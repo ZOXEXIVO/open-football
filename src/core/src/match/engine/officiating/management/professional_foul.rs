@@ -27,7 +27,8 @@ impl CounterAttackThreat {
 
     /// The threat read off the pitch: the carrier running at `goal`, the
     /// man who might bring him down at `fouler`, and every other player of
-    /// the defending side, keeper included.
+    /// the defending side. A keeper is the thing being protected, not cover:
+    /// he counts for neither the lane nor the men behind the ball.
     pub fn from_positions(
         carrier: Vector3<f32>,
         goal: Vector3<f32>,
@@ -44,6 +45,9 @@ impl CounterAttackThreat {
         let mut behind = 0u8;
         let mut lane_open = true;
         for (at, is_keeper) in defenders {
+            if is_keeper {
+                continue;
+            }
             let rel = Vector3::new(at.x - carrier.x, at.y - carrier.y, 0.0);
             let along = rel.dot(&dir);
             if along <= 0.0 || along >= distance_to_goal_units {
@@ -51,7 +55,7 @@ impl CounterAttackThreat {
             }
             behind = behind.saturating_add(1);
             let across = (rel - dir * along).norm();
-            if !is_keeper && across < Self::LANE_HALF_WIDTH {
+            if across < Self::LANE_HALF_WIDTH {
                 lane_open = false;
             }
         }
@@ -65,6 +69,13 @@ impl CounterAttackThreat {
 
     pub fn is_dogso_zone(&self) -> bool {
         self.distance_to_goal_units < 260.0
+    }
+
+    /// An obvious goal-scoring opportunity, as Law 12 reads one: near
+    /// enough the goal, the lane to it open, and no outfield defender left
+    /// to cover.
+    pub fn is_obvious_opportunity(&self) -> bool {
+        self.is_dogso_zone() && self.lane_open && self.defenders_behind_ball == 0
     }
 }
 
@@ -123,6 +134,26 @@ impl ProfessionalFoul {
         raw.clamp(0.0, 0.65)
     }
 
+    /// The cards for a foul that denied an obvious goal-scoring opportunity,
+    /// as Law 12 sets them: outside his own area a sending-off; inside it a
+    /// caution when he genuinely attempted to play the ball, a sending-off
+    /// when he did not. `None` when the opportunity was not an obvious one,
+    /// which leaves the ordinary card.
+    pub fn denial_cards(
+        threat: CounterAttackThreat,
+        in_own_area: bool,
+        attempted_ball: bool,
+    ) -> Option<(f32, f32)> {
+        if !threat.is_obvious_opportunity() {
+            return None;
+        }
+        Some(if in_own_area && attempted_ball {
+            (1.0, 0.0)
+        } else {
+            (0.0, 1.0)
+        })
+    }
+
     /// Decide whether the professional foul is yellow or red — DOGSO close to
     /// goal can flip a small fraction to red. Returned as the *probability*
     /// of red; caller rolls.
@@ -164,8 +195,8 @@ mod tests {
         let threat =
             CounterAttackThreat::from_positions(carrier, goal, fouler, [keeper, beaten].into_iter());
         assert!(threat.lane_open);
-        assert_eq!(threat.defenders_behind_ball, 1);
-        assert!(threat.is_dogso_zone());
+        assert_eq!(threat.defenders_behind_ball, 0, "the keeper is not cover");
+        assert!(threat.is_obvious_opportunity());
     }
 
     #[test]
@@ -178,7 +209,7 @@ mod tests {
         let threat =
             CounterAttackThreat::from_positions(carrier, goal, fouler, [keeper, cover].into_iter());
         assert!(!threat.lane_open);
-        assert_eq!(threat.defenders_behind_ball, 2);
+        assert_eq!(threat.defenders_behind_ball, 1);
     }
 
     #[test]

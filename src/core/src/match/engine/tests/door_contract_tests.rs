@@ -5,16 +5,14 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
-use crate::r#match::common_states::LooseBallChase;
+use crate::r#match::common_states::{LooseBallChase, TackleEngagement};
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::DefensiveLine;
+use crate::r#match::defenders::states::common::DefensiveSlot;
 use crate::r#match::engine::result::Score;
 use crate::r#match::engine::teamplay::possession::TeamPossession;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::RunInBehind;
 use crate::r#match::goalkeepers::states::common::KeeperSweepLimit;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::PressOwnership;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::defenders::states::holding_line::DefenderHoldingLineState;
 use crate::r#match::player::strategies::defenders::states::intercepting::DefenderInterceptingState;
@@ -23,8 +21,8 @@ use crate::r#match::player::strategies::midfielders::states::intercepting::Midfi
 use crate::r#match::player::strategies::midfielders::states::returning::MidfielderReturningState;
 use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::{
-    GameTickContext, MatchContext, MatchField, MatchPlayerCollection, PlayerSide,
-    StateProcessingContext, StateProcessingHandler,
+    DefenceRefreshInputs, DefensivePlan, GameTickContext, MatchContext, MatchField,
+    MatchPlayerCollection, PlayerSide, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
 
@@ -84,20 +82,24 @@ fn stand(field: &mut MatchField, id: u32, x: f32, y: f32) {
     field.get_player_mut(id).expect("a player").position = Vector3::new(x, y, 0.0);
 }
 
-/// Stand him on his line in `HoldingLine`, wherever the plan has put it with
-/// the ball where it is now. Returns the depth, for the rest of the scene.
-fn on_the_line(field: &mut MatchField, context: &MatchContext, id: u32) -> f32 {
-    let x = {
-        let decision = Decision::new(field, context);
-        DefensiveLine::position_x(&decision.ctx(id, 40))
-    };
-    let player = field.get_player_mut(id).expect("a player");
-    player.transition_to(
+/// Stand him in `HoldingLine` on his place in the line, wherever the plan
+/// has put it with the ball where it is now. Returns the place, for the
+/// rest of the scene.
+fn on_the_line(field: &mut MatchField, context: &MatchContext, id: u32) -> Vector3<f32> {
+    field.get_player_mut(id).expect("a player").transition_to(
         PlayerState::Defender(DefenderState::HoldingLine),
         TransitionSource::Reset,
     );
-    player.position = Vector3::new(x, 270.0, 0.0);
-    x
+    let mut place = Vector3::zeros();
+    // Twice: where he stands is part of the line he is placed on.
+    for _ in 0..2 {
+        place = {
+            let decision = Decision::new(field, context);
+            DefensiveSlot::point(&decision.ctx(id, 40))
+        };
+        field.get_player_mut(id).expect("a player").position = place;
+    }
+    place
 }
 
 /// An away pass in flight to `target`, coming from `from` toward `to`.
@@ -151,21 +153,31 @@ impl<'a> Decision<'a> {
 
 // ── A player commits to an interception only for a ball he can contest ──
 
+/// Whether his side sends him after it is the election's, as the
+/// dispatcher's; what he does not do is commit to cutting it out.
 #[test]
-fn a_pass_he_cannot_reach_first_leaves_him_in_the_line() {
+fn a_pass_he_cannot_reach_first_is_not_an_interception() {
     let (mut field, context) = empty_pitch();
     let id = defender(&field);
     let target = away_man(&field, 9);
     away_pass(&mut field, target, (300.0, 270.0), (250.0, 270.0));
-    let x = on_the_line(&mut field, &context, id);
+    let at = on_the_line(&mut field, &context, id);
     // The opponent the pass is for stands right on its line, well ahead of
     // the defender, and it reaches him long before it could reach anyone else.
-    stand(&mut field, target, x + 130.0, 270.0);
-    away_pass(&mut field, target, (x + 160.0, 270.0), (x + 130.0, 270.0));
+    stand(&mut field, target, at.x + 130.0, at.y);
+    away_pass(
+        &mut field,
+        target,
+        (at.x + 160.0, at.y),
+        (at.x + 130.0, at.y),
+    );
     field.ball.velocity *= 2.0;
     let decision = Decision::new(&field, &context);
     assert!(!LooseBallChase::can_contest(&decision.ctx(id, 40)));
-    assert_eq!(decision.of(id, DefenderHoldingLineState::default()), None);
+    assert_ne!(
+        decision.of(id, DefenderHoldingLineState::default()),
+        Some(PlayerState::Defender(DefenderState::Intercepting)),
+    );
 }
 
 #[test]
@@ -173,10 +185,10 @@ fn a_carried_ball_is_not_an_interception() {
     let (mut field, context) = empty_pitch();
     let id = defender(&field);
     let carrier = away_man(&field, 9);
-    let x = on_the_line(&mut field, &context, id);
-    stand(&mut field, carrier, x + 60.0, 270.0);
+    let at = on_the_line(&mut field, &context, id);
+    stand(&mut field, carrier, at.x + 60.0, at.y);
     field.ball.current_owner = Some(carrier);
-    field.ball.position = Vector3::new(x + 60.0, 270.0, 0.0);
+    field.ball.position = Vector3::new(at.x + 60.0, at.y, 0.0);
     field.ball.velocity = Vector3::new(-2.0, 0.0, 0.0);
     on_the_line(&mut field, &context, id);
     let decision = Decision::new(&field, &context);
@@ -186,21 +198,25 @@ fn a_carried_ball_is_not_an_interception() {
     );
 }
 
+/// The loose-ball rung either way: the election's chase, or the cut-out
+/// of a ball coming to him.
 #[test]
 fn a_pass_he_can_reach_first_is_his_to_go_for() {
     let (mut field, context) = empty_pitch();
     let id = defender(&field);
     let target = away_man(&field, 9);
-    let x = on_the_line(&mut field, &context, id);
+    let at = on_the_line(&mut field, &context, id);
     stand(&mut field, target, 800.0, 100.0);
-    away_pass(&mut field, target, (x + 60.0, 270.0), (x - 50.0, 270.0));
-    let x = on_the_line(&mut field, &context, id);
-    away_pass(&mut field, target, (x + 60.0, 270.0), (x - 50.0, 270.0));
+    away_pass(&mut field, target, (at.x + 60.0, at.y), (at.x - 50.0, at.y));
+    let at = on_the_line(&mut field, &context, id);
+    away_pass(&mut field, target, (at.x + 60.0, at.y), (at.x - 50.0, at.y));
     let decision = Decision::new(&field, &context);
-    assert_eq!(
+    assert!(matches!(
         decision.of(id, DefenderHoldingLineState::default()),
-        Some(PlayerState::Defender(DefenderState::Intercepting)),
-    );
+        Some(PlayerState::Defender(
+            DefenderState::TakeBall | DefenderState::Intercepting
+        )),
+    ));
 }
 
 #[test]
@@ -225,7 +241,7 @@ fn a_lost_race_with_nobody_on_the_ball_is_not_a_press() {
 
 #[test]
 fn a_lost_race_to_a_carried_ball_is_still_a_press() {
-    let (mut field, context) = empty_pitch();
+    let (mut field, mut context) = empty_pitch();
     let id = defender(&field);
     let carrier = away_man(&field, 9);
     stand(&mut field, id, 200.0, 270.0);
@@ -233,6 +249,19 @@ fn a_lost_race_to_a_carried_ball_is_still_a_press() {
     field.ball.current_owner = Some(carrier);
     field.ball.position = Vector3::new(330.0, 270.0, 0.0);
     field.ball.velocity = Vector3::new(-0.2, 0.0, 0.0);
+    DefensivePlan::refresh(
+        &mut context.defence_home,
+        &mut context.defence_away,
+        &DefenceRefreshInputs {
+            field: &field,
+            possession_holder: Some(AWAY),
+            home_team_id: HOME,
+            away_team_id: AWAY,
+            home_keeper_voice: 0.5,
+            away_keeper_voice: 0.5,
+        },
+    );
+    assert_eq!(context.defence_home.presser(), Some(id));
     let decision = Decision::new(&field, &context);
     assert_eq!(
         decision.of(id, DefenderInterceptingState::default()),
@@ -253,16 +282,10 @@ fn a_forward_who_has_created_space_stays_off_the_ball() {
     field.ball.position = Vector3::new(540.0, 270.0, 0.0);
     let decision = Decision::new(&field, &context);
     for _ in 0..200 {
-        assert!(
-            matches!(
-                decision.of(id, ForwardCreatingSpaceState::default()),
-                None | Some(PlayerState::Forward(
-                    ForwardState::Running
-                        | ForwardState::RunningInBehind
-                        | ForwardState::HoldingWidth
-                ))
-            ),
-            "he carries on with his off-ball movement"
+        assert_ne!(
+            decision.of(id, ForwardCreatingSpaceState::default()),
+            Some(PlayerState::Forward(ForwardState::Running)),
+            "he passed through the state for the man on the ball"
         );
     }
 }
@@ -281,57 +304,7 @@ fn a_forward_who_receives_the_ball_decides_as_any_carrier_does() {
     );
 }
 
-// ── A run is started on a stricter picture than it is carried on ────────
-
-#[test]
-fn a_run_with_two_men_in_the_way_cannot_start_or_carry_on() {
-    let (mut field, context) = empty_pitch();
-    let id = forward(&field);
-    stand(&mut field, id, 600.0, 270.0);
-    let (first, second) = (away_man(&field, 3), away_man(&field, 4));
-    stand(&mut field, first, 620.0, 270.0);
-    stand(&mut field, second, 620.0, 280.0);
-    let decision = Decision::new(&field, &context);
-    let ctx = decision.ctx(id, 40);
-    assert!(!RunInBehind::may_commit(&ctx));
-    assert!(!RunInBehind::stays_viable(&ctx));
-}
-
-#[test]
-fn a_clear_run_can_start_and_carry_on() {
-    let (mut field, context) = empty_pitch();
-    let id = forward(&field);
-    stand(&mut field, id, 600.0, 270.0);
-    let decision = Decision::new(&field, &context);
-    let ctx = decision.ctx(id, 40);
-    assert!(RunInBehind::may_commit(&ctx));
-    assert!(RunInBehind::stays_viable(&ctx));
-}
-
-/// One man in the way: over a stretch of play a quick forward commits far less
-/// often than he carries on. That gap is the hysteresis.
-#[test]
-fn one_blocker_lets_a_run_carry_on_more_readily_than_start() {
-    let (mut field, context) = empty_pitch();
-    let id = forward(&field);
-    let blocker = away_man(&field, 3);
-    stand(&mut field, id, 600.0, 270.0);
-    stand(&mut field, blocker, 620.0, 270.0);
-    let decision = Decision::new(&field, &context);
-    let ctx = decision.ctx(id, 40);
-    let draws = 4000;
-    let commits = (0..draws).filter(|_| RunInBehind::may_commit(&ctx)).count();
-    let carries = (0..draws)
-        .filter(|_| RunInBehind::stays_viable(&ctx))
-        .count();
-    assert!(
-        commits < carries,
-        "{commits} commits against {carries} carries"
-    );
-    assert!(carries < draws, "the release is what timeboxes the run");
-}
-
-// ── The press door asks whether the press is his ───────────────────────
+// ── The press door asks whether the licence is his ──────────────────────
 
 fn press_scene(field: &mut MatchField, team_mate_x: f32) -> (u32, u32) {
     let id = midfielder(field);
@@ -342,6 +315,9 @@ fn press_scene(field: &mut MatchField, team_mate_x: f32) -> (u32, u32) {
     stand(field, carrier, 390.0, 270.0);
     field.ball.current_owner = Some(carrier);
     field.ball.position = Vector3::new(390.0, 270.0, 0.0);
+    // Long after the last strike, so every man has read it and the chase
+    // election has its rows.
+    field.ball.current_tick_cached = 1_000;
     (id, carrier)
 }
 
@@ -350,9 +326,7 @@ fn a_returning_midfielder_leaves_a_press_a_team_mate_is_clearly_on() {
     let (mut field, context) = empty_pitch();
     let (id, _) = press_scene(&mut field, 380.0);
     let decision = Decision::new(&field, &context);
-    assert!(PressOwnership::belongs_to_a_team_mate(
-        &decision.ctx(id, 40)
-    ));
+    assert!(!TackleEngagement::may_engage_carrier(&decision.ctx(id, 40)));
     assert_ne!(
         decision.of(id, MidfielderReturningState::default()),
         Some(PlayerState::Midfielder(MidfielderState::Pressing)),
@@ -364,9 +338,7 @@ fn a_returning_midfielder_takes_a_press_nobody_else_is_on() {
     let (mut field, context) = empty_pitch();
     let (id, _) = press_scene(&mut field, 200.0);
     let decision = Decision::new(&field, &context);
-    assert!(!PressOwnership::belongs_to_a_team_mate(
-        &decision.ctx(id, 40)
-    ));
+    assert!(TackleEngagement::may_engage_carrier(&decision.ctx(id, 40)));
     assert_eq!(
         decision.of(id, MidfielderReturningState::default()),
         Some(PlayerState::Midfielder(MidfielderState::Pressing)),

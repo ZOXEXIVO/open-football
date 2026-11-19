@@ -627,6 +627,7 @@ impl CornerGeometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RoleLevels;
     use crate::club::player::mind::KickoffMind;
     use crate::r#match::MatchPlayer;
     use crate::{PersonAttributes, PlayerAttributes, PlayerPositionType, PlayerSkills};
@@ -684,6 +685,8 @@ mod tests {
                 1.0,
                 1.0,
                 KickoffMind::neutral(),
+                RoleLevels::natural(position),
+                0.5,
                 false,
             )
         }

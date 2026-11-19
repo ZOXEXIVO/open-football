@@ -14,7 +14,6 @@ use core::HappinessFactors;
 use core::PathwayStage;
 use core::Person;
 use core::Player;
-use core::PlayerSquadStatus;
 use core::PlayerStatusType;
 use core::SimulatorData;
 use core::StaffPosition;
@@ -496,16 +495,7 @@ fn get_player_info(player: &Player, today: NaiveDate, i18n: &I18n) -> PlayerInfo
     let fitness = (pa.fitness as f32 / 100.0).round().clamp(0.0, 100.0) as u8;
 
     let (squad_status, salary, contract_expiry) = if let Some(contract) = &player.contract {
-        let status = match contract.squad_status {
-            PlayerSquadStatus::KeyPlayer => i18n.t("squad_key_player"),
-            PlayerSquadStatus::FirstTeamRegular => i18n.t("squad_first_team_regular"),
-            PlayerSquadStatus::FirstTeamSquadRotation => i18n.t("squad_rotation"),
-            PlayerSquadStatus::MainBackupPlayer => i18n.t("squad_backup_player"),
-            PlayerSquadStatus::HotProspectForTheFuture => i18n.t("squad_hot_prospect"),
-            PlayerSquadStatus::DecentYoungster => i18n.t("squad_decent_youngster"),
-            PlayerSquadStatus::NotNeeded => i18n.t("squad_not_needed"),
-            _ => "",
-        };
+        let status = i18n.t(contract.squad_status.i18n_key());
         let wage = format!(
             "{} {}",
             FormattingUtils::format_money(contract.salary as f64),

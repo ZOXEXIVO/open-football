@@ -19,6 +19,7 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
+use super::keeper_save_contact_tests::rest_point;
 use crate::r#match::engine::ball::ball::contest::body::KeeperBody;
 use crate::r#match::engine::result::Score;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
@@ -305,4 +306,35 @@ fn the_engine_and_the_replay_agree_about_where_a_diving_keeper_is() {
         "upright he is {:.2} m across",
         upright.reach_across()
     );
+}
+
+/// **What comes back off him rests within 5 m of him.** A shot struck
+/// square at his chest used to come back tens of metres up the pitch.
+#[test]
+fn a_shot_off_his_body_comes_to_rest_within_five_metres() {
+    let (mut field, mut context) = kickoff();
+    let keeper_at = Vector3::new(820.0, 264.0, 0.0);
+    let keeper_id = lone_keeper(&mut field, keeper_at);
+    a_shot_he_has_already_been_beaten_by(
+        &mut field,
+        Vector3::new(804.0, 264.0, 1.10),
+        Vector3::new(2.4, 0.0, 0.0),
+    );
+    let players = field.players.clone();
+    let mut events = EventCollection::with_capacity(8);
+    for _ in 0..20 {
+        field.ball.update_light(&mut context, &players, &mut events);
+        if field.ball.last_touch_player_id == Some(keeper_id) {
+            break;
+        }
+    }
+    assert_eq!(
+        field.ball.last_touch_player_id,
+        Some(keeper_id),
+        "it never hit him"
+    );
+    let contact = field.ball.position;
+    let rest = rest_point(&mut field, &mut context).expect("it stayed on the pitch");
+    let metres = (rest - contact).xy().norm() * 0.125;
+    assert!(metres <= 5.0, "it came to rest {metres:.1} m from him");
 }

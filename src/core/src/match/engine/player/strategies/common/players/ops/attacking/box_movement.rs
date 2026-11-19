@@ -63,9 +63,12 @@
 //! behaviour — target, cadence, evasion and the steering that serves it —
 //! lives here and the states ask for a velocity.
 
+use crate::r#match::passing::CrossModel;
 use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
-use crate::r#match::{BoxSlot, StateProcessingContext, SteeringBehavior, TeamShape};
+use crate::r#match::{
+    BoxSlot, MatchContext, PlayerSide, StateProcessingContext, SteeringBehavior, TeamShape,
+};
 use nalgebra::Vector3;
 
 pub struct BoxMovement;
@@ -278,8 +281,20 @@ impl BoxMovement {
         let Some(side) = ctx.player.side else {
             return 0.0;
         };
-        let field_width = ctx.context.field_size.width as f32;
-        let ball_x = ctx.tick_context.positions.ball.position.x;
+        Self::stage_at(
+            side,
+            ctx.tick_context.positions.ball.position.x,
+            ctx.context.field_size.width as f32,
+        )
+    }
+
+    /// [`Self::stage`] from the ball's depth alone, for the side attacking
+    /// from `side`. The attack plan reads its box places by this number, so
+    /// a place holds its man from the tick the box is staged for him.
+    pub fn stage_at(side: PlayerSide, ball_x: f32, field_width: f32) -> f32 {
+        if Self::staging_off() {
+            return 1.0;
+        }
         let progress = side.attacking_progress_x(ball_x, field_width);
         let (approach, strike) = (Self::approach(), Self::strike());
         // The approach leg — block to holding point. See [`Self::HOLD`].
@@ -358,11 +373,36 @@ impl BoxMovement {
     /// staged point, plus the habit, plus the contest.
     pub fn target(ctx: &StateProcessingContext, slot: BoxSlot) -> Vector3<f32> {
         let stage = Self::stage(ctx);
-        let base = Self::staged_point(ctx, slot, stage);
+        let base =
+            Self::byline_point(ctx, slot).unwrap_or_else(|| Self::staged_point(ctx, slot, stage));
         // `MarkerEvasion` is bounded, so it adjusts the angle he attacks
         // his patch from without ever letting him evade his way out of
         // the assignment.
         MarkerEvasion::evade(ctx, base + Self::work(ctx, stage))
+    }
+
+    /// **The byline ball.** While a team-mate carries the ball inside the
+    /// box's width at the byline, the near-post and edge runners stop
+    /// waiting for a cross from deep and go where the driven ball and the
+    /// pull-back are played ([`BoxSlot::byline_target`]).
+    fn byline_point(ctx: &StateProcessingContext, slot: BoxSlot) -> Option<Vector3<f32>> {
+        if MatchContext::cross_byline_off() {
+            return None;
+        }
+        let carrier = ctx.ball().owner_id().filter(|&id| id != ctx.player.id)?;
+        let goal = ctx.player().opponent_goal_position();
+        let ball = ctx.tick_context.positions.ball.position;
+        if !CrossModel::inside_at_the_byline(ball, goal)
+            || !ctx.players().teammates().all().any(|t| t.id == carrier)
+        {
+            return None;
+        }
+        slot.byline_target(
+            goal,
+            ball.y,
+            ctx.context.field_size.height as f32,
+            ctx.player.side.map_or(1.0, |s| s.forward_dir_x()),
+        )
     }
 
     /// The velocity that serves it. Both off-ball forward states call

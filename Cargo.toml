@@ -26,7 +26,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "1.8.330"
+version = "1.8.390"
 
 authors = ["Artemov Ivan (ZOXEXIVO) <zoxexivo@gmail.com>"]
 edition = "2024"
@@ -113,7 +113,7 @@ codegen-units = 16
 simulator_core = { path = "src/core", package = "core" }
 web = { path = "src/web" }
 database = { path = "src/database" }
-log = { version = "0.4.34", features = ["release_max_level_info"] }
+log = { version = "0.4.35", features = ["release_max_level_info"] }
 env_logger = "0.11.11"
 color-eyre = "0.6.5"
 tokio = { version = "1.54.1", features = ["full"] }

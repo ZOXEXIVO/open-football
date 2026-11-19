@@ -445,3 +445,39 @@ fn the_second_touch_bar_expires_rather_than_deadlocking() {
         "a ball nobody has come for in ten seconds is a loose ball again"
     );
 }
+
+/// The men sent to fetch a ball that went out stay on the fetch list, the
+/// taker among them, and the list's claim is a claim like any other.
+#[test]
+fn the_fetch_list_does_not_hand_the_thrower_his_own_throw() {
+    if !ThrowIn::armed() {
+        return;
+    }
+    let (mut field, mut context) = kickoff();
+    let toucher = outfielder(&field, PlayerSide::Left);
+    put_it_out(&mut field, &context, toucher, None);
+    let taker = take_the_throw(&mut field, &mut context).expect("the taker reached the ball");
+
+    let at = field.get_player(taker).unwrap().position;
+    let tick = context.current_tick();
+    field.ball.note_release(taker, field.ball.position, tick);
+    field.ball.current_owner = None;
+    field.ball.current_tick_cached = tick + 4;
+    field.ball.position = Vector3::new(at.x, at.y, 0.0);
+    field.ball.velocity = Vector3::zeros();
+    field.ball.flags.in_flight_state = 0;
+    field.ball.take_ball_notified_players = vec![taker];
+    let players = field.players.clone();
+    let mut events = EventCollection::with_capacity(4);
+
+    field.ball.try_notify_standing_ball(&players, &mut events);
+    assert_eq!(field.ball.current_owner, None, "he claimed his own throw");
+
+    field.ball.current_tick_cached = tick + 1000;
+    field.ball.try_notify_standing_ball(&players, &mut events);
+    assert_eq!(
+        field.ball.current_owner,
+        Some(taker),
+        "once the bar has lifted the list may hand it to him"
+    );
+}

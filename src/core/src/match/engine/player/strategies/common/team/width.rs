@@ -31,7 +31,6 @@
 //! stays put.
 
 use crate::r#match::engine::ball::ball::OffsideLine;
-use crate::r#match::player::strategies::common::states::ActivityIntensity;
 use crate::r#match::{Flank, MatchContext, StateProcessingContext, WidePlan};
 use nalgebra::Vector3;
 
@@ -45,19 +44,6 @@ pub enum WideIntent {
     Advance,
     /// Run in behind the full-back, toward the byline.
     Byline,
-}
-
-impl WideIntent {
-    /// How hard he is working. Holding width is a jog — the value is in
-    /// the position, not the effort — and the run to the byline is the
-    /// one moment a winger genuinely sprints.
-    pub fn intensity(self) -> ActivityIntensity {
-        match self {
-            WideIntent::Hold => ActivityIntensity::Moderate,
-            WideIntent::Advance => ActivityIntensity::High,
-            WideIntent::Byline => ActivityIntensity::VeryHigh,
-        }
-    }
 }
 
 /// The wide channel, resolved for one player on one tick.

@@ -46,11 +46,10 @@
 //! thought of is still seen, which is the property a census needs and a
 //! hand-placed counter never has.
 //!
-//! ⚠ **The punch and the smother's knock-away are the known gap**, and
-//! deliberately: both leave the ball through `ClearBall` on a ball nobody
-//! owns, which records no touch at all, and both are aimed 15-25 m
-//! clearances rather than a fumble at his feet. `KeeperActionDiag` counts
-//! them.
+//! **The punch and the smother's knock-away have no named site.** Both
+//! leave the ball through `ClearBall`, which books the touch for a clearer
+//! who did not own the ball, so the catch-all files them as
+//! [`KnockSource::Other`]. `KeeperActionDiag` counts them by name.
 
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::MatchPlayer;

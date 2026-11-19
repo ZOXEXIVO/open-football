@@ -117,13 +117,11 @@ impl LaneAhead {
         let mut in_lane_len = 0usize;
 
         for opp in ctx.players().opponents().nearby(LANE_SCAN) {
-            let offset = opp.position - from;
-            let along = offset.dot(&to_goal);
-            if along <= 0.0 || along > LANE_SCAN {
+            let Some((along, lateral, half_width)) =
+                Self::place_in_channel(opp.position - from, to_goal)
+            else {
                 continue;
-            }
-            let lateral = (offset - to_goal * along).magnitude();
-            let half_width = LANE_HALF_WIDTH + along * LANE_FLARE;
+            };
             if lateral > half_width {
                 continue;
             }
@@ -155,6 +153,29 @@ impl LaneAhead {
             occupancy,
             openness: (nearest / RUNNING_ROOM).clamp(0.0, 1.0),
         }
+    }
+
+    /// How far up the running channel along `heading` a man `offset` from
+    /// the carrier stands, how far across it, and the channel's half-width
+    /// there. `None` behind him or beyond the scan.
+    fn place_in_channel(offset: Vector3<f32>, heading: Vector3<f32>) -> Option<(f32, f32, f32)> {
+        let along = offset.dot(&heading);
+        if along <= 0.0 || along > LANE_SCAN {
+            return None;
+        }
+        Some((
+            along,
+            (offset - heading * along).magnitude(),
+            LANE_HALF_WIDTH + along * LANE_FLARE,
+        ))
+    }
+
+    /// Is a man `offset` from the carrier inside the running channel along
+    /// `heading`?
+    #[cfg(feature = "match-logs")]
+    pub(crate) fn in_channel(offset: Vector3<f32>, heading: Vector3<f32>) -> bool {
+        Self::place_in_channel(offset, heading)
+            .is_some_and(|(_, across, half_width)| across <= half_width)
     }
 
     fn open() -> Self {

@@ -6,15 +6,17 @@ use crate::r#match::engine::ball::ball::AerialReach;
 use crate::r#match::engine::flow::goal::GOAL_HEIGHT;
 use crate::r#match::events::EventCollection;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::goalkeepers::states::common::KeeperSplitStep;
+use crate::r#match::goalkeepers::states::common::{KeeperDebug, KeeperSplitStep};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::keeper_census::ClaimEnd;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::motion_diag::StateCensus;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::{
-    GameTickContext, MatchContext, MatchPlayer, MovementEffort, StateProcessingResult,
+    ClaimIntent, GameTickContext, MatchContext, MatchPlayer, MovementEffort, StateProcessingResult,
 };
 
 use nalgebra::Vector3;
@@ -38,20 +40,29 @@ impl PlayerState {
     pub fn is_challenging(&self) -> bool {
         matches!(
             self,
-            PlayerState::Defender(DefenderState::Pressing | DefenderState::Tackling)
-                | PlayerState::Midfielder(MidfielderState::Pressing | MidfielderState::Tackling)
-                | PlayerState::Forward(ForwardState::Pressing | ForwardState::Tackling)
+            PlayerState::Defender(
+                DefenderState::Pressing | DefenderState::Jockeying | DefenderState::Tackling
+            )
+                | PlayerState::Midfielder(
+                    MidfielderState::Pressing
+                        | MidfielderState::Jockeying
+                        | MidfielderState::Tackling
+                )
+                | PlayerState::Forward(
+                    ForwardState::Pressing | ForwardState::Jockeying | ForwardState::Tackling
+                )
         )
     }
 
     /// Cheap integer ID for fast dedup — avoids `to_string()` allocation.
     /// Each (outer variant, inner variant) pair maps to a unique u16.
     ///
-    /// The id is embedded in replay / position records, so it must stay
-    /// stable across releases. The inner `*s as u16` reads the inner
-    /// enum's **explicit** discriminant (every state enum pins them), and
-    /// `compact_id_snapshot` in this file's tests fails loudly if any
-    /// value drifts — so it never silently depends on variant order.
+    /// Replays store a state's display name, not this id, so it is an
+    /// in-process key: the census tables and the transition recorder index
+    /// on it. The inner `*s as u16` reads the inner enum's **explicit**
+    /// discriminant (every state enum pins them), and `compact_id_snapshot`
+    /// in this file's tests fails loudly if any value drifts — so it never
+    /// silently depends on variant order.
     #[inline]
     pub fn compact_id(&self) -> u16 {
         match self {
@@ -63,6 +74,11 @@ impl PlayerState {
             PlayerState::Forward(s) => 400 + (*s as u16),
         }
     }
+
+    /// Length of any table indexed by `compact_id`: the forward band is the
+    /// highest, and its `ALL` ends on its highest discriminant.
+    pub const COMPACT_SLOTS: usize =
+        400 + ForwardState::ALL[ForwardState::ALL.len() - 1] as usize + 1;
 
     /// Every state in the engine's universe, role-then-declaration order.
     /// The single source of truth for the transition-graph audit and the
@@ -110,8 +126,8 @@ impl PlayerState {
 
     /// True while the player is mid-way through a physical action that a
     /// real footballer cannot abort: a keeper already committed to a dive
-    /// or a claim, a defender sliding in, a header already launched, a
-    /// shot or cross being struck.
+    /// or a claim, a header already launched, a clearance, shot or cross
+    /// being struck.
     ///
     /// The engine's out-of-band loose-ball redirects (the universal
     /// `should_force_takeball` override and the ball's `TakeMe` signal)
@@ -196,12 +212,15 @@ impl PlayerState {
             // coming off their line for a loose ball. `HoldingBall` is
             // likewise excluded — the ball is owned, so the loose-ball
             // redirects cannot fire anyway.
+            // A keeper on the floor getting up is in the same position as a
+            // man recovering from a challenge.
             PlayerState::Goalkeeper(s) => matches!(
                 s,
                 GoalkeeperState::Diving
                     | GoalkeeperState::Jumping
                     | GoalkeeperState::Catching
                     | GoalkeeperState::Punching
+                    | GoalkeeperState::GettingUp
             ),
             // ⚠ `Tackling` IS NOT ONE. It is CONTAINMENT.
             //
@@ -372,6 +391,8 @@ pub(crate) struct ResolvedDecision {
     pub events: Option<EventCollection>,
     pub shot_reason: Option<&'static str>,
     pub dive_aim: Option<f32>,
+    /// The first claim intent any state on the way committed him to.
+    pub claim_intent: Option<ClaimIntent>,
     /// The state he was tried in went in and missed.
     pub missed_challenge: Option<ChallengeKind>,
 }
@@ -414,8 +435,16 @@ impl DecisionResolver {
         let mut visited = [player.state.compact_id(), first.compact_id(), 0, 0, 0];
         let mut seen = 2;
         let mut at = first;
+        let mut claim_intent = None;
         for _ in 0..Self::MAX_HOPS {
             let outcome = player.trying_state(at, &mut decide);
+            claim_intent = claim_intent.or(outcome.claim_intent);
+            if outcome.claim_intent.is_some() {
+                player.claim_intent = outcome.claim_intent;
+            }
+            if outcome.staged_challenge.is_some() {
+                player.staged_challenge = outcome.staged_challenge;
+            }
             if outcome.start_tackle_cooldown {
                 player.start_tackle_cooldown();
             }
@@ -440,6 +469,7 @@ impl DecisionResolver {
                     events: acted.then_some(outcome.events),
                     shot_reason: outcome.shot_reason,
                     dive_aim: outcome.dive_aim,
+                    claim_intent,
                     ..ResolvedDecision::default()
                 };
             };
@@ -450,6 +480,7 @@ impl DecisionResolver {
                     events: acted.then_some(outcome.events),
                     shot_reason: outcome.shot_reason,
                     dive_aim: outcome.dive_aim,
+                    claim_intent,
                     ..ResolvedDecision::default()
                 };
             }
@@ -462,6 +493,7 @@ impl DecisionResolver {
         }
         ResolvedDecision {
             landing: Some(at),
+            claim_intent,
             ..ResolvedDecision::default()
         }
     }
@@ -480,8 +512,13 @@ impl PlayerMatchState {
         #[cfg(feature = "match-logs")]
         let state_before_overrides = player.state;
 
+        player.staged_challenge = None;
+        player.aerial_award &= tick_context.ball.awaits_header_from(player.id);
         let state_change_result =
             player_position_group.process(player.in_state_time, player, context, tick_context);
+        if state_change_result.staged_challenge.is_some() {
+            player.staged_challenge = state_change_result.staged_challenge;
+        }
 
         #[cfg(feature = "match-logs")]
         {
@@ -535,6 +572,11 @@ impl PlayerMatchState {
         if let Some(kind) = state_change_result.missed_challenge {
             player.on_challenge_missed(kind);
         }
+        // A claim is his from the moment he commits to it: every state the
+        // chain tries next reads it off him.
+        if state_change_result.claim_intent.is_some() {
+            player.claim_intent = state_change_result.claim_intent;
+        }
         let resolved = new_state
             .filter(|first| DecisionResolver::applies(player, *first, &state_change_result))
             .map(|first| {
@@ -552,9 +594,14 @@ impl PlayerMatchState {
                 }
                 decision
             });
-        let (new_state, chain_reason, chain_dive) = match &resolved {
-            Some(decision) => (decision.landing, decision.shot_reason, decision.dive_aim),
-            None => (new_state, None, None),
+        let (new_state, chain_reason, chain_dive, chain_claim) = match &resolved {
+            Some(decision) => (
+                decision.landing,
+                decision.shot_reason,
+                decision.dive_aim,
+                decision.claim_intent,
+            ),
+            None => (new_state, None, None, None),
         };
         let shot_reason = state_change_result.shot_reason.or(chain_reason);
         if let Some(ResolvedDecision {
@@ -626,6 +673,11 @@ impl PlayerMatchState {
             player.pending_shot_reason = None;
         }
 
+        // A staged save or claim is read by one decision, the one that has
+        // just run.
+        player.pending_save = None;
+        player.pending_claim = None;
+
         if let Some(state) = new_state {
             Self::change_state(player, state);
             // A committed dive keeps the side it committed to for as long
@@ -635,6 +687,23 @@ impl PlayerMatchState {
             } else {
                 None
             };
+            // A claim lasts while he is in the states it is made in.
+            match state {
+                PlayerState::Goalkeeper(keeper) if keeper.is_claim() => {
+                    if let Some(intent) = state_change_result.claim_intent.or(chain_claim) {
+                        player.claim_intent = Some(intent);
+                    }
+                }
+                _ => {
+                    // Out of the claim states undecided: he never got to it.
+                    #[cfg(feature = "match-logs")]
+                    context
+                        .keeper_census
+                        .borrow_mut()
+                        .claim_end(player.id, ClaimEnd::Lost);
+                    player.claim_intent = None;
+                }
+            }
             // A player who has just committed to leaving the ground does so
             // now, on the tick he decided. The rise lives outside `velocity`
             // and outside everything below — see `MatchPlayer::vertical_speed`
@@ -681,7 +750,9 @@ impl PlayerMatchState {
                 PlayerState::Goalkeeper(GoalkeeperState::Punching) => {
                     crate::mid_run_diag::KeeperActionDiag::note(2)
                 }
-                PlayerState::Goalkeeper(GoalkeeperState::Jumping) => {
+                // A missed punch comes down in `Jumping` on the leap it was
+                // already on.
+                PlayerState::Goalkeeper(GoalkeeperState::Jumping) if !player.is_airborne() => {
                     crate::mid_run_diag::KeeperActionDiag::note(4)
                 }
                 _ => {}
@@ -703,6 +774,13 @@ impl PlayerMatchState {
         // strike, not to the state. `hop` refuses a man already off the
         // ground, so a keeper who has just taken off for a dive above is
         // left alone. See `KeeperSplitStep`.
+        // …and how set he was for it, latched as it is struck whether or not
+        // he could hop: a keeper caught in the air is not set either.
+        if player_position_group == PlayerFieldPositionGroup::Goalkeeper
+            && KeeperSplitStep::in_strike_window(player, tick_context)
+        {
+            player.on_strike_seen();
+        }
         if player_position_group == PlayerFieldPositionGroup::Goalkeeper
             && let Some(apex) = KeeperSplitStep::apex(player, tick_context)
         {
@@ -873,13 +951,12 @@ impl PlayerMatchState {
             // velocity passes through, means no state can bypass it and
             // no caller can compose its way around it: almost every
             // caller composes steering results (`Arrive{..}.velocity +
-            // separation_velocity()`), and a handful of states
-            // (`RunningInBehind` and friends) skip the behaviours
-            // entirely and assign `direction * speed` outright.
+            // separation_velocity()`), and a few scale one past top speed
+            // (`RunningInBehind`'s `Seek` times up to 1.45).
             //
             // Outfielders get the real momentum model —
             // `MovementEffort::sprint_ramp`, where `acceleration` sets
-            // the per-tick budget in physical units (4.4–8.8 m/s²) and
+            // the per-tick budget in physical units (a 20–30 m/s² burst) and
             // `agility` the braking/turning multiplier. Before it, the
             // bound below was the only one, and at 0.25–0.55 u/tick it
             // allowed a full stop-to-sprint change in 1–2 AI ticks
@@ -1047,15 +1124,24 @@ impl PlayerMatchState {
             // himself. Its own band because a dive that travels at sprint
             // speed makes diving pointless — see `GoalkeeperSpeedContext`.
             GoalkeeperState::Diving => GoalkeeperSpeedContext::Dive,
-            // Reflex actions — the punch, the jump, the set.
-            GoalkeeperState::PreparingForSave
-            | GoalkeeperState::Jumping
-            | GoalkeeperState::Punching => GoalkeeperSpeedContext::Explosive,
+            // Reflex actions — the punch, the jump.
+            GoalkeeperState::Jumping | GoalkeeperState::Punching => {
+                GoalkeeperSpeedContext::Explosive
+            }
+            // The set: adjusting the angle at a shuffle, not a sprint.
+            GoalkeeperState::PreparingForSave if !KeeperDebug::set_pace_off() => {
+                GoalkeeperSpeedContext::Positioning
+            }
+            GoalkeeperState::PreparingForSave => GoalkeeperSpeedContext::Explosive,
             // Actively covering ground: rushing off the line, closing on a
             // claim, sprinting to a loose ball.
-            GoalkeeperState::Catching | GoalkeeperState::ComingOut | GoalkeeperState::TakeBall => {
-                GoalkeeperSpeedContext::Active
-            }
+            // Closing down a man through on goal is the same running.
+            GoalkeeperState::Catching
+            | GoalkeeperState::ComingOut
+            | GoalkeeperState::TakeBall
+            | GoalkeeperState::OneOnOne => GoalkeeperSpeedContext::Active,
+            // On the floor: a scramble.
+            GoalkeeperState::GettingUp => GoalkeeperSpeedContext::Grounded,
             // Reading the game and adjusting the angle.
             GoalkeeperState::Standing
             | GoalkeeperState::ReturningToGoal
@@ -1107,12 +1193,11 @@ mod state_id_tests {
     fn role_discriminants_are_strictly_increasing_and_unique() {
         // `ALL` must list every variant in ascending discriminant order.
         // Reorder a variant and its discriminant no longer climbs, failing
-        // here before any replay could be misnumbered.
+        // here before any table indexed by it is misnumbered.
         //
         // Equality with the slot index is NOT required: retiring a state
         // leaves a permanent hole in the id space (the GK band has holes
-        // at 1, 15, 16, 20) precisely so the surviving ids never shift
-        // under existing recordings.
+        // at 1, 13, 15, 16, 20) so a surviving id never changes meaning.
         fn assert_ascending<S: Copy + Into<u16>>(all: &[S], role: &str) {
             let mut prev: Option<u16> = None;
             for (i, s) in all.iter().enumerate() {
@@ -1150,20 +1235,20 @@ mod state_id_tests {
     #[test]
     fn compact_id_snapshot() {
         // Pin the entire id space. If a state is added, removed, reordered
-        // or renumbered, this fails — the signal to bump the replay format
-        // intentionally rather than by accident.
+        // or renumbered, this fails, so the change is made on purpose.
         //
         // The GK band deliberately has holes (101 / 113 / 115 / 116 / 120)
         // where `Resting`, `Passing`, `Tackling`, `Shooting` and `Running` were
-        // retired, and the forward band one at 414 where `Assisting` was.
-        // Ids are never reused, so recordings made before the removal
-        // still decode every surviving state to the same name.
+        // retired, and the forward band two, at 414 and 418, where `Assisting`
+        // and `Resting` were.
+        // Ids are never reused. Recordings store names, so they decode
+        // whatever the ids do; the census tables are what the ids index.
         let all = PlayerState::all();
-        assert_eq!(all.len(), 2 + 16 + 22 + 21 + 19, "state count changed");
-        assert_eq!(GoalkeeperState::ALL.len(), 16);
-        assert_eq!(DefenderState::ALL.len(), 22);
-        assert_eq!(MidfielderState::ALL.len(), 21);
-        assert_eq!(ForwardState::ALL.len(), 19);
+        assert_eq!(all.len(), 2 + 18 + 21 + 22 + 20, "state count changed");
+        assert_eq!(GoalkeeperState::ALL.len(), 18);
+        assert_eq!(DefenderState::ALL.len(), 21);
+        assert_eq!(MidfielderState::ALL.len(), 22);
+        assert_eq!(ForwardState::ALL.len(), 20);
 
         let mut ids: Vec<u16> = all.iter().map(|s| s.compact_id()).collect();
         let unique: std::collections::BTreeSet<u16> = ids.iter().copied().collect();
@@ -1171,14 +1256,19 @@ mod state_id_tests {
 
         ids.sort_unstable();
         let mut expected: Vec<u16> = vec![0, 1]; // Injured, Recovering
-        // 16 GK — 101/113/115/116/120 retired, ids never reused.
+        // 18 GK — 101/113/115/116/120 retired, ids never reused.
         expected.extend([
-            100, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 114, 117, 118, 119,
+            100, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 114, 117, 118, 119, 121,
+            122,
         ]);
-        expected.extend(200..=221u16); // 22 DEF (221 = Overlapping)
-        expected.extend(300..=320u16); // 21 MID (320 = HoldingWidth)
-        // 19 FWD (419 = HoldingWidth) — 414 retired, never reused.
-        expected.extend((400..=419u16).filter(|id| *id != 414));
+        // 21 DEF (222 = Jockeying) — 203 `Resting` and 218 `Guarding` retired.
+        expected.extend((200..=222u16).filter(|id| *id != 203 && *id != 218));
+        // 22 MID (321 = Jockeying, 322 = HoldingShape, 323 = TrackingBack) —
+        // 301 `Distributing` and 312 `Resting` retired.
+        expected.extend((300..=323u16).filter(|id| *id != 301 && *id != 312));
+        // 20 FWD (419 = HoldingWidth, 420 = Jockeying, 421 = HoldingShape) —
+        // 414 `Assisting` and 418 `Resting` retired, never reused.
+        expected.extend((400..=421u16).filter(|id| *id != 414 && *id != 418));
         assert_eq!(ids, expected, "compact_id space drifted");
 
         // Anchor a few named states so an intra-band reorder is caught
@@ -1197,6 +1287,14 @@ mod state_id_tests {
         assert_eq!(
             PlayerState::Goalkeeper(GoalkeeperState::TakeBall).compact_id(),
             119
+        );
+        assert_eq!(
+            PlayerState::Goalkeeper(GoalkeeperState::OneOnOne).compact_id(),
+            121
+        );
+        assert_eq!(
+            PlayerState::Goalkeeper(GoalkeeperState::GettingUp).compact_id(),
+            122
         );
         assert_eq!(
             PlayerState::Defender(DefenderState::AttackingCorner).compact_id(),

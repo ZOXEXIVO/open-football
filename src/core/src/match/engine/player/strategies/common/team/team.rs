@@ -4,7 +4,7 @@ use crate::r#match::player::diagnostics::motion_diag::POSSESSION_CENSUS;
 use crate::r#match::player::strategies::players::ops::skill::traits_bias::movement_bias;
 use crate::r#match::player::strategies::common::players::ops::box_movement::BoxMovement;
 use crate::r#match::{
-    AttackPlan, BoxSlot, CoachInstruction, DefensiveDuty, DefensivePlan, Flank, GamePhase,
+    AttackPlan, BoxSlot, DefensiveDuty, DefensivePlan, Flank, GamePhase,
     MatchCoach, MatchContext, MatchPlayerLite, PlayerSide, StateProcessingContext, TeamShape,
     TeamTacticalState, WidePlan,
 };
@@ -32,6 +32,10 @@ impl<'b> TeamOperationsImpl<'b> {
     /// the pass simple and the full-back's decision hard.
     const OVERLAP_LEAD: f32 = 60.0;
     const OVERLAP_OUTSIDE: f32 = 20.0;
+    /// How far behind the ball a man the attack keeps back holds his
+    /// place (~15 m): a ball played back past him leaves him ahead of it
+    /// until he has dropped, which at 5 m was a fifth of his time.
+    const KEPT_BEHIND: f32 = 120.0;
     /// How much of the gap between the block's line and the BALL a man
     /// holding a touchline closes.
     ///
@@ -53,6 +57,10 @@ impl<'b> TeamOperationsImpl<'b> {
     /// leaving him behind it when the ball is already at the byline, and
     /// pulls him back when the move is recycled behind him.
     const WIDTH_DEPTH_FOLLOW: f32 = 0.65;
+    /// The keep-the-ball reading above which a side recycles rather than
+    /// breaks, and how far the stance moves that reading.
+    const KEEP_FROM: f32 = 0.6;
+    const KEEP_STANCE: f32 = 0.5;
     // ⚠ A DEEPER FOLLOW FOR THE OVERLAP RUNNER WAS TRIED AND REVERTED —
     // DO NOT RE-DERIVE IT.
     //
@@ -90,11 +98,6 @@ impl<'b> TeamOperationsImpl<'b> {
         }
     }
 
-    /// Get the coach's current instruction for this player's team
-    pub fn coach_instruction(&self) -> CoachInstruction {
-        self.coach().instruction
-    }
-
     /// Get the coach state for this player's team
     pub fn coach(&self) -> &MatchCoach {
         self.ctx.context.coach_for_team(self.ctx.player.team_id)
@@ -121,9 +124,7 @@ impl<'b> TeamOperationsImpl<'b> {
     /// the same plan, which is the point: the destinations are exclusive,
     /// so two players cannot be sent to the same patch of grass.
     pub fn attack_plan(&self) -> &AttackPlan {
-        self.ctx
-            .context
-            .attack_plan_for_team(self.ctx.player.team_id)
+        self.plans_as_read().0
     }
 
     /// The box slot this player has been given, if any.
@@ -136,9 +137,17 @@ impl<'b> TeamOperationsImpl<'b> {
     /// [`attack_plan`](Self::attack_plan): with the ball it says who the
     /// move is for, without it says who each man is responsible for.
     pub fn defensive_plan(&self) -> &DefensivePlan {
-        self.ctx
-            .context
-            .defence_plan_for_team(self.ctx.player.team_id)
+        self.plans_as_read().1
+    }
+
+    /// The side's plans as this player has taken them in: a man who
+    /// follows the plan less closely is still acting on the plan of a
+    /// moment ago when a new run, cover or tracking job is handed out.
+    fn plans_as_read(&self) -> (&AttackPlan, &DefensivePlan) {
+        self.ctx.context.plans_as_read(
+            self.ctx.player.team_id,
+            self.ctx.player.adherence.job_latency(),
+        )
     }
 
     /// What THIS player is responsible for defensively. `HoldZone` when
@@ -258,7 +267,8 @@ impl<'b> TeamOperationsImpl<'b> {
     ///    average, and an average never puts anybody on the paint.
     /// 4. **Team shape** — his anchor inside the live block
     ///    ([`TeamShape`]). Always available, covers all eleven, and is
-    ///    what makes the side one body rather than eleven agents.
+    ///    what makes the side one body rather than eleven agents. A man the
+    ///    attack keeps back holds it behind the ball.
     /// 5. **Kickoff dot** — the pre-plan fallback, kept only for the
     ///    first tick of a match and for a player who has somehow left
     ///    every roster.
@@ -279,10 +289,31 @@ impl<'b> TeamOperationsImpl<'b> {
         if let Some(wide) = self.my_width_anchor() {
             return wide;
         }
-        if let Some(anchor) = self.shape().anchor_of(self.ctx.player.id) {
-            return anchor;
+        let place = self
+            .shape()
+            .anchor_of(self.ctx.player.id)
+            .unwrap_or(self.ctx.player.start_position);
+        if self.attack_plan().is_rest_defence(self.ctx.player.id) {
+            return self.behind_the_ball(place);
         }
-        self.ctx.player.start_position
+        place
+    }
+
+    /// `place`, no further up the pitch than `KEPT_BEHIND` short of the ball.
+    fn behind_the_ball(&self, place: Vector3<f32>) -> Vector3<f32> {
+        let forward = self
+            .ctx
+            .player
+            .side
+            .map_or(1.0, |side| side.forward_dir_x());
+        let ball_x = self.ctx.tick_context.positions.ball.position.x;
+        let limit = ball_x - forward * Self::KEPT_BEHIND;
+        let x = if (place.x - limit) * forward > 0.0 {
+            limit
+        } else {
+            place.x
+        };
+        Vector3::new(x, place.y, place.z)
     }
 
     /// This side's width assignment — who is on each touchline and who
@@ -466,8 +497,7 @@ impl<'b> TeamOperationsImpl<'b> {
         if self.counter_window() {
             return false;
         }
-        let coach = self.coach_instruction();
-        if coach.prefer_possession() {
+        if self.prefers_keeping_the_ball() {
             return true;
         }
 
@@ -496,17 +526,23 @@ impl<'b> TeamOperationsImpl<'b> {
             return true;
         }
 
-        // (5) Late game + drawing or leading — even Normal-instruction
-        // teams slow down in the last 10 min when they don't need goals.
-        let half_ms = crate::r#match::engine::engine::MATCH_HALF_TIME_MS as f32;
-        let full_ms = half_ms * 2.0;
-        let match_progress = (ctx.context.total_match_time as f32 / full_ms).clamp(0.0, 1.0);
-        if match_progress > 0.88 && self.score_diff() >= 0 {
-            return true;
-        }
-
         // (4) Attack not set up downfield.
         !self.is_attack_ready()
+    }
+
+    /// Whether the side means to keep the ball rather than break with it:
+    /// a slow, patient plan, and a stance turned toward protecting what it
+    /// has.
+    pub fn prefers_keeping_the_ball(&self) -> bool {
+        let plan = &self.coach().plan;
+        let keep = 0.5 * (1.0 - plan.tempo) + 0.5 * (1.0 - plan.directness)
+            - Self::KEEP_STANCE * self.tactical().stance;
+        keep > Self::KEEP_FROM
+    }
+
+    /// The plan's appetite for risk, before the stance moves it.
+    pub fn plan_risk(&self) -> f32 {
+        self.tactical().plan_risk
     }
 
     /// True when a genuine counter-attack window is open: we won the
@@ -627,12 +663,6 @@ impl<'b> TeamOperationsImpl<'b> {
         self.tactical().rest_defense_count
     }
 
-    /// In the counter-press window: just lost the ball, the nearest 2-3
-    /// players should engage instead of falling back.
-    pub fn counterpress_window(&self) -> bool {
-        self.tactical().counterpress_window
-    }
-
     /// Whether the team's coach allows shooting right now (team-level cooldown).
     ///
     /// A live rebound (dangerous parry / loose block deflection within
@@ -652,9 +682,8 @@ impl<'b> TeamOperationsImpl<'b> {
     }
 
     /// Score difference from this team's perspective (positive =
-    /// leading) — as BEHAVIOR is allowed to see it: level before
-    /// score-reactive football engages (final ~28 min, see
-    /// `MatchContext::SCORE_REACTION_FROM_MINUTE`), real after.
+    /// leading), as behaviour may see it — see
+    /// `MatchContext::behavioral_score_visible`.
     pub fn score_diff(&self) -> i8 {
         if !self.ctx.context.behavioral_score_visible() {
             return 0;
@@ -725,11 +754,8 @@ impl<'b> TeamOperationsImpl<'b> {
         !self.is_loosing()
     }
 
-    /// Behavioral "are we behind?" — like `score_diff`, players act on
-    /// the scoreline only once score-reactive football engages (final
-    /// ~28 min). Before that a trailing side keeps playing its game —
-    /// the from-minute-1 reaction was part of the measured equalizer
-    /// machine (trailing teams scored at 2.35/90 vs leaders' 1.08).
+    /// Behavioral "are we behind?", as behaviour may see it — see
+    /// `MatchContext::behavioral_score_visible`.
     pub fn is_loosing(&self) -> bool {
         if !self.ctx.context.behavioral_score_visible() {
             return false;

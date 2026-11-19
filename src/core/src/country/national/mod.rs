@@ -462,6 +462,8 @@ impl NationalTeam {
             // memory yet — the match engine falls back to the legacy
             // (memory-less) substitution scoring for these fixtures.
             coach_snapshot: None,
+            coach_card: None,
+            familiarity: None,
         }
     }
 
@@ -566,6 +568,8 @@ impl NationalTeam {
             selection_omissions: Vec::new(),
             overlooked: Vec::new(),
             coach_snapshot: None,
+            coach_card: None,
+            familiarity: None,
         }
     }
 }

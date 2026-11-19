@@ -1,7 +1,7 @@
 use crate::r#match::Ball;
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperPunt,
+    ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision, KeeperPunt,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
@@ -47,6 +47,9 @@ impl StateProcessingHandler for GoalkeeperClearingState {
 }
 
 impl GoalkeeperClearingState {
+    /// Pressed past this (`KeeperFeetDecision::pressure`), he clears wide.
+    const PRESSED: f32 = 0.5;
+
     /// Execute a clearance — lofted hoof up the pitch, struck flat out.
     ///
     /// Old implementation used `MoveBall` with z=0, so the "clearance"
@@ -120,9 +123,21 @@ impl GoalkeeperClearingState {
 
         // Central-ish and off-centre at random, so the clearance lands
         // where the midfielders can contest it rather than near a
-        // sideline, and so it is not predictable.
+        // sideline, and so it is not predictable. With a man on him he
+        // gets it away from the middle instead: the nearer touchline third,
+        // where a miscue costs a throw rather than a shot.
         let rng = &ctx.context.rng;
-        let target_y = mid_y + rng.jitter(0.0, field_height * 0.15);
+        let target_y = if KeeperFeetDecision::pressure(ctx) > Self::PRESSED {
+            let third = field_height / 3.0;
+            let wide_y = if keeper_pos.y < mid_y {
+                third * 0.5
+            } else {
+                field_height - third * 0.5
+            };
+            wide_y + rng.jitter(0.0, third * 0.25)
+        } else {
+            mid_y + rng.jitter(0.0, field_height * 0.15)
+        };
         // Never hoof it over the far goal line: a clearance that lands in
         // the opposition six-yard box is a free ball for their keeper.
         const GOAL_LINE_MARGIN: f32 = 90.0;

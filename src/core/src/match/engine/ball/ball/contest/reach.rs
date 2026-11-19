@@ -44,6 +44,9 @@
 //!   declared itself aerial — the heading states, the winner of a
 //!   decided aerial contest, a goalkeeper's punch — reaches his full
 //!   jumping ceiling.
+//! * [`PlayerReach::can_head`] — may he HEAD it: above the boot, under
+//!   his ceiling, and within [`PlayerReach::HEAD_REACH`] across the grass,
+//!   which is shorter than a boot's reach.
 //!
 //! Nothing here rolls a die or moves anything. It answers one question
 //! for every caller, so the answer cannot drift.
@@ -76,6 +79,9 @@ pub enum BlockContact {
 pub struct PlayerReach;
 
 impl PlayerReach {
+    /// How far across the grass a head reaches: 0.75 m, for every role.
+    pub const HEAD_REACH: f32 = 6.0;
+
     /// The highest ball this player can play at all, in metres — a
     /// standing reach for a poor leaper, the top of a jump for a good
     /// one. See [`AerialReach::ceiling`].
@@ -142,9 +148,28 @@ impl PlayerReach {
     /// refuses; the same ball half a second later, on the deck, is his.
     #[inline]
     pub fn can_strike(ball: &Ball, player: &MatchPlayer, aerial: bool) -> bool {
+        Self::can_strike_at(ball.position, player, aerial)
+    }
+
+    /// [`Self::can_strike`] for a ball at `position` — what a state reads
+    /// off the tick's snapshot.
+    #[inline]
+    pub fn can_strike_at(position: Vector3<f32>, player: &MatchPlayer, aerial: bool) -> bool {
         player.can_play_ball()
-            && ball.position.z <= Self::strike_ceiling(player, aerial)
-            && Self::within(ball.position, player.position, KICKABLE_DISTANCE)
+            && position.z <= Self::strike_ceiling(player, aerial)
+            && Self::within(position, player.position, KICKABLE_DISTANCE)
+    }
+
+    /// **Can he head this ball, where it is?** Above the highest ball a
+    /// boot can strike, at or below his own jumping ceiling, and within a
+    /// head's reach measured across the grass — the ball's height is not a
+    /// distance from him.
+    #[inline]
+    pub fn can_head(position: Vector3<f32>, player: &MatchPlayer) -> bool {
+        player.can_play_ball()
+            && position.z > AerialReach::VOLLEY
+            && position.z <= Self::ceiling(player)
+            && Self::within(position, player.position, Self::HEAD_REACH)
     }
 
     /// **May he get a body to this ball, right now?** — the block

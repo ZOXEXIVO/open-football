@@ -117,6 +117,8 @@ fn squad(team_id: u32, base_id: u32) -> MatchSquad {
         selection_omissions: vec![],
         overlooked: vec![],
         coach_snapshot: None,
+        coach_card: None,
+        familiarity: None,
     }
 }
 

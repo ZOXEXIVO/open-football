@@ -1,6 +1,7 @@
 use crate::PlayerSkills;
-use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, DefenderRead,
+};
 use crate::r#match::engine::ball::ball::{Ball, KICKABLE_DISTANCE};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::psychology::lapse::lapse_diag;
@@ -30,9 +31,7 @@ impl StateProcessingHandler for DefenderClearingState {
         // is a committed action and is dropped from the chase table and
         // the `TakeMe` redirect while it runs.
         if !self.contact_available(ctx) {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Standing,
-            ));
+            return Some(DefenderRead::change(ctx));
         }
 
         // Wait a few ticks before clearing to allow the player to reach the ball
@@ -40,7 +39,7 @@ impl StateProcessingHandler for DefenderClearingState {
             return None;
         }
 
-        let mut state = StateChangeResult::with(PlayerState::Defender(DefenderState::Standing));
+        let mut state = StateChangeResult::with(PlayerState::Defender(DefenderRead::released(ctx)));
 
         // Get ball's current position
         let ball_position = ctx.tick_context.positions.ball.position;
@@ -139,11 +138,10 @@ impl StateProcessingHandler for DefenderClearingState {
         let speed_mult =
             (0.85 + def_profile.clearance_profile * 0.30) * def_profile.clearance_condition_mult;
         // Reach the aim point within the hang time, then trim by execution.
-        // Clamped to a realistic hoof: 2.6 u/tick = 32 m/s.
         let hang = Ball::hang_ticks(z_velocity).max(1.0);
         let clear_speed =
             ((to_target_dist / hang) * speed_mult * if poor_clearance { 0.65 } else { 1.0 })
-                .clamp(0.30, 2.6);
+                .clamp(0.30, Ball::MAX_CLEARANCE_SPEED);
         let horizontal_velocity = direction_to_target * clear_speed;
 
         let ball_velocity = Vector3::new(horizontal_velocity.x, horizontal_velocity.y, z_velocity);

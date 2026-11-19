@@ -876,6 +876,18 @@ pub struct BallMetadata {
     /// re-rolling the duel the contest just decided.
     /// See `Ball::aerial_contest_winner`.
     pub aerial_contest_winner: Option<u32>,
+    /// Who a decided aerial contest is delivering the ball to
+    /// (`Ball::aerial_delivery`).
+    pub aerial_delivery_winner: Option<u32>,
+    /// Where that delivery comes down through heading height
+    /// (`AerialDelivery::target`): the spot its winner meets it on.
+    pub aerial_delivery_target: Option<Vector3<f32>>,
+    /// That man, when he goes up for it in his own read
+    /// (`MatchPlayer::plays_his_own_header`): the ball is his, and nobody
+    /// on his side is sent chasing it.
+    pub aerial_award_for: Option<u32>,
+    /// The ball in the air was crossed. See `Ball::pending_pass_was_cross`.
+    pub pending_pass_was_cross: bool,
     /// The side whose restart the game is waiting on, until the kick or
     /// the throw is made (`Ball::restart_in_progress`).
     pub restarting_team: Option<u32>,
@@ -933,6 +945,14 @@ pub struct BallMetadata {
 }
 
 impl BallMetadata {
+    /// A decided aerial contest is bringing the ball to this man, or has
+    /// left it his to head.
+    #[inline]
+    pub fn awaits_header_from(&self, player_id: u32) -> bool {
+        self.aerial_delivery_winner == Some(player_id)
+            || self.aerial_contest_winner == Some(player_id)
+    }
+
     #[inline]
     pub fn notified_players(&self) -> &[u32] {
         &self.notified_buf[..self.notified_len as usize]
@@ -990,6 +1010,14 @@ impl BallMetadata {
         self.goal_kick_taker = field.ball.goal_kick_taker;
         self.kickoff_partner = field.ball.kickoff_partner;
         self.aerial_contest_winner = field.ball.aerial_contest_winner;
+        self.aerial_delivery_winner = field.ball.aerial_delivery.as_ref().map(|d| d.winner_id);
+        self.aerial_delivery_target = field.ball.aerial_delivery.as_ref().map(|d| d.target);
+        self.aerial_award_for = self.aerial_delivery_winner.filter(|id| {
+            field
+                .get_player(*id)
+                .is_some_and(|p| p.plays_his_own_header())
+        });
+        self.pending_pass_was_cross = field.ball.pending_pass_was_cross;
         self.restarting_team = field
             .ball
             .restart_in_progress()
@@ -1055,6 +1083,10 @@ impl From<&MatchField> for BallMetadata {
             deliberate_kick_by: None,
             hands_released_by: None,
             aerial_contest_winner: None,
+            aerial_delivery_winner: None,
+            aerial_delivery_target: None,
+            aerial_award_for: None,
+            pending_pass_was_cross: false,
             restarting_team: None,
             restart_taker: None,
             restart_carrier: None,

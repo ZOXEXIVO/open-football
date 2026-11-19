@@ -12,8 +12,11 @@ use super::player_stats::{PlayerMatchEndStats, PlayerMatchPhysicalSnapshot};
 use super::score::Score;
 use super::substitution::SubstitutionInfo;
 use super::tally::MatchTally;
+use crate::club::team::talks::TeamTalkTone;
 use crate::league::LeagueMatch;
 use crate::r#match::engine::environment::{Pitch, Weather};
+use crate::r#match::engine::teamplay::coach::CoachRecord;
+use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::squad::OmittedPlayer;
 use crate::r#match::{MatchSquad, RecordingArtifacts, ResultMatchPositionData};
@@ -105,19 +108,20 @@ pub struct MatchResultRaw {
     pub starting_home_tactic: Option<MatchTacticType>,
     pub starting_away_tactic: Option<MatchTacticType>,
     /// The shape each team finished the match in. Differs from the
-    /// starting shape when the in-match coach probed a situational
-    /// override (`evaluate_situational_shape`) — e.g. 4-4-2 → 4-3-3
-    /// chasing a deficit, 4-4-2 → 4-5-1 protecting a lead. Surfaced so
+    /// starting shape when its coach changed formation during the match —
+    /// e.g. 4-4-2 → 4-3-3 chasing a deficit, 4-4-2 → 4-5-1 protecting a
+    /// lead. Surfaced so
     /// the league pipeline can record it on `MatchHistory` and the
     /// web tactics view can render "Plan: 4-4-2 — Last used: 4-3-3
     /// (chase) vs Spurs".
     pub final_home_tactic: Option<MatchTacticType>,
     pub final_away_tactic: Option<MatchTacticType>,
-    /// Sim-minute at which the FIRST shape change fired for either
-    /// side (whichever came first). `None` when neither side changed
-    /// shape during the match. Stored as the marker the web view uses
-    /// to label a chip with "shifted at min X".
-    pub shape_change_minute: Option<u8>,
+    /// How each side was managed: its kickoff plan, every change to it
+    /// with the minute and the moment, and its half-time talk.
+    #[serde(default)]
+    pub coach_home: CoachRecord,
+    #[serde(default)]
+    pub coach_away: CoachRecord,
     #[serde(default)]
     pub tally: MatchTally,
     /// What it was played in.
@@ -161,7 +165,8 @@ impl Clone for MatchResultRaw {
             starting_away_tactic: self.starting_away_tactic,
             final_home_tactic: self.final_home_tactic,
             final_away_tactic: self.final_away_tactic,
-            shape_change_minute: self.shape_change_minute,
+            coach_home: self.coach_home.clone(),
+            coach_away: self.coach_away.clone(),
             tally: self.tally.clone(),
             weather: self.weather,
             pitch: self.pitch,
@@ -192,7 +197,8 @@ impl MatchResultRaw {
             starting_away_tactic: None,
             final_home_tactic: None,
             final_away_tactic: None,
-            shape_change_minute: None,
+            coach_home: CoachRecord::default(),
+            coach_away: CoachRecord::default(),
             tally: MatchTally::default(),
             weather: Weather::default(),
             pitch: Pitch::default(),
@@ -221,13 +227,50 @@ impl MatchResultRaw {
             starting_away_tactic: self.starting_away_tactic,
             final_home_tactic: self.final_home_tactic,
             final_away_tactic: self.final_away_tactic,
-            shape_change_minute: self.shape_change_minute,
+            coach_home: self.coach_home.clone(),
+            coach_away: self.coach_away.clone(),
             tally: self.tally.clone(),
             weather: self.weather,
             pitch: self.pitch,
             standard_of_football: self.standard_of_football,
             penalty_saves: self.penalty_saves.clone(),
             penalty_misses: self.penalty_misses.clone(),
+        }
+    }
+
+    /// Every goal in the order it was scored: when, on the match clock, and
+    /// whether it counted for the home side. An own goal counts for the side
+    /// the scorer was playing against.
+    pub fn goal_timeline(&self) -> Vec<(u64, bool)> {
+        let Some(score) = self.score.as_ref() else {
+            return Vec::new();
+        };
+        let home_id = score.home_team.team_id;
+        let team_of = |player_id: u32| {
+            [&self.left_team_players, &self.right_team_players]
+                .into_iter()
+                .find(|squad| {
+                    squad.main.contains(&player_id) || squad.substitutes.contains(&player_id)
+                })
+                .map(|squad| squad.team_id)
+        };
+        let mut goals: Vec<(u64, bool)> = score
+            .detail()
+            .iter()
+            .filter(|g| g.stat_type == MatchStatisticType::Goal)
+            .filter_map(|g| team_of(g.player_id).map(|team| (g.time, (team == home_id) != g.is_auto_goal)))
+            .collect();
+        goals.sort_by_key(|&(time, _)| time);
+        goals
+    }
+
+    /// The half-time talk `team_id`'s coach gave in this match, if he gave
+    /// one. The home side kicked off on the left.
+    pub fn half_time_talk(&self, team_id: u32) -> Option<TeamTalkTone> {
+        if team_id == self.left_team_players.team_id {
+            self.coach_home.half_time_talk
+        } else {
+            self.coach_away.half_time_talk
         }
     }
 
@@ -336,6 +379,12 @@ impl FieldSquad {
         self.main.len() + self.substitutes.len()
     }
 
+    /// Everyone named for the match, who was in the dressing room at
+    /// half-time: the starters and the whole bench, used or not.
+    pub fn dressing_room(&self) -> impl Iterator<Item = u32> + '_ {
+        self.main.iter().chain(self.substitutes.iter()).copied()
+    }
+
     /// Slot the starter played at kickoff, or `None` if the
     /// `starter_slots` map was not populated (legacy paths) or the
     /// player wasn't in the starting eleven.
@@ -411,6 +460,26 @@ mod tests {
             scored,
             sudden_death: false,
         }
+    }
+
+    #[test]
+    fn the_recorded_half_time_talk_is_each_side_s_own() {
+        let mut result = MatchResultRaw::with_match_time(90 * 60 * 1000);
+        result.left_team_players.team_id = 1;
+        result.right_team_players.team_id = 2;
+        result.coach_home.half_time_talk = Some(TeamTalkTone::Criticise);
+        result.coach_away.half_time_talk = Some(TeamTalkTone::Praise);
+        assert_eq!(result.half_time_talk(1), Some(TeamTalkTone::Criticise));
+        assert_eq!(result.half_time_talk(2), Some(TeamTalkTone::Praise));
+    }
+
+    #[test]
+    fn the_whole_matchday_squad_was_in_the_dressing_room() {
+        let mut squad = FieldSquad::new();
+        squad.main = vec![1, 2];
+        squad.substitutes = vec![3, 4];
+        squad.substitutes_used = vec![3];
+        assert_eq!(squad.dressing_room().collect::<Vec<_>>(), vec![1, 2, 3, 4]);
     }
 
     #[test]

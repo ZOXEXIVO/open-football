@@ -123,6 +123,8 @@ pub(super) fn squad_in(
         selection_omissions: vec![],
         overlooked: vec![],
         coach_snapshot: None,
+        coach_card: None,
+        familiarity: None,
     }
 }
 
@@ -215,6 +217,51 @@ fn a_goal_leaves_the_ball_in_the_net_not_on_the_line() {
         depth > 0.0 && depth <= GoalNet::DEPTH + GoalNet::GIVE_BACK,
         "the ball must come to rest inside the goal, ended {depth:.2}u past the line"
     );
+}
+
+/// The ball crosses the goal line at `x` off `player`, who has had it long
+/// enough to call it his: whether it is a goal, and an own goal.
+fn in_off(field: &mut MatchField, context: &MatchContext, player: u32, x: f32) -> Option<bool> {
+    field.ball.previous_owner = Some(player);
+    field.ball.current_owner = None;
+    field.ball.ownership_duration = 60;
+    field.ball.position = Vector3::new(x, 545.0 / 2.0 + 6.0, 0.6);
+    field.ball.velocity = Vector3::new(if x < 0.0 { -2.2 } else { 2.2 }, 0.0, -0.01);
+    let mut events = EventCollection::with_capacity(4);
+    field.ball.check_goal(context, &mut events);
+    field.ball.in_net.map(|net| net.auto_goal)
+}
+
+fn home_player(field: &MatchField, position: PlayerPositionType) -> u32 {
+    field
+        .players
+        .iter()
+        .find(|p| p.team_id == 1 && p.tactical_position.current_position == position)
+        .map(|p| p.id)
+        .expect("the home side has the role")
+}
+
+#[test]
+fn a_defender_who_turns_it_into_his_own_net_scores_an_own_goal() {
+    let (mut field, context) = kickoff();
+    let defender = home_player(&field, PlayerPositionType::DefenderCenterLeft);
+    assert_eq!(in_off(&mut field, &context, defender, -1.0), Some(true));
+}
+
+#[test]
+fn after_the_change_of_ends_an_own_goal_is_still_one_and_a_goal_still_a_goal() {
+    let (mut field, mut context) = kickoff();
+    field.swap_squads();
+    context.players.change_ends();
+    let defender = home_player(&field, PlayerPositionType::DefenderCenterLeft);
+    assert_eq!(in_off(&mut field, &context, defender, 841.0), Some(true));
+
+    let (mut field, mut context) = kickoff();
+    field.swap_squads();
+    context.players.change_ends();
+    let forward = home_player(&field, PlayerPositionType::ForwardLeft);
+    field.ball.last_shot_struck_tick = context.current_tick();
+    assert_eq!(in_off(&mut field, &context, forward, -1.0), Some(false));
 }
 
 #[test]

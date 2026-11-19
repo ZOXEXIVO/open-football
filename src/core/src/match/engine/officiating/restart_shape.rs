@@ -11,6 +11,7 @@
 //! nothing: no RNG, no clock, the same players in the same places always
 //! produce the same plan. Holding them there belongs to `SetPieceHold`.
 
+use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::engine::set_pieces::{FreeKickBand, wall_size_for};
 use crate::r#match::{MatchPlayer, PassOriginRestart, PlayerSide};
 use nalgebra::Vector3;
@@ -40,7 +41,7 @@ impl RestartShape {
     /// in — walked to the line, let go, and back on it.
     const LINE_TOLERANCE: f32 = 8.0;
     /// Shoulder to shoulder in a wall.
-    const WALL_SPACING: f32 = 5.0;
+    pub const WALL_SPACING: f32 = 5.0;
     /// 16.5 m and 40.32 m: the penalty area's depth and width.
     const AREA_DEPTH: f32 = 132.0;
     const AREA_WIDTH: f32 = 322.6;
@@ -233,13 +234,24 @@ impl RestartShape {
         } else {
             wall_size_for(band, wide) as usize
         };
-        let dir = if distance > 0.0 {
-            to_goal / distance
-        } else {
-            to_goal
-        };
-        let across = Vector3::new(-dir.y, dir.x, 0.0);
-        let wall_centre = spot + dir * Self::WALL_DISTANCE;
+        // The wall takes the near side of the goal: its outermost man stands
+        // on the line from the ball to the near post and the rest extend
+        // inward from him, which leaves the far side the keeper's.
+        let near_post = Vector3::new(
+            goal.x,
+            goal.y + (spot.y - goal.y).signum() * GOAL_WIDTH,
+            0.0,
+        );
+        let post_dir = (near_post - spot)
+            .try_normalize(1e-3)
+            .unwrap_or_else(|| Vector3::new(1.0, 0.0, 0.0));
+        let mut across = Vector3::new(-post_dir.y, post_dir.x, 0.0);
+        if across.dot(&(goal - near_post)) < 0.0 {
+            across = -across;
+        }
+        let outermost = spot + post_dir * Self::WALL_DISTANCE;
+        let wall_centre =
+            outermost + across * (wall_size.saturating_sub(1) as f32 * 0.5 * Self::WALL_SPACING);
 
         let mut outfield: Vec<&MatchPlayer> = Self::opponents(players, taker)
             .filter(|p| !p.tactical_position.current_position.is_goalkeeper())
@@ -253,10 +265,9 @@ impl RestartShape {
         let mut stations = Vec::new();
         let wall_n = wall_size.min(outfield.len());
         for (i, man) in outfield.iter().take(wall_n).enumerate() {
-            let offset = (i as f32 - (wall_n as f32 - 1.0) * 0.5) * Self::WALL_SPACING;
             stations.push(RestartStation {
                 player_id: man.id,
-                position: wall_centre + across * offset,
+                position: outermost + across * (i as f32 * Self::WALL_SPACING),
             });
         }
         for man in outfield.iter().skip(wall_n) {

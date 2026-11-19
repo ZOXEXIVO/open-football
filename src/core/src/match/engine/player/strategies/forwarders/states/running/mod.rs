@@ -1,1488 +1,751 @@
 use crate::PlayerPositionType;
-use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{
-    ActivityIntensity, ForwardCondition, ForwardPress, InterceptionRange,
+    ActivityIntensity, ForwardCondition, ForwardRead, ForwardShot,
 };
 use crate::r#match::midfielders::states::common::{CarryHeading, LaneAhead};
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::forward_census::{
+    ForwardCensus, FwdLimit, FwdRequest, FwdVerdict,
+};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::common::players::ops::clearance::TouchlineCall;
 use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay};
-use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
-use crate::r#match::player::strategies::common::players::ops::box_movement::BoxMovement;
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     BallCarry, ShotDecision, evaluate_forward_shot_decision,
 };
-use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
-use crate::r#match::player::strategies::common::players::ops::support::SupportOffer;
-use crate::r#match::player::strategies::common::states::TackleEngagement;
-use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::engine::shot_gate_stats;
+use crate::r#match::engine::engine::stuck_exit_stats;
 use crate::r#match::{
-    ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromPosition, PlayerSide,
-    StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 use std::cmp::Ordering;
 
-// ───────────────────────────────────────────────────────────────────────────
-// Shot-gate rejection counters — `match-logs` feature only. A forward tick
-// with the ball in shooting range increments a waterfall of passes: each
-// counter represents the subset of ticks that got past the prior gate.
-// Drop-off between adjacent counters = how often that specific gate fires.
-// `fired` is the ultimate output; gap between `passed_willingness` and
-// `fired` is the rng drop inside the willingness roll.
-// ───────────────────────────────────────────────────────────────────────────
-#[cfg(feature = "match-logs")]
-/// Which `return None` a stuck forward is taking.
-///
-/// `Forward: Running` is the last row in the ball-stuck table that is a
-/// genuine freeze rather than the claim-tick label (96-98% of its stuck
-/// ticks have the owner 250-plus AI ticks into the state). Only a
-/// `return None` keeps him in Running — every other exit changes state
-/// and resets the clock — so counting them under exactly that condition
-/// names the branch without a replay dump.
-#[cfg(feature = "match-logs")]
-pub mod stuck_exit_stats {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    pub const EXITS: usize = 5;
-    const ZERO: AtomicU64 = AtomicU64::new(0);
-    /// 0 tempo-hold, 1 point-blank Hold, 2 box Hold, 3 drive-at-goal,
-    /// 4 fell off the end of the tree.
-    pub static EXIT: [AtomicU64; EXITS] = [ZERO; EXITS];
-    pub const NAMES: [&str; EXITS] = [
-        "tempo-hold",
-        "point-blank Hold",
-        "box Hold",
-        "drive-at-goal",
-        "end of tree",
-    ];
-    /// Speed at the moment, in hundredths of a unit per tick — a frozen
-    /// carrier reads ~0, one oscillating in place reads high.
-    pub static SPEED_X100: AtomicU64 = AtomicU64::new(0);
-    pub static SAMPLES: AtomicU64 = AtomicU64::new(0);
-
-    /// Only counts while the carrier is deep enough into the state to be
-    /// what the stuck table is measuring.
-    pub fn note(slot: usize, in_state_time: u64, speed: f32) {
-        if in_state_time <= 250 {
-            return;
-        }
-        EXIT[slot].fetch_add(1, Ordering::Relaxed);
-        SPEED_X100.fetch_add((speed * 100.0) as u64, Ordering::Relaxed);
-        SAMPLES.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn reset() {
-        for c in EXIT.iter() {
-            c.store(0, Ordering::Relaxed);
-        }
-        SPEED_X100.store(0, Ordering::Relaxed);
-        SAMPLES.store(0, Ordering::Relaxed);
-    }
-
-    /// `(per-exit counts, mean speed in units/tick)`.
-    pub fn snapshot() -> ([u64; EXITS], f32) {
-        let mut out = [0u64; EXITS];
-        for (i, c) in EXIT.iter().enumerate() {
-            out[i] = c.load(Ordering::Relaxed);
-        }
-        let n = SAMPLES.load(Ordering::Relaxed).max(1);
-        (
-            out,
-            SPEED_X100.load(Ordering::Relaxed) as f32 / n as f32 / 100.0,
-        )
-    }
-}
-
-#[cfg(not(feature = "match-logs"))]
-pub mod stuck_exit_stats {
-    #[inline(always)]
-    pub fn note(_slot: usize, _in_state_time: u64, _speed: f32) {}
-}
-
-pub mod shot_gate_stats {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    pub static HAS_BALL_IN_RANGE: AtomicU64 = AtomicU64::new(0);
-    pub static PASSED_CAN_SHOOT: AtomicU64 = AtomicU64::new(0);
-    pub static PASSED_SETTLED: AtomicU64 = AtomicU64::new(0);
-    pub static PASSED_NOT_POSSESSION: AtomicU64 = AtomicU64::new(0);
-    pub static PASSED_NOT_DEFER: AtomicU64 = AtomicU64::new(0);
-    pub static PASSED_MAX_DIST: AtomicU64 = AtomicU64::new(0);
-    pub static PASSED_CLEAR_SHOT: AtomicU64 = AtomicU64::new(0);
-    pub static PASSED_WILLINGNESS: AtomicU64 = AtomicU64::new(0);
-    pub static FIRED: AtomicU64 = AtomicU64::new(0);
-    pub static HELPER_SHOOT: AtomicU64 = AtomicU64::new(0);
-    pub static HELPER_PASS: AtomicU64 = AtomicU64::new(0);
-    pub static HELPER_HOLD: AtomicU64 = AtomicU64::new(0);
-
-    pub fn reset() {
-        for c in [
-            &HAS_BALL_IN_RANGE,
-            &PASSED_CAN_SHOOT,
-            &PASSED_SETTLED,
-            &PASSED_NOT_POSSESSION,
-            &PASSED_NOT_DEFER,
-            &PASSED_MAX_DIST,
-            &PASSED_CLEAR_SHOT,
-            &PASSED_WILLINGNESS,
-            &FIRED,
-            &HELPER_SHOOT,
-            &HELPER_PASS,
-            &HELPER_HOLD,
-        ] {
-            c.store(0, Ordering::Relaxed);
-        }
-    }
-
-    pub fn snapshot() -> [u64; 12] {
-        [
-            HAS_BALL_IN_RANGE.load(Ordering::Relaxed),
-            PASSED_CAN_SHOOT.load(Ordering::Relaxed),
-            PASSED_SETTLED.load(Ordering::Relaxed),
-            PASSED_NOT_POSSESSION.load(Ordering::Relaxed),
-            PASSED_NOT_DEFER.load(Ordering::Relaxed),
-            PASSED_MAX_DIST.load(Ordering::Relaxed),
-            PASSED_CLEAR_SHOT.load(Ordering::Relaxed),
-            PASSED_WILLINGNESS.load(Ordering::Relaxed),
-            FIRED.load(Ordering::Relaxed),
-            HELPER_SHOOT.load(Ordering::Relaxed),
-            HELPER_PASS.load(Ordering::Relaxed),
-            HELPER_HOLD.load(Ordering::Relaxed),
-        ]
-    }
-}
-
-// ───────────────────────────────────────────────────────────────────────────
-// Tackle instrumentation — `match-logs` feature only. Counts:
-//   * state_entries: how often a Tackling state is entered (any role)
-//   * attempts:      how often attempt_*_tackle actually rolls the dice
-//   * successes:     how often TacklingBall event fires (stat bumped)
-//   * fouls:         CommitFoul events emitted from tackle paths
-// Drop-off reveals whether we over-enter tackling states, over-attempt,
-// or have an inflated success rate — each suggests a different fix.
-// ───────────────────────────────────────────────────────────────────────────
-#[cfg(feature = "match-logs")]
-pub mod tackle_stats {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    pub static DEF_TICKS_IN_STATE: AtomicU64 = AtomicU64::new(0);
-    pub static MID_TICKS_IN_STATE: AtomicU64 = AtomicU64::new(0);
-    pub static FWD_TICKS_IN_STATE: AtomicU64 = AtomicU64::new(0);
-    pub static GK_TICKS_IN_STATE: AtomicU64 = AtomicU64::new(0);
-
-    pub static DEF_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
-    pub static MID_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
-    pub static FWD_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
-    pub static GK_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
-
-    pub static DEF_SUCCESSES: AtomicU64 = AtomicU64::new(0);
-    pub static MID_SUCCESSES: AtomicU64 = AtomicU64::new(0);
-    pub static FWD_SUCCESSES: AtomicU64 = AtomicU64::new(0);
-    pub static GK_SUCCESSES: AtomicU64 = AtomicU64::new(0);
-
-    pub fn reset() {
-        for c in [
-            &DEF_TICKS_IN_STATE,
-            &MID_TICKS_IN_STATE,
-            &FWD_TICKS_IN_STATE,
-            &GK_TICKS_IN_STATE,
-            &DEF_ATTEMPTS,
-            &MID_ATTEMPTS,
-            &FWD_ATTEMPTS,
-            &GK_ATTEMPTS,
-            &DEF_SUCCESSES,
-            &MID_SUCCESSES,
-            &FWD_SUCCESSES,
-            &GK_SUCCESSES,
-        ] {
-            c.store(0, Ordering::Relaxed);
-        }
-    }
-
-    pub fn snapshot() -> [u64; 12] {
-        [
-            DEF_TICKS_IN_STATE.load(Ordering::Relaxed),
-            MID_TICKS_IN_STATE.load(Ordering::Relaxed),
-            FWD_TICKS_IN_STATE.load(Ordering::Relaxed),
-            GK_TICKS_IN_STATE.load(Ordering::Relaxed),
-            DEF_ATTEMPTS.load(Ordering::Relaxed),
-            MID_ATTEMPTS.load(Ordering::Relaxed),
-            FWD_ATTEMPTS.load(Ordering::Relaxed),
-            GK_ATTEMPTS.load(Ordering::Relaxed),
-            DEF_SUCCESSES.load(Ordering::Relaxed),
-            MID_SUCCESSES.load(Ordering::Relaxed),
-            FWD_SUCCESSES.load(Ordering::Relaxed),
-            GK_SUCCESSES.load(Ordering::Relaxed),
-        ]
-    }
-}
-
-// Realistic shooting distances (field is 840 units)
-// Real football: most goals scored from within 18m (~36 units)
-/// Furthest a forward will even CONSIDER a strike (40 m). Reachability
-/// only — see the note on the midfielder constant of the same name. The
-/// per-player range and the appetite that fades across it live in
-/// `StrikingRange` / `evaluate_forward_shot_decision`; a flat cap here
-/// short-circuits that model and was capping the whole engine's shot
-/// distribution at 30 m.
-#[allow(dead_code)]
-const MAX_SHOOTING_DISTANCE: f32 = 320.0;
-#[allow(dead_code)]
-const MIN_SHOOTING_DISTANCE: f32 = 5.0;
 /// Depth of the penalty area from the goal line (16.5 m). Inside this, a
 /// forward with the ball is in a shooting position by definition.
 const PENALTY_AREA_DEPTH: f32 = 132.0;
-const POINT_BLANK_DISTANCE: f32 = 48.0; // 6m — point-blank strike zone. Below this, the
-// forward must shoot rather than dribble toward the keeper. Widened
-// from 24u (3m — practically on the 6-yard line) because at 24u the
-// forward had already run past every shot opportunity. Real football:
-// strikers fire from 16-18 yards frequently; running the ball to
-// inside 3m of the keeper is never a conscious choice.
-#[allow(dead_code)]
-const VERY_CLOSE_RANGE_DISTANCE: f32 = 72.0; // 9m - anyone can shoot
-const CLOSE_RANGE_DISTANCE: f32 = 48.0; // ~24m - close range shots
-#[allow(dead_code)]
-const OPTIMAL_SHOOTING_DISTANCE: f32 = 60.0; // ~30m - ideal shooting distance
-#[allow(dead_code)]
-const MEDIUM_RANGE_DISTANCE: f32 = 70.0; // ~35m - medium range shots
-
-// Passing decision thresholds for forwards
-const SHOOTING_ZONE_DISTANCE: f32 = 48.0; // Only shoot under pressure from close range
-const TEAMMATE_ADVANTAGE_STRICT_RATIO: f32 = 0.7; // Teammate must be 30% closer to override
-
-// Performance thresholds
-const SPRINT_DURATION_THRESHOLD: u64 = 150; // Ticks before considering fatigue
 
 #[derive(Default, Clone)]
 pub struct ForwardRunningState {}
 
 impl StateProcessingHandler for ForwardRunningState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Offside discipline — if we don't have the ball, we're not
-        // currently pressing the carrier, and we're stranded past the
-        // opposing defensive line, drop back. Standing/Walking check
-        // for this too; Running also needs it because a forward can
-        // legitimately be running UP (making a diagonal, chasing a
-        // through ball, tracking the game's flow) and that's when they
-        // most often drift offside.
-        if !ctx.player.has_ball(ctx) && ctx.player().defensive().is_stranded_offside() {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Returning,
+        // `Running` is the man on the ball; without it the read answers.
+        if !ctx.player.has_ball(ctx) {
+            return Some(ForwardRead::change(ctx));
+        }
+
+        // Pinned at his own touchline with no safe out: over the line, up
+        // it — the rule every role plays by (`TouchlineCall`).
+        if TouchlineCall::decide(ctx).is_some() {
+            return Some(StateChangeResult::with_forward_state_and_event(
+                ForwardRead::released(ctx),
+                TouchlineCall::put_out(ctx),
             ));
         }
 
-        // Team phase — consulted BEFORE any local context. This is what
-        // turns eleven independent-agent decisions into something that
-        // looks like football. Only the short-window transitions and
-        // explicit pressing cues short-circuit the existing logic; the
-        // "settled in possession" phases fall through to the rich
-        // ball-handling decision tree below.
-        if let Some(phase_action) = self.phase_dispatch(ctx) {
-            return Some(phase_action);
-        }
+        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
-        // Handle cases when player has the ball
-        if ctx.player.has_ball(ctx) {
-            let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-            let coach = ctx.team().coach_instruction();
-            // Team-level cooldown (~500 ms between any team shot).
-            let can_shoot_team = ctx.team().can_shoot();
-            // Per-player cooldown (~1.5 s between this player's shots) —
-            // a striker's balance is disrupted after striking and the
-            // ball has left their feet; they can't fire again instantly.
-            // Without this, a forward camped at the post could fire on
-            // every AI tick and accumulate 30-50 shots per match.
-            let can_shoot_self = ctx.player().can_shoot();
-            let can_shoot = can_shoot_team && can_shoot_self;
-
-            // ── Snapshot under heavy pressure ──────────────────────────
+        // ── Snapshot under heavy pressure ──────────────────────────
+        //
+        // A forward who has JUST received the ball (his first 0.16 s
+        // on it) within 7.5 m of goal (60u) with
+        // a defender right on him (within 1.25 m, 10u) fires
+        // immediately — real football's "first-time shot" pattern. Without this, the forward enters the
+        // normal decision tree, applies first-touch + control
+        // settling + pass-EV deferral + willingness roll, and by the
+        // time those gates resolve the defender has tackled them out
+        // of the buildup. The audit data showed weak-side forwards
+        // reaching the final third 65×/match but only shooting ~5
+        // times — almost every chance died here.
+        //
+        // Tight gates (a defender within 10u, 60u from goal, 0.16 s
+        // on the ball) keep the trigger asymmetric: a STRONG forward is
+        // rarely that close to a defender at the moment of reception
+        // (their team's structure protects them and they get the
+        // ball with space). A WEAK forward facing a strong defence
+        // gets a tight defender on every reception. The wider
+        // 12u/70u version fired equally for both sides and added
+        // strong-side shots; this 8u/50u tightening keeps the
+        // benefit asymmetric.
+        //
+        // The snapshot routes through Shooting state's existing
+        // physics (tagged `FWD_SNAPSHOT_PRESSED`). Error scaling,
+        // body-control penalty, and GK reach all still apply — so a
+        // weak striker firing a rushed snapshot still misses the
+        // target more often than not. The contribution is per-shot
+        // VOLUME, not per-shot quality.
+        if Self::just_received(ctx) && distance_to_goal < 60.0 {
+            // Asymmetric snapshot gate: the forward only fires
+            // instinctively when they KNOW they can't out-touch the
+            // defender — i.e. the nearest opposing tackler's skill
+            // is higher than their own first-touch. A skilled
+            // forward (first_touch > defender's tackling) trusts
+            // their control and takes the time to set up the chance;
+            // a weaker forward facing a strong defender snapshots
+            // before the inevitable tackle. This is the canonical
+            // real-football skill calculus and keeps the trigger
+            // calibration-neutral at equal skill (same skill on both
+            // sides → snapshot rarely fires) while asymmetrically
+            // unlocking shots for weak teams against strong
+            // defenders.
             //
-            // A forward who has JUST received the ball (in_state_time <
-            // 6) inside the shooting zone with a defender right on them
-            // (within 8u) fires immediately — real football's "first-
-            // time shot" pattern. Without this, the forward enters the
-            // normal decision tree, applies first-touch + control
-            // settling + pass-EV deferral + willingness roll, and by the
-            // time those gates resolve the defender has tackled them out
-            // of the buildup. The audit data showed weak-side forwards
-            // reaching the final third 65×/match but only shooting ~5
-            // times — almost every chance died here.
-            //
-            // Tight gates (8u defender, 50u shooting zone, 6-tick
-            // window) keep the trigger asymmetric: a STRONG forward is
-            // rarely that close to a defender at the moment of reception
-            // (their team's structure protects them and they get the
-            // ball with space). A WEAK forward facing a strong defence
-            // gets a tight defender on every reception. The wider
-            // 12u/70u version fired equally for both sides and added
-            // strong-side shots; this 8u/50u tightening keeps the
-            // benefit asymmetric.
-            //
-            // The snapshot routes through Shooting state's existing
-            // physics (tagged `FWD_SNAPSHOT_PRESSED`). Error scaling,
-            // body-control penalty, and GK reach all still apply — so a
-            // weak striker firing a rushed snapshot still misses the
-            // target more often than not. The contribution is per-shot
-            // VOLUME, not per-shot quality.
-            if can_shoot && ctx.in_state_time < 8 && distance_to_goal < 60.0 {
-                // Asymmetric snapshot gate: the forward only fires
-                // instinctively when they KNOW they can't out-touch the
-                // defender — i.e. the nearest opposing tackler's skill
-                // is higher than their own first-touch. A skilled
-                // forward (first_touch > defender's tackling) trusts
-                // their control and takes the time to set up the chance;
-                // a weaker forward facing a strong defender snapshots
-                // before the inevitable tackle. This is the canonical
-                // real-football skill calculus and keeps the trigger
-                // calibration-neutral at equal skill (same skill on both
-                // sides → snapshot rarely fires) while asymmetrically
-                // unlocking shots for weak teams against strong
-                // defenders.
-                //
-                // A "desperate snapshot" variant (looser gates when
-                // losing by ≥2 goals) was tried and reverted: it added
-                // shot VOLUME but tanked per-shot xG so badly (0.066 →
-                // 0.055) that net goals dropped. The desperate strikes
-                // also burned the can_shoot cooldown, blocking better
-                // chances later in the possession. Quality of opportunity
-                // matters more than quantity for low-skill teams.
-                let nearest_threat = ctx
-                    .players()
-                    .opponents()
-                    .nearby_raw(10.0)
-                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))
-                    .map(|(id, _)| id);
-                if let Some(threat_id) = nearest_threat {
-                    let defender_tackling = ctx.player().skills(threat_id).technical.tackling;
-                    let attacker_first_touch = ctx.player.skills.technical.first_touch;
-                    // Buffer 1.0 → 0.5 — fires at SMALLER skill gaps
-                    // too. At equal skill (both ~11) the gate still
-                    // doesn't fire (11 < 10.5 is false), so calibration
-                    // remains neutral. But at gap 3-5 buckets (where
-                    // defender tackling exceeds attacker first_touch
-                    // by ~1) the gate now triggers, covering the
-                    // moderate-asymmetry case the original buffer
-                    // missed.
-                    // Chance-quality floor: the snapshot skips the
-                    // unified helper (pending_shot_reason bypasses it in
-                    // Shooting), so it must carry its own xG bar — a
-                    // pressured snapshot is still a SHOT SELECTION, not
-                    // a reflex to fire from anywhere. 0.15 ≈ a clear
-                    // look inside ~11m for an ordinary finisher.
-                    // Probability gate: this path bypasses the unified
-                    // helper entirely (it tags a reason, so Shooting
-                    // skips the roll), and its window spans 8 ticks —
-                    // so without one it fires essentially every time
-                    // its conditions hold. A pressured snapshot is a
-                    // real football action, not an automatic one.
-                    if attacker_first_touch < defender_tackling - 0.5
-                        && ctx.player().shooting().expected_xg() >= 0.15
-                        && ctx.context.rng.unit_f32() < 0.10
-                    {
-                        return Some(
-                            StateChangeResult::with_forward_state(ForwardState::Shooting)
-                                .with_shot_reason("FWD_SNAPSHOT_PRESSED"),
-                        );
-                    }
-                }
-            }
-            let gm_intensity = ctx.team().game_management_intensity();
-            // Treat "we're protecting a result" as a possession preference:
-            // same mechanic the coach uses via WasteTime / ParkTheBus, now
-            // driven automatically by score+minute+ability. Threshold raised
-            // 0.35 → 0.55 after the gate-waterfall showed this gate was
-            // rejecting 50% of shooting-range forward ticks — half of a
-            // normal 0-0 match was being classified as "game-managing".
-            let prefer_possession = (coach.prefer_possession() || gm_intensity > 0.55)
-                // A live counter window beats the slow-down preference —
-                // the forward leading the break must not stop to recycle.
-                && !ctx.team().counter_window();
-
-            if prefer_possession && distance_to_goal > POINT_BLANK_DISTANCE {
-                // Longer hold when game management is high — stretches
-                // possessions 50–120 ticks (5–12 s) at full intensity.
-                let base_hold = coach.min_possession_ticks();
-                let gm_hold = (gm_intensity * 80.0) as u32;
-                let min_hold = base_hold.max(gm_hold);
-                let ownership_ticks = ctx.tick_context.ball.ownership_duration;
-                if ownership_ticks < min_hold {
-                    stuck_exit_stats::note(0, ctx.in_state_time, ctx.player.velocity.norm());
-                    return None;
-                }
-            }
-
-            // PATIENT POSSESSION (forward recycle): only fires when the
-            // forward is genuinely STUCK — outside the finishing zone,
-            // boxed in by multiple opponents, with no progressive path
-            // to goal. The previous version triggered on any
-            // `should_play_possession()` reading, which made forwards
-            // recycle every time the team won the ball (300-tick
-            // post-possession window) regardless of whether the
-            // forward had a path forward. That single condition was
-            // the dominant shot-volume suppressor.
-            //
-            // The new gate keeps the safety valve (forward genuinely
-            // can't progress → lay off) without abandoning the attack
-            // every time the team enters possession mode.
-            let under_pressure = ctx.player().pressure().is_under_immediate_pressure();
-            let stuck = ctx.players().opponents().nearby(15.0).count() >= 2
-                && !self.has_open_space_ahead(ctx);
-            if !under_pressure
-                && stuck
-                && distance_to_goal > 50.0
-                && ctx.tick_context.ball.ownership_duration > 10
-                && ctx.team().should_play_possession()
-            {
-                let player_pos = ctx.player.position;
-                let goal_pos = ctx.player().opponent_goal_position();
-                let to_goal = (goal_pos - player_pos).normalize();
-                let safe_outlet = ctx
-                    .players()
-                    .teammates()
-                    .nearby(180.0)
-                    .filter(|t| {
-                        if t.id == ctx.player.id {
-                            return false;
-                        }
-                        let dist = (t.position - player_pos).magnitude();
-                        if dist < 25.0 || dist > 180.0 {
-                            return false;
-                        }
-                        let to_t = (t.position - player_pos).normalize();
-                        let fwd = to_t.dot(&to_goal);
-                        if fwd >= 0.3 {
-                            return false;
-                        }
-                        let opp_near = ctx.tick_context.grid.opponents(t.id, 12.0).count();
-                        opp_near < 2 && ctx.player().has_clear_pass(t.id)
-                    })
-                    .max_by(|a, b| {
-                        let sa = if a.tactical_positions.is_midfielder() {
-                            10.0
-                        } else {
-                            0.0
-                        };
-                        let sb = if b.tactical_positions.is_midfielder() {
-                            10.0
-                        } else {
-                            0.0
-                        };
-                        sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
-                    });
-                if let Some(target) = safe_outlet {
-                    return Some(StateChangeResult::with_forward_state_and_event(
-                        ForwardState::Running,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::builder()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(target.id)
-                                .with_reason("FWD_PATIENT_POSSESSION")
-                                .build(ctx),
-                        )),
-                    ));
-                }
-            }
-
-            // Priority 0: Point-blank range (≤36u, inside the 18-yard box).
-            // Routed through the centralised `evaluate_forward_shot_decision`
-            // so the same xG / sprint-balance / 1v1 / pass-EV / willingness
-            // gates apply that the rest of the forward states use. The
-            // previous bespoke 0.025..0.10 per-tick curve here was the
-            // last in-tree willingness duplicate that diverged from the
-            // helper, and Shooting state's `pending_shot_reason.is_some()`
-            // skip meant nothing else was checking these gates after
-            // the transition.
-            if distance_to_goal <= POINT_BLANK_DISTANCE {
-                if !can_shoot {
-                    // Cooldown active — rebound scenario, don't chase the
-                    // keeper. Lay the ball off via a pass instead.
-                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
-                }
-                match evaluate_forward_shot_decision(ctx, "FWD_RUN_POINT_BLANK") {
-                    ShotDecision::Shoot { reason } => {
-                        // Inside the box this is a FINISH, not a shot from
-                        // range: `Finishing` carries no distance-based
-                        // abort gates, which is what a tap-in needs (the
-                        // Shooting state would happily reject a six-yard
-                        // chance from a sub-0.5 finisher).
-                        return Some(
-                            StateChangeResult::with_forward_state(ForwardState::Finishing)
-                                .with_shot_reason(reason),
-                        );
-                    }
-                    ShotDecision::Pass => {
-                        return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
-                    }
-                    ShotDecision::Hold => {
-                        // "Hesitated this tick — stay in Running and
-                        // re-roll next tick" is what this used to say, and
-                        // THERE IS NO RE-ROLL. The shot threshold is drawn
-                        // once per POSSESSION (see the note at `spread`),
-                        // so a forward who declines a point-blank chance
-                        // declines it for as long as he keeps the ball —
-                        // and `return None` keeps him in `Running`, where
-                        // the only thing left to do is carry. He circles
-                        // in front of goal until somebody takes it off him
-                        // or the stall detector fires 20 s later.
-                        //
-                        // Measured with a stuck-exit census over exactly
-                        // the ticks the stall table counts (owner 250-plus
-                        // AI ticks into `Running`): **97% of them leave
-                        // through this branch**, at a mean speed of 0.245
-                        // u/tick — not frozen, circling. It is the last
-                        // genuine freeze in the ball-stuck table and the
-                        // same fault as the box `Hold` one block below.
-                        //
-                        // The appetite itself is NOT fixed — distance,
-                        // clarity and pressure all move — so a short hold
-                        // is worth having: a touch that improves the angle
-                        // can clear the standing bar. What is not worth
-                        // having is an unbounded one. Past the cap the
-                        // chance has not materialised and he squares it,
-                        // which is what a striker who did not fancy it
-                        // actually does. Going backwards out of the area
-                        // is separately prevented by
-                        // `PassEvaluator::retreat_penalty`.
-                        const POINT_BLANK_PATIENCE: u64 = 150; // 1.5 s
-                        stuck_exit_stats::note(1, ctx.in_state_time, ctx.player.velocity.norm());
-                        if ctx.in_state_time > POINT_BLANK_PATIENCE {
-                            return Some(StateChangeResult::with_forward_state(
-                                ForwardState::Passing,
-                            ));
-                        }
-                        return None;
-                    }
-                }
-            }
-
-            // can_shoot CONTENTION SKIP. If we're in shooting range but
-            // the shot gate is blocked (team cooldown, per-player cooldown,
-            // or shots_this_possession cap already reached), don't loiter
-            // on the ball hoping the gate opens — it won't during this
-            // possession. Lay the ball off so either (a) a teammate with
-            // a fresh cooldown becomes the shooter, or (b) the possession
-            // resets faster and the whole attack can be restarted. Without
-            // this branch the gate-waterfall showed ~82% of in-range ticks
-            // stalled at can_shoot=false while the forward held the ball,
-            // which is exactly the dead time that produces 0-0 matches.
-            if !can_shoot {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
-            }
-
-            // Build-up gate: forwards can't fire within 300ms of gaining
-            // possession. Real football demands 2-3s of build-up — shots
-            // that fly in the first half-second of ownership are how
-            // a run-and-receive turns into a shot on every possession.
-            // Point-blank (Priority 0 above) already returned; those are
-            // unavoidable. Everything below is a judgement call, and
-            // judgement calls need at least a beat of control.
-            // 2026-08-16: the "settle for 300 ms before you may strike"
-            // timer is REMOVED, with the rest of the shot cooldowns. A
-            // first-time finish is not spam, and this gate could not tell
-            // the two apart — it only knew how long the ball had been at
-            // his feet. See `PlayerMemory::can_shoot`.
-            let has_settled = true;
-
-            // Teammate-in-better-position pass-over-shot heuristic.
-            // Real strikers pick PASS over SHOT when a teammate is in a
-            // significantly better position — even with a clear sight
-            // of goal. The old logic fired on any "clear shot in range"
-            // which produced hat-tricks every match; in real football
-            // only ~half of clear shooting opportunities become shots,
-            // the rest become assists.
-            let defer_to_teammate = self.has_teammate_with_much_better_shot(ctx, distance_to_goal);
-
-            // Flat 90u ceiling — every forward attempts, and the
-            // xG/accuracy maths inside the helper decides whether the
-            // shot is good. Skill-stratified caps double-punished low-fin
-            // strikers (penalised by xG already and by willingness, then
-            // additionally vetoed by a hard distance cap).
-            // Reachability gate only — the helper owns the decision and
-            // the per-player range. See `MAX_SHOOTING_DISTANCE`.
-            let max_shot_distance = 320.0f32;
-            // GAME-MANAGEMENT SHOT SUPPRESSION (PRIO 0.5 only). The
-            // unified helper does NOT scale by gm_intensity — that's a
-            // tempo decision the coach makes, not the helper's
-            // chance-quality calculus. Apply it as a willingness
-            // post-multiplier so a leading team late still recycles
-            // through PRIO 0.5 without firing every possession.
-            //
-            // 2026-08-16: softened from a 70% cut to a 20% one. A leading
-            // side playing the clock is real, but at full strength this
-            // took 70% of a forward's willingness away — so the reported
-            // "he had a shot and passed it backwards" got WORSE the moment
-            // a team went ahead, which is when it was most visible. Game
-            // management belongs in tempo and in where the block sits, not
-            // in vetoing a chance. Part of the shooting-blocker teardown —
-            // see `SHOT_BAR_BASE`.
-            let gm_suppression = if gm_intensity > 0.40 {
-                (1.0 - (gm_intensity - 0.40) / 0.60 * 0.20).clamp(0.80, 1.0)
-            } else {
-                1.0
-            };
-
-            // Gate waterfall instrumentation (match-logs only). Counts
-            // how many forward-has-ball ticks survive each independent
-            // pre-gate (everything except the final helper roll, which
-            // is bumped after the helper returns Shoot).
-            #[cfg(feature = "match-logs")]
-            {
-                use std::sync::atomic::Ordering;
-                if distance_to_goal <= 90.0 {
-                    shot_gate_stats::HAS_BALL_IN_RANGE.fetch_add(1, Ordering::Relaxed);
-                    if !prefer_possession {
-                        shot_gate_stats::PASSED_NOT_POSSESSION.fetch_add(1, Ordering::Relaxed);
-                    }
-                    if can_shoot {
-                        shot_gate_stats::PASSED_CAN_SHOOT.fetch_add(1, Ordering::Relaxed);
-                        if has_settled {
-                            shot_gate_stats::PASSED_SETTLED.fetch_add(1, Ordering::Relaxed);
-                            if !defer_to_teammate {
-                                shot_gate_stats::PASSED_NOT_DEFER.fetch_add(1, Ordering::Relaxed);
-                                if distance_to_goal <= max_shot_distance {
-                                    shot_gate_stats::PASSED_MAX_DIST
-                                        .fetch_add(1, Ordering::Relaxed);
-                                    if ctx.player().has_clear_shot() {
-                                        shot_gate_stats::PASSED_CLEAR_SHOT
-                                            .fetch_add(1, Ordering::Relaxed);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Priority 0.5: Clear shot in range — route through the
-            // unified `evaluate_forward_shot_decision` helper so PRIO 0.5,
-            // PRIO 0.6 (box), point-blank, RunningInBehind, and Finishing
-            // ALL share the same per-tick shot decision (xG floor,
-            // clarity, sprint/balance, GK proximity, pass-EV, willingness
-            // roll). Previous version kept a parallel inline willingness
-            // calc that drifted ~14× too low after `shot_profile()` was
-            // recalibrated, killing 99.7% of in-range clear-shot ticks
-            // and turning every match into 0-0.
-            //
-            // Pre-gates kept locally:
-            //   * has_settled        — anti spam-fire on first-touch
-            //   * !defer_to_teammate — open-net teammate gets the cutback
-            //   * dist <= max_shot_distance / has_clear_shot()
-            //
-            // GM suppression is applied as a probability gate on top of
-            // the helper's Shoot decision so a leading-late team still
-            // game-manages without dropping the helper's calibration.
-            // NB no `has_clear_shot()` here. It was a hard veto on the
-            // forward's main shot path while the midfielder's equivalent
-            // (MID_SHOOT, Tier-2) has no such gate — so midfielders got
-            // far more shot DECISIONS than forwards and ended up taking
-            // 46-54% of all shots (real ~32%). Lane quality is priced
-            // continuously by `clarity_mult` inside the helper; the
-            // helper also still rejects a genuinely blocked lane.
-            let pre_gate_passed = has_settled
-                && can_shoot
-                && !defer_to_teammate
-                && distance_to_goal <= max_shot_distance;
-
-            if pre_gate_passed {
-                let _decision = evaluate_forward_shot_decision(ctx, "FWD_RUN_PRIO05_CLEAR");
-                #[cfg(feature = "match-logs")]
-                {
-                    use std::sync::atomic::Ordering;
-                    match _decision {
-                        ShotDecision::Shoot { .. } => {
-                            shot_gate_stats::HELPER_SHOOT.fetch_add(1, Ordering::Relaxed)
-                        }
-                        ShotDecision::Pass => {
-                            shot_gate_stats::HELPER_PASS.fetch_add(1, Ordering::Relaxed)
-                        }
-                        ShotDecision::Hold => {
-                            shot_gate_stats::HELPER_HOLD.fetch_add(1, Ordering::Relaxed)
-                        }
-                    };
-                }
-                match _decision {
-                    ShotDecision::Shoot { reason } => {
-                        // GM suppression veto — protect-a-result teams
-                        // recycle even with a clear shot. Scale tail
-                        // beyond gm > 0.40; under that, no suppression.
-                        if gm_suppression < 1.0 && ctx.context.rng.unit_f32() >= gm_suppression {
-                            // Suppressed by game-management — under
-                            // pressure, lay off; otherwise keep running.
-                            let under_pressure =
-                                ctx.player().pressure().is_under_immediate_pressure();
-                            return if under_pressure {
-                                Some(StateChangeResult::with_forward_state(ForwardState::Passing))
-                            } else {
-                                None
-                            };
-                        }
-                        #[cfg(feature = "match-logs")]
-                        {
-                            use std::sync::atomic::Ordering;
-                            shot_gate_stats::PASSED_WILLINGNESS.fetch_add(1, Ordering::Relaxed);
-                            shot_gate_stats::FIRED.fetch_add(1, Ordering::Relaxed);
-                        }
-                        return Some(
-                            StateChangeResult::with_forward_state(ForwardState::Shooting)
-                                .with_shot_reason(reason),
-                        );
-                    }
-                    ShotDecision::Pass => {
-                        // Helper decided pass-EV beat the shot — defer.
-                        return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
-                    }
-                    ShotDecision::Hold => {
-                        // Helper said "not now" — under pressure lay off,
-                        // otherwise keep running and re-evaluate next tick.
-                        let under_pressure = ctx.player().pressure().is_under_immediate_pressure();
-                        if under_pressure {
-                            return Some(StateChangeResult::with_forward_state(
-                                ForwardState::Passing,
-                            ));
-                        }
-                        // Stay in Running — keep dribbling toward goal.
-                        // Don't return None unconditionally: fall through
-                        // to PRIO 0.6 / 0.8 below so close-range or
-                        // open-path branches still trigger.
-                    }
-                }
-            }
-
-            // Priority 0.6: Close-range shot (≤45u) — drop the settled-time
-            // requirement since a forward in the box strikes immediately.
-            // Same reasoning as Priority 0.5: the hold-ball branch above
-            // already considered possession preference; here we're too
-            // close to goal for tempo management to veto.
-            //
-            // Final commit goes through the centralised helper so the
-            // sprint-balance / 1v1 / pass-EV gates apply uniformly. The
-            // bespoke `shot_triggered` roll above is PRIO05's, not the
-            // helper's — leaving it as the gate here meant a sprinting
-            // forward off-balance still fired in the box without the
-            // composure penalty being applied.
-            // A STRIKER IN THE BOX SHOOTS.
-            //
-            // This block was gated at 45u — **5.6 metres** — which is the
-            // six-yard box, not the penalty area. A forward anywhere
-            // between the spot and the D never reached it, and the
-            // measured consequence is the whole complaint: forwards took
-            // **91% of their shots from inside 11 m** (30% from <6 m, 61%
-            // from 6-11 m) and 5.2% from 11-16.5 m, while midfielders
-            // arriving into the same area took 25.6% of theirs from
-            // there. The strikers were not shooting; they were waiting
-            // for tap-ins.
-            //
-            // The asymmetry is not skill, it is marking: a forward is
-            // held at 4.0 m by an assigned marker and a midfielder at
-            // 10.9 m, so the forward's lane is worse everywhere except
-            // point-blank. That is correct defending, and the answer is
-            // not to make him wait — it is that a striker inside the area
-            // hits it anyway. That is his job, and the shot he takes at a
-            // narrow angle under pressure is a real striker's shot.
-            //
-            // `has_clear_shot()` is dropped as an AND for the same reason
-            // the main path above dropped it: it is a hard binary veto on
-            // a quantity the helper already prices continuously through
-            // `clarity`, and the helper still rejects a genuinely blocked
-            // lane. Keeping it here re-created exactly the asymmetry the
-            // note above describes, one block further down.
-            let box_shot_condition =
-                can_shoot && !defer_to_teammate && distance_to_goal < PENALTY_AREA_DEPTH;
-
-            if box_shot_condition {
-                match evaluate_forward_shot_decision(ctx, "FWD_RUN_PRIO06_BOX") {
-                    ShotDecision::Shoot { reason } => {
-                        return Some(
-                            StateChangeResult::with_forward_state(ForwardState::Shooting)
-                                .with_shot_reason(reason),
-                        );
-                    }
-                    // A forward who declines lays it off — but only from
-                    // somewhere a lay-off is the better ball. Deep in the
-                    // area he keeps it and looks again rather than
-                    // squaring it backwards, which is the other half of
-                    // "does everything except shoot".
-                    ShotDecision::Pass => {
-                        return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
-                    }
-                    ShotDecision::Hold => {
-                        // A forward six metres out who is not shooting this
-                        // instant does NOT turn and lay it off.
-                        //
-                        // This branch used to do that, and it was the
-                        // reported bug in its purest form: the helper says
-                        // "not yet", the caller answers "then pass", and the
-                        // pass evaluator — which rewards an isolated
-                        // receiver and, for most personalities, does not
-                        // care which way the ball goes — finds the spare man
-                        // BEHIND the ball. Ball in front of goal, played
-                        // backwards, every time the appetite came up short.
-                        //
-                        // ⚠ BUT IT MUST NOT `return None` EITHER, AND THAT
-                        // WAS THE BIGGER BUG. `return` here skips the whole
-                        // rest of the tree — the cutback, the one-two, and
-                        // the 1.2 s anti-oscillation release at the bottom
-                        // of it — and the appetite threshold is drawn ONCE
-                        // PER POSSESSION, so `Hold` is the fixed answer for
-                        // as long as he keeps the ball. Meanwhile
-                        // `BallCarry::target` collapses onto the carrier's
-                        // own feet in exactly this situation (`advance` is
-                        // zero inside `carry_hold`, and a central man has no
-                        // sidestep left), and the carry deadband turns that
-                        // into a hard `Vector3::zeros()`. Decision frozen,
-                        // velocity zero, same question next tick: a fixed
-                        // point, broken only by the stall detector 20 s
-                        // later.
-                        //
-                        // Measured with the per-state dwell split:
-                        // `Forward: Running` was the largest stuck bucket in
-                        // the game at **98% in the 250-plus dwell bucket**,
-                        // 86 episodes a match at a mean of 10.5 s each —
-                        // the only row in the table that was a genuine
-                        // freeze rather than the claim-tick label.
-                        //
-                        // …but HOLDING IS NOT FREEZING, and `return None`
-                        // here made it one. It skips the whole rest of the
-                        // tree, including the 1.2 s release at the bottom,
-                        // and the appetite threshold is drawn once per
-                        // possession — so `Hold` is the fixed answer for as
-                        // long as he keeps the ball. Paired with a carry
-                        // target that collapses onto his own feet inside
-                        // `carry_hold`, that is a fixed point only the
-                        // stall detector breaks, 20 s later.
-                        //
-                        // Measured with the per-state dwell split:
-                        // `Forward: Running` was the largest genuine freeze
-                        // in the game — 98% of its stuck ticks with the
-                        // owner 250-plus AI ticks into the state, ~10.5 s
-                        // an episode.
-                        //
-                        // So he holds, but not forever. Under the cap he
-                        // keeps the ball and works for the chance, which is
-                        // the behaviour the note above is protecting; over
-                        // it the possession has become a stall and the rest
-                        // of the tree gets its say.
-                        //
-                        // ⚠ Do NOT drop the cap and fall through always.
-                        // Measured: the first branch below is the cutback
-                        // to an arriving runner, so a striker holding in
-                        // the area handed it to a midfielder instead — FWD
-                        // goal share 60.7% → 49.1%, MID 38.5% → 50.4%,
-                        // against a real 58/32.
-                        const HOLD_PATIENCE: u64 = 300; // 3 s
-                        if ctx.in_state_time <= HOLD_PATIENCE {
-                            stuck_exit_stats::note(
-                                2,
-                                ctx.in_state_time,
-                                ctx.player.velocity.norm(),
-                            );
-                            return None;
-                        }
-                    }
-                }
-            }
-
-            // CUTBACK TO ARRIVING RUNNER. A central midfielder arriving
-            // unmarked in the box is the textbook cutback target and a
-            // major source of midfielder goals in real football. We reach
-            // this point only AFTER the forward's own shot blocks declined
-            // (no clean shot this tick), so laying off to an unmarked
-            // central runner in a better spot is strictly additive — not a
-            // stolen chance. Fires only when the forward is genuinely STUCK
-            // (pressured or with no open path to goal) — exactly when a
-            // real forward releases the ball rather than forcing it — so it
-            // stays low-volume and never trades away a chance the forward
-            // could take themselves. The finder is tightly gated (runner
-            // central, in range, unmarked, clear lane, ≥8u closer to goal),
-            // and the runner converts via the box-arrival carve-out.
-            let fwd_stuck = ctx.player().pressure().is_under_immediate_pressure()
-                || !self.has_open_space_ahead(ctx);
-            if has_settled && distance_to_goal < 130.0 && fwd_stuck
-                && let Some(runner) =
-                    crate::r#match::player::strategies::common::players::ops::forward_shot_decision::find_cutback_to_arriving_runner(ctx)
+            // A "desperate snapshot" variant (looser gates when
+            // losing by ≥2 goals) was tried and reverted: it added
+            // shot VOLUME but tanked per-shot xG so badly (0.066 →
+            // 0.055) that net goals dropped. Quality of opportunity
+            // matters more than quantity for low-skill teams.
+            let nearest_threat = ctx
+                .players()
+                .opponents()
+                .nearby_raw(10.0)
+                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))
+                .map(|(id, _)| id);
+            if let Some(threat_id) = nearest_threat {
+                let defender_tackling = ctx.player().skills(threat_id).technical.tackling;
+                let attacker_first_touch = ctx.player.skills.technical.first_touch;
+                // Buffer 1.0 → 0.5 — fires at SMALLER skill gaps
+                // too. At equal skill (both ~11) the gate still
+                // doesn't fire (11 < 10.5 is false), so calibration
+                // remains neutral. But at gap 3-5 buckets (where
+                // defender tackling exceeds attacker first_touch
+                // by ~1) the gate now triggers, covering the
+                // moderate-asymmetry case the original buffer
+                // missed.
+                // Chance-quality floor: the snapshot skips the
+                // unified helper (pending_shot_reason bypasses it in
+                // Shooting), so it must carry its own xG bar — a
+                // pressured snapshot is still a SHOT SELECTION, not
+                // a reflex to fire from anywhere. 0.15 ≈ a clear
+                // look inside ~11m for an ordinary finisher.
+                // Probability gate: this path bypasses the unified
+                // helper entirely (it tags a reason, so Shooting
+                // skips the roll), and its window spans 0.16 s —
+                // so without one it fires essentially every time
+                // its conditions hold. A pressured snapshot is a
+                // real football action, not an automatic one.
+                if attacker_first_touch < defender_tackling - 0.5
+                    && ctx.player().shooting().expected_xg() >= 0.15
+                    && ctx.context.rng.unit_f32() < 0.10
                 {
                     #[cfg(feature = "match-logs")]
                     {
-                        use std::sync::atomic::Ordering;
-                        crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::FWD_CUTBACK.fetch_add(1, Ordering::Relaxed);
+                        ForwardCensus::note_limit(ctx, FwdLimit::Snapshot);
+                        ForwardCensus::note_shot_site(
+                            ctx,
+                            FwdRequest::Snapshot,
+                            FwdVerdict::Approved,
+                        );
                     }
-                    return Some(StateChangeResult::with_forward_state_and_event(
-                        ForwardState::Running,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::builder()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(runner.id)
-                                .with_reason("FWD_RUNNING_CUTBACK_TO_RUNNER")
-                                .build(ctx),
-                        )),
-                    ));
+                    return Some(
+                        StateChangeResult::with_forward_state(ForwardState::Shooting)
+                            .with_shot_reason("FWD_SNAPSHOT_PRESSED"),
+                    );
                 }
-
-            // If we deferred to a better-positioned teammate, route
-            // through Passing — the pass state picks the target. The
-            // pass-EV-beats-shot-xG case is now handled inside the
-            // unified helper (returns ShotDecision::Pass).
-            if defer_to_teammate && has_settled {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
+        }
+        // PATIENT POSSESSION (forward recycle): only fires when the
+        // forward is genuinely STUCK — outside the finishing zone,
+        // boxed in by multiple opponents, with no progressive path
+        // to goal. The previous version triggered on any
+        // `should_play_possession()` reading, which made forwards
+        // recycle every time the team won the ball (300-tick
+        // post-possession window) regardless of whether the
+        // forward had a path forward. That single condition was
+        // the dominant shot-volume suppressor.
+        //
+        // The new gate keeps the safety valve (forward genuinely
+        // can't progress → lay off) without abandoning the attack
+        // every time the team enters possession mode.
+        let under_pressure = ctx.player().pressure().is_under_immediate_pressure();
+        let stuck = ctx.players().opponents().nearby(15.0).count() >= 2
+            && !self.has_open_space_ahead(ctx);
+        if !under_pressure
+            && stuck
+            && distance_to_goal > 50.0
+            && ctx.tick_context.ball.ownership_duration > 10
+            && ctx.team().should_play_possession()
+        {
+            let player_pos = ctx.player.position;
+            let goal_pos = ctx.player().opponent_goal_position();
+            let to_goal = (goal_pos - player_pos).normalize();
+            let safe_outlet = ctx
+                .players()
+                .teammates()
+                .nearby(180.0)
+                .filter(|t| {
+                    if t.id == ctx.player.id {
+                        return false;
+                    }
+                    let dist = (t.position - player_pos).magnitude();
+                    if dist < 25.0 || dist > 180.0 {
+                        return false;
+                    }
+                    let to_t = (t.position - player_pos).normalize();
+                    let fwd = to_t.dot(&to_goal);
+                    if fwd >= 0.3 {
+                        return false;
+                    }
+                    ctx.tick_context.grid.opponents(t.id, 12.0).count() < 2
+                })
+                .filter_map(|t| {
+                    let odds = ctx.player().clear_pass(t.id)?;
+                    let preference = if t.tactical_positions.is_midfielder() {
+                        10.0
+                    } else {
+                        0.0
+                    };
+                    Some((t, odds.price(preference)))
+                })
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(t, _)| t);
+            if let Some(target) = safe_outlet {
+                #[cfg(feature = "match-logs")]
+                ForwardCensus::note_pass_site(ctx, FwdRequest::PatientPossession);
+                return Some(StateChangeResult::with_forward_state_and_event(
+                    ForwardRead::released(ctx),
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(target.id)
+                            .with_reason("FWD_PATIENT_POSSESSION")
+                            .build(ctx),
+                    )),
+                ));
+            }
+        }
 
-            // Priority 0.8: Open path to goal — KEEP RUNNING, don't pass or dribble
-            // But only if still far from shooting range. Once in range, shooting
-            // checks above should have triggered. If they didn't (no clear shot),
-            // don't keep running into the GK — fall through to passing/dribbling.
-            // `> MAX_SHOOTING_DISTANCE (320u) && < 180u` — a condition no
-            // distance can satisfy, so this branch had never once run and
-            // the forward had no drive-at-goal path at all. What it means
-            // to say is the comment above it: keep running while still
-            // OUTSIDE normal shooting range, because inside it the shot
-            // blocks have already had their say. 180u is 22.5 m, the point
-            // those blocks take over — so that is the lower bound, not the
-            // upper one.
-            if distance_to_goal > 180.0 && self.has_open_space_ahead(ctx) {
-                let dribbling = ctx.player.skills.technical.dribbling / 20.0;
-                let composure = ctx.player.skills.mental.composure / 20.0;
-                let determination = ctx.player.skills.mental.determination / 20.0;
-                let pace = ctx.player.skills.physical.pace / 20.0;
-                let carry_quality =
-                    dribbling * 0.35 + composure * 0.25 + determination * 0.2 + pace * 0.2;
-                if carry_quality > 0.55 {
-                    stuck_exit_stats::note(3, ctx.in_state_time, ctx.player.velocity.norm());
+        // Priority 0: point blank, inside six metres
+        // (`ForwardShot::POINT_BLANK`).
+        // Routed through the centralised `evaluate_forward_shot_decision`
+        // so the same xG / sprint-balance / 1v1 / pass-EV / willingness
+        // gates apply that the rest of the forward states use. The
+        // previous bespoke 0.025..0.10 per-tick curve here was the
+        // last in-tree willingness duplicate that diverged from the
+        // helper, and Shooting state's `pending_shot_reason.is_some()`
+        // skip meant nothing else was checking these gates after
+        // the transition.
+        if distance_to_goal <= ForwardShot::POINT_BLANK {
+            let point_blank = evaluate_forward_shot_decision(ctx, "FWD_RUN_POINT_BLANK");
+            #[cfg(feature = "match-logs")]
+            ForwardCensus::note_shot_site(
+                ctx,
+                FwdRequest::PointBlank,
+                Self::verdict(&point_blank),
+            );
+            match point_blank {
+                ShotDecision::Shoot { reason } => {
+                    // Inside the box this is a FINISH, not a shot from
+                    // range: `Finishing` carries no distance-based
+                    // abort gates, which is what a tap-in needs (the
+                    // Shooting state would happily reject a six-yard
+                    // chance from a sub-0.5 finisher).
+                    return Some(
+                        StateChangeResult::with_forward_state(ForwardState::Finishing)
+                            .with_shot_reason(reason),
+                    );
+                }
+                ShotDecision::Pass => {
+                    #[cfg(feature = "match-logs")]
+                    ForwardCensus::note_pass_site(ctx, FwdRequest::PassOther);
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                }
+                ShotDecision::Hold => {
+                    // "Hesitated this tick — stay in Running and
+                    // re-roll next tick" is what this used to say, and
+                    // THERE IS NO RE-ROLL. The shot threshold is drawn
+                    // once per POSSESSION (see the note at `spread`),
+                    // so a forward who declines a point-blank chance
+                    // declines it for as long as he keeps the ball —
+                    // and `return None` keeps him in `Running`, where
+                    // the only thing left to do is carry. He circles
+                    // in front of goal until somebody takes it off him
+                    // or the stall detector fires 20 s later.
+                    //
+                    // Measured with a stuck-exit census over exactly
+                    // the ticks the stall table counts (owner 250-plus
+                    // AI ticks into `Running`): **97% of them leave
+                    // through this branch**, at a mean speed of 0.245
+                    // u/tick — not frozen, circling. It is the last
+                    // genuine freeze in the ball-stuck table and the
+                    // same fault as the box `Hold` one block below.
+                    //
+                    // The appetite itself is NOT fixed — distance,
+                    // clarity and pressure all move — so a short hold
+                    // is worth having: a touch that improves the angle
+                    // can clear the standing bar. What is not worth
+                    // having is an unbounded one. Past the cap the
+                    // chance has not materialised and he squares it,
+                    // which is what a striker who did not fancy it
+                    // actually does. Going backwards out of the area
+                    // is separately prevented by
+                    // `PassEvaluator::retreat_penalty`.
+                    stuck_exit_stats::note(1, ctx.in_state_time, ctx.player.velocity.norm());
+                    if Self::on_the_ball(ctx) > Self::POINT_BLANK_PATIENCE {
+                        #[cfg(feature = "match-logs")]
+                        {
+                            ForwardCensus::note_limit(ctx, FwdLimit::PointBlankPatience);
+                            ForwardCensus::note_pass_site(ctx, FwdRequest::PassOther);
+                        }
+                        return Some(StateChangeResult::with_forward_state(
+                            ForwardState::Passing,
+                        ));
+                    }
                     return None;
                 }
             }
+        }
 
-            // ONE-TWO COMBINATION: After just receiving ball, check if passer ran into space
-            if ctx.ball().has_stable_possession() {
-                let ownership_ticks = ctx.tick_context.ball.ownership_duration;
-                if (2..=10).contains(&ownership_ticks)
-                    && distance_to_goal > POINT_BLANK_DISTANCE
-                    && let Some(return_target) = self.find_one_two_return(ctx)
-                {
-                    return Some(StateChangeResult::with_forward_state_and_event(
-                        ForwardState::Running,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::builder()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(return_target.id)
-                                .with_reason("FWD_RUNNING_ONE_TWO_RETURN")
-                                .build(ctx),
-                        )),
-                    ));
-                }
-            }
+        // Teammate-in-better-position pass-over-shot heuristic.
+        // Real strikers pick PASS over SHOT when a teammate is in a
+        // significantly better position — even with a clear sight
+        // of goal. The old logic fired on any "clear shot in range"
+        // which produced hat-tricks every match; in real football
+        // only ~half of clear shooting opportunities become shots,
+        // the rest become assists.
+        let defer_to_teammate = self.has_teammate_with_much_better_shot(ctx, distance_to_goal);
 
-            // HOLD-UP PLAY: When facing away from goal with midfielders arriving,
-            // draw defenders and lay off to a supporting teammate.
-            // Only when forward genuinely can't advance (opponents blocking ahead).
-            if ctx.ball().has_stable_possession()
-                && distance_to_goal > CLOSE_RANGE_DISTANCE
-                && ctx.tick_context.ball.ownership_duration > 30
-                && !self.has_open_space_ahead(ctx)
-            // Don't lay off if can run forward
-                && let Some(layoff_target) = self.find_hold_up_layoff(ctx)
-            {
-                return Some(StateChangeResult::with_forward_state_and_event(
-                    ForwardState::Running,
-                    Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::builder()
-                            .with_from_player_id(ctx.player.id)
-                            .with_to_player_id(layoff_target.id)
-                            .with_reason("FWD_RUNNING_HOLD_UP_LAYOFF")
-                            .build(ctx),
-                    )),
-                ));
-            }
-
-            // Clear ball if congested far from goal — only after carrying for a while
-            if distance_to_goal > SHOOTING_ZONE_DISTANCE
-                && ctx.tick_context.ball.ownership_duration > 15
-                && (ctx.player().movement().is_congested_near_boundary()
-                    || ctx.player().movement().is_congested())
-                && let Some(_) = ctx.players().teammates().all().next()
-            {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
-            }
-
-            // DRAW AND RELEASE: When an opponent is committing to tackle, draw them in
-            // then pass to space they vacated
-            if ctx.ball().has_stable_possession()
-                && ctx.tick_context.ball.ownership_duration > 20
-                && distance_to_goal > CLOSE_RANGE_DISTANCE
-                && let Some(release_target) = self.find_draw_and_release_pass(ctx)
-            {
-                return Some(StateChangeResult::with_forward_state_and_event(
-                    ForwardState::Running,
-                    Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::builder()
-                            .with_from_player_id(ctx.player.id)
-                            .with_to_player_id(release_target.id)
-                            .with_reason("FWD_RUNNING_DRAW_AND_RELEASE")
-                            .build(ctx),
-                    )),
-                ));
-            }
-
-            // Under pressure - quick decision needed
-            if ctx.player().pressure().is_under_immediate_pressure() {
-                if self.should_pass_under_pressure(ctx) {
-                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
-                } else if self.can_dribble_out_of_pressure(ctx) {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::Dribbling,
-                    ));
-                }
-            }
-
-            // Evaluate best action based on game context
-            // Require minimum carry time to prevent instant pass-after-receive
-            let ownership_ticks = ctx.tick_context.ball.ownership_duration;
-
-            // THE WIDE AREA, above the generic pass.
-            //
-            // A wide forward in the final third is not looking for
-            // "somebody better placed" — he is looking for the box, and
-            // the generic evaluator has no idea that is what the flank
-            // is for. Decided purely on where he is standing, so it
-            // covers a striker who has drifted wide as readily as a
-            // nominal winger. See `FlankPlay`.
-            if ownership_ticks > 8 {
-                match FlankPlay::decide(ctx) {
-                    Some(FlankAction::ReleaseOutside { target }) => {
-                        #[cfg(feature = "match-logs")]
-                        crate::mid_run_diag::WideDiag::note(4);
-                        return Some(StateChangeResult::with_forward_state_and_event(
-                            ForwardState::Running,
-                            Event::PlayerEvent(PlayerEvent::PassTo(
-                                PassingEventContext::builder()
-                                    .with_from_player_id(ctx.player.id)
-                                    .with_to_player_id(target)
-                                    .with_reason("FWD_FLANK_RELEASE")
-                                    .build(ctx),
-                            )),
-                        ));
+        // Flat 320u (40 m) ceiling — every forward attempts, and the
+        // xG/accuracy maths inside the helper decides whether the
+        // shot is good. Skill-stratified caps double-punished low-fin
+        // strikers (penalised by xG already and by willingness, then
+        // additionally vetoed by a hard distance cap).
+        // Reachability gate only — the helper owns the decision and
+        // the per-player range. See `MAX_SHOOTING_DISTANCE`.
+        let max_shot_distance = 320.0f32;
+        // Gate waterfall instrumentation (match-logs only). Counts
+        // how many forward-has-ball ticks survive each independent
+        // pre-gate (everything except the final helper roll, which
+        // is bumped after the helper returns Shoot).
+        #[cfg(feature = "match-logs")]
+        {
+            use std::sync::atomic::Ordering;
+            if distance_to_goal <= 90.0 {
+                shot_gate_stats::HAS_BALL_IN_RANGE.fetch_add(1, Ordering::Relaxed);
+                shot_gate_stats::PASSED_NOT_POSSESSION.fetch_add(1, Ordering::Relaxed);
+                shot_gate_stats::PASSED_CAN_SHOOT.fetch_add(1, Ordering::Relaxed);
+                shot_gate_stats::PASSED_SETTLED.fetch_add(1, Ordering::Relaxed);
+                if !defer_to_teammate {
+                    shot_gate_stats::PASSED_NOT_DEFER.fetch_add(1, Ordering::Relaxed);
+                    if distance_to_goal <= max_shot_distance {
+                        shot_gate_stats::PASSED_MAX_DIST.fetch_add(1, Ordering::Relaxed);
+                        if ctx.player().has_clear_shot() {
+                            shot_gate_stats::PASSED_CLEAR_SHOT.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
-                    Some(FlankAction::Deliver) => {
-                        return Some(StateChangeResult::with_forward_state(
-                            ForwardState::Crossing,
-                        ));
-                    }
-                    None => {}
                 }
             }
+        }
 
-            if ownership_ticks > 12 && self.should_pass(ctx) {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+        // Priority 0.5: Clear shot in range — route through the
+        // unified `evaluate_forward_shot_decision` helper so PRIO 0.5,
+        // PRIO 0.6 (box), point-blank, RunningInBehind, and Finishing
+        // ALL share the same per-tick shot decision (xG floor,
+        // clarity, sprint/balance, GK proximity, pass-EV, willingness
+        // roll). Previous version kept a parallel inline willingness
+        // calc that drifted ~14× too low after `shot_profile()` was
+        // recalibrated, killing 99.7% of in-range clear-shot ticks
+        // and turning every match into 0-0.
+        //
+        // Pre-gates kept locally:
+        //   * !defer_to_teammate — open-net teammate gets the cutback
+        //   * dist <= max_shot_distance
+        //
+        // GM suppression is applied as a probability gate on top of
+        // the helper's Shoot decision so a leading-late team still
+        // game-manages without dropping the helper's calibration.
+        // NB no `has_clear_shot()` here. It was a hard veto on the
+        // forward's main shot path while the midfielder's equivalent
+        // (MID_SHOOT, Tier-2) has no such gate — so midfielders got
+        // far more shot DECISIONS than forwards and ended up taking
+        // 46-54% of all shots (real ~32%). Lane quality is priced
+        // continuously by `clarity_mult` inside the helper; the
+        // helper also still rejects a genuinely blocked lane.
+        let pre_gate_passed = !defer_to_teammate && distance_to_goal <= max_shot_distance;
+
+        if pre_gate_passed {
+            let _decision = evaluate_forward_shot_decision(ctx, "FWD_RUN_PRIO05_CLEAR");
+            #[cfg(feature = "match-logs")]
+            {
+                use std::sync::atomic::Ordering;
+                ForwardCensus::note_shot_site(ctx, FwdRequest::Prio05, Self::verdict(&_decision));
+                match _decision {
+                    ShotDecision::Shoot { .. } => {
+                        shot_gate_stats::HELPER_SHOOT.fetch_add(1, Ordering::Relaxed)
+                    }
+                    ShotDecision::Pass => {
+                        shot_gate_stats::HELPER_PASS.fetch_add(1, Ordering::Relaxed)
+                    }
+                    ShotDecision::Hold => {
+                        shot_gate_stats::HELPER_HOLD.fetch_add(1, Ordering::Relaxed)
+                    }
+                };
             }
-
-            if ownership_ticks > 20 && self.should_dribble(ctx) {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Dribbling,
-                ));
-            }
-
-            // ANTI-OSCILLATION: If carrying ball too long without acting, force a decision
-            // Prefer passing over shooting to maintain realistic play.
-            //
-            // The decision point used to fire a Shoot event directly when
-            // a competent finisher had a clear shot in close range. That
-            // bypassed every gate in the centralised helper because
-            // ForwardShootingState skips its own helper call when
-            // `pending_shot_reason` is Some. Now the final yes/no comes
-            // from the helper too — a sprinting Composure-8 striker no
-            // longer auto-fires just because we hit the 120-tick limit.
-            if ctx.in_state_time > 120 {
-                let finishing = ctx.player.skills.technical.finishing / 20.0;
-                if can_shoot
-                    && distance_to_goal < POINT_BLANK_DISTANCE * 1.5
-                    && finishing > 0.5
-                    && ctx.player().has_clear_shot()
-                    && ctx.player().shooting().has_good_angle()
-                    && let ShotDecision::Shoot { reason } =
-                        evaluate_forward_shot_decision(ctx, "FWD_RUN_ANTI_OSCILLATION")
-                {
+            match _decision {
+                ShotDecision::Shoot { reason } => {
+                    #[cfg(feature = "match-logs")]
+                    {
+                        use std::sync::atomic::Ordering;
+                        shot_gate_stats::PASSED_WILLINGNESS.fetch_add(1, Ordering::Relaxed);
+                        shot_gate_stats::FIRED.fetch_add(1, Ordering::Relaxed);
+                    }
                     return Some(
                         StateChangeResult::with_forward_state(ForwardState::Shooting)
                             .with_shot_reason(reason),
                     );
                 }
+                ShotDecision::Pass => {
+                    // Helper decided pass-EV beat the shot — defer.
+                    #[cfg(feature = "match-logs")]
+                    ForwardCensus::note_pass_site(ctx, FwdRequest::PassOther);
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                }
+                ShotDecision::Hold => {
+                    // Helper said "not now" — under pressure lay off,
+                    // otherwise keep running and re-evaluate next tick.
+                    let under_pressure = ctx.player().pressure().is_under_immediate_pressure();
+                    if under_pressure {
+                        #[cfg(feature = "match-logs")]
+                        ForwardCensus::note_pass_site(ctx, FwdRequest::PassAfterHold);
+                        return Some(StateChangeResult::with_forward_state(
+                            ForwardState::Passing,
+                        ));
+                    }
+                    // Stay in Running — keep dribbling toward goal.
+                    // Don't return None unconditionally: fall through
+                    // to PRIO 0.6 / 0.8 below so close-range or
+                    // open-path branches still trigger.
+                }
+            }
+        }
+
+        // Priority 0.6: inside the penalty area (16.5 m,
+        // `PENALTY_AREA_DEPTH`) with the helper having just held. It
+        // is asked here as `FWD_RUN_PRIO06_BOX` whenever the clear-shot
+        // block above did not ask it, and the lay-off it answers is played;
+        // the shot it never approved in 300 matches is left out.
+        //
+        // A forward six metres out who is not shooting this instant
+        // does NOT turn and lay it off. That was the reported bug in
+        // its purest form: the helper says "not yet", the caller
+        // answers "then pass", and the pass evaluator — which rewards
+        // an isolated receiver and, for most personalities, does not
+        // care which way the ball goes — finds the spare man BEHIND the
+        // ball. Ball in front of goal, played backwards, every time the
+        // appetite came up short.
+        //
+        // ⚠ BUT IT MUST NOT `return None` FOR EVER EITHER. `return`
+        // skips the whole rest of the tree — the cutback, the one-two,
+        // and the stall release at the bottom of it — and the appetite
+        // threshold is drawn ONCE PER POSSESSION, so `Hold` is the
+        // fixed answer for as long as he keeps the ball. Meanwhile
+        // `BallCarry::target` collapses onto the carrier's own feet in
+        // exactly this situation (`advance` is zero inside
+        // `carry_hold`, and a central man has no sidestep left), and
+        // the carry deadband turns that into a hard
+        // `Vector3::zeros()`: a fixed point only the stall detector
+        // breaks, 20 s later. Measured with the per-state dwell split:
+        // `Forward: Running` was the largest genuine freeze in the game
+        // — 98% of its stuck ticks with the owner 250-plus AI ticks
+        // into the state, ~10.5 s an episode.
+        //
+        // So he holds, but not forever. Under the cap he keeps the ball
+        // and works for the chance; over it the possession has become a
+        // stall and the rest of the tree gets its say.
+        //
+        // ⚠ Do NOT drop the cap and fall through always. Measured: the
+        // first branch below is the cutback to an arriving runner, so a
+        // striker holding in the area handed it to a midfielder instead
+        // — FWD goal share 60.7% → 49.1%, MID 38.5% → 50.4%, against a
+        // real 58/32.
+        if !defer_to_teammate && distance_to_goal < PENALTY_AREA_DEPTH {
+            if let ShotDecision::Pass = evaluate_forward_shot_decision(ctx, "FWD_RUN_PRIO06_BOX") {
+                #[cfg(feature = "match-logs")]
+                ForwardCensus::note_pass_site(ctx, FwdRequest::PassOther);
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
-
-            // Continue running with ball briefly while looking for an opening
-            stuck_exit_stats::note(4, ctx.in_state_time, ctx.player.velocity.norm());
-            return None;
+            if Self::on_the_ball(ctx) <= Self::HOLD_PATIENCE {
+                stuck_exit_stats::note(2, ctx.in_state_time, ctx.player.velocity.norm());
+                return None;
+            }
+            #[cfg(feature = "match-logs")]
+            ForwardCensus::note_limit(ctx, FwdLimit::BoxHoldPatience);
         }
-        // Handle cases when player doesn't have the ball
-        else {
-            // Loose-ball claim lives in the dispatcher.
 
-            // Also respond to ball system notifications
-            if ctx.ball().should_take_ball_immediately()
-                && ctx.team().is_best_player_to_chase_ball()
+        // CUTBACK TO ARRIVING RUNNER. A central midfielder arriving
+        // unmarked in the box is the textbook cutback target and a
+        // major source of midfielder goals in real football. We reach
+        // this point only AFTER the forward's own shot blocks declined
+        // (no clean shot this tick), so laying off to an unmarked
+        // central runner in a better spot is strictly additive — not a
+        // stolen chance. Fires only when the forward is genuinely STUCK
+        // (pressured or with no open path to goal) — exactly when a
+        // real forward releases the ball rather than forcing it — so it
+        // stays low-volume and never trades away a chance the forward
+        // could take themselves. The finder is tightly gated (runner
+        // central, in range, unmarked, clear lane, ≥8u closer to goal),
+        // and the runner converts via the box-arrival carve-out.
+        let fwd_stuck = ctx.player().pressure().is_under_immediate_pressure()
+            || !self.has_open_space_ahead(ctx);
+        if distance_to_goal < 130.0 && fwd_stuck
+            && let Some(runner) =
+                crate::r#match::player::strategies::common::players::ops::forward_shot_decision::find_cutback_to_arriving_runner(ctx)
             {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::TakeBall,
-                ));
-            }
-
-            // Priority 0.5: Aerial ball approaching — head it
-            if ctx.tick_context.positions.ball.position.z >= 1.5
-                && ctx.ball().is_towards_player_with_angle(0.5)
-                && ctx.ball().distance() < 40.0
-                && ctx.ball().distance_to_opponent_goal() < 96.0
-            {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Heading));
-            }
-
-            // Priority 0.7: Cross incoming — position to receive
-            // Detect crosses: ball in flight, coming from wide area, forward in or near the box
-            if ctx.ball().is_towards_player_with_angle(0.6)
-                && ctx.ball().distance() > 10.0
-                && ctx.ball().distance() < 100.0
-                && ctx.ball().distance_to_opponent_goal() < 150.0
-                && ctx.tick_context.positions.ball.position.z >= 1.0
-                && !ctx.ball().is_owned()
-            {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::CrossReceiving,
-                ));
-            }
-
-            // Priority 1: Ball interception opportunity
-            if self.can_intercept_ball(ctx) {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Intercepting,
-                ));
-            }
-
-            // Priority 2: Pressing opportunity
-            if self.should_press(ctx) && !ForwardPress::called_off(ctx) {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Pressing,
-                ));
-            }
-
-            // Priority 3: Create space when team has possession
-            if ctx.team().is_control_ball() {
-                // …but a wide forward has a touchline to hold, and it
-                // outranks looking for a gap: the gap he is creating by
-                // standing there is for somebody else. See
-                // `holding_width`.
-                if WideChannel::still_mine(ctx) {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::HoldingWidth,
-                    ));
-                }
-
-                if self.should_create_space(ctx) {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::CreatingSpace,
-                    ));
-                }
-
-                // Make intelligent runs
-                if self.should_make_run_in_behind(ctx) {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::RunningInBehind,
-                    ));
-                }
-            }
-
-            // Priority 4: Defensive duties when needed
-            if !ctx.team().is_control_ball() {
-                // Retreating is a response to the OPPOSITION having the
-                // ball, not to nobody having it. `is_control_ball()` is
-                // false for a loose ball too, and that sent forwards
-                // home every time it broke loose — see the measurement
-                // in `ForwardReturningState`. Helping to defend below
-                // keeps the looser gate: closing a loose ball down is
-                // work a forward does.
-                if ctx.players().opponents().with_ball().next().is_some()
-                    && self.should_return_to_position(ctx)
+                #[cfg(feature = "match-logs")]
                 {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::Returning,
-                    ));
+                    use std::sync::atomic::Ordering;
+                    crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::FWD_CUTBACK.fetch_add(1, Ordering::Relaxed);
+                    ForwardCensus::note_pass_site(ctx, FwdRequest::Cutback);
                 }
-
-                if self.should_help_defend(ctx) && !ForwardPress::called_off(ctx) {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::Pressing,
-                    ));
-                }
+                return Some(StateChangeResult::with_forward_state_and_event(
+                    ForwardRead::released(ctx),
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(runner.id)
+                            .with_reason("FWD_RUNNING_CUTBACK_TO_RUNNER")
+                            .build(ctx),
+                    )),
+                ));
             }
 
-            // Consider fatigue and state duration
-            if self.needs_recovery(ctx) {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Resting));
-            }
+        // If we deferred to a better-positioned teammate, route
+        // through Passing — the pass state picks the target. The
+        // pass-EV-beats-shot-xG case is now handled inside the
+        // unified helper (returns ShotDecision::Pass).
+        if defer_to_teammate {
+            #[cfg(feature = "match-logs")]
+            ForwardCensus::note_pass_site(ctx, FwdRequest::PassOther);
+            return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+        }
 
-            // Prevent getting stuck in running state
-            if ctx.in_state_time > 300 {
-                if ctx.team().is_control_ball() {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::CreatingSpace,
-                    ));
-                }
-                // `Walking` sends him straight back while somebody has the ball.
-                if !ctx.ball().is_owned() {
-                    return Some(StateChangeResult::with_forward_state(ForwardState::Walking));
-                }
+        // Priority 0.8: Open path to goal — KEEP RUNNING, don't pass or dribble
+        // But only if still far from shooting range. Once in range, shooting
+        // checks above should have triggered. If they didn't (no clear shot),
+        // don't keep running into the GK — fall through to passing/dribbling.
+        // `> MAX_SHOOTING_DISTANCE (320u) && < 180u` — a condition no
+        // distance can satisfy, so this branch had never once run and
+        // the forward had no drive-at-goal path at all. What it means
+        // to say is the comment above it: keep running from beyond
+        // 22.5 m (180u) with space ahead. The shot blocks above ask the
+        // helper out to 320u (40 m), so here it has already declined
+        // this tick.
+        if distance_to_goal > 180.0 && self.has_open_space_ahead(ctx) {
+            let dribbling = ctx.player.skills.technical.dribbling / 20.0;
+            let composure = ctx.player.skills.mental.composure / 20.0;
+            let determination = ctx.player.skills.mental.determination / 20.0;
+            let pace = ctx.player.skills.physical.pace / 20.0;
+            let carry_quality =
+                dribbling * 0.35 + composure * 0.25 + determination * 0.2 + pace * 0.2;
+            if carry_quality > 0.55 {
+                stuck_exit_stats::note(3, ctx.in_state_time, ctx.player.velocity.norm());
+                return None;
             }
         }
 
+        // ONE-TWO COMBINATION: After just receiving ball, check if passer ran into space
+        if ctx.ball().has_stable_possession() {
+            let ownership_ticks = ctx.tick_context.ball.ownership_duration;
+            if (2..=10).contains(&ownership_ticks)
+                && let Some(return_target) = self.find_one_two_return(ctx)
+            {
+                #[cfg(feature = "match-logs")]
+                ForwardCensus::note_pass_site(ctx, FwdRequest::OneTwo);
+                return Some(StateChangeResult::with_forward_state_and_event(
+                    ForwardRead::released(ctx),
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(return_target.id)
+                            .with_reason("FWD_RUNNING_ONE_TWO_RETURN")
+                            .build(ctx),
+                    )),
+                ));
+            }
+        }
+
+        // HOLD-UP PLAY: When facing away from goal with midfielders arriving,
+        // draw defenders and lay off to a supporting teammate.
+        // Only when forward genuinely can't advance (opponents blocking ahead).
+        if ctx.ball().has_stable_possession()
+            && ctx.tick_context.ball.ownership_duration > 30
+            && !self.has_open_space_ahead(ctx)
+        // Don't lay off if can run forward
+            && let Some(layoff_target) = self.find_hold_up_layoff(ctx)
+        {
+            #[cfg(feature = "match-logs")]
+            ForwardCensus::note_pass_site(ctx, FwdRequest::HoldUpLayoff);
+            return Some(StateChangeResult::with_forward_state_and_event(
+                ForwardRead::released(ctx),
+                Event::PlayerEvent(PlayerEvent::PassTo(
+                    PassingEventContext::builder()
+                        .with_from_player_id(ctx.player.id)
+                        .with_to_player_id(layoff_target.id)
+                        .with_reason("FWD_RUNNING_HOLD_UP_LAYOFF")
+                        .build(ctx),
+                )),
+            ));
+        }
+
+        // Clear ball if congested far from goal — only after carrying for a while
+        if ctx.tick_context.ball.ownership_duration > 15
+            && (ctx.player().movement().is_congested_near_boundary()
+                || ctx.player().movement().is_congested())
+            && let Some(_) = ctx.players().teammates().all().next()
+        {
+            #[cfg(feature = "match-logs")]
+            ForwardCensus::note_pass_site(ctx, FwdRequest::PassOther);
+            return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+        }
+
+        // Under pressure - quick decision needed
+        if ctx.player().pressure().is_under_immediate_pressure() {
+            if self.should_pass_under_pressure(ctx) {
+                #[cfg(feature = "match-logs")]
+                ForwardCensus::note_pass_site(ctx, FwdRequest::PassOther);
+                return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+            } else if self.can_dribble_out_of_pressure(ctx) {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Dribbling,
+                ));
+            }
+        }
+
+        // Evaluate best action based on game context
+        // Require minimum carry time to prevent instant pass-after-receive
+        let ownership_ticks = ctx.tick_context.ball.ownership_duration;
+
+        // THE WIDE AREA, above the generic pass.
+        //
+        // A wide forward in the final third is not looking for
+        // "somebody better placed" — he is looking for the box, and
+        // the generic evaluator has no idea that is what the flank
+        // is for. Decided purely on where he is standing, so it
+        // covers a striker who has drifted wide as readily as a
+        // nominal winger. See `FlankPlay`.
+        if ownership_ticks > 8 {
+            match FlankPlay::decide(ctx) {
+                Some(FlankAction::ReleaseOutside { target }) => {
+                    #[cfg(feature = "match-logs")]
+                    {
+                        crate::mid_run_diag::WideDiag::note(4);
+                        ForwardCensus::note_pass_site(ctx, FwdRequest::FlankRelease);
+                    }
+                    return Some(StateChangeResult::with_forward_state_and_event(
+                        ForwardRead::released(ctx),
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::builder()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(target)
+                                .with_reason("FWD_FLANK_RELEASE")
+                                .build(ctx),
+                        )),
+                    ));
+                }
+                Some(FlankAction::Deliver) => {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::Crossing,
+                    ));
+                }
+                None => {}
+            }
+        }
+
+        if ownership_ticks > 12 && self.should_pass(ctx) {
+            #[cfg(feature = "match-logs")]
+            ForwardCensus::note_pass_site(ctx, FwdRequest::PassShouldPass);
+            return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+        }
+
+        if ownership_ticks > 20 && self.should_dribble(ctx) {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Dribbling,
+            ));
+        }
+
+        // ANTI-OSCILLATION: carrying the ball too long without acting
+        // (2.4 s on it) — he passes. It asked the shot helper
+        // here as `FWD_RUN_ANTI_OSCILLATION`, and that never approved:
+        // this is only reached after the helper held above, on the same
+        // tick, and it gives the same answer.
+        if Self::on_the_ball(ctx) > Self::STALL {
+            #[cfg(feature = "match-logs")]
+            {
+                ForwardCensus::note_limit(ctx, FwdLimit::Stall);
+                ForwardCensus::note_pass_site(ctx, FwdRequest::PassAfterStall);
+            }
+            return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+        }
+
+        // Continue running with ball briefly while looking for an opening
+        stuck_exit_stats::note(4, ctx.in_state_time, ctx.player.velocity.norm());
         None
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Fatigue-aware velocity calculation
-        let fatigue_factor = self.calculate_fatigue_factor(ctx);
-
-        // If following waypoints (team tactical movement)
-        if ctx.player.should_follow_waypoints(ctx) && !ctx.player.has_ball(ctx) {
-            let waypoints = ctx.player.get_waypoints_as_vectors();
-
-            if !waypoints.is_empty() {
-                return Some(
-                    SteeringBehavior::FollowPath {
-                        waypoints,
-                        current_waypoint: ctx.player.waypoint_manager.current_index,
-                        crowd_offset: ctx.player().separation_offset(),
-                    }
-                    .calculate(ctx.player)
-                    .velocity
-                        * fatigue_factor,
-                );
-            }
-        }
-
-        // Movement with ball
         if ctx.player.has_ball(ctx) {
-            Some(self.calculate_ball_carrying_movement(ctx) * fatigue_factor)
+            return Some(self.calculate_ball_carrying_movement(ctx) * Self::carry_age_factor(ctx));
         }
-        // Without ball — spread across pitch using unique player slots
-        else {
-            let ball_pos = ctx.tick_context.positions.ball.position;
-            let start_pos = ctx.player.start_position;
-            let field_width = ctx.context.field_size.width as f32;
-            let field_height = ctx.context.field_size.height as f32;
-            let ball_distance = ctx.ball().distance();
-
-            // ASSIGNED BOX SLOT: once the team plan has given this forward
-            // a patch of the box, that is where he goes. It supersedes the
-            // generic spread below for the duration of the attack.
-            //
-            // The spread is a good default but it is only a default: its
-            // `slot_y` is derived from a by-id rank among FORWARDS and
-            // blended with the ball's y, so three forwards fan out
-            // relative to each other and to the ball while knowing nothing
-            // about the midfielders arriving into the same space — and
-            // nothing about which parts of the box are actually worth
-            // occupying. The plan assigns exclusive destinations across
-            // the whole side, which is the only thing that stops bodies
-            // converging in front of goal.
-            //
-            // ⚠ THIS USED TO SIT BELOW THE SUPPORT BRANCH, AND THAT ORDER
-            // WAS THE CLUSTER.
-            //
-            // A man with a patch of the box has a job, and coming back to
-            // stand beside the carrier is not it — `AttackPlan` says as
-            // much in as many words: `near_support` is "the short outlet,
-            // deliberately NOT a box occupant". With the support branch
-            // first, every forward inside 10 m of a pressed carrier
-            // abandoned his slot to go and stand next to him, and the
-            // pressure census says a carrier in the attacking third has
-            // somebody inside 2 m on 60% of ticks. The plan was being
-            // overruled almost every time it mattered.
-            if let Some(slot) = ctx.team().my_box_slot() {
-                // Occupying the slot is not the same as being available
-                // in it. A defender whose whole job is to stand on this
-                // forward's goal-side shoulder solves a stationary target
-                // by standing still, which is why forwards' share of
-                // shots collapsed once man-marking started working.
-                //
-                // `BoxMovement` owns the whole behaviour — the staged
-                // approach, the zone-working cadence, the marker evasion
-                // and the run onto the delivery — so this state and
-                // `CreatingSpace` cannot hold different opinions about
-                // what occupying a box slot looks like.
-                return Some(BoxMovement::steer(ctx, slot) * fatigue_factor);
-            }
-
-            // OFFER HIM SOMETHING: a forward the plan has given no patch
-            // of the box is the short outlet, and the outlet stands at an
-            // angle at a DISTANCE. `SupportOffer` owns both, and the
-            // midfielders' own support run reads the same model, so the
-            // two cannot drift apart about what supporting means.
-            //
-            // ⚠ THIS REPLACES TWO RULES, AND BOTH WERE WRONG THE SAME WAY.
-            //
-            // "SUPPORT PRESSURED TEAMMATE" sent him to stand 2-3 m off a
-            // pressed carrier, and "ANTI-FOLLOWING" then pushed him
-            // blindly away from the ball plus a lateral nudge whenever he
-            // got inside 3 m. One pulled him in, the other shoved him
-            // out, neither knew where a passing option belongs, and the
-            // two of them together are most of what a replay shows as
-            // players milling around the ball. The offer below has a
-            // floor of 9.5 m and keeps his own bearing, so he stays on
-            // whichever side of the carrier he was already on.
-            if ctx.team().is_control_ball()
-                && ball_distance < SupportOffer::far()
-                && let Some(carrier) = ctx
-                    .players()
-                    .teammates()
-                    .all()
-                    .find(|t| ctx.ball().owner_id() == Some(t.id))
-                && let Some(target) = SupportOffer::target(ctx, carrier.position)
-            {
-                return Some(
-                    SteeringBehavior::Arrive {
-                        target,
-                        slowing_distance: 24.0,
-                    }
-                    .calculate(ctx.player)
-                    .velocity
-                        * fatigue_factor,
-                );
-            }
-
-            let attacking_direction = match ctx.player.side {
-                Some(PlayerSide::Left) => 1.0,
-                Some(PlayerSide::Right) => -1.0,
-                None => 0.0,
-            };
-
-            // Quantize ball position to 10-unit grid to prevent target wobble
-            let qball_x = (ball_pos.x / 10.0).round() * 10.0;
-            let qball_y = (ball_pos.y / 10.0).round() * 10.0;
-
-            // Smooth ball proximity (no binary switches)
-            let proximity = (1.0 - ball_distance / 400.0).clamp(0.05, 0.45);
-
-            // === UNIQUE FORWARD SLOT: spread forwards vertically ===
-            let my_id = ctx.player.id;
-            let mut slot_index = 0u32;
-            let mut total_fwds = 1u32;
-            for t in ctx.players().teammates().all() {
-                if t.tactical_positions.is_forward() {
-                    total_fwds += 1;
-                    if t.id < my_id {
-                        slot_index += 1;
-                    }
-                }
-            }
-            let slot_index = slot_index as usize;
-            let total_fwds = total_fwds as usize;
-
-            // Spread forwards across 25%-75% of field height
-            let slot_y = field_height * 0.25
-                + (field_height * 0.5) * (slot_index as f32 + 0.5) / total_fwds as f32;
-
-            // Forwards stay HIGH — target pushes well ahead of ball toward opponent goal
-            let depth_stagger = attacking_direction * (slot_index as f32 * 20.0);
-            let advanced_x = qball_x + attacking_direction * 70.0 + depth_stagger;
-            let min_forward_x = match ctx.player.side {
-                Some(PlayerSide::Left) => (field_width * 0.45).max(qball_x).min(field_width),
-                Some(PlayerSide::Right) => 0.0_f32,
-                None => 0.0,
-            };
-            let max_forward_x = match ctx.player.side {
-                Some(PlayerSide::Left) => field_width,
-                Some(PlayerSide::Right) => (field_width * 0.55).min(qball_x).max(0.0),
-                None => field_width,
-            };
-            let clamped_advanced_x = advanced_x.clamp(min_forward_x, max_forward_x);
-            let target_x = start_pos.x + (clamped_advanced_x - start_pos.x) * proximity;
-
-            // Y: blend between assigned slot and start position
-            let center_y = field_height / 2.0;
-            let is_wide = (start_pos.y - center_y).abs() > field_height * 0.2;
-            let slot_weight = if is_wide { 0.4 } else { 0.5 };
-            let ball_weight = proximity * (1.0 - slot_weight);
-            let start_weight = (1.0 - slot_weight - ball_weight).max(0.0);
-            let target_y =
-                slot_y * slot_weight + qball_y * ball_weight + start_pos.y * start_weight;
-
-            let target = Vector3::new(
-                target_x.clamp(30.0, field_width - 30.0),
-                target_y.clamp(40.0, field_height - 40.0),
-                0.0,
-            );
-            // Same rule outside the box: the spread decides WHERE he
-            // wants to be, the marker decides how he gets there.
-            let target = MarkerEvasion::evade(ctx, target);
-
-            let dist_to_target = (target - ctx.player.position).magnitude();
-
-            if dist_to_target < 8.0 {
-                return Some(Vector3::zeros());
-            }
-
-            let arrive_velocity = SteeringBehavior::Arrive {
-                target,
-                slowing_distance: 15.0,
+        // The read moves him on the tick he is here without it; whatever is
+        // left of that tick he spends on his place.
+        Some(
+            SteeringBehavior::Arrive {
+                target: ctx.team().my_anchor(),
+                slowing_distance: 25.0,
             }
             .calculate(ctx.player)
-            .velocity;
-
-            Some(arrive_velocity * fatigue_factor * MarkerEvasion::burst(ctx))
-        }
+            .velocity,
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
         // Forwards do a lot of intense running - high intensity with velocity
-        ForwardCondition::with_velocity(ActivityIntensity::High).process(ctx);
+        ForwardCondition::new(ActivityIntensity::High).process(ctx);
     }
 }
 
 impl ForwardRunningState {
-    /// Phase-first dispatch — returns `Some` when the team's current
-    /// phase has a strong, short-circuiting behaviour for this player.
-    /// Returns `None` for settled phases (BuildUp, Progression, Attack,
-    /// MidBlock, LowBlock) so the rich existing decision tree handles
-    /// ball-handling and off-ball positioning as before.
-    fn phase_dispatch(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        let phase = ctx.team().phase();
-        let has_ball = ctx.player.has_ball(ctx);
-        match phase {
-            // We just won possession — this is the fast-break window.
-            // The carrier is someone else (usually a midfielder). The
-            // forward sprints in behind to offer a direct pass target.
-            GamePhase::AttackingTransition if !has_ball => {
-                if ctx.ball().distance_to_opponent_goal() > 30.0 {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::RunningInBehind,
-                    ));
-                }
-            }
-            // We just lost possession — counter-press window. Only the
-            // nearest forward to the ball engages; the rest fall back
-            // through normal defensive logic below.
-            GamePhase::DefensiveTransition if !has_ball => {
-                let ball_dist = ctx.ball().distance();
-                if ball_dist < 35.0 && ctx.team().is_best_player_to_chase_ball() {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::Pressing,
-                    ));
-                }
-            }
-            // Coach called for a high press and ball is in opposition's
-            // own half — forwards hunt the ball carrier.
-            GamePhase::HighPress if !has_ball => {
-                let ball_dist = ctx.ball().distance();
-                if ball_dist < 80.0 && ctx.team().is_best_player_to_chase_ball() {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::Pressing,
-                    ));
-                }
-            }
-            _ => {}
+    /// 30% off the carry over 3.6 s in the state. Time on the ball is not
+    /// tiredness, but this is the only brake on a carry the on-ball tree
+    /// holds too long: without it goals rose from 2.88 to 3.74 a match.
+    fn carry_age_factor(ctx: &StateProcessingContext) -> f32 {
+        (1.0 - ctx.in_state_time as f32 / 600.0).max(0.7)
+    }
+
+    /// Engine ticks in a second: the clock `ownership_duration` runs on.
+    const TICKS_PER_SECOND: f32 = 100.0;
+    /// The first moment after he gets the ball, 0.16 s.
+    const JUST_RECEIVED: u32 = (0.16 * Self::TICKS_PER_SECOND) as u32;
+    /// On the ball 2.4 s without acting, he passes.
+    const STALL: u32 = (2.4 * Self::TICKS_PER_SECOND) as u32;
+    /// A point-blank hold lasts 3 s before he squares it.
+    const POINT_BLANK_PATIENCE: u32 = (3.0 * Self::TICKS_PER_SECOND) as u32;
+    /// He holds the ball in the area 6 s for the chance to come.
+    const HOLD_PATIENCE: u32 = (6.0 * Self::TICKS_PER_SECOND) as u32;
+
+    /// How long he has had the ball, in engine ticks — counted from when he
+    /// got it, whatever state he was in then.
+    fn on_the_ball(ctx: &StateProcessingContext) -> u32 {
+        ctx.tick_context.ball.ownership_duration
+    }
+
+    fn just_received(ctx: &StateProcessingContext) -> bool {
+        Self::on_the_ball(ctx) < Self::JUST_RECEIVED
+    }
+
+    #[cfg(feature = "match-logs")]
+    fn verdict(decision: &ShotDecision) -> FwdVerdict {
+        match decision {
+            ShotDecision::Shoot { .. } => FwdVerdict::Approved,
+            ShotDecision::Pass => FwdVerdict::HelperPass,
+            ShotDecision::Hold => FwdVerdict::HelperHold,
         }
-        None
     }
 
     /// Check if there's open space ahead toward the opponent goal
@@ -1536,26 +799,13 @@ impl ForwardRunningState {
         blockers == 0
     }
 
-    /// Check if under immediate pressure
-    #[allow(dead_code)]
-    fn is_under_immediate_pressure(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.player().pressure().is_under_immediate_pressure()
-    }
-
     /// Determine if should pass when under pressure
     fn should_pass_under_pressure(&self, ctx: &StateProcessingContext) -> bool {
         // Check for available passing options
-        let safe_pass_available = ctx
-            .players()
+        ctx.players()
             .teammates()
             .nearby(200.0)
-            .any(|t| ctx.player().has_clear_pass(t.id));
-
-        let composure = ctx.player.skills.mental.composure / 20.0;
-
-        // Low composure players pass more under pressure
-        safe_pass_available
-            && (composure < 0.7 || ctx.player().pressure().is_under_immediate_pressure())
+            .any(|t| ctx.player().has_clear_pass(t.id))
     }
 
     /// Check if can dribble out of pressure
@@ -1611,376 +861,6 @@ impl ForwardRunningState {
         }
 
         None
-    }
-
-    /// Enhanced interception check
-    fn can_intercept_ball(&self, ctx: &StateProcessingContext) -> bool {
-        if ctx.team().is_control_ball()
-            || ctx.ball().distance() > InterceptionRange::GIVE_UP
-            || !LooseBallChase::can_contest(ctx)
-        {
-            return false;
-        }
-
-        // Don't try to intercept if ball is already owned by teammate
-        if ctx.ball().is_owned()
-            && let Some(owner_id) = ctx.ball().owner_id()
-            && let Some(owner) = ctx.context.players.by_id(owner_id)
-            && owner.team_id == ctx.player.team_id
-        {
-            return false;
-        }
-
-        if !ctx.tick_context.chase.may_go(ctx.player.id) {
-            return false;
-        }
-
-        let ball_distance = ctx.ball().distance();
-        let ball_speed = ctx.ball().speed();
-
-        // Static or slow-moving ball nearby - only if nearest teammate
-        if ball_distance < 30.0 && ball_speed < 2.0 {
-            let cutoff = ball_distance - 5.0;
-            let ball_pos = ctx.tick_context.positions.ball.position;
-            let closer_teammate = cutoff > 0.0 && {
-                let cutoff_sq = cutoff * cutoff;
-                ctx.players().teammates().all().any(|t| {
-                    t.id != ctx.player.id && (t.position - ball_pos).norm_squared() < cutoff_sq
-                })
-            };
-            if !closer_teammate {
-                return true;
-            }
-        }
-
-        // Ball moving toward player
-        if ball_distance < 150.0 && ctx.ball().is_towards_player_with_angle(0.8) {
-            let meeting = LooseBallChase::meeting_point(
-                ctx,
-                ctx.tick_context.positions.ball.position,
-                ctx.tick_context.positions.ball.velocity,
-            );
-            return LooseBallChase::wins_the_race(ctx, meeting);
-        }
-
-        false
-    }
-
-    /// Improved pressing decision with smart triggers
-    fn should_press(&self, ctx: &StateProcessingContext) -> bool {
-        // Don't press if team has possession
-        if ctx.team().is_control_ball() {
-            return false;
-        }
-
-        // The team plan's answer wins. `DefensivePlan` nominates exactly
-        // one presser per side, by distance to the point of attack and
-        // with no positional thumb on the scale, and every other part of
-        // the defensive model treats that nomination as authoritative —
-        // `TackleEngagement::should_commit` and both midfield press gates
-        // already accept it. The front line was the last place that did
-        // not, and it is the place it mattered most.
-        if TackleEngagement::is_nominated_presser(ctx) {
-            return true;
-        }
-
-        // Only the closest player should initiate the press — prevents swarming
-        // Exception: very close range (<30) anyone can press reactively
-        //
-        // ⚠ `is_best_player_to_chase_ball` is a SINGLE-PLAYER election run
-        // across the whole team, so as the only door into the state it
-        // capped the front line's pressing at "the one man in eleven who
-        // happens to be nearest the ball, and only when he is also nearer
-        // than every defender and midfielder". Measured before the
-        // nomination above was accepted: `Forward: Pressing` took 0.3% of
-        // all AI ticks — 2.2% of a forward's own match.
-        let ball_distance = ctx.ball().distance();
-        if ball_distance > 30.0 && !ctx.team().is_best_player_to_chase_ball() {
-            return false;
-        }
-
-        let stamina_level = ctx.player.player_attributes.condition_percentage() as f32 / 100.0;
-        let work_rate = ctx.player.skills.mental.work_rate / 20.0;
-        // Team-shared press_intensity already accounts for tactic +
-        // counter-press + condition + game-management, so a tired
-        // late-leading forward stops chasing whether or not the
-        // formation tactic still says "press".
-        let intensity = ctx.team().press_intensity();
-
-        // Pressing distance: 60u base (~30m) calibrated to real forward
-        // press radii. Real forwards engage at 15-25m (30-50u), and a
-        // high-press striker (intensity 1.0, work_rate 1.0, full stamina)
-        // gets boosted to 60u. The previous 150u base meant a forward
-        // pressed at half the field's length, producing 9.8 forward
-        // tackles per match (real ~1-2) and pulling forwards out of
-        // attacking position whenever the opposition won the ball.
-        let effective_press_distance =
-            60.0 * stamina_level * (0.5 + work_rate) * (0.5 + intensity * 0.5);
-
-        // Check tactical instruction (high press vs low block)
-        let high_press = ctx.team().tactics().is_high_pressing();
-
-        // PRESSING TRAP: Opponent defender receiving ball facing own goal — press aggressively
-        if ball_distance < effective_press_distance * 1.5
-            && let Some(opponent) = ctx
-                .players()
-                .opponents()
-                .nearby(effective_press_distance * 1.5)
-                .with_ball(ctx)
-                .next()
-        {
-            let opp_velocity = ctx.tick_context.positions.players.velocity(opponent.id);
-            // The carrier's OWN goal is the goal we attack — no
-            // reflection needed. (The old `ball*2 - goal` mirror
-            // pointed at OUR goal instead, so the trap fired on
-            // advancing carriers and missed the retreating ones it
-            // was written for.)
-            let opp_own_goal = ctx.player().opponent_goal_position();
-
-            // Opponent retreating toward their own goal (back to us)
-            if opp_velocity.magnitude() > 0.5
-                && let Some(to_own_goal) = (opp_own_goal - opponent.position).try_normalize(1e-4)
-                && opp_velocity.normalize().dot(&to_own_goal) > 0.4
-            {
-                return true; // Opponent in trouble — press!
-            }
-
-            // WIDE ISOLATION: Opponent near touchline — trap them
-            let field_height = ctx.context.field_size.height as f32;
-            if opponent.position.y < field_height * 0.1 || opponent.position.y > field_height * 0.9
-            {
-                return true;
-            }
-
-            // TIRED OPPONENT: Increase pressing range against fatigued players
-            if let Some(opp_player) = ctx.context.players.by_id(opponent.id)
-                && opp_player.player_attributes.condition_percentage() < 50
-            {
-                return ball_distance < effective_press_distance * 1.4;
-            }
-        }
-
-        if high_press {
-            ball_distance < effective_press_distance * 1.3
-        } else {
-            // Only press in attacking third
-            ball_distance < effective_press_distance && !ctx.ball().on_own_third()
-        }
-    }
-
-    /// Determine if should create space
-    fn should_create_space(&self, ctx: &StateProcessingContext) -> bool {
-        // Ball carrier doesn't create space — they MOVE with the ball.
-        let ball_distance = ctx.ball().distance();
-        if ball_distance < 5.0 {
-            return false;
-        }
-
-        // Teammate has the ball: the primary trigger for space creation.
-        // Real football: the WHOLE attacking unit spreads to open passing
-        // lanes and stretch the defence. Previously this only fired when
-        // I was >60u from the ball, which meant close forwards stayed
-        // huddled around the carrier instead of making the diagonal runs
-        // that create triangles.
-        if let Some(owner_id) = ctx.ball().owner_id()
-            && owner_id != ctx.player.id
-            && let Some(owner) = ctx.context.players.by_id(owner_id)
-            && owner.team_id == ctx.player.team_id
-        {
-            // Create space whenever we're clustered with
-            // another forward / any teammate — the exact
-            // distance to the ball doesn't matter, what
-            // matters is whether we're bunched.
-            let me_pos = ctx.player.position;
-            let bunched = ctx.players().teammates().all().any(|t| {
-                if t.id == ctx.player.id {
-                    return false;
-                }
-                let d_sq = (t.position - me_pos).norm_squared();
-                d_sq < 22.0 * 22.0 // < ~2.5m
-            });
-            if bunched {
-                return true;
-            }
-            // Even without an immediate cluster: if I'm
-            // reasonably close to the ball (30-150u, the
-            // "attacking support" band), make a run to pull
-            // defenders. Carriers need OPTIONS, not another
-            // nearby body.
-            return ball_distance > 30.0 && ball_distance < 150.0;
-        }
-
-        // No teammate has ball - still try to create space if we're not closest
-        let closest_to_ball = !ctx.players().teammates().all().any(|t| {
-            let t_dist = (t.position - ctx.tick_context.positions.ball.position).magnitude();
-            t_dist < ball_distance * 0.9
-        });
-
-        !closest_to_ball
-    }
-
-    /// Detect counter-attack opportunity (team just won possession, opponents high)
-    fn is_counter_attack_opportunity(&self, ctx: &StateProcessingContext) -> bool {
-        let ownership_duration = ctx.tick_context.ball.ownership_duration;
-        if ownership_duration >= 15 {
-            return false;
-        }
-
-        // Count opponents ahead of ball
-        let ball_pos = ctx.tick_context.positions.ball.position;
-        let goal_pos = ctx.player().opponent_goal_position();
-        let to_goal = (goal_pos - ball_pos).normalize();
-
-        let opponents_ahead = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opp| {
-                let to_opp = opp.position - ball_pos;
-                to_opp.normalize().dot(&to_goal) > 0.3
-            })
-            .count();
-
-        opponents_ahead < 3
-    }
-
-    /// Check if should make run in behind defense
-    fn should_make_run_in_behind(&self, ctx: &StateProcessingContext) -> bool {
-        // Don't make runs on own half
-        if ctx.player().on_own_side() {
-            return false;
-        }
-
-        // Condition is fitness, not ability, and a tired forward genuinely
-        // does stop running.
-        let pace = (ctx.player.skills.physical.pace / 20.0).clamp(0.0, 1.0);
-        let off_ball = (ctx.player.skills.mental.off_the_ball / 20.0).clamp(0.0, 1.0);
-        let stamina = ctx.player.player_attributes.condition_percentage() as f32 / 100.0;
-
-        // Counter-attack: lower skill threshold — be more aggressive
-        let is_counter = self.is_counter_attack_opportunity(ctx);
-        let skill_threshold = if is_counter { 0.25 } else { 0.4 };
-
-        // Combined skill check - if player is good at any of these, allow the run
-        let skill_score = pace * 0.4 + off_ball * 0.4 + stamina * 0.2;
-        if skill_score < skill_threshold {
-            return false;
-        }
-
-        // Check if there's space behind defense
-        let defensive_line = self.find_defensive_line(ctx);
-        let space_behind = self.check_space_behind_defense(ctx, defensive_line);
-
-        // Check if a teammate has the ball (any teammate, not just good passers)
-        let teammate_has_ball = ctx
-            .ball()
-            .owner_id()
-            .and_then(|id| ctx.context.players.by_id(id))
-            .map(|p| p.team_id == ctx.player.team_id)
-            .unwrap_or(false);
-
-        // More aggressive: make runs even if space is limited, as long as teammate has ball
-        // and we're in attacking third
-        let in_attacking_third = self.is_in_good_attacking_position(ctx);
-
-        // During counter-attacks, be much more willing to run
-        if is_counter && teammate_has_ball {
-            return true;
-        }
-
-        (space_behind || in_attacking_third) && teammate_has_ball
-    }
-
-    /// Find opponent defensive line position
-    fn find_defensive_line(&self, ctx: &StateProcessingContext) -> f32 {
-        let players_view = ctx.players();
-        let opponents_view = players_view.opponents();
-        let defender_xs = || {
-            opponents_view
-                .all()
-                .filter(|p| p.tactical_positions.is_defender())
-                .map(|p| p.position.x)
-        };
-
-        match ctx.player.side {
-            Some(PlayerSide::Left) => {
-                let max = defender_xs().fold(f32::MIN, f32::max);
-                if max == f32::MIN {
-                    ctx.context.field_size.width as f32 / 2.0
-                } else {
-                    max
-                }
-            }
-            Some(PlayerSide::Right) => {
-                let min = defender_xs().fold(f32::MAX, f32::min);
-                if min == f32::MAX {
-                    ctx.context.field_size.width as f32 / 2.0
-                } else {
-                    min
-                }
-            }
-            None => {
-                let (sum, count) = defender_xs().fold((0.0_f32, 0u32), |(s, c), x| (s + x, c + 1));
-                if count == 0 {
-                    ctx.context.field_size.width as f32 / 2.0
-                } else {
-                    sum / count as f32
-                }
-            }
-        }
-    }
-
-    /// Check if there's exploitable space behind defense
-    fn check_space_behind_defense(
-        &self,
-        ctx: &StateProcessingContext,
-        defensive_line: f32,
-    ) -> bool {
-        let player_x = ctx.player.position.x;
-
-        match ctx.player.side {
-            Some(PlayerSide::Left) => {
-                // Space exists if defensive line is high and there's room behind
-                defensive_line < ctx.context.field_size.width as f32 * 0.7
-                    && player_x < defensive_line + 20.0
-            }
-            Some(PlayerSide::Right) => {
-                defensive_line > ctx.context.field_size.width as f32 * 0.3
-                    && player_x > defensive_line - 20.0
-            }
-            None => false,
-        }
-    }
-
-    /// Determine if should return to defensive position
-    fn should_return_to_position(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.player().position_to_distance() == PlayerDistanceFromPosition::Big
-    }
-
-    /// A hard-working forward drops into his own third late on when his
-    /// side has a lead to protect. A side chasing the game keeps him up.
-    fn should_help_defend(&self, ctx: &StateProcessingContext) -> bool {
-        let protecting_a_lead = ctx.team().score_diff() > 0 && ctx.context.is_running_out();
-        let work_rate = ctx.player.skills.mental.work_rate / 20.0;
-
-        work_rate > 0.7 && protecting_a_lead && ctx.ball().on_own_third()
-    }
-
-    /// Check if player needs recovery
-    fn needs_recovery(&self, ctx: &StateProcessingContext) -> bool {
-        let stamina = ctx.player.player_attributes.condition_percentage();
-        let has_been_sprinting = ctx.in_state_time > SPRINT_DURATION_THRESHOLD;
-
-        stamina < 60 && has_been_sprinting
-    }
-
-    /// Calculate fatigue factor for movement
-    fn calculate_fatigue_factor(&self, ctx: &StateProcessingContext) -> f32 {
-        let time_in_state = ctx.in_state_time as f32;
-
-        // Only apply time-based fatigue here.
-        // Condition is already factored in by steering behaviors via max_speed_with_condition().
-        (1.0 - (time_in_state / 600.0)).max(0.7)
     }
 
     /// Calculate movement when carrying the ball
@@ -2076,7 +956,7 @@ impl ForwardRunningState {
     /// depends on one reading — is anybody near him:
     ///
     /// * **Being closed down** — he shields, turning his body between the
-    ///   defender and the ball. Away from the nearest man, slowly.
+    ///   defender and the ball, stepping away from the nearest man.
     /// * **Nobody near him** — then he is through, and the thing to do is
     ///   go at the goalkeeper. `carry_hold` normally stops him closing,
     ///   and that rule is right in general, but it cannot be right when
@@ -2086,10 +966,9 @@ impl ForwardRunningState {
     /// position, so neither reproduces the treadmill the deadband was
     /// introduced to stop: he moves, the geometry changes, and ordinary
     /// steering takes over again on the next tick.
-    fn settle_over_the_ball(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+    pub(crate) fn settle_over_the_ball(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         const SHIELD_REACH: f32 = 24.0; // 3 m
         let me = ctx.player.position;
-        let speed = ctx.player.skills.physical.pace * 0.30;
 
         let nearest = ctx
             .players()
@@ -2118,7 +997,11 @@ impl ForwardRunningState {
             }
         };
 
-        direction * speed
+        SteeringBehavior::Seek {
+            target: me + direction * SHIELD_REACH,
+        }
+        .calculate(ctx.player)
+        .velocity
     }
 
     /// Find optimal path considering opponents and teammates
@@ -2271,17 +1154,7 @@ impl ForwardRunningState {
             }
         }
 
-        // 2. PREFER TO RUN/SHOOT: Very close to goal - only pass if teammate is much better positioned
-        if distance_to_goal < CLOSE_RANGE_DISTANCE && !under_pressure {
-            return self.has_better_positioned_teammate(ctx, teammates, distance_to_goal);
-        }
-
-        if distance_to_goal < SHOOTING_ZONE_DISTANCE && !under_pressure {
-            // Enhanced shooting zone - only forward passes to significantly better teammates
-            return self.has_forward_pass_to_better_teammate(ctx, teammates, distance_to_goal);
-        }
-
-        // 3. LOOK FOR QUALITY OPPORTUNITIES: vision/passing scale smoothly
+        // 2. LOOK FOR QUALITY OPPORTUNITIES: vision/passing scale smoothly
         let quality_p = SkillCurve::new(vision_raw, 14.0, 0.6)
             .probability()
             .max(SkillCurve::new(passing_raw, 14.0, 0.6).probability());
@@ -2291,7 +1164,7 @@ impl ForwardRunningState {
             return true;
         }
 
-        // 4. TEAM PLAY: teamwork and decisions blend smoothly
+        // 3. TEAM PLAY: teamwork and decisions blend smoothly
         let team_p = SkillCurve::new(teamwork_raw, 14.0, 0.6).probability()
             * SkillCurve::new(decisions_raw, 12.0, 0.6).probability();
         if ctx.context.rng.unit_f32() < team_p {
@@ -2324,7 +1197,7 @@ impl ForwardRunningState {
         own_distance: f32,
     ) -> bool {
         // Don't pass at point-blank range
-        if own_distance < POINT_BLANK_DISTANCE {
+        if own_distance < ForwardShot::POINT_BLANK {
             return false;
         }
 
@@ -2339,14 +1212,9 @@ impl ForwardRunningState {
         ctx.players().teammates().nearby(200.0).any(|teammate| {
             let teammate_distance =
                 (teammate.position - ctx.player().opponent_goal_position()).magnitude();
-            // Teammate must be significantly closer (at least 35% closer).
-            // Boundary tightened to 0.65 + `<=` so a teammate exactly
-            // 40% closer (e.g. 24u when we're at 40u) still counts
-            // as a better option — previously the strict < at 0.6
-            // missed that exact boundary case.
-            // 2026-08-16: 0.65 → 0.45. "Much better shot" has to mean MUCH
-            // better, or the carrier hands off a perfectly good look. Part
-            // of the shooting-blocker teardown — see `SHOT_BAR_BASE`.
+            // Teammate must be much closer: at most 45% of his own distance
+            // to goal. "Much better shot" has to mean MUCH better, or the
+            // carrier hands off a perfectly good look.
             let is_much_closer = teammate_distance <= own_distance * 0.45;
             let has_clear_pass = ctx.player().has_clear_pass(teammate.id);
             // "Not heavily marked" asked for TWO opponents inside 8u — and
@@ -2384,58 +1252,6 @@ impl ForwardRunningState {
         })
     }
 
-    /// Check if any teammate is in a significantly better scoring position
-    fn has_better_positioned_teammate(
-        &self,
-        ctx: &StateProcessingContext,
-        teammates: &[MatchPlayerLite],
-        current_distance: f32,
-    ) -> bool {
-        teammates.iter().any(|teammate| {
-            let teammate_distance =
-                (teammate.position - ctx.player().opponent_goal_position()).magnitude();
-            let is_much_closer = teammate_distance < current_distance * 0.6;
-            let not_heavily_marked = !self.is_teammate_heavily_marked(ctx, teammate);
-            let has_clear_lane = ctx.player().has_clear_pass(teammate.id);
-
-            is_much_closer && not_heavily_marked && has_clear_lane
-        })
-    }
-
-    /// Check for forward passes to better positioned teammates (prevents backward passes near goal)
-    fn has_forward_pass_to_better_teammate(
-        &self,
-        ctx: &StateProcessingContext,
-        teammates: &[MatchPlayerLite],
-        current_distance: f32,
-    ) -> bool {
-        let player_pos = ctx.player.position;
-
-        teammates.iter().any(|teammate| {
-            // Must be a forward pass direction
-            let is_forward_pass = match ctx.player.side {
-                Some(PlayerSide::Left) => teammate.position.x > player_pos.x,
-                Some(PlayerSide::Right) => teammate.position.x < player_pos.x,
-                None => false,
-            };
-
-            if !is_forward_pass {
-                return false; // Reject backward passes
-            }
-
-            // Teammate must be much closer to goal
-            let teammate_distance =
-                (teammate.position - ctx.player().opponent_goal_position()).magnitude();
-            let is_much_closer =
-                teammate_distance < current_distance * TEAMMATE_ADVANTAGE_STRICT_RATIO;
-            let not_heavily_marked = !self.is_teammate_heavily_marked(ctx, teammate);
-            let has_clear_lane = ctx.player().has_clear_pass(teammate.id);
-
-            is_much_closer && not_heavily_marked && has_clear_lane
-        })
-    }
-
-    /// Check for teammates in dangerous attacking positions (free zones or making runs)
     fn has_teammate_in_dangerous_position(
         &self,
         ctx: &StateProcessingContext,
@@ -2452,16 +1268,9 @@ impl ForwardRunningState {
             // Check if teammate is in free space (use pre-computed distances)
             let in_free_space = ctx.tick_context.grid.opponents(teammate.id, 12.0).count() < 2;
 
-            // Check if teammate is making a forward run
-            let teammate_velocity = ctx.tick_context.positions.players.velocity(teammate.id);
-            let making_run = teammate_velocity.magnitude() > 2.0 && {
-                let to_goal = ctx.player().opponent_goal_position() - teammate.position;
-                teammate_velocity.normalize().dot(&to_goal.normalize()) > 0.5
-            };
-
             let has_clear_pass = ctx.player().has_clear_pass(teammate.id);
 
-            has_clear_pass && in_attacking_position && (in_free_space || making_run)
+            has_clear_pass && in_attacking_position && in_free_space
         })
     }
 
@@ -2566,95 +1375,6 @@ impl ForwardRunningState {
         }
     }
 
-    fn is_in_good_attacking_position(&self, ctx: &StateProcessingContext) -> bool {
-        // Check if player is well-positioned in attacking third
-        let field_width = ctx.context.field_size.width as f32;
-        let attacking_third_start = match ctx.player.side {
-            Some(PlayerSide::Left) => field_width * 0.65,
-            Some(PlayerSide::Right) => field_width * 0.35,
-            None => field_width * 0.5,
-        };
-
-        match ctx.player.side {
-            Some(PlayerSide::Left) => ctx.player.position.x > attacking_third_start,
-            Some(PlayerSide::Right) => ctx.player.position.x < attacking_third_start,
-            None => false,
-        }
-    }
-
-    // Calculate tactical run position for better support when team has possession
-    #[allow(dead_code)]
-    fn calculate_tactical_run_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let player_position = ctx.player.position;
-        let field_width = ctx.context.field_size.width as f32;
-        let field_height = ctx.context.field_size.height as f32;
-
-        // Find teammate with the ball
-        let ball_holder = ctx
-            .players()
-            .teammates()
-            .all()
-            .find(|t| ctx.ball().owner_id() == Some(t.id));
-
-        if let Some(holder) = ball_holder {
-            // Calculate position based on ball holder's position
-            let holder_position = holder.position;
-
-            // Make runs beyond the ball holder
-            let forward_position = match ctx.player.side {
-                Some(PlayerSide::Left) => Vector3::new(
-                    holder_position.x + 80.0,
-                    // Vary Y-position based on player's current position
-                    if player_position.y < field_height / 2.0 {
-                        holder_position.y - 40.0 // Make run to left side
-                    } else {
-                        holder_position.y + 40.0 // Make run to right side
-                    },
-                    0.0,
-                ),
-                Some(PlayerSide::Right) => Vector3::new(
-                    holder_position.x - 80.0,
-                    if player_position.y < field_height / 2.0 {
-                        holder_position.y - 40.0 // Make run to left side
-                    } else {
-                        holder_position.y + 40.0 // Make run to right side
-                    },
-                    0.0,
-                ),
-                None => Vector3::new(holder_position.x, holder_position.y + 30.0, 0.0),
-            };
-
-            // Ensure position is within field boundaries
-            return Vector3::new(
-                forward_position.x.clamp(20.0, field_width - 20.0),
-                forward_position.y.clamp(20.0, field_height - 20.0),
-                0.0,
-            );
-        }
-
-        // Default to moving toward opponent's goal if no teammate has the ball
-        let goal_direction = (ctx.player().opponent_goal_position() - player_position).normalize();
-        player_position + goal_direction * 50.0
-    }
-
-    // Calculate defensive position when team doesn't have possession
-    #[allow(dead_code)]
-    fn calculate_defensive_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let field_width = ctx.context.field_size.width as f32;
-
-        // Forwards generally stay higher up the pitch
-        let forward_line = match ctx.player.side {
-            Some(PlayerSide::Left) => field_width * 0.6,
-            Some(PlayerSide::Right) => field_width * 0.4,
-            None => field_width * 0.5,
-        };
-
-        // Use player's start position Y-coordinate for width positioning
-        let target_y = ctx.player.start_position.y;
-
-        Vector3::new(forward_line, target_y, 0.0)
-    }
-
     /// ONE-TWO COMBINATION: Check if the player who just passed to us has run
     /// ahead into space — return the ball for a wall-pass / give-and-go
     fn find_one_two_return<'a>(&self, ctx: &StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
@@ -2745,110 +1465,18 @@ impl ForwardRunningState {
                 // Prefer midfielders who can carry forward
                 let is_midfielder_or_attacker =
                     t.tactical_positions.is_midfielder() || t.tactical_positions.is_forward();
-                // Clear passing lane
-                let clear_pass = ctx.player().has_clear_pass(t.id);
                 // Reject recent passers to prevent cycling
                 let not_recent = ctx.ball().passer_recency_penalty(t.id) > 0.3;
 
-                is_behind && in_space && is_midfielder_or_attacker && clear_pass && not_recent
+                is_behind && in_space && is_midfielder_or_attacker && not_recent
             })
-            .max_by(|a, b| {
+            .filter_map(|t| {
+                let odds = ctx.player().clear_pass(t.id)?;
                 // Prefer farther teammates — they're more likely outside the congested group
-                let da = (a.position - player_pos).magnitude();
-                let db = (b.position - player_pos).magnitude();
-                da.partial_cmp(&db).unwrap_or(Ordering::Equal)
+                Some((t, odds.price((t.position - player_pos).magnitude())))
             })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(t, _)| t)
     }
 
-    /// DRAW AND RELEASE: Detect an opponent committing to a tackle and find
-    /// a teammate in the space they're vacating
-    fn find_draw_and_release_pass<'a>(
-        &self,
-        ctx: &StateProcessingContext<'a>,
-    ) -> Option<MatchPlayerLite> {
-        let player_pos = ctx.player.position;
-
-        // Find closest approaching opponent (within 15-35 units, closing in)
-        let approaching_opponent = ctx
-            .players()
-            .opponents()
-            .nearby(35.0)
-            .filter(|opp| {
-                let dist = (opp.position - player_pos).magnitude();
-                if dist < 15.0 || dist > 35.0 {
-                    return false;
-                }
-
-                let opp_velocity = ctx.tick_context.positions.players.velocity(opp.id);
-                if opp_velocity.magnitude() < 1.0 {
-                    return false;
-                }
-
-                let to_us = (player_pos - opp.position).normalize();
-                let opp_dir = opp_velocity.normalize();
-                opp_dir.dot(&to_us) > 0.6
-            })
-            .min_by(|a, b| {
-                let da = (a.position - player_pos).magnitude();
-                let db = (b.position - player_pos).magnitude();
-                da.partial_cmp(&db).unwrap_or(Ordering::Equal)
-            })?;
-
-        // Space the opponent is vacating
-        let opp_velocity = ctx
-            .tick_context
-            .positions
-            .players
-            .velocity(approaching_opponent.id);
-        let vacated_zone = approaching_opponent.position - opp_velocity.normalize() * 30.0;
-
-        // Find teammate near vacated space (at least 25 units away to avoid short group passes)
-        ctx.players()
-            .teammates()
-            .nearby(200.0)
-            .filter(|t| {
-                let t_dist = (t.position - player_pos).magnitude();
-                let t_dist_to_vacated = (t.position - vacated_zone).magnitude();
-                t_dist > 25.0
-                    && t_dist_to_vacated < 60.0
-                    && ctx.player().has_clear_pass(t.id)
-                    && ctx.ball().passer_recency_penalty(t.id) > 0.3
-                    && ctx.tick_context.grid.opponents(t.id, 10.0).count() < 2
-            })
-            .min_by(|a, b| {
-                let da = (a.position - vacated_zone).magnitude();
-                let db = (b.position - vacated_zone).magnitude();
-                da.partial_cmp(&db).unwrap_or(Ordering::Equal)
-            })
-    }
-
-    /// Check if player is stuck in a corner/boundary with multiple players around
-    #[allow(dead_code)]
-    fn is_congested_near_boundary(&self, ctx: &StateProcessingContext) -> bool {
-        // Check if near any boundary (within 20 units)
-        let field_width = ctx.context.field_size.width as f32;
-        let field_height = ctx.context.field_size.height as f32;
-        let pos = ctx.player.position;
-
-        let near_boundary = pos.x < 20.0
-            || pos.x > field_width - 20.0
-            || pos.y < 20.0
-            || pos.y > field_height - 20.0;
-
-        if !near_boundary {
-            return false;
-        }
-
-        // Count all nearby players (teammates + opponents) within 15 units using pre-computed distances
-        let player_id = ctx.player.id;
-        let total_nearby = ctx
-            .tick_context
-            .grid
-            .teammates(player_id, 0.0, 15.0)
-            .count()
-            + ctx.tick_context.grid.opponents(player_id, 15.0).count();
-
-        // If 3 or more players nearby (congestion), need to clear
-        total_nearby >= 3
-    }
 }

@@ -218,9 +218,12 @@ impl DutyAssigner<'_> {
         plan.active = true;
 
         let mut taken = [false; MAX_UNIT];
+        // A keeper with the ball in his hands carries nothing anybody can
+        // close — the states' own definition of a carrier.
         let carrier = owner_team
             .filter(|t| *t != self.team_id)
             .and(self.field.ball.current_owner)
+            .filter(|_| !self.field.ball.held_in_hands)
             .and_then(|id| self.field.players.iter().find(|p| p.id == id))
             .filter(|p| p.team_id != self.team_id);
 
@@ -347,7 +350,7 @@ impl DutyAssigner<'_> {
                 &taken,
                 point_of_attack,
                 Self::COVER_REACH,
-                None,
+                previous.cover(),
                 forward,
                 0.0,
                 true,

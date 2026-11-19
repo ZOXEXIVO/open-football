@@ -839,7 +839,8 @@ impl Club {
             });
     }
 
-    /// The window has shut. A man the club staged for a loan that never
+    /// The window has shut. Each team chooses its system again for the
+    /// squad it now has. A man the club staged for a loan that never
     /// happened is not still on his way out: the intent lapses, the badge
     /// comes off, the row goes, and the club looks at him again shortly.
     ///
@@ -847,6 +848,9 @@ impl Club {
     /// stage was the one rung nothing moved a player off, so he carried
     /// `loan_push` 1.0 and a full parent subsidy for ever.
     pub fn on_window_closed(&mut self, date: NaiveDate) {
+        for team in self.teams.teams.iter_mut() {
+            team.on_window_closed();
+        }
         let club_id = self.id;
         let mut lapsed: Vec<u32> = Vec::new();
         for team in self.teams.teams.iter_mut() {

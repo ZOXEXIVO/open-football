@@ -169,3 +169,27 @@ The added nerves SHALL act through the same reliability and initiative channels 
 #### Scenario: A comfortable lead is calm
 - **WHEN** a side leads by three goals in the 85th minute
 - **THEN** no player on the pitch carries nerves from the closing stage
+
+### Requirement: Players react to the half-time talk
+Each player's reaction to the coach's half-time talk SHALL depend on:
+- the talk's tone;
+- the player's own personality: how the player handles pressure, temperament, and professionalism;
+- the coach's man-management and motivation.
+
+The reaction SHALL move the player's confidence and nerves for the second half. It SHALL stay within the bounds the psychology model sets for any other event. The same talk SHALL be able to lift one player and unsettle another. The talk SHALL reach the whole matchday squad in the dressing room. A substitute who comes on later SHALL carry the reaction onto the pitch.
+
+#### Scenario: One talk, two players
+- **WHEN** a critical half-time talk is given to a side with one player strong and one weak at handling pressure
+- **THEN** the player strong at handling pressure starts the second half more confident than before the talk, and the weaker player less
+
+#### Scenario: A good motivator moves a side more
+- **WHEN** the same encouraging talk is given to the same side by a coach strong and by a coach weak at motivating
+- **THEN** the side's players' confidence moves further under the strong motivator
+
+#### Scenario: The reaction is bounded
+- **WHEN** any half-time talk is given
+- **THEN** no player's confidence or nerves leave the bounds the psychology model holds them to for any other event
+
+#### Scenario: The bench heard it too
+- **WHEN** a substitute who was on the bench at half-time comes on in the 60th minute
+- **THEN** that player's state of mind carries the reaction to the half-time talk

@@ -117,7 +117,6 @@ pub use club::{
     DomesticCupOverride,
     FacilityLevel,
     FacilityQuality,
-    FormationChange,
     Goalkeeping,
     GoalkeepingGains,
     HappinessEvent,
@@ -170,6 +169,7 @@ pub use club::{
     MatchResultInfo,
     MatchSelectionContext,
     MatchTacticType,
+    FormationFamiliarity,
     MediaFanEventContext,
     MediaFanEventKind,
     MediaFanSource,
@@ -257,8 +257,6 @@ pub use club::{
     PromiseKind,
     RecognitionEventContext,
     RecognitionEventKind,
-    RecommendationCategory,
-    RecommendationPriority,
     RecruitmentPolicy,
     RecruitmentResponsibility,
     RegionFamiliarity,
@@ -277,6 +275,7 @@ pub use club::{
     RetirementReason,
     RivalThreatResponse,
     RoleFamiliarity,
+    RoleLevels,
     RoleStatusEventContext,
     RoleStatusKind,
     RotationPreference,
@@ -294,7 +293,6 @@ pub use club::{
     SpecialInstruction,
     SponsorPerformance,
     SponsorRenewalContext,
-    SquadAnalysis,
     // Staff exports
     Staff,
     StaffAttributes,
@@ -331,10 +329,7 @@ pub use club::{
     SupportTrigger,
     TACTICS_POSITIONS,
     TacticSelectionReason,
-    TacticalDecisionEngine,
-    TacticalDecisionResult,
     TacticalFocus,
-    TacticalRecommendation,
     TacticalStyle,
     Tactics,
     TacticsSelector,
@@ -419,6 +414,8 @@ pub use crate::r#match::engine::ball::ball::assist_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::diagnostics::block_diag;
 #[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::ball::ball::diagnostics::delivery_diag;
+#[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::diagnostics::lane_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::flight_diag;
@@ -447,17 +444,25 @@ pub use crate::r#match::engine::player::events::players::save_accounting_stats;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::events::players::shot_accuracy_diag;
 #[cfg(feature = "match-logs")]
-pub use crate::r#match::engine::player::strategies::forwarders::states::running::shot_gate_stats;
+pub use crate::r#match::engine::engine::shot_gate_stats;
 #[cfg(feature = "match-logs")]
-pub use crate::r#match::engine::player::strategies::forwarders::states::running::stuck_exit_stats;
+pub use crate::r#match::engine::engine::stuck_exit_stats;
 #[cfg(feature = "match-logs")]
-pub use crate::r#match::engine::player::strategies::forwarders::states::running::tackle_stats;
+pub use crate::r#match::engine::engine::tackle_stats;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::strategies::processor::chase_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::heatmap as heatmap_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::midfielders::states::common::onball_diag as mid_onball_diag;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::player::diagnostics::defender_census;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::player::diagnostics::forward_census;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::player::diagnostics::keeper_census;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::player::diagnostics::midfielder_census;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::player::diagnostics::motion_diag;
 #[cfg(feature = "match-logs")]

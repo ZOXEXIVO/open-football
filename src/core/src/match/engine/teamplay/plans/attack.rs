@@ -44,9 +44,12 @@
 //! instead of trading it back and forth every refresh — the same
 //! stability problem the `CreatingSpace` gap shortlist documents.
 
+use crate::r#match::engine::ball::ball::OffsideLine;
 use crate::r#match::engine::teamplay::plans::wide::{Flank, WideBuilder, WidePlan};
+use crate::r#match::player::strategies::players::ops::box_movement::BoxMovement;
 use crate::r#match::{MatchField, MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
+use std::cmp::Ordering;
 
 /// A place in and around the penalty area worth attacking. Ordered near →
 /// far → deep so the discriminant doubles as the array index.
@@ -198,6 +201,19 @@ impl BoxSlot {
         }
     }
 
+    /// Where the near-post and edge runners go while a team-mate carries
+    /// the ball inside the box at the byline: the near post on the
+    /// six-yard line, where the ball driven across the face of goal is
+    /// met, and the edge of the area the pull-back is played to. The spot
+    /// and the far post keep their places.
+    fn byline_offsets(self, ball_side: f32) -> Option<(f32, f32)> {
+        match self {
+            BoxSlot::NearPost => Some((44.0, ball_side * 24.0)),
+            BoxSlot::CutbackEdge => Some(self.offsets(ball_side)),
+            BoxSlot::PenaltySpot | BoxSlot::FarPost => None,
+        }
+    }
+
     /// Which flank the ball is on: `+1` on the high-`y` side. Every
     /// lateral offset is mirrored through it, so "near post" is the near
     /// one from wherever the ball actually is.
@@ -232,6 +248,19 @@ impl BoxSlot {
     ) -> Vector3<f32> {
         let (depth, lateral) = self.wait_offsets(Self::ball_side(ball_y, field_height));
         Self::place(goal, field_height, forward_dir, depth, lateral)
+    }
+
+    /// Where its occupant goes for the byline ball, when it moves him. See
+    /// [`Self::byline_offsets`].
+    pub fn byline_target(
+        self,
+        goal: Vector3<f32>,
+        ball_y: f32,
+        field_height: f32,
+        forward_dir: f32,
+    ) -> Option<Vector3<f32>> {
+        let (depth, lateral) = self.byline_offsets(Self::ball_side(ball_y, field_height))?;
+        Some(Self::place(goal, field_height, forward_dir, depth, lateral))
     }
 
     fn place(
@@ -269,7 +298,8 @@ pub struct AttackPlan {
     pub carrier: Option<u32>,
     /// The man this attack is FOR. Read by the pass evaluator.
     pub primary_target: Option<u32>,
-    /// The short outlet — kept out of the box on purpose.
+    /// The short outlet, named whenever the side has the ball — kept out
+    /// of the box on purpose.
     pub near_support: Option<u32>,
     /// The ball-in-behind runner.
     pub far_runner: Option<u32>,
@@ -367,7 +397,7 @@ impl AttackPlan {
                 rest_target,
             };
             if !attacking || !ours {
-                // Width outlives the attack plan.
+                // Width, and the short outlet, outlive the attack plan.
                 //
                 // `wants_bodies_forward` is false during `BuildUp`, and
                 // a side playing out from the back is exactly when its
@@ -377,9 +407,10 @@ impl AttackPlan {
                 // forward, so it is safe in every phase we have the
                 // ball, unlike a box slot or an overlap.
                 let previous_wide = plan.wide;
+                let previous_runner = plan.far_runner;
                 *plan = AttackPlan::idle();
                 if in_possession && ours {
-                    builder.build_width(plan, &previous_wide);
+                    builder.build_width(plan, &previous_wide, previous_runner);
                 }
                 #[cfg(feature = "match-logs")]
                 crate::mid_run_diag::PlanDiag::note_refresh(false, 0);
@@ -428,6 +459,15 @@ struct PlanBuilder<'a> {
 impl PlanBuilder<'_> {
     /// Beyond this a player is not part of the attack at all.
     const ATTACK_RADIUS: f32 = 420.0;
+    /// The run in behind needs their last line at least this far (16.5 m)
+    /// from their goal line: a line on its own penalty area leaves nothing
+    /// to run into.
+    const RUN_DEPTH: f32 = 132.0;
+    /// A runner is chosen among the men within this of the goal.
+    const RUN_REACH: f32 = 460.0;
+    /// Keeping a job is worth a little, so a marginal score change does not
+    /// send two players swapping runs mid-attack.
+    const INCUMBENCY: f32 = 0.15;
 
     /// Which end this side attacks, and the width builder projected into
     /// its formation's own bounding box.
@@ -470,15 +510,107 @@ impl PlanBuilder<'_> {
         ))
     }
 
-    /// The touchlines alone, for a side that has the ball but is not yet
-    /// in a phase that commits bodies forward.
-    fn build_width(&self, plan: &mut AttackPlan, previous: &WidePlan) {
-        let Some((_, wide)) = self.geometry() else {
+    /// The touchlines and the short outlet, for a side that has the ball
+    /// but is not yet in a phase that commits bodies forward. Without the
+    /// outlet nobody in the build-up is told to show for it.
+    fn build_width(&self, plan: &mut AttackPlan, previous: &WidePlan, previous_runner: Option<u32>) {
+        let Some((side, wide)) = self.geometry() else {
             return;
         };
         let carrier = self.field.ball.current_owner;
         wide.holders(&mut plan.wide, previous, |id| Some(id) != carrier);
         plan.wide.active = true;
+        let mut held = HeldSet::default();
+        for id in Flank::ALL.into_iter().filter_map(|f| plan.wide.holder(f)) {
+            held.mark(id);
+        }
+        plan.far_runner = self.runner(side, &held, carrier, previous_runner);
+        if let Some(id) = plan.far_runner {
+            held.mark(id);
+        }
+        plan.near_support = self.short_outlet(&held, carrier);
+    }
+
+    /// The opposition's goal, for the side attacking from `side`.
+    fn goal(&self, side: PlayerSide) -> Vector3<f32> {
+        let field_width = self.field.size.width as f32;
+        Vector3::new(
+            match side {
+                PlayerSide::Left => field_width,
+                PlayerSide::Right => 0.0,
+            },
+            self.field.size.height as f32 / 2.0,
+            0.0,
+        )
+    }
+
+    /// **The runner in behind**, named before anybody is given a place in
+    /// the box: the best of pace, acceleration and movement off the ball,
+    /// with the incumbent's bonus, among the men within reach of goal the
+    /// plan has not already given a job — and only while their last line
+    /// leaves room behind it.
+    fn runner(
+        &self,
+        side: PlayerSide,
+        held: &HeldSet,
+        carrier: Option<u32>,
+        incumbent: Option<u32>,
+    ) -> Option<u32> {
+        if !self.room_behind(side) {
+            return None;
+        }
+        let goal = self.goal(side);
+        self.outfielders()
+            .filter(|p| !held.contains(p.id))
+            .filter(|p| Some(p.id) != carrier)
+            .filter(|p| (goal - p.position).magnitude() < Self::RUN_REACH)
+            .map(|p| {
+                let pace = (p.skills.physical.pace + p.skills.physical.acceleration) / 40.0;
+                let off_ball = p.skills.mental.off_the_ball / 20.0;
+                let kept = if incumbent == Some(p.id) {
+                    Self::INCUMBENCY
+                } else {
+                    0.0
+                };
+                (p.id, pace * 0.65 + off_ball * 0.35 + kept)
+            })
+            .max_by(|a, b| {
+                a.1.partial_cmp(&b.1)
+                    .unwrap_or(Ordering::Equal)
+                    .then(b.0.cmp(&a.0))
+            })
+            .map(|(id, _)| id)
+    }
+
+    /// Their last line, as the referee reads it, at least `RUN_DEPTH` from
+    /// their goal line.
+    fn room_behind(&self, side: PlayerSide) -> bool {
+        let opponents = self
+            .field
+            .players
+            .iter()
+            .filter(|p| p.team_id != self.team_id)
+            .map(|p| p.position.x);
+        let Some(line) = OffsideLine::second_last(opponents, side) else {
+            return true;
+        };
+        (self.goal(side).x - line).abs() >= Self::RUN_DEPTH
+    }
+
+    /// The nearest man to the ball the plan has not already given a job,
+    /// within 27.5 m of it.
+    fn short_outlet(&self, held: &HeldSet, carrier: Option<u32>) -> Option<u32> {
+        self.outfielders()
+            .filter(|p| !held.contains(p.id))
+            .filter(|p| Some(p.id) != carrier)
+            .map(|p| (p.id, (p.position - self.ball_pos).magnitude()))
+            .filter(|(_, d)| *d < 220.0)
+            .min_by(|a, b| {
+                a.1.partial_cmp(&b.1)
+                    .unwrap_or(Ordering::Equal)
+                    .then(a.0.cmp(&b.0))
+            })
+            .map(|(id, _)| id)
     }
 
     fn build(&self, plan: &mut AttackPlan) {
@@ -582,7 +714,20 @@ impl PlanBuilder<'_> {
             held.mark(id);
         }
 
+        // ── The runner in behind ──────────────────────────────────────
+        // Named before the box is filled: filled first, the box took the
+        // strikers and the run went to whoever was left.
+        plan.far_runner = self.runner(side, &held, plan.carrier, previous.far_runner);
+        if let Some(id) = plan.far_runner {
+            held.mark(id);
+        }
+
         // ── Box slots ─────────────────────────────────────────────────
+        // A place holds its man from the moment the box is staged. Until
+        // then he stands on his place in the shape, free to be named the
+        // short outlet.
+        let staged = BoxMovement::stage_at(side, self.ball_pos.x, field_width) > 0.0;
+        let mut boxed = HeldSet::default();
         // Each slot takes the best REMAINING candidate, so the
         // assignments are exclusive by construction. Slots are filled
         // near → far → deep because the near-post runner is the most
@@ -592,7 +737,7 @@ impl PlanBuilder<'_> {
             let incumbent = previous.box_slots[slot.index()];
             let best = self
                 .outfielders()
-                .filter(|p| !held.contains(p.id))
+                .filter(|p| !held.contains(p.id) && !boxed.contains(p.id))
                 .filter(|p| Some(p.id) != plan.carrier)
                 .filter(|p| (p.position - self.ball_pos).magnitude() < Self::ATTACK_RADIUS)
                 .map(|p| {
@@ -608,7 +753,7 @@ impl PlanBuilder<'_> {
                 // Ties break by id so the assignment is reproducible.
                 .max_by(|a, b| {
                     a.1.partial_cmp(&b.1)
-                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .unwrap_or(Ordering::Equal)
                         .then(b.0.cmp(&a.0))
                 });
             if let Some((id, score)) = best {
@@ -619,8 +764,13 @@ impl PlanBuilder<'_> {
                 // to prevent.
                 if score > 0.25 {
                     plan.box_slots[slot.index()] = Some(id);
-                    held.mark(id);
+                    boxed.mark(id);
                 }
+            }
+        }
+        if staged {
+            for id in plan.box_slots.iter().flatten() {
+                held.mark(*id);
             }
         }
 
@@ -649,7 +799,7 @@ impl PlanBuilder<'_> {
             })
             .max_by(|a, b| {
                 a.1.partial_cmp(&b.1)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .unwrap_or(Ordering::Equal)
                     .then(b.0.cmp(&a.0))
             })
             .map(|(id, _)| id);
@@ -657,40 +807,10 @@ impl PlanBuilder<'_> {
         // ── Near support ──────────────────────────────────────────────
         // The short outlet. Explicitly NOT a box occupant — the whole
         // point is to have somebody to play backwards to.
-        plan.near_support = self
-            .outfielders()
-            .filter(|p| !held.contains(p.id))
-            .filter(|p| Some(p.id) != plan.carrier)
-            .map(|p| (p.id, (p.position - self.ball_pos).magnitude()))
-            .filter(|(_, d)| *d < 220.0)
-            .min_by(|a, b| {
-                a.1.partial_cmp(&b.1)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then(a.0.cmp(&b.0))
-            })
-            .map(|(id, _)| id);
+        plan.near_support = self.short_outlet(&held, plan.carrier);
         if let Some(id) = plan.near_support {
             held.mark(id);
         }
-
-        // ── Far runner ────────────────────────────────────────────────
-        // Fastest uncommitted attacker, for the ball in behind.
-        plan.far_runner = self
-            .outfielders()
-            .filter(|p| !held.contains(p.id))
-            .filter(|p| Some(p.id) != plan.carrier)
-            .filter(|p| (goal - p.position).magnitude() < 460.0)
-            .map(|p| {
-                let pace = (p.skills.physical.pace + p.skills.physical.acceleration) / 40.0;
-                let off_ball = p.skills.mental.off_the_ball / 20.0;
-                (p.id, pace * 0.65 + off_ball * 0.35)
-            })
-            .max_by(|a, b| {
-                a.1.partial_cmp(&b.1)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then(b.0.cmp(&a.0))
-            })
-            .map(|(id, _)| id);
     }
 
     /// How much this player is wanted at home, in "effective depth" —

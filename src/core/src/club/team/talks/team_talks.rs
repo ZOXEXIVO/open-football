@@ -12,12 +12,13 @@ use crate::club::Staff;
 use crate::club::player::Player;
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
-    HappinessEventScope, HappinessEventSeverity, SupportEventContext, SupportMatchPhase,
-    SupportSetting, SupportSource, SupportTone, SupportTrigger,
+    HappinessEventScope, HappinessEventSeverity, PersonAttributes, SupportEventContext,
+    SupportMatchPhase, SupportSetting, SupportSource, SupportTone, SupportTrigger,
 };
 use chrono::NaiveDate;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TeamTalkTone {
     /// "You lot are brilliant — go out and show them." Morale boost for
     /// mentally strong players, but soft players shrink under the pressure.
@@ -99,80 +100,16 @@ pub fn apply_team_talk_dated<'a, I>(
     let motivating = manager
         .map(|m| m.staff_attributes.mental.motivating as f32 / 20.0)
         .unwrap_or(0.5);
-    let effectiveness = (man_mgmt * 0.6 + motivating * 0.4).clamp(0.1, 1.0);
+    let effectiveness = TeamTalkReception::effectiveness(man_mgmt, motivating);
     let coach_id = manager.map(|m| m.id);
 
     for player in players {
-        let personality = &player.attributes;
-        let pressure = personality.pressure;
-        let temperament = personality.temperament;
-        let important_matches = personality.important_matches;
-        let determination = player.skills.mental.determination;
-        let professionalism = personality.professionalism;
-
-        // Base magnitude per tone — wider band so important talks have real
-        // weight while encouragement stays a soft cushion.
-        let base: f32 = match tone {
-            TeamTalkTone::Praise => 2.5,
-            TeamTalkTone::Criticise => -1.0,
-            TeamTalkTone::Encourage => 1.5,
-            TeamTalkTone::Passionate => {
-                if ctx.big_match {
-                    2.0
-                } else {
-                    0.8
-                }
-            }
-            TeamTalkTone::TacticalSilent => 0.0,
-        };
-
-        // Personality modulation — football-specific responses to each tone.
-        let personality_mod: f32 = match tone {
-            TeamTalkTone::Praise => {
-                let mut m = 0.0;
-                // Pressure ≥ 15: soaks up praise. Pressure ≤ 7 in big match
-                // shrinks under it — they fear they can't live up.
-                if pressure >= 15.0 {
-                    m += 0.20 * 2.5;
-                }
-                if pressure <= 7.0 && ctx.big_match {
-                    m -= 0.20 * 2.5;
-                }
-                m
-            }
-            TeamTalkTone::Criticise => {
-                // Determined / professional pros absorb criticism and
-                // convert it into motivation. Soft-temperament players
-                // crumble — extra 50% hit.
-                if determination >= 15.0 && professionalism >= 14.0 {
-                    // Net positive — we need to overcome the negative base
-                    // and end up at +1.0. base is -1.0, so this adds +2.0
-                    // to flip sign.
-                    2.0
-                } else if temperament <= 7.0 {
-                    -0.5 * 1.0 // additional 50% hit relative to base
-                } else {
-                    0.0
-                }
-            }
-            TeamTalkTone::Encourage => {
-                if pressure >= 15.0 {
-                    0.20 * 1.5
-                } else {
-                    0.0
-                }
-            }
-            TeamTalkTone::Passionate => {
-                if ctx.big_match && important_matches >= 15.0 {
-                    0.40 * 2.0
-                } else if ctx.big_match && important_matches <= 6.0 {
-                    -0.25 * 2.0
-                } else {
-                    0.0
-                }
-            }
-            TeamTalkTone::TacticalSilent => 0.0,
-        };
+        let raw_signal = TeamTalkReception::signal(
+            tone,
+            &player.attributes,
+            player.skills.mental.determination,
+            ctx.big_match,
+        );
 
         // Phase weighting — half-time talks matter more when losing,
         // full-time praise matters more when winning.
@@ -185,7 +122,6 @@ pub fn apply_team_talk_dated<'a, I>(
 
         // Rapport multiplier — trusted coaches land praise harder; from an
         // untrusted coach, criticism becomes inflammatory.
-        let raw_signal = base + personality_mod;
         let positive_tone = raw_signal >= 0.0;
         let rapport_mul = if let Some(cid) = coach_id {
             player.rapport.talk_reception_multiplier(cid, positive_tone)
@@ -231,6 +167,100 @@ pub fn apply_team_talk_dated<'a, I>(
                 player.rapport.on_negative(cid, today, 2);
             }
         }
+    }
+}
+
+/// How a man takes a talk: the tone, answered by his own personality, and
+/// how much of it the coach's delivery lands. Read by the club's talks and
+/// by the half-time talk given in the match.
+pub struct TeamTalkReception;
+
+impl TeamTalkReception {
+    /// The talk's pull on a man before the coach's delivery: the tone's
+    /// weight, and how his pressure, temperament, determination,
+    /// professionalism and big-match nerve answer it.
+    pub fn signal(
+        tone: TeamTalkTone,
+        personality: &PersonAttributes,
+        determination: f32,
+        big_match: bool,
+    ) -> f32 {
+        let pressure = personality.pressure;
+        let temperament = personality.temperament;
+        let important_matches = personality.important_matches;
+        let professionalism = personality.professionalism;
+
+        // Base magnitude per tone — wider band so important talks have real
+        // weight while encouragement stays a soft cushion.
+        let base: f32 = match tone {
+            TeamTalkTone::Praise => 2.5,
+            TeamTalkTone::Criticise => -1.0,
+            TeamTalkTone::Encourage => 1.5,
+            TeamTalkTone::Passionate => {
+                if big_match {
+                    2.0
+                } else {
+                    0.8
+                }
+            }
+            TeamTalkTone::TacticalSilent => 0.0,
+        };
+
+        // Personality modulation — football-specific responses to each tone.
+        let personality_mod: f32 = match tone {
+            TeamTalkTone::Praise => {
+                let mut m = 0.0;
+                // Pressure ≥ 15: soaks up praise. Pressure ≤ 7 in big match
+                // shrinks under it — they fear they can't live up.
+                if pressure >= 15.0 {
+                    m += 0.20 * 2.5;
+                }
+                if pressure <= 7.0 && big_match {
+                    m -= 0.20 * 2.5;
+                }
+                m
+            }
+            TeamTalkTone::Criticise => {
+                // Determined / professional pros absorb criticism and
+                // convert it into motivation. Soft-temperament players
+                // crumble — extra 50% hit.
+                if determination >= 15.0 && professionalism >= 14.0 {
+                    // Net positive — we need to overcome the negative base
+                    // and end up at +1.0. base is -1.0, so this adds +2.0
+                    // to flip sign.
+                    2.0
+                } else if temperament <= 7.0 {
+                    -0.5 * 1.0 // additional 50% hit relative to base
+                } else {
+                    0.0
+                }
+            }
+            TeamTalkTone::Encourage => {
+                if pressure >= 15.0 {
+                    0.20 * 1.5
+                } else {
+                    0.0
+                }
+            }
+            TeamTalkTone::Passionate => {
+                if big_match && important_matches >= 15.0 {
+                    0.40 * 2.0
+                } else if big_match && important_matches <= 6.0 {
+                    -0.25 * 2.0
+                } else {
+                    0.0
+                }
+            }
+            TeamTalkTone::TacticalSilent => 0.0,
+        };
+
+        base + personality_mod
+    }
+
+    /// How much of a talk lands, from the coach's man-management and
+    /// motivating, each 0..1.
+    pub fn effectiveness(man_management: f32, motivating: f32) -> f32 {
+        (man_management * 0.6 + motivating * 0.4).clamp(0.1, 1.0)
     }
 }
 
@@ -349,12 +379,11 @@ impl DressingRoomSpeechContextBuilder {
     }
 }
 
-/// Decides which dressing-room moments a matchday actually produces.
-/// Routine talks are tactical and carry no morale weight; only the
-/// charged moments — a big-occasion rallying cry before kickoff, a
-/// half-time talk when trailing or when a clear favourite is being
-/// held — become `DressingRoomSpeech` events. Full-time tone stays
-/// with the result processor, which reads the final score directly.
+/// Decides which dressing-room moments a matchday produces outside the
+/// match: a big-occasion rallying cry before kickoff. The half-time talk is
+/// the one the coach gave in the match, recorded with the result, and the
+/// full-time tone stays with the result processor, which reads the final
+/// score directly.
 pub struct TeamTalkMoments;
 
 impl TeamTalkMoments {
@@ -362,41 +391,6 @@ impl TeamTalkMoments {
     /// produces a morale-relevant speech.
     pub fn pre_match_tone(big_match: bool) -> Option<TeamTalkTone> {
         big_match.then_some(TeamTalkTone::Passionate)
-    }
-
-    /// Half-time: a trailing side always gets a real talk — the
-    /// hairdryer from a disciplinarian two goals down, the rousing
-    /// speech from a motivator. A clear favourite held level gets
-    /// demands. Everything else is a tactical chat with no morale
-    /// weight, so no event fires.
-    pub fn half_time_tone(
-        ht_delta: i8,
-        rep_edge: f32,
-        manager: Option<&Staff>,
-    ) -> Option<TeamTalkTone> {
-        let motivating = manager
-            .map(|m| m.staff_attributes.mental.motivating)
-            .unwrap_or(10);
-        let discipline = manager
-            .map(|m| m.staff_attributes.mental.discipline)
-            .unwrap_or(10);
-        if ht_delta <= -2 {
-            Some(if discipline > motivating {
-                TeamTalkTone::Criticise
-            } else {
-                TeamTalkTone::Passionate
-            })
-        } else if ht_delta == -1 {
-            Some(if motivating >= 12 {
-                TeamTalkTone::Passionate
-            } else {
-                TeamTalkTone::Encourage
-            })
-        } else if ht_delta == 0 && rep_edge >= 0.20 {
-            Some(TeamTalkTone::Criticise)
-        } else {
-            None
-        }
     }
 }
 

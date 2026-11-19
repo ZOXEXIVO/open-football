@@ -1,19 +1,26 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::MatchContext;
 use crate::r#match::engine::ball::ball::contest::save::SaveModel;
-use crate::r#match::engine::ball::ball::{AerialReach, DeadBall, GRAVITY_PER_TICK, ShotTarget};
+use crate::r#match::engine::ball::ball::{
+    AerialReach, BallRoll, DeadBall, GRAVITY_PER_TICK, MAX_OWNER_TRACK_DISTANCE, ShotTarget,
+};
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
 use crate::r#match::engine::player::strategies::common::{
     ActivityIntensityConfig, ConditionProcessor, GOALKEEPER_JADEDNESS_INCREMENT,
     GOALKEEPER_JADEDNESS_INTERVAL, GOALKEEPER_LOW_CONDITION_THRESHOLD,
 };
 use crate::r#match::events::Event;
+use crate::r#match::goalkeepers::states::GoalkeeperPunchingState;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::events::{FoulSeverity, FoulSource, PlayerEvent};
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::keeper_census::{ClaimAction, KeeperCensus};
+use crate::r#match::player::events::gk_claim::{ClaimSituation, GkClaimContest};
+use crate::r#match::player::events::{FoulCommitted, FoulSeverity, FoulSource, PlayerEvent};
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
-    GameTickContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
+    ClaimIntent, GameTickContext, MatchPlayer, MatchPlayerLite, PlayerSide, StateChangeResult,
+    StateProcessingContext,
 };
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::{KeeperActionDiag, KeeperDiveDiag};
@@ -22,12 +29,14 @@ use nalgebra::Vector3;
 mod goal_kick;
 mod mind;
 mod punt;
+mod read;
 mod release;
 mod set_piece;
 mod split_step;
 pub use goal_kick::*;
 pub use mind::*;
 pub use punt::*;
+pub use read::*;
 pub use release::*;
 pub use set_piece::*;
 pub use split_step::*;
@@ -81,48 +90,6 @@ impl ActivityIntensityConfig for GoalkeeperConfig {
     }
 }
 
-/// Where a keeper sets his feet to face a shot, and where he takes the
-/// ball once he has gathered it.
-///
-/// Both save states used to steer to `(own_goal.x, goal_line_y)` — the
-/// goal LINE itself. No keeper faces a shot standing on his line; he sets
-/// a yard or so off it so he can attack the ball rather than carry it
-/// back over the line behind him. It also had a very visible
-/// consequence: the physics save snaps the ball to the keeper's
-/// position, so every catch parked the ball at **x ≈ 839 of 840** at
-/// glove height — hanging inside the goal frame, on the same spot, about
-/// 160 times a match. Measured from a replay dump: the ball sat at
-/// (839.3, 223.6, 1.20) without moving for 3.5 seconds.
-///
-/// UNITS: 1 unit = 0.125 m.
-/// Where the keeper stands during OPEN PLAY — as distinct from
-/// [`KeeperSetPosition`], which is where he sets himself to face a strike.
-///
-/// # Why this exists
-///
-/// Two states owned a keeper's resting position — `Standing` and
-/// `Walking` — and each had its own copy of the model with different
-/// constants, so the same keeper wanted to be in two different places
-/// depending on which state he happened to be in. Both copies were also
-/// wrong in the same way: their whole depth range came to about 1-4 m, so
-/// a keeper never left his line. He stood motionless for **88% of the
-/// match**, which is the "only the GK stays in the goal" report.
-///
-/// # The model
-///
-/// Depth is set by **where the ball is** and **how high his own defence
-/// is**; lateral position by **the angle** — he stands on the line from
-/// the middle of his goal to the ball, which is what narrowing the angle
-/// physically means, and which gives him his side-to-side movement for
-/// free.
-///
-/// Real reference points, which the constants reproduce:
-///   * ball in the opponent's half behind a high line — 20-28 m out,
-///     effectively a sweeper;
-///   * ball in midfield — 12-18 m;
-///   * ball entering our final third — 6-10 m;
-///   * ball in the box — 2-5 m, on the angle.
-///
 /// Diagnostic switch: with `OF_KEEPER_CALM_OFF` set, the keeper goes back
 /// to tracking the ball continuously — the resting tolerance stops opening
 /// out with distance, `PreparingForSave` stands down on a one-tick
@@ -149,6 +116,34 @@ impl KeeperDebug {
         use std::sync::OnceLock;
         static OFF: OnceLock<bool> = OnceLock::new();
         *OFF.get_or_init(|| std::env::var("OF_KEEPER_CALM_OFF").is_ok())
+    }
+
+    /// `OF_KEEPER_SET_PACE=off`: `PreparingForSave` without a shot back on
+    /// the explosive band at sprint pace, for the A/B.
+    pub fn set_pace_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::off("OF_KEEPER_SET_PACE"))
+    }
+
+    /// `OF_KEEPER_STRIKE_SET=off`: a keeper moving at the strike reacts as
+    /// quickly as a set one.
+    pub fn strike_set_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::off("OF_KEEPER_STRIKE_SET"))
+    }
+
+    /// `OF_KEEPER_BISECTOR=off`: the rest and set points back on the line
+    /// from the ball to the middle of his goal.
+    pub fn bisector_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::off("OF_KEEPER_BISECTOR"))
+    }
+
+    fn off(switch: &str) -> bool {
+        std::env::var(switch).is_ok_and(|value| value.eq_ignore_ascii_case("off"))
     }
 }
 
@@ -232,6 +227,33 @@ impl KeeperDelivery {
     }
 }
 
+/// Where the keeper stands during OPEN PLAY — as distinct from
+/// [`KeeperSetPosition`], which is where he sets himself to face a strike.
+///
+/// # Why this exists
+///
+/// Two states owned a keeper's resting position — `Standing` and
+/// `Walking` — and each had its own copy of the model with different
+/// constants, so the same keeper wanted to be in two different places
+/// depending on which state he happened to be in. Both copies were also
+/// wrong in the same way: their whole depth range came to about 1-4 m, so
+/// a keeper never left his line. He stood motionless for **88% of the
+/// match**, which is the "only the GK stays in the goal" report.
+///
+/// # The model
+///
+/// Depth is set by **where the ball is** and **how high his own defence
+/// is**; lateral position by **the angle** — he stands on the line from
+/// the middle of his goal to the ball, which is what narrowing the angle
+/// physically means, and which gives him his side-to-side movement for
+/// free.
+///
+/// Real reference points, which the constants reproduce:
+///   * ball in the opponent's half behind a high line — 20-28 m out,
+///     effectively a sweeper;
+///   * ball in midfield — 12-18 m;
+///   * ball entering our final third — 6-10 m;
+///   * ball in the box — 2-5 m, on the angle.
 pub struct KeeperRestPosition;
 
 impl KeeperRestPosition {
@@ -331,6 +353,14 @@ impl KeeperRestPosition {
     /// where he stood.
     const LEAD_TICKS: f32 = 24.0;
 
+    /// Where a keeper of this `read` plays the ball: [`Self::LEAD_TICKS`]
+    /// × read ahead of it along its travel. Every point he stands on reads
+    /// the ball through this, so the set and the one-on-one anticipate the
+    /// play as the rest does.
+    pub fn anticipated(ball: Vector3<f32>, velocity: Vector3<f32>, read: f32) -> Vector3<f32> {
+        ball + velocity * (Self::LEAD_TICKS * read.clamp(0.0, 1.0))
+    }
+
     /// The spot, for a keeper defending `own_goal`, given where the ball
     /// is and where his side's defensive line is sitting.
     ///
@@ -353,7 +383,7 @@ impl KeeperRestPosition {
         // Where the ball is GOING. A keeper who reads the game is already
         // moving as the ball is struck; one who does not is still watching
         // where it was.
-        let ball = ball_now + ball_velocity * (Self::LEAD_TICKS * read);
+        let ball = Self::anticipated(ball_now, ball_velocity, read);
         let to_ball = ball - own_goal;
         let ball_distance = to_ball.magnitude();
 
@@ -380,19 +410,21 @@ impl KeeperRestPosition {
             (line_progress * field_width - Self::BEHIND_LINE_GAP).max(Self::NEAR_DEPTH);
         depth = depth.min(line_depth).min(field_width * 0.5 - 20.0);
 
-        // On the goal-to-ball line. A better-positioned keeper sits truer
-        // on the angle; a poorer one hedges centrally and can be beaten at
-        // his near post.
+        // At that depth, on the line he guards: the bisector of the angle
+        // the posts make at the ball (`KeeperSetPosition::guard_y`). A
+        // better-positioned keeper sits truer on it; a poorer one hedges
+        // centrally and can be beaten at his near post.
         let toward_ball = if ball_distance > 1.0 {
             to_ball / ball_distance
         } else {
             Vector3::new(side.forward_dir_x(), 0.0, 0.0)
         };
         let on_angle = own_goal + toward_ball * depth;
+        let guard_y = KeeperSetPosition::guard_y(own_goal, ball, on_angle.x);
         let fidelity = 0.55 + read * 0.45;
         Vector3::new(
             on_angle.x,
-            own_goal.y + (on_angle.y - own_goal.y) * fidelity,
+            own_goal.y + (guard_y - own_goal.y) * fidelity,
             0.0,
         )
     }
@@ -529,7 +561,9 @@ impl KeeperRestPosition {
     }
 
     /// Is he set, for a keeper of this concentration, with the ball this
-    /// far from his goal?
+    /// far from his goal? Moving or still is this question alone, asked in
+    /// `velocity`: relaxed or alert is the phase's (`KeeperRead::phase`), so
+    /// arriving on his spot never changes his state.
     pub fn is_set_with(
         keeper: Vector3<f32>,
         target: Vector3<f32>,
@@ -537,70 +571,7 @@ impl KeeperRestPosition {
         ball_distance: f32,
         field_width: f32,
     ) -> bool {
-        Self::within(
-            keeper,
-            target,
-            concentration,
-            ball_distance,
-            field_width,
-            1.0,
-        )
-    }
-
-    /// …and is he far enough off it to be worth CHANGING STATE for?
-    ///
-    /// # Why the two questions cannot share a threshold
-    ///
-    /// `Standing` and `Walking` are the same keeper doing the same thing —
-    /// same rest point, same steering, same deadzone inside `velocity` —
-    /// and the only difference between them is whether he has arrived.
-    /// Transitioning on exactly that boolean, in both directions, is a
-    /// two-cycle by construction: the target moves with the ball every
-    /// tick, so a keeper parked on the boundary crosses it repeatedly and
-    /// each crossing is a state change. Measured, **17,374 transitions per
-    /// keeper per match, 91% of them reversing inside 300 ms, and 15,804
-    /// of them this one pair.**
-    ///
-    /// It is the same invariant this engine has now broken six times, in
-    /// its mirror image: there, an entry condition WIDER than its own
-    /// give-up condition; here, an entry and a give-up that are exact
-    /// complements, which is the degenerate case of the same thing.
-    /// `COMMIT < DISENGAGE` needs a gap between them.
-    ///
-    /// So: he starts walking when he is [`Self::REPOSITION_MARGIN`] times
-    /// further out than the tolerance he stops at. In between he stays in
-    /// whichever state he is in and keeps moving — `velocity` is bounded
-    /// by `is_set_with` in both states, so the band costs nothing.
-    pub fn needs_repositioning(
-        keeper: Vector3<f32>,
-        target: Vector3<f32>,
-        concentration: f32,
-        ball_distance: f32,
-        field_width: f32,
-    ) -> bool {
-        !Self::within(
-            keeper,
-            target,
-            concentration,
-            ball_distance,
-            field_width,
-            Self::REPOSITION_MARGIN,
-        )
-    }
-
-    /// How much further out than "set" he has to be before it is worth
-    /// changing state over. See [`Self::needs_repositioning`].
-    const REPOSITION_MARGIN: f32 = 2.5;
-
-    fn within(
-        keeper: Vector3<f32>,
-        target: Vector3<f32>,
-        concentration: f32,
-        ball_distance: f32,
-        field_width: f32,
-        margin: f32,
-    ) -> bool {
-        let slack = Self::distance_slack(ball_distance, field_width) * margin;
+        let slack = Self::distance_slack(ball_distance, field_width);
         (keeper.y - target.y).abs() < Self::lateral_tolerance(concentration) * slack
             && (keeper.x - target.x).abs() < Self::SET_DEADZONE * slack
     }
@@ -645,8 +616,6 @@ impl KeeperRestPosition {
 /// 240u to fix precisely this — the fix never reached the second, tighter
 /// gate sitting underneath it). An entry condition three times wider than
 /// its own give-up condition is a two-cycle by construction.
-///
-/// # The model
 ///
 /// # The model, and why one axis was not enough
 ///
@@ -837,24 +806,16 @@ impl KeeperSweepLimit {
 ///
 /// # Why this exists
 ///
-/// `should_rush_out_for_ball` short-circuits to "come out" for any carrier
-/// inside 18.75 m, deliberately: it was added because a forward with the
-/// ball at his feet could otherwise carry it to within a couple of feet of
-/// a keeper who never moved. That is the right instinct and the wrong
-/// trigger, because a carrier 18 m out with two centre-backs in front of
-/// him is not a keeper's problem — he is the defence's — and charging at
-/// him leaves an empty goal to chip.
-///
-/// It also swallowed the branch beneath it whole: `Standing` asks the
-/// come-out question first and only then asks whether to *set* himself,
-/// so a trigger that fires at 18.75 m made `PreparingForSave` — the state
-/// that actually tracks the angle continuously — **unreachable for any
-/// carrier inside 12.5 m**, the one situation it exists for. The keeper
-/// committed, hit the leash above, turned round, ran home, and committed
-/// again.
+/// A carrier 18 m out with two centre-backs in front of him is not a
+/// keeper's problem — he is the defence's — and charging at him leaves an
+/// empty goal to chip. The come-out trigger this replaced fired on any
+/// carrier inside 18.75 m, and in doing so made `PreparingForSave`
+/// unreachable for a carrier inside 12.5 m: the keeper committed, hit his
+/// leash, ran home and committed again.
 ///
 /// A keeper comes for the ball when there is nobody between him and it.
-/// That is the whole of the real rule, and it is what this asks.
+/// That is the whole of the real rule, and it is what this asks, for the
+/// duel (`KeeperOneOnOne`) as for the smother.
 pub struct KeeperCarrierThreat;
 
 impl KeeperCarrierThreat {
@@ -874,8 +835,28 @@ impl KeeperCarrierThreat {
     /// six-yard box.
     const ON_THE_LINE: f32 = 44.0;
 
+    /// To end a duel the keeper is already in, a defender has to be in the
+    /// carrier's path: 12u = 1.5 m. Narrower than the corridor that keeps
+    /// the keeper home, so a man tracking the run alongside does not switch
+    /// the duel off and on as he drifts across its edge.
+    const IN_HIS_PATH: f32 = 12.0;
+
     /// Nobody goal-side of him: this one is the keeper's.
     pub fn is_through(ctx: &StateProcessingContext, carrier: &MatchPlayerLite) -> bool {
+        Self::clear_within(ctx, carrier, Self::COVER_CORRIDOR)
+    }
+
+    /// Still through, for a duel already on: only a defender in his path
+    /// ends it.
+    pub fn still_through(ctx: &StateProcessingContext, carrier: &MatchPlayerLite) -> bool {
+        Self::clear_within(ctx, carrier, Self::IN_HIS_PATH)
+    }
+
+    fn clear_within(
+        ctx: &StateProcessingContext,
+        carrier: &MatchPlayerLite,
+        corridor: f32,
+    ) -> bool {
         let goal = ctx.ball().direction_to_own_goal();
         let to_goal = goal - carrier.position;
         let run = to_goal.magnitude();
@@ -899,11 +880,25 @@ impl KeeperCarrierThreat {
                 return false;
             }
             // …and inside the corridor the carrier is running down.
-            (rel - lane * along).magnitude() <= Self::COVER_CORRIDOR
+            (rel - lane * along).magnitude() <= corridor
         })
     }
 }
 
+/// Where a keeper sets his feet to face a shot, and where he takes the
+/// ball once he has gathered it.
+///
+/// Both save states used to steer to `(own_goal.x, goal_line_y)` — the
+/// goal LINE itself. No keeper faces a shot standing on his line; he sets
+/// a yard or so off it so he can attack the ball rather than carry it
+/// back over the line behind him. It also had a very visible
+/// consequence: the physics save snaps the ball to the keeper's
+/// position, so every catch parked the ball at **x ≈ 839 of 840** at
+/// glove height — hanging inside the goal frame, on the same spot, about
+/// 160 times a match. Measured from a replay dump: the ball sat at
+/// (839.3, 223.6, 1.20) without moving for 3.5 seconds.
+///
+/// UNITS: 1 unit = 0.125 m.
 pub struct KeeperSetPosition;
 
 impl KeeperSetPosition {
@@ -926,6 +921,29 @@ impl KeeperSetPosition {
             1.0
         } else {
             -1.0
+        }
+    }
+
+    /// The `y`, at depth `at_x`, of the line he guards against a ball at
+    /// `ball`: the bisector of the angle the two posts make at the ball.
+    /// It lies nearer the near post than the line to the middle of the
+    /// goal, and the gap widens as the ball goes wide; a keeper on the
+    /// middle line leaves his near post open.
+    pub fn guard_y(own_goal: Vector3<f32>, ball: Vector3<f32>, at_x: f32) -> f32 {
+        let toward = |y: f32| {
+            Vector3::new(own_goal.x - ball.x, y - ball.y, 0.0)
+                .try_normalize(1e-3)
+                .unwrap_or_else(Vector3::zeros)
+        };
+        let aim = if KeeperDebug::bisector_off() {
+            toward(own_goal.y)
+        } else {
+            toward(own_goal.y - GOAL_WIDTH) + toward(own_goal.y + GOAL_WIDTH)
+        };
+        if aim.x.abs() > 1e-3 {
+            ball.y + aim.y * (at_x - ball.x) / aim.x
+        } else {
+            own_goal.y
         }
     }
 
@@ -1022,6 +1040,28 @@ impl KeeperSetPosition {
         )
     }
 
+    /// The set point with no shot in flight, for a ball at `ball`: the set
+    /// depth for a strike from there, on the bisector at that depth. Read
+    /// at the depth it sends him to rather than at his own, so the point
+    /// does not move as he steps to it.
+    pub fn guard_point(
+        own_goal: Vector3<f32>,
+        ball: Vector3<f32>,
+        field_width: f32,
+        read: f32,
+    ) -> Vector3<f32> {
+        let mut point = Self::set_point(
+            own_goal,
+            own_goal.y,
+            (ball - own_goal).magnitude(),
+            field_width,
+            read,
+            0.0,
+        );
+        point.y = Self::guard_y(own_goal, ball, point.x);
+        point
+    }
+
     /// Where a keeper walks the ball once it is in his gloves. Real
     /// keepers get up and carry it out to the edge of their area to
     /// release it; this engine's stood exactly where it caught it for up
@@ -1066,6 +1106,38 @@ impl KeeperSetPosition {
 pub struct KeeperBallClaim;
 
 impl KeeperBallClaim {
+    /// The odds he gathers a ball he has got to.
+    ///
+    /// A ball he already owns is not a claim he can fumble: bending down to
+    /// one under his own boot is near certain. For one he is meeting, what
+    /// makes it hard is a man on him and pace on the ball, against his
+    /// hands. Unpressured and slow it is essentially certain; pressed, with
+    /// the ball coming at him quickly and poor hands, nearer four in five.
+    /// (A flat 0.9 once had a keeper strolling onto a ball trickling across
+    /// an empty six-yard box fumble one in ten.)
+    pub fn gather_odds(ctx: &StateProcessingContext) -> f32 {
+        let handling = (ctx.player.skills.goalkeeping.handling / 20.0).clamp(0.0, 1.0);
+        if ctx.player.has_ball(ctx) {
+            return (0.97 + handling * 0.03).min(1.0);
+        }
+        let press = KeeperFeetDecision::pressure(ctx);
+        let pace = (ctx.tick_context.positions.ball.velocity.norm() / 2.0).clamp(0.0, 1.0);
+        (0.995 - press * 0.10 - pace * 0.08 - (1.0 - handling) * 0.06).clamp(0.70, 0.999)
+    }
+
+    /// One tick of a gather he is trying on every tick the ball is in his
+    /// reach: one attempt at [`Self::gather_odds`], spread over the ticks
+    /// his gloves are on it, so trying again each tick does not compound it
+    /// into a certainty.
+    pub fn gathers_this_tick(ctx: &StateProcessingContext) -> bool {
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+        let per_tick = prof.per_tick_save(Self::gather_odds(ctx), Self::CONTACT_TICKS);
+        ctx.context.rng.unit_f32() < per_tick
+    }
+
+    /// How long his gloves are on a ball he is gathering, in AI ticks.
+    pub const CONTACT_TICKS: f32 = 14.0;
+
     /// How much nearer the keeper is allowed to let an opponent be while
     /// still going for a ball ON THE FLOOR. He has hands and a dive, so he
     /// wins one he is marginally further from — but only marginally.
@@ -1416,13 +1488,68 @@ impl KeeperAerialClaim {
         AerialReach::ceiling(jumping) + Self::ARMS
     }
 
-    /// Book a claim the keeper has just decided to go for. Called only at
-    /// the two states a claim can START from, so a claim he spends a
-    /// second running to counts once rather than once per tick.
-    #[allow(unused_variables)]
-    pub fn note_start(ctx: &StateProcessingContext, claim: &AerialClaim) {
-        #[cfg(feature = "match-logs")]
+    /// Catch it or punch it, chosen as he commits: on the odds of holding it
+    /// with his hands and nerve in the traffic around it, and the pace on it
+    /// — by a keeper with the command of his area to punch at all, at a ball
+    /// his fist can play.
+    pub fn intent(ctx: &StateProcessingContext, claim: &AerialClaim) -> ClaimIntent {
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+        let speed = ctx.tick_context.positions.ball.velocity.norm();
+        let situation = ClaimSituation::of(
+            claim.height,
+            claim.traffic,
+            speed,
+            ctx.tick_context.ball.pending_pass_was_cross,
+        );
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        let hold =
+            1.0 - GkClaimContest::failure(ctx.player, ClaimIntent::Catch, &situation, minute);
+        let power = ((speed - 1.2) / 2.0).clamp(0.0, 1.0);
+        if claim.height >= GoalkeeperPunchingState::FLOOR
+            && prof.should_punch(hold, claim.traffic, power)
         {
+            ClaimIntent::Punch
+        } else {
+            ClaimIntent::Catch
+        }
+    }
+
+    /// The reach the aerial contest grants him: a stride away, and up to the
+    /// leap he commits to. One reach for the commit and the contest, or he
+    /// comes for a ball the contest then says he cannot touch.
+    pub fn contest_reach(keeper: &MatchPlayer, ball: Vector3<f32>) -> bool {
+        (ball - keeper.position).xy().norm() <= MAX_OWNER_TRACK_DISTANCE
+            && ball.z <= Self::leap_ceiling(keeper.skills.physical.jumping)
+    }
+
+    /// Can he play the ball where it is now? A step and his arms across the
+    /// grass, and up to his leap off the ground or his reach standing on it:
+    /// the envelope he committed to coming for it, and the one the aerial
+    /// contest lets him play it in.
+    pub fn within_reach(keeper: &MatchPlayer, ball: Vector3<f32>) -> bool {
+        let ceiling = if keeper.is_airborne() {
+            Self::leap_ceiling(keeper.skills.physical.jumping)
+        } else {
+            Self::standing_ceiling()
+        };
+        (ball - keeper.position).xy().norm() <= AerialClaim::CONTACT_RANGE && ball.z <= ceiling
+    }
+
+    /// Book a claim the keeper has just decided to go for, and what he means
+    /// to do with it. The read calls it at every door onto a claim, so a
+    /// claim he runs out to and then meets passes it twice: it counts once,
+    /// when the census opens it.
+    #[allow(unused_variables)]
+    pub fn note_start(ctx: &StateProcessingContext, claim: &AerialClaim, intent: ClaimIntent) {
+        #[cfg(feature = "match-logs")]
+        if KeeperCensus::open_claim_in(ctx) {
+            KeeperCensus::claim_action_in(
+                ctx,
+                match intent {
+                    ClaimIntent::Catch => ClaimAction::Catch,
+                    ClaimIntent::Punch => ClaimAction::Punch,
+                },
+            );
             crate::mid_run_diag::KeeperActionDiag::note(3);
             let range = (claim.meeting_point - ctx.player.position).magnitude();
             crate::mid_run_diag::KeeperActionDiag::add(8, (range * 100.0).max(0.0) as u64);
@@ -1443,8 +1570,8 @@ impl KeeperAerialClaim {
         if ctx.ball().is_owned() || ctx.ball().blocked_from_recollecting() {
             return None;
         }
-        // A delivery an engine-level aerial contest has already awarded
-        // is not his to come for: the keeper's claim chance was PRICED
+        // A delivery an engine-level aerial contest has awarded to
+        // somebody else is not his to come for: the keeper's claim chance was PRICED
         // INTO that contest (`gk_command` shrinks the attacker's win,
         // and the cross contest's own GK branch can take the ball off
         // both duellists). Coming for it anyway re-rolled his part —
@@ -1452,7 +1579,12 @@ impl KeeperAerialClaim {
         // out of the air before arrival while the winner's header
         // vanished. He stays for the strike; the save pipeline is where
         // he answers it.
-        if ctx.tick_context.ball.aerial_contest_winner.is_some() {
+        if ctx
+            .tick_context
+            .ball
+            .aerial_contest_winner
+            .is_some_and(|winner| winner != ctx.player.id)
+        {
             return None;
         }
         if !ctx.ball().on_own_side() {
@@ -1625,7 +1757,7 @@ pub struct SmotherAttempt {
 ///
 /// # The model
 ///
-/// The same shape as a defender's challenge (`attempt_sliding_tackle`), for
+/// The same shape as a defender's challenge (`attempt_block_tackle`), for
 /// the same reason: it is a duel, it has a cost, and it can be a foul.
 ///   * He commits when the ball is inside his own spread and the carrier is
 ///     in front of him — never from behind, which is a foul and nothing
@@ -1642,10 +1774,16 @@ pub struct SmotherAttempt {
 pub struct KeeperSmother;
 
 impl KeeperSmother {
+    /// Where a ball he knocks away comes to rest, in units: 2 m for a keeper
+    /// who cannot direct a parry, 5 m for one who can.
+    const KNOCK_REST: (f32, f32) = (16.0, 40.0);
+    /// …rising off him at this, in m/tick: it has come off a body, not a boot.
+    const KNOCK_LIFT: f32 = 0.02;
     /// How far a keeper's spread reaches, before skill. 12u = 1.5 m —
     /// arms, chest and the ground he covers going down.
     pub const SPREAD_BASE: f32 = 12.0;
-    /// …and what agility and one-on-one technique add, out to ~3 m.
+    /// …and what agility and one-on-one technique add, up to what the ball
+    /// can be granted at (see [`Self::reach`]).
     pub const SPREAD_SKILL: f32 = 12.0;
     /// A ball higher than this is not at anybody's feet — that is a
     /// [`KeeperAerialClaim`], and diving under it achieves nothing. 1.1 m.
@@ -1805,10 +1943,13 @@ impl KeeperSmother {
         })
     }
 
-    /// How far this keeper spreads himself, in game units.
+    /// How far this keeper spreads himself, in game units: no further than
+    /// the ball can be granted to him, or a smother he wins at full stretch
+    /// is one the possession grant refuses.
     pub fn reach(prof: &GoalkeeperSkillProfile) -> f32 {
-        Self::SPREAD_BASE
-            + (prof.dive_reach * 0.6 + prof.one_v_one * 0.4).clamp(0.0, 1.0) * Self::SPREAD_SKILL
+        (Self::SPREAD_BASE
+            + (prof.dive_reach * 0.6 + prof.one_v_one * 0.4).clamp(0.0, 1.0) * Self::SPREAD_SKILL)
+            .min(MAX_OWNER_TRACK_DISTANCE)
     }
 
     /// Resolve the attempt and hand back the transition it produces.
@@ -1840,7 +1981,13 @@ impl KeeperSmother {
             ),
             SmotherOutcome::Fouled(severity) => StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::Diving,
-                Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, severity, FoulSource::KeeperSmother)),
+                Event::PlayerEvent(PlayerEvent::CommitFoul(FoulCommitted {
+                    fouler: ctx.player.id,
+                    fouled: attempt.carrier_id,
+                    severity,
+                    source: FoulSource::KeeperSmother,
+                    challenge: None,
+                })),
             ),
             SmotherOutcome::Beaten => {
                 StateChangeResult::with_goalkeeper_state(GoalkeeperState::Diving)
@@ -1945,55 +2092,18 @@ impl KeeperSmother {
         let sideways =
             ctx.context.rng.range_f32(-1.0, 1.0).signum() * (0.35 + prof.parry_control * 0.75);
         let lateral = Vector3::new(-out.y, out.x, 0.0) * sideways;
-        let speed = 0.8 + prof.parry_control * 0.9;
+        // …and it comes to rest within his own few metres, where the man
+        // he went through can still chase it; at the 0.8-1.7 u/tick it used
+        // to leave at it rolled 60-130 m.
+        let rest =
+            Self::KNOCK_REST.0 + prof.parry_control * (Self::KNOCK_REST.1 - Self::KNOCK_REST.0);
+        let speed = BallRoll::speed_to_rest_at_from(rest, attempt.ball.z, Self::KNOCK_LIFT);
         let mut away = (out + lateral).try_normalize(1e-3).unwrap_or(out) * speed;
-        // Off the deck a little — it has come off a body, not a boot.
-        away.z = 0.02;
+        away.z = Self::KNOCK_LIFT;
         away
     }
 }
 
-/// **What a keeper can physically do about a ball that is already on its
-/// way** — how long before he moves at all, and how fast he can move on
-/// his feet once he does.
-///
-/// # Why this exists: the keeper could RUN faster than he could DIVE
-///
-/// Measured on a real recording (`dev_match record`, 30 airborne episodes
-/// across one match): **22 of them started with the ball already inside
-/// 3 m of the keeper**, most of them inside 2 m of a ball travelling at
-/// 35 m/s — i.e. 50 ms before it reached him. Not one dive began while the
-/// ball was more than 6 m away. The viewer draws that as the ball stopping
-/// dead at a standing man who then falls over, which is exactly the report:
-/// *"he doesn't dive for the ball at all, for any shot"*.
-///
-/// [`KeeperShotDive`] below was already asking the right question — can he
-/// get there on his feet? — but it asked it against
-/// `GoalkeeperSpeedContext::Explosive`, which is `1.0 + agility*0.5 +
-/// acceleration*0.5` times a base of 0.36-0.63 u/tick: **8 to 13 m/s**,
-/// sideways, for the whole flight. A keeper who can cover the width of his
-/// own goal in two thirds of a second never has to dive, because the answer
-/// to "can he walk it?" is always yes. The gate was not mis-tuned; the
-/// thing it was measuring against was not a goalkeeper.
-///
-/// # The model
-///
-/// A shot leaves a keeper with two resources and no others:
-///
-/// * **A reaction.** 160 ms for an elite shot-stopper, 280 ms for a poor
-///   one — the standard human simple-reaction band, and the reason a
-///   penalty is a coin flip. He is motionless for it. Measured from the
-///   strike, which is recoverable without a new field: `ShotTarget` carries
-///   `struck_from`, so the distance already flown divided by the ball's
-///   speed IS the elapsed flight.
-/// * **A shuffle.** From a set stance — knees bent, weight forward, feet
-///   apart — a keeper side-steps at 2.4 to 4.0 m/s. He is not running; a
-///   man who runs at a struck ball arrives unset and saves nothing, which
-///   is why keepers are coached to be still at the moment of contact.
-///
-/// Everything else has to come out of the dive. That is the whole point:
-/// the dive is not decoration on top of a save the keeper was going to make
-/// anyway, it is the only way he covers ground once the ball is struck.
 /// **A man running at him with the ball, and nobody in the way.**
 ///
 /// # Why this exists
@@ -2029,6 +2139,17 @@ impl KeeperSmother {
 /// him. As the striker closes, the gap closes with him, and the moment the
 /// ball is inside the spread the duel resolves.
 pub struct KeeperOneOnOne;
+
+/// Why a one-on-one he is in has lapsed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DuelLapse {
+    /// Nobody of theirs is on the ball: a pass, a tackle, a dead ball.
+    OffTheBall,
+    /// A defender has got into the man's path.
+    Covered,
+    /// The man has turned away from goal.
+    TurnedAway,
+}
 
 impl KeeperOneOnOne {
     /// How near his own goal the duel has to be before he plays it as one.
@@ -2089,7 +2210,18 @@ impl KeeperOneOnOne {
         *HELD.get_or_init(|| std::env::var("OF_KEEPER_HOLD").is_ok())
     }
 
-    /// The man he is in a duel with, if he is in one.
+    /// How far from him a man through on goal is met, before his appetite
+    /// for risk widens or narrows it. 150u ≈ 19 m: the carrier is into the
+    /// ground the keeper is responsible for.
+    const MEETING_RANGE: f32 = 150.0;
+    /// He stays in the duel while the man is not running away from goal
+    /// by more than this (a cosine). Looser than the zero the duel is
+    /// entered on, so a stutter in the carrier's run does not end it.
+    const STILL_COMING: f32 = -0.5;
+
+    /// The man he is in a duel with, if he is in one: a carrier running at
+    /// goal with nobody between them, inside the penalty area's depth or
+    /// close enough to be met.
     pub fn duel(ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
         if Self::held_back() {
             return None;
@@ -2103,19 +2235,19 @@ impl KeeperOneOnOne {
             return None;
         }
         let carrier = ctx.players().opponents().with_ball().next()?;
-        let ball = ctx.tick_context.positions.ball.position;
-        let goal = ctx.ball().direction_to_own_goal();
-        if (ball.x - goal.x).abs() > Self::DANGER_DEPTH {
+        if ctx.ball().is_held_by_opponent_goalkeeper() {
             return None;
         }
-        // Running AT the goal. A man knocking it square along the edge of
-        // the area is not a 1-v-1 and coming to meet him wins nothing.
-        let run = ctx.tick_context.positions.players.velocity(carrier.id);
-        let bearing_down = (goal - carrier.position)
-            .try_normalize(1e-3)
-            .zip(run.try_normalize(1e-3))
-            .is_none_or(|(lane, way)| lane.dot(&way) > 0.0);
-        if !bearing_down {
+        let ball = ctx.tick_context.positions.ball.position;
+        let goal = ctx.ball().direction_to_own_goal();
+        let risk = GoalkeeperSkillProfile::from_ctx(ctx)
+            .eccentricity
+            .clamp(0.0, 1.0)
+            - 0.5
+            + KeeperAppetite::rush_risk(KeeperAppetite::of(ctx));
+        let in_range = (ball.x - goal.x).abs() <= Self::DANGER_DEPTH
+            || ctx.ball().distance() < Self::MEETING_RANGE * (1.0 + risk * 0.4);
+        if !in_range || Self::run_at_goal(ctx, &carrier) <= 0.0 {
             return None;
         }
         // …and nobody between the two of them. The same question the sweep
@@ -2123,12 +2255,66 @@ impl KeeperOneOnOne {
         KeeperCarrierThreat::is_through(ctx, &carrier).then_some(carrier)
     }
 
+    /// Why a duel he is already in has lapsed, or `None` while it stands:
+    /// the man still on the ball, still through, and not running away from
+    /// goal. Looser than [`Self::duel`] by construction, so the pair cannot
+    /// cycle.
+    pub fn lapse(ctx: &StateProcessingContext) -> Option<DuelLapse> {
+        if Self::held_back() || KeeperSetPieceStance::pending(ctx).is_some() {
+            return Some(DuelLapse::OffTheBall);
+        }
+        let Some(carrier) = Self::on_the_ball(ctx) else {
+            return Some(DuelLapse::OffTheBall);
+        };
+        if Self::run_at_goal(ctx, &carrier) <= Self::STILL_COMING {
+            return Some(DuelLapse::TurnedAway);
+        }
+        (!KeeperCarrierThreat::still_through(ctx, &carrier)).then_some(DuelLapse::Covered)
+    }
+
+    /// The opponent on the ball: its owner, or, while it is nobody's, the
+    /// opponent who had it last, as long as it is still at his feet's reach.
+    /// A man pushing it ahead of him leaves it nobody's between touches, and
+    /// that is not the end of his run.
+    fn on_the_ball(ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+            return Some(carrier);
+        }
+        if ctx.ball().is_owned() {
+            return None;
+        }
+        let last = ctx.ball().previous_owner_id()?;
+        let ball = ctx.tick_context.positions.ball.position;
+        ctx.players().opponents().all().find(|carrier| {
+            carrier.id == last
+                && (Vector3::new(ball.x, ball.y, 0.0) - carrier.position).magnitude()
+                    < Self::TOUCH_AHEAD
+        })
+    }
+
+    /// How far ahead of a running man his own touch still counts as his:
+    /// 24u = 3 m.
+    const TOUCH_AHEAD: f32 = 24.0;
+
+    /// Running AT the goal, as a cosine. A man knocking it square along the
+    /// edge of the area is not a 1-v-1 and coming to meet him wins nothing.
+    /// A man standing still reads as coming.
+    fn run_at_goal(ctx: &StateProcessingContext, carrier: &MatchPlayerLite) -> f32 {
+        let goal = ctx.ball().direction_to_own_goal();
+        let run = ctx.tick_context.positions.players.velocity(carrier.id);
+        (goal - carrier.position)
+            .try_normalize(1e-3)
+            .zip(run.try_normalize(1e-3))
+            .map_or(1.0, |(lane, way)| lane.dot(&way))
+    }
+
     /// How far off the ball he holds, in units.
     pub fn standoff(prof: &GoalkeeperSkillProfile) -> f32 {
         KeeperSmother::reach(prof) + Self::MARGIN
     }
 
-    /// Where he stands: on the goal→ball line, a stand-off short of the ball.
+    /// Where he stands: on the goal→ball line, a stand-off short of where
+    /// the ball is going ([`KeeperRestPosition::anticipated`]).
     ///
     /// Bounded twice, and the two bounds are different shapes: `stand`
     /// caps the DEPTH of the closing point, and [`KeeperSweepLimit`] then
@@ -2136,11 +2322,12 @@ impl KeeperOneOnOne {
     /// the touchline is still a duel, and without the second bound the
     /// keeper came to meet him out by the corner flag.
     pub fn point(ctx: &StateProcessingContext, prof: &GoalkeeperSkillProfile) -> Vector3<f32> {
+        let ball = &ctx.tick_context.positions.ball;
         KeeperSweepLimit::contain(
             ctx,
             Self::stand(
                 ctx.ball().direction_to_own_goal(),
-                ctx.tick_context.positions.ball.position,
+                KeeperRestPosition::anticipated(ball.position, ball.velocity, prof.positioning),
                 Self::standoff(prof),
                 KeeperSweepLimit::off_line(prof.rushing_out_profile),
             ),
@@ -2168,6 +2355,47 @@ impl KeeperOneOnOne {
     }
 }
 
+/// **What a keeper can physically do about a ball that is already on its
+/// way** — how long before he moves at all, and how fast he can move on
+/// his feet once he does.
+///
+/// # Why this exists: the keeper could RUN faster than he could DIVE
+///
+/// Measured on a real recording (`dev_match record`, 30 airborne episodes
+/// across one match): **22 of them started with the ball already inside
+/// 3 m of the keeper**, most of them inside 2 m of a ball travelling at
+/// 35 m/s — i.e. 50 ms before it reached him. Not one dive began while the
+/// ball was more than 6 m away. The viewer draws that as the ball stopping
+/// dead at a standing man who then falls over, which is exactly the report:
+/// *"he doesn't dive for the ball at all, for any shot"*.
+///
+/// [`KeeperShotDive`] below was already asking the right question — can he
+/// get there on his feet? — but it asked it against
+/// `GoalkeeperSpeedContext::Explosive`, which is `1.0 + agility*0.5 +
+/// acceleration*0.5` times a base of 0.36-0.63 u/tick: **8 to 13 m/s**,
+/// sideways, for the whole flight. A keeper who can cover the width of his
+/// own goal in two thirds of a second never has to dive, because the answer
+/// to "can he walk it?" is always yes. The gate was not mis-tuned; the
+/// thing it was measuring against was not a goalkeeper.
+///
+/// # The model
+///
+/// A shot leaves a keeper with two resources and no others:
+///
+/// * **A reaction.** 160 ms for an elite shot-stopper, 280 ms for a poor
+///   one — the standard human simple-reaction band, and the reason a
+///   penalty is a coin flip. He is motionless for it. Measured from the
+///   strike, which is recoverable without a new field: `ShotTarget` carries
+///   `struck_from`, so the distance already flown divided by the ball's
+///   speed IS the elapsed flight.
+/// * **A shuffle.** From a set stance — knees bent, weight forward, feet
+///   apart — a keeper side-steps at 2.4 to 4.0 m/s. He is not running; a
+///   man who runs at a struck ball arrives unset and saves nothing, which
+///   is why keepers are coached to be still at the moment of contact.
+///
+/// Everything else has to come out of the dive. That is the whole point:
+/// the dive is not decoration on top of a save the keeper was going to make
+/// anyway, it is the only way he covers ground once the ball is struck.
 pub struct KeeperShotReaction;
 
 impl KeeperShotReaction {
@@ -2271,15 +2499,44 @@ impl KeeperShotReaction {
         Self::SLOW_REACTION - (Self::SLOW_REACTION - Self::FAST_REACTION) * sharpness
     }
 
+    /// The most a keeper still moving at the strike adds to his reaction:
+    /// 40%, reached at twice his set shuffle. His weight is going the wrong
+    /// way, and he has to stop it before he can push for the ball.
+    const CAUGHT_MOVING: f32 = 0.40;
+
+    /// The share of his reaction he adds for being on the move as the shot
+    /// was struck — his ground speed then, past his set shuffle.
+    pub fn moving_penalty(keeper: &MatchPlayer) -> f32 {
+        if KeeperDebug::strike_set_off() {
+            return 0.0;
+        }
+        let shuffle = Self::set_shuffle(keeper.skills.physical.agility);
+        Self::CAUGHT_MOVING * ((keeper.strike_speed - shuffle) / shuffle).clamp(0.0, 1.0)
+    }
+
+    /// His reaction to this shot, in engine ticks: his own, and later for
+    /// being caught moving.
+    fn reaction(ctx: &StateProcessingContext, prof: &GoalkeeperSkillProfile) -> f32 {
+        Self::reaction_ticks(prof) * (1.0 + Self::moving_penalty(ctx.player))
+    }
+
     /// Has he moved yet? Before this he is a statue, and that is not a
     /// stylistic choice — it is where a well-placed shot gets its value.
     pub fn has_reacted(ctx: &StateProcessingContext, prof: &GoalkeeperSkillProfile) -> bool {
-        Self::servo() || Self::since_strike(ctx) >= Self::reaction_ticks(prof)
+        Self::servo() || Self::since_strike(ctx) >= Self::reaction(ctx, prof)
     }
 
     /// His set-stance shuffle, in u/tick — the floor of the band below.
     fn shuffle(prof: &GoalkeeperSkillProfile) -> f32 {
         Self::HEAVY_FEET + (Self::QUICK_FEET - Self::HEAVY_FEET) * prof.dive_reach.clamp(0.0, 1.0)
+    }
+
+    /// The same shuffle with no shot in flight, in u/tick: 2.4–4.0 m/s by
+    /// agility, without the shot-tempo conversion, because there is no
+    /// compressed flight to keep up with.
+    pub fn set_shuffle(agility: f32) -> f32 {
+        let quick = (agility / 20.0).clamp(0.0, 1.0);
+        (Self::HEAVY_FEET + (Self::QUICK_FEET - Self::HEAVY_FEET) * quick) * Self::SHOT_TEMPO
     }
 
     /// Top speed on his feet with the ball `ticks_left` from reaching him,
@@ -2341,7 +2598,7 @@ impl KeeperShotReaction {
         ticks_left: f32,
     ) -> f32 {
         let stalled =
-            (Self::reaction_ticks(prof) - Self::since_strike(ctx)).clamp(0.0, ticks_left.max(0.0));
+            (Self::reaction(ctx, prof) - Self::since_strike(ctx)).clamp(0.0, ticks_left.max(0.0));
         if Self::servo() {
             // The comparison this model replaced: a flat sprint, all the
             // way to the moment of contact.
@@ -2589,97 +2846,6 @@ impl KeeperShotDive {
     /// that he cannot step to.* Which is what a goalkeeper does.
     const DESPAIR_REACH: f32 = 3.5;
 
-    /// **How high a keeper can play a shot with his feet on the floor.**
-    ///
-    /// Deliberately head height rather than `AerialReach::STANDING` (2.2 m)
-    /// or `KeeperAerialClaim::standing_ceiling` (2.65 m). Those describe a
-    /// keeper who has *come* for a ball with his arms already above his
-    /// head — a cross he has read for a second and a half. A keeper set for
-    /// a shot has his hands at chest height and a tenth of a second: what
-    /// he can take without leaving the floor is what he can get a hand to
-    /// in front of his own body.
-    pub const SET_CEILING: f32 = AerialReach::HEAD;
-
-    /// The bottom of the same envelope: below this he is not bending down
-    /// for it, he is going down with it. Mid-shin — a ball at hip or knee
-    /// height in front of him is a standing gather, one skidding along the
-    /// floor to his side is the most ordinary diving save in football.
-    const GATHER_FLOOR: f32 = 0.45;
-
-    /// What a metre of climb, and a metre of stoop, are worth in units of
-    /// lateral gap.
-    ///
-    /// ⚠ **DERIVED EXCHANGE RATES, not taste calls.** A dive buys a keeper
-    /// 2.5-3.5 m sideways (`KeeperShotSave::base_reach` × the wedge
-    /// projection) and 0.6-0.8 m upward (`PlayerMatchState::leap_apex` on
-    /// `Diving`, plus his arms). His reach is therefore an ELLIPSE about
-    /// four times wider than it is tall, and comparing a point against an
-    /// ellipse means scaling the short axis before taking the distance.
-    /// Re-derive from those two if either moves.
-    ///
-    /// Going DOWN is cheaper than going up — gravity is on his side and he
-    /// has his whole body length to lay out — so the floor side of the
-    /// envelope is half the price. Asymmetric on purpose: a keeper reaches
-    /// a low ball to his side far more easily than a high one.
-    const CLIMB_COST: f32 = 4.0;
-    const STOOP_COST: f32 = 2.0;
-
-    /// Units to the metre on the horizontal grid. The vertical axis is
-    /// metric and the horizontal one is not — see `MatchPlayer::height`.
-    const UNITS_PER_METRE: f32 = 8.0;
-
-    /// The lateral gap a ball at `ball_z` is WORTH, on top of however far
-    /// across him it is going.
-    ///
-    /// # Why the dive decision needs a vertical axis at all
-    ///
-    /// It had none, and neither does `SaveModel::wedge`: both measure how
-    /// far the keeper's `y` is from the crossing `y` and nothing else. So a
-    /// shot from twenty-five yards into the top corner, struck dead in line
-    /// with him, produced `gap ≈ 0` → *"he can step to this one"* → he
-    /// stayed on his feet, arms down, and the ball went over his head. A
-    /// shot skidding into the bottom corner produced the same answer for
-    /// the same reason.
-    ///
-    /// **That is the whole of the report and it is not a rare case.**
-    /// Measured off twelve recorded matches, of the twenty-nine on-frame
-    /// goals struck from 18 m+ four crossed him at **1.95-2.55 m** and
-    /// eleven at **under 0.4 m**, with lateral gaps as small as **6 cm** —
-    /// and in every one of those his recorded height stayed at exactly
-    /// 0.00 m for the whole flight. From the stands that is a goalkeeper
-    /// watching a long shot go past him without moving, which is what was
-    /// reported.
-    ///
-    /// A ball inside the band he can take standing costs nothing, so an
-    /// ordinary chest-height shot — where the population save rate is
-    /// calibrated — is priced exactly as it was before. This only ever ADDS
-    /// gap, and only outside his own stance.
-    pub fn climb_gap(ball_z: f32, set_ceiling: f32) -> f32 {
-        let over = (ball_z - set_ceiling).max(0.0) * Self::CLIMB_COST;
-        let under = (Self::GATHER_FLOOR - ball_z.max(0.0)).max(0.0) * Self::STOOP_COST;
-        (over + under) * Self::UNITS_PER_METRE
-    }
-
-    /// His own ceiling: 1.68 m for a keeper who waits for the ball to come
-    /// down to him, 1.92 m for one who plays it above his own head. That
-    /// is `aerial_reach` / `jumping` / `command_of_area`, which is what
-    /// `aerial_command` already blends.
-    ///
-    /// ⚠ Written as a BAND rather than as `SET_CEILING × quality` on
-    /// purpose. `aerial_command` is a `keeper_curve`d composite and does
-    /// not centre on 0.5 — the same reason
-    /// `GoalkeeperSkillProfile::POPULATION_READ` exists at 0.479 for the
-    /// positioning composite — so a multiplicative term here would have to
-    /// be centred on a measured mean of *this* composite, and would go
-    /// stale the moment its weights moved. A band needs no such constant:
-    /// both ends are physical statements about how high a man plays a ball
-    /// standing up, and the worst a population-mean error can do is shift
-    /// the middle of it by a centimetre.
-    fn set_ceiling(prof: &GoalkeeperSkillProfile) -> f32 {
-        const SPAN: f32 = 0.24;
-        Self::SET_CEILING - SPAN * 0.5 + prof.aerial_command.clamp(0.0, 1.0) * SPAN
-    }
-
     /// **How far over the bar a shot has to be before the keeper writes it
     /// off entirely.**
     ///
@@ -2832,7 +2998,7 @@ impl KeeperShotDive {
         let across = lateral_error * base_reach / reach;
         // …and HOW HIGH it is going, which nothing here could see. A ball
         // over his head is a ball he has to leave his feet for however
-        // straight at him it is — see [`Self::climb_gap`], which is the
+        // straight at him it is — see [`SaveModel::climb_gap`], which is the
         // whole of why a top-corner shot from range used to be the one he
         // never moved for. Pythagoras because his gloves have to get to a
         // point that is both across him and above him.
@@ -2847,7 +3013,7 @@ impl KeeperShotDive {
         // `PlayerMatchState::leap_apex`, which decides how high the dive
         // this returns will actually climb — so using it here is what keeps
         // the decision and the leap talking about the same ball.
-        let climb = Self::climb_gap(target.goal_line_z, Self::set_ceiling(&prof));
+        let climb = SaveModel::climb_gap(target.goal_line_z, SaveModel::set_ceiling(&prof));
         let gap = (across * across + climb * climb).sqrt();
         #[cfg(feature = "match-logs")]
         {
@@ -2974,182 +3140,15 @@ impl KeeperShotDive {
     }
 }
 
-/// The one save roll for a shot in flight, shared by every state the
-/// keeper can be in while it is.
-///
-/// # Why it is shared
-///
-/// `GoalkeeperCatchingState` owned this model, and its per-tick conversion
-/// (`EXPECTED_SAVE_TICKS`) is calibrated against the keeper staying in
-/// `Catching` for the WHOLE flight. The moment he can also spend part of a
-/// flight in `Diving` — which is the entire point of [`KeeperShotDive`] —
-/// two different models for the same shot would mean the realised save
-/// rate depended on when he left his feet. One model, one per-tick
-/// probability, so a keeper who dives early rolls exactly what a keeper who
-/// stays up rolls, and the population save rate does not move.
+/// How far a keeper can get a glove from where he stands, which is what the
+/// dive decision reads. The save itself is decided once, on the ball
+/// (`Ball::try_save_shot`), and he carries out what it decides.
 pub struct KeeperShotSave;
 
 impl KeeperShotSave {
-    /// Length of the save window, in AI ticks, that the per-shot
-    /// probability is spread across.
-    ///
-    /// Get this wrong and the keeper's realised save rate drifts away from
-    /// `save_probability` even though that model is untouched: the per-tick
-    /// die is rolled once per tick he spends in the save, so a longer window
-    /// compounds to a higher cumulative rate.
-    ///
-    /// **It has been "corrected" four times and the history is the point.**
-    /// It lived on `GoalkeeperCatchingState` until Aug 2026, when the dive
-    /// stopped being the only state a save could resolve in.
-    ///
-    /// * 3.0, derived when the loose-ball override could yank a keeper out of
-    ///   `Catching` / `Diving` part-way through a save. Keepers now hold
-    ///   those states to completion (`PlayerState::is_committed_action`), so
-    ///   the real window is longer and the constant describing it was stale.
-    /// * → 3.8, the re-derived length. Measured on its own the move was
-    ///   inside run-to-run noise; it was corrected because it was the honest
-    ///   number, not because it moved the aggregate.
-    /// * → 54. The early return at the top of `Catching::process` holds the
-    ///   keeper there for the ENTIRE flight, so the per-shot→per-tick
-    ///   conversion was dividing by a residency ~10× shorter than the real
-    ///   one and the save was rolled 30-110 times. That made this the
-    ///   DOMINANT save path (population 77.7% against a real 67% even after
-    ///   the physics roll was latched to one roll per shot) and made every
-    ///   `skill_mult` retune inert.
-    /// * LEFT at 54 after the 2026-08 possession fix, deliberately. Shots
-    ///   now stay live for their projected flight rather than a flat 40
-    ///   ticks, so residency grew and the save rate rose with it. Re-deriving
-    ///   upward was tried and REVERTED: 54 → 75 → 110 cut the save rate as
-    ///   expected but did not add a single goal, because the shots he stops
-    ///   catching were not goal-bound — they miss instead. All it moved was
-    ///   the on-target rate, which is defined as (saves + goals) and so falls
-    ///   one for one with saves. 54 measures on-target at 33.5% against a
-    ///   real 33%; 75 gives 29.4% and 110 gives 24.3%, for the same goals.
-    ///
-    /// ⚠ **DO NOT "RE-DERIVE" THIS TO MATCH THE ARRIVAL WINDOW.** Tried and
-    /// reverted 2026-08-16. With the arrival gate below in place the roll no
-    /// longer runs for the whole flight, so 54 looks obviously wrong and the
-    /// closing arithmetic (`effective_catch_distance` ~20u ÷ 2.63 u/tick × 2
-    /// engine ticks per AI tick ≈ 4) looks obviously right. Measured, 4 took
-    /// **saves/on-target 74.7% → 86.6% and goals 25.3 → 16.5** in one step:
-    /// he is within reach for considerably longer than that suggests,
-    /// because he is steering to MEET the ball rather than standing still.
-    ///
-    /// The real defect is that a per-shot probability is smeared over a tick
-    /// count at all — the same one-shot-one-roll problem
-    /// `ShotTarget::save_rolled` and `block_rolled` exist to solve. The state
-    /// machine cannot latch on the shot the way they do (it reads a frozen
-    /// `tick_context` and cannot write to the ball), so fixing it properly
-    /// means routing the latch through an event or letting
-    /// `Ball::try_save_shot` be the sole resolver. Until then this stays
-    /// where it was calibrated.
-    pub const EXPECTED_SAVE_TICKS: f32 = 54.0;
-
     /// Effective reach in game units: weak ~14u, elite ~30u.
     pub fn base_reach(prof: &GoalkeeperSkillProfile) -> f32 {
         10.0 + prof.dive_reach * 12.0 + prof.shot_stopping * 4.0
-    }
-
-    /// Roll this tick's share of the save. `false` when there is no shot
-    /// to save, when he cannot reach it, or when it simply has not
-    /// arrived yet.
-    pub fn roll(ctx: &StateProcessingContext) -> bool {
-        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
-        let Some(target) = ctx.tick_context.ball.cached_shot_target.as_ref() else {
-            return false;
-        };
-        // …at HIS goal. The cache is on the ball and both keepers read it,
-        // so a shot at the other end would otherwise be scored against this
-        // one's goal line — nonsense geometry that could hand him a save.
-        // Unreachable in practice (the arrival gate below needs the ball
-        // within two metres of him) but the guard belongs on the model, not
-        // on the improbability.
-        if Some(target.defending_side) != ctx.player.side {
-            return false;
-        }
-        // Ball over the bar — no save attempt worth making.
-        //
-        // Against the SAME margin `KeeperShotDive::should_launch` uses, and
-        // for the same reason: `goal_line_z` is a projection, `Ball::
-        // try_save_shot` retires a shot as off-frame at 2.8 m on live
-        // ballistics, and a bare `> GOAL_HEIGHT` here refused to let him
-        // catch balls the physics went on to resolve. Three sites, one
-        // tolerance.
-        if target.goal_line_z > GOAL_HEIGHT + KeeperShotDive::CROSSBAR_MARGIN {
-            return false;
-        }
-        // …and what his reach is worth from where he is standing. Same
-        // model as the physics save — `SaveModel::contact` — so the two
-        // paths cannot disagree about whether he was in position, and so
-        // neither of them charges him for narrowing the angle.
-        //
-        // ⚠ …and scored against the BALL, for the same reason and with the
-        // same care as the physics save: `target.goal_line_y` is what he
-        // believes and is deliberately wrong, so adjudicating a catch on it
-        // denied him balls arriving in his hands. See the long note at the
-        // `contact` call in `Ball::try_save_shot`. The gather gate below is
-        // already physical; this makes the reach test agree with it.
-        let ball = &ctx.tick_context.positions.ball;
-        let (lateral_error, reach) = SaveModel::contact(
-            target.seen_from,
-            ball.velocity.norm(),
-            ctx.player.position,
-            Self::base_reach(&prof),
-            ball.position.y,
-            ctx.player.dive_aim.is_some(),
-        );
-        if lateral_error > reach {
-            return false;
-        }
-
-        // …AND THE BALL HAS TO HAVE ARRIVED.
-        //
-        // The lateral test above is the right measure of how HARD the save
-        // is; it is not a statement that the save can be made yet. Without
-        // this the per-tick roll fired at a uniformly random point in the
-        // flight and `CaughtBall` handed the keeper a ball still twenty
-        // metres away — which `Ball::move_to` then dropped, leaving it dead
-        // in mid-pitch with nobody near it (`reception_diag::OWNER_TOO_FAR`,
-        // 87 a match). The physics save has always had this gate.
-        if ctx.ball().distance() > prof.effective_catch_distance {
-            return false;
-        }
-
-        // Build shot difficulty in 0..1 from placement, power,
-        // reaction-window, and keeper-offline factors.
-        let placement = (lateral_error / reach.max(1e-3)).clamp(0.0, 1.0);
-        let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
-        // `(speed - 2.0) / 6.0` against the engine's 3.2 u/tick shot
-        // ceiling capped this at 0.2 of its range, so how hard the shot was
-        // hit barely entered the difficulty. Signed against an ordinary
-        // strike — see `SaveModel::strike_power` for why it has to be
-        // centred rather than simply widened.
-        let power = SaveModel::strike_power(ball_speed);
-        let height_factor = (target.goal_line_z / GOAL_HEIGHT).clamp(0.0, 1.0);
-        let reaction = (1.0 - prof.shot_stopping).clamp(0.0, 1.0) * 0.4;
-
-        // Placement carries 0.42 of the difficulty. It was written as two
-        // separate 0.24 + 0.18 terms of the same quantity; folded, because
-        // reading it as two independent factors is how a weight gets
-        // "tuned" twice by accident.
-        let shot_difficulty = (power * 0.28
-            + placement * 0.42
-            + height_factor * 0.10
-            + reaction * 0.10
-            + (1.0 - prof.condition_mult) * 0.10)
-            .clamp(0.0, 1.0);
-
-        // Per-shot save probability, then converted to per-tick.
-        let mut save_prob = prof.save_probability(shot_difficulty);
-        // Deflection damping: the GK was set for the original trajectory.
-        // A redirected shot arrives on a line they haven't committed to, so
-        // the reaction window is shorter. Real PL data: deflected
-        // on-target shots produce ~30% goals against ~10% for clean ones.
-        if target.deflected {
-            save_prob *= 0.50;
-        }
-        let per_tick = prof.per_tick_save(save_prob, Self::EXPECTED_SAVE_TICKS);
-        ctx.context.rng.unit_f32() < per_tick
     }
 }
 
@@ -3169,10 +3168,9 @@ mod tests {
     /// the kickoff-slot leash this constant replaced, which killed 83% of
     /// every sweep the keeper committed to.
     ///
-    /// `GoalkeeperStandingState::should_rush_out_for_ball` commits to a
-    /// carrier out to `150 * (1 + risk * 0.4)` = 180u at the extreme, so
-    /// the excursion limit has to clear that for EVERY keeper, including
-    /// the one least willing to leave his line.
+    /// `KeeperOneOnOne::duel` meets a carrier out to `150 * (1 + risk * 0.4)`
+    /// = 180u at the extreme, so the excursion limit has to clear that for
+    /// EVERY keeper, including the one least willing to leave his line.
     #[test]
     fn a_keeper_may_always_go_further_than_the_distance_he_commits_at() {
         const WIDEST_ENTRY: f32 = 180.0;
@@ -3420,19 +3418,19 @@ mod tests {
     /// and watched it go in with his arms by his sides. Measured off
     /// recordings, that was four of the twenty-three on-frame goals from
     /// 18 m+ in twelve matches, at heights of 1.95-2.55 m and lateral gaps
-    /// of **7 to 26 centimetres**. See [`KeeperShotDive::climb_gap`].
+    /// of **7 to 26 centimetres**. See [`SaveModel::climb_gap`].
     #[test]
     fn a_ball_over_his_head_is_a_dive_however_straight_at_him_it_is() {
-        let ceiling = KeeperShotDive::SET_CEILING;
+        let ceiling = SaveModel::SET_CEILING;
         // Chest height, dead at him: he takes it standing, and the whole
         // calibrated population of ordinary shots must be untouched.
-        assert_eq!(KeeperShotDive::climb_gap(1.2, ceiling), 0.0);
-        assert_eq!(KeeperShotDive::climb_gap(ceiling, ceiling), 0.0);
-        assert_eq!(KeeperShotDive::climb_gap(0.9, ceiling), 0.0);
+        assert_eq!(SaveModel::climb_gap(1.2, ceiling), 0.0);
+        assert_eq!(SaveModel::climb_gap(ceiling, ceiling), 0.0);
+        assert_eq!(SaveModel::climb_gap(0.9, ceiling), 0.0);
         // …and a ball skidding along the floor is a dive too, which is the
         // more common half of the same defect: eleven of the twenty-nine
         // long-range goals measured arrived under 0.4 m.
-        let low = KeeperShotDive::climb_gap(0.0, ceiling);
+        let low = SaveModel::climb_gap(0.0, ceiling);
         assert!(
             low > KeeperShotDive::STANDING_GAP,
             "a shot along the floor reads as {low:.0}u and a step is {:.0}u — he stands up \
@@ -3440,9 +3438,9 @@ mod tests {
             KeeperShotDive::STANDING_GAP
         );
         // …but going down is cheaper than going up.
-        assert!(low < KeeperShotDive::climb_gap(ceiling + 0.45, ceiling));
+        assert!(low < SaveModel::climb_gap(ceiling + 0.45, ceiling));
         // …under the bar is not.
-        let top = KeeperShotDive::climb_gap(GOAL_HEIGHT, ceiling);
+        let top = SaveModel::climb_gap(GOAL_HEIGHT, ceiling);
         assert!(
             top > KeeperShotDive::STANDING_GAP,
             "a shot under his own bar reads as {top:.0}u of gap and a step is \
@@ -3454,7 +3452,7 @@ mod tests {
         assert!(top < 20.0 * KeeperShotDive::DESPAIR_REACH);
         // Monotone in height, or a keeper is more willing to go for a ball
         // at head height than one under the bar.
-        assert!(KeeperShotDive::climb_gap(2.44, ceiling) > KeeperShotDive::climb_gap(2.0, ceiling));
+        assert!(SaveModel::climb_gap(2.44, ceiling) > SaveModel::climb_gap(2.0, ceiling));
     }
 
     /// The last of a flight is not walkable at all, so a gap that opens up

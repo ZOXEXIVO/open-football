@@ -85,3 +85,29 @@ Every modifier the environment declares (first touch, pass and cross accuracy, b
 #### Scenario: Wet pitch slows the ball and heavy legs tire faster
 - **WHEN** a match is played in heavy rain on a muddy pitch
 - **THEN** ground passes travel shorter, first touches fail more often and players lose condition faster than in the same match played in clear weather on a normal pitch
+
+### Requirement: The match result records how each side was managed
+Every completed match SHALL record, for each side:
+- the plan it started with;
+- each change to its plan, with the minute and the moment that prompted it;
+- the minute of its own first change of formation;
+- its half-time talk.
+
+#### Scenario: A managed match is recorded
+- **WHEN** a side changes formation in the 58th minute after conceding, and its opponent never changes
+- **THEN** the result records the change for that side alone, with the 58th minute and the goal as its moment, and records no change for the opponent
+
+#### Scenario: Each side's change minute is its own
+- **WHEN** both sides change formation, one in the 46th minute and one in the 71st
+- **THEN** each side's record carries its own minute
+
+### Requirement: A remote match is managed by the same coach
+Everything that decides how a side is managed SHALL reach a match played on a remote worker as it reaches a local one: the coach's temperament and preferred football, the side's familiarity with its formation, and each player's familiarity with the role and buy-in to the coach. The same fixture, squads and seed SHALL produce the same plans, the same plan changes and the same half-time talks whether played locally or remotely.
+
+#### Scenario: Local and remote agree
+- **WHEN** the same fixture, squads and seed are played once locally and once on a remote match worker
+- **THEN** both results record the same plans, plan changes and half-time talks for both sides
+
+#### Scenario: An old worker is not used
+- **WHEN** a remote worker speaks an earlier protocol that cannot carry the coach
+- **THEN** it is not given matches, and the matches are played elsewhere

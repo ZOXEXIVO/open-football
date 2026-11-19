@@ -222,16 +222,18 @@ fn chemistry_map_caches_pair_score_symmetric() {
 }
 
 #[test]
-fn time_wasting_kicks_in_when_leading_late_and_can_book() {
-    // No delay before 75'.
+fn time_wasting_follows_the_protecting_stance_and_can_book() {
+    // No delay while the side is not protecting anything.
     assert_eq!(
-        TimeWasting::delay_ms(1, 60, TimeWastingRestart::ThrowIn, 12.0),
+        TimeWasting::delay_ms(0.0, TimeWastingRestart::ThrowIn, 12.0),
         0
     );
-    // Substitution late while leading produces the longest delay.
-    let sub = TimeWasting::delay_ms(1, 88, TimeWastingRestart::Substitution, 12.0);
-    let throw = TimeWasting::delay_ms(1, 88, TimeWastingRestart::ThrowIn, 12.0);
+    // A substitution produces the longest delay, and more protecting
+    // drags longer.
+    let sub = TimeWasting::delay_ms(1.0, TimeWastingRestart::Substitution, 12.0);
+    let throw = TimeWasting::delay_ms(1.0, TimeWastingRestart::ThrowIn, 12.0);
     assert!(sub > throw);
+    assert!(TimeWasting::delay_ms(0.5, TimeWastingRestart::ThrowIn, 12.0) < throw);
     // Past 45s cumulative + strict referee → non-zero yellow chance.
     assert!(TimeWasting::yellow_prob(60_000, 0.9, 1) > 0.0);
 }

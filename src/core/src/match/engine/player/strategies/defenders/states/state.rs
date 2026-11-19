@@ -1,9 +1,11 @@
-use crate::r#match::defenders::states::common::DefensiveRecovery;
+use crate::r#match::common_states::ShapeTempo;
+use crate::r#match::defenders::states::common::{DefensiveRecovery, DefensiveSlot};
 use crate::r#match::defenders::states::{
     DefenderAttackingCornerState, DefenderClearingState, DefenderCoveringState,
-    DefenderCrossingState, DefenderGuardingState, DefenderHeadingState, DefenderHoldingLineState,
-    DefenderInterceptingState, DefenderMarkingState, DefenderOverlappingState,
-    DefenderPassingState, DefenderPressingState, DefenderPushingUpState, DefenderRestingState,
+    DefenderCrossingState, DefenderHeadingState, DefenderHoldingLineState,
+    DefenderInterceptingState, DefenderJockeyingState, DefenderMarkingState,
+    DefenderOverlappingState,
+    DefenderPassingState, DefenderPressingState, DefenderPushingUpState,
     DefenderReturningState, DefenderRunningState, DefenderShootingState, DefenderStandingState,
     DefenderTacklingState, DefenderTakeBallState, DefenderTrackingBackState, DefenderWalkingState,
 };
@@ -14,31 +16,30 @@ use std::fmt::{Display, Formatter};
 
 // Explicit discriminants pin `compact_id` (see `forwarders::states::state`
 // for the full rationale). New variants take the next number and append
-// to `ALL`.
+// to `ALL`; 3 (`Resting`) and 18 (`Guarding`) are retired and never reused.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DefenderState {
-    Standing = 0,         // Standing
-    Covering = 1,         // Covering the ball
-    PushingUp = 2,        // Pushing the ball up
-    Resting = 3,          // Resting after an attack
+    Standing = 0,         // Standing in his place in the block
+    Covering = 1,         // Covering the team-mate who is engaging the carrier
+    PushingUp = 2,        // Squeezing up behind the ball while his side has it
     Passing = 4,          // Passing the ball
-    Running = 5,          // Running in the direction of the ball
-    Intercepting = 6,     // Intercepting a pass
+    Running = 5,          // On the ball, or between jobs off it
+    Intercepting = 6,     // Stepping in to cut out a ball in flight
     Marking = 7,          // Marking an attacker
     Clearing = 8,         // Clearing the ball from the danger zone
-    Heading = 9,          // Heading the ball, often during corners or crosses
-    Tackling = 10,        // Tackling the ball
-    Pressing = 11,        // Pressing the opponent
-    TrackingBack = 12,    // Tracking back to defense after an attack
-    HoldingLine = 13,     // Holding the defensive line
-    Returning = 14,       // Returning the ball,
-    Walking = 15,         // Walking around,
-    TakeBall = 16,        // Take the ball,
-    Shooting = 17,        // Shoting the ball,
-    Guarding = 18, // Guarding an attacker — denying space and preventing them from getting open
+    Heading = 9,          // Going up for a header
+    Tackling = 10,        // Containing the carrier and challenging him
+    Pressing = 11,        // Closing down the carrier
+    TrackingBack = 12,    // Recovery run back to his place in the shape
+    HoldingLine = 13,     // Holding his place in the line
+    Returning = 14,       // Getting back into shape
+    Walking = 15,         // Walking in his place while play is away
+    TakeBall = 16,        // Collecting a loose ball, or a restart he takes
+    Shooting = 17,        // Shooting
     AttackingCorner = 19, // Pushed up to attack an attacking corner (run into the box, head on goal)
     Crossing = 20,        // Overlapping fullback delivering from a wide advanced position
     Overlapping = 21,     // The full-back run beyond the width holder — see `overlapping`
+    Jockeying = 22,       // Containing the carrier, goal-side, choosing the moment
 }
 
 impl DefenderState {
@@ -70,11 +71,10 @@ impl DefenderState {
 
     /// Every variant in declared order — single source of truth for the
     /// state universe (transition-graph audit + id-stability snapshot).
-    pub const ALL: [DefenderState; 22] = [
+    pub const ALL: [DefenderState; 21] = [
         DefenderState::Standing,
         DefenderState::Covering,
         DefenderState::PushingUp,
-        DefenderState::Resting,
         DefenderState::Passing,
         DefenderState::Running,
         DefenderState::Intercepting,
@@ -89,23 +89,38 @@ impl DefenderState {
         DefenderState::Walking,
         DefenderState::TakeBall,
         DefenderState::Shooting,
-        DefenderState::Guarding,
         DefenderState::AttackingCorner,
         DefenderState::Crossing,
         DefenderState::Overlapping,
+        DefenderState::Jockeying,
     ];
+
+    /// Length of any table indexed by `state as usize`: one past the last
+    /// discriminant, which retired ids keep above `ALL.len()`.
+    pub const SLOTS: usize = Self::ALL[Self::ALL.len() - 1] as usize + 1;
+
+    /// The states that hold the shape and steer at the slot, at the pace
+    /// the play asks for (`ShapeTempo`).
+    pub fn holds_the_shape(self) -> bool {
+        matches!(
+            self,
+            DefenderState::Walking
+                | DefenderState::HoldingLine
+                | DefenderState::PushingUp
+                | DefenderState::Returning
+                | DefenderState::TrackingBack
+        )
+    }
+
+    pub fn from_slot(slot: usize) -> Option<DefenderState> {
+        Self::ALL.into_iter().find(|s| *s as usize == slot)
+    }
 }
 
 pub struct DefenderStrategies {}
 
 impl DefenderStrategies {
     pub fn process(state: DefenderState, state_processor: StateProcessor) -> StateProcessingResult {
-        // let common_state = state_processor.process(DefenderCommonState::default());
-        //
-        // if common_state.state.is_some() {
-        //     return common_state;
-        // }
-
         // Read the situation before dispatching — `process` consumes the
         // processor. Every defender obeys the goal-side rule on top of
         // whatever his state wants, because five of the states run during
@@ -117,6 +132,13 @@ impl DefenderStrategies {
         } else {
             DefensiveRecovery::depth_override(&state_processor.ctx())
         };
+        // A man holding the shape moves at the pace the play asks of him
+        // (`ShapeTempo`): the state chooses where, the tempo how fast.
+        let tempo = (state.holds_the_shape() && ShapeTempo::applies(&state_processor.ctx())).then(|| {
+            let ctx = state_processor.ctx();
+            let slot = DefensiveSlot::point(&ctx);
+            (ShapeTempo::to(&ctx, slot), slot, ctx.player.position)
+        });
 
         let mut result = Self::dispatch(state, state_processor);
         // An imposed movement with its own effort floor (keeper release
@@ -125,7 +147,12 @@ impl DefenderStrategies {
         if result.effort_floor > 0.0 {
             return result;
         }
-        if let (Some((depth, weight)), Some(velocity)) = (depth_override, result.velocity) {
+        if let (Some((tempo, slot, position)), Some(velocity)) = (tempo, result.velocity) {
+            result.velocity = Some(tempo.steer(position, slot, velocity));
+            result.effort_floor = result.effort_floor.max(tempo.effort());
+        }
+        if let (Some((depth, weight, effort)), Some(velocity)) = (depth_override, result.velocity) {
+            result.effort_floor = result.effort_floor.max(effort * weight);
             // Blend rather than replace. The recovery depth is an order of
             // magnitude larger than a state's own velocity, so overwriting
             // x outright made the rule's on/off boundary a velocity
@@ -141,7 +168,6 @@ impl DefenderStrategies {
     fn dispatch(state: DefenderState, state_processor: StateProcessor) -> StateProcessingResult {
         match state {
             DefenderState::Standing => state_processor.process(DefenderStandingState::default()),
-            DefenderState::Resting => state_processor.process(DefenderRestingState::default()),
             DefenderState::Passing => state_processor.process(DefenderPassingState::default()),
             DefenderState::Intercepting => {
                 state_processor.process(DefenderInterceptingState::default())
@@ -164,7 +190,6 @@ impl DefenderStrategies {
             DefenderState::PushingUp => state_processor.process(DefenderPushingUpState::default()),
             DefenderState::TakeBall => state_processor.process(DefenderTakeBallState::default()),
             DefenderState::Shooting => state_processor.process(DefenderShootingState::default()),
-            DefenderState::Guarding => state_processor.process(DefenderGuardingState::default()),
             DefenderState::AttackingCorner => {
                 state_processor.process(DefenderAttackingCornerState::default())
             }
@@ -172,6 +197,7 @@ impl DefenderStrategies {
             DefenderState::Overlapping => {
                 state_processor.process(DefenderOverlappingState::default())
             }
+            DefenderState::Jockeying => state_processor.process(DefenderJockeyingState::default()),
         }
     }
 }
@@ -180,7 +206,6 @@ impl Display for DefenderState {
     fn fmt(&self, f: &mut Formatter) -> Result {
         match self {
             DefenderState::Standing => write!(f, "Standing"),
-            DefenderState::Resting => write!(f, "Resting"),
             DefenderState::Passing => write!(f, "Passing"),
             DefenderState::Intercepting => write!(f, "Intercepting"),
             DefenderState::Marking => write!(f, "Marking"),
@@ -197,10 +222,10 @@ impl Display for DefenderState {
             DefenderState::PushingUp => write!(f, "Pushing Up"),
             DefenderState::TakeBall => write!(f, "Take Ball"),
             DefenderState::Shooting => write!(f, "Shooting"),
-            DefenderState::Guarding => write!(f, "Guarding"),
             DefenderState::AttackingCorner => write!(f, "Attacking Corner"),
             DefenderState::Crossing => write!(f, "Crossing"),
             DefenderState::Overlapping => write!(f, "Overlapping"),
+            DefenderState::Jockeying => write!(f, "Jockeying"),
         }
     }
 }

@@ -5,41 +5,41 @@
 {% block content %}
 <div class="fm-page sc-page">
 
-    <nav class="sc-subtabs" role="tablist" data-sc-tabs>
-        <a class="sc-subtab active" data-sc-target="overview" href="#sc-overview" role="tab">
-            <i class="fa fa-chart-pie sc-subtab-icon"></i>
+    <nav class="fm-subtabs" role="tablist" data-sc-tabs>
+        <a class="fm-subtab active" data-sc-target="overview" href="#sc-overview" role="tab">
+            <i class="fa fa-chart-pie fm-subtab-icon"></i>
             <span>{{ i18n.t("sc_tab_overview") }}</span>
-            <span class="sc-subtab-count">{{ scout_workload.len() }}</span>
+            <span class="fm-subtab-count">{{ scout_workload.len() }}</span>
         </a>
-        <a class="sc-subtab" data-sc-target="monitoring" href="#sc-monitoring" role="tab">
-            <i class="fa fa-binoculars sc-subtab-icon"></i>
+        <a class="fm-subtab" data-sc-target="monitoring" href="#sc-monitoring" role="tab">
+            <i class="fa fa-binoculars fm-subtab-icon"></i>
             <span>{{ i18n.t("sc_tab_monitoring") }}</span>
-            <span class="sc-subtab-count">{{ active_monitoring.len() }}</span>
+            <span class="fm-subtab-count">{{ active_monitoring.len() }}</span>
         </a>
-        <a class="sc-subtab" data-sc-target="reports" href="#sc-reports" role="tab">
-            <i class="fa fa-file-alt sc-subtab-icon"></i>
+        <a class="fm-subtab" data-sc-target="reports" href="#sc-reports" role="tab">
+            <i class="fa fa-file-alt fm-subtab-icon"></i>
             <span>{{ i18n.t("sc_tab_reports") }}</span>
-            <span class="sc-subtab-count">{{ scouting_reports.len() }}</span>
+            <span class="fm-subtab-count">{{ scouting_reports.len() }}</span>
         </a>
-        <a class="sc-subtab" data-sc-target="assignments" href="#sc-assignments" role="tab">
-            <i class="fa fa-clipboard-list sc-subtab-icon"></i>
+        <a class="fm-subtab" data-sc-target="assignments" href="#sc-assignments" role="tab">
+            <i class="fa fa-clipboard-list fm-subtab-icon"></i>
             <span>{{ i18n.t("sc_tab_assignments") }}</span>
-            <span class="sc-subtab-count">{{ scouting_assignments.len() }}</span>
+            <span class="fm-subtab-count">{{ scouting_assignments.len() }}</span>
         </a>
-        <a class="sc-subtab" data-sc-target="meetings" href="#sc-meetings" role="tab">
-            <i class="fa fa-users sc-subtab-icon"></i>
+        <a class="fm-subtab" data-sc-target="meetings" href="#sc-meetings" role="tab">
+            <i class="fa fa-users fm-subtab-icon"></i>
             <span>{{ i18n.t("sc_tab_meetings") }}</span>
-            <span class="sc-subtab-count">{{ recruitment_meetings.len() }}</span>
+            <span class="fm-subtab-count">{{ recruitment_meetings.len() }}</span>
         </a>
-        <a class="sc-subtab" data-sc-target="database" href="#sc-database" role="tab">
-            <i class="fa fa-database sc-subtab-icon"></i>
+        <a class="fm-subtab" data-sc-target="database" href="#sc-database" role="tab">
+            <i class="fa fa-database fm-subtab-icon"></i>
             <span>{{ i18n.t("sc_tab_database") }}</span>
-            <span class="sc-subtab-count">{{ known_players.len() }}</span>
+            <span class="fm-subtab-count">{{ known_players.len() }}</span>
         </a>
     </nav>
 
     {# ── Tab: Overview ─────────────────────────────────────────── #}
-    <div class="sc-tab-panel active" data-sc-panel="overview" role="tabpanel">
+    <div class="fm-subtab-panel active" data-sc-panel="overview" role="tabpanel">
         <section class="fm-panel">
             <div class="fm-panel-head">
                 <h3>{{ i18n.t("scouting_department") }}</h3>
@@ -121,7 +121,7 @@
     </div>
 
     {# ── Tab: Monitoring ───────────────────────────────────────── #}
-    <div class="sc-tab-panel" data-sc-panel="monitoring" role="tabpanel">
+    <div class="fm-subtab-panel" data-sc-panel="monitoring" role="tabpanel">
         <section class="fm-panel">
             <div class="fm-panel-head">
                 <h3>{{ i18n.t("active_monitoring") }}</h3>
@@ -203,7 +203,7 @@
     </div>
 
     {# ── Tab: Reports ──────────────────────────────────────────── #}
-    <div class="sc-tab-panel" data-sc-panel="reports" role="tabpanel">
+    <div class="fm-subtab-panel" data-sc-panel="reports" role="tabpanel">
         <section class="fm-panel">
             <div class="fm-panel-head">
                 <h3>{{ i18n.t("scouting_reports") }}</h3>
@@ -271,7 +271,7 @@
     </div>
 
     {# ── Tab: Assignments ──────────────────────────────────────── #}
-    <div class="sc-tab-panel" data-sc-panel="assignments" role="tabpanel">
+    <div class="fm-subtab-panel" data-sc-panel="assignments" role="tabpanel">
         <div class="fm-transfers-row">
             <section class="fm-panel">
                 <div class="fm-panel-head">
@@ -365,7 +365,7 @@
     </div>
 
     {# ── Tab: Meetings ─────────────────────────────────────────── #}
-    <div class="sc-tab-panel" data-sc-panel="meetings" role="tabpanel">
+    <div class="fm-subtab-panel" data-sc-panel="meetings" role="tabpanel">
         <section class="fm-panel">
             <div class="fm-panel-head">
                 <h3>{{ i18n.t("recruitment_meetings") }}</h3>
@@ -477,7 +477,7 @@
     </div>
 
     {# ── Tab: Database ─────────────────────────────────────────── #}
-    <div class="sc-tab-panel" data-sc-panel="database" role="tabpanel">
+    <div class="fm-subtab-panel" data-sc-panel="database" role="tabpanel">
         <div class="fm-transfers-row">
             <section class="fm-panel">
                 <div class="fm-panel-head">

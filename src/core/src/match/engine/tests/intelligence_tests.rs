@@ -11,9 +11,7 @@
 
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::traits::PlayerTrait;
-use crate::r#match::engine::coach::{
-    CoachInstruction, MatchCoach, RollingTeamMetrics, TacticalNeed,
-};
+use crate::r#match::engine::coach::TacticalNeed;
 use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::engine::psychology::PsychState;
 use crate::r#match::engine::sub_scoring::SubScoring;
@@ -266,37 +264,6 @@ fn playmaker_attempts_more_progressive_passes_via_bias() {
     let plain_pb = passing_bias(&plain);
     assert!(pb.through_ball_bonus > plain_pb.through_ball_bonus);
     assert!(pb.ask_for_ball_bonus > plain_pb.ask_for_ball_bonus);
-}
-
-#[test]
-fn coach_does_not_go_all_out_when_drawing_but_dominating_xg() {
-    let mut coach = MatchCoach::new();
-    let metrics = RollingTeamMetrics {
-        xg_for_last_15: 1.4,
-        xg_against_last_15: 0.3,
-        ..Default::default()
-    };
-    // Drawing 0–0 in the 80th minute. Without metrics, evaluate would
-    // pick AllOutAttack. With metrics showing xG dominance, we expect
-    // PushForward at most.
-    coach.evaluate_with_metrics(0, 0, 0.83, 0.8, 5000, metrics);
-    assert!(matches!(
-        coach.instruction,
-        CoachInstruction::PushForward | CoachInstruction::Normal
-    ));
-}
-
-#[test]
-fn coach_lowers_press_when_press_failing_and_team_tired() {
-    let mut coach = MatchCoach::new();
-    coach.instruction = CoachInstruction::AllOutAttack;
-    let metrics = RollingTeamMetrics {
-        press_success_rate_last_10: 0.25,
-        ..Default::default()
-    };
-    // condition < 0.55 + low press success → step down to Normal.
-    coach.evaluate_with_metrics(0, 0, 0.5, 0.45, 5000, metrics);
-    assert_ne!(coach.instruction, CoachInstruction::AllOutAttack);
 }
 
 #[test]

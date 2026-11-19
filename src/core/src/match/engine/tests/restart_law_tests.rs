@@ -5,14 +5,15 @@
 
 use super::goal_celebration_tests::squad;
 use crate::club::player::traits::PlayerTrait;
+use crate::r#match::common_states::ChallengeKind;
 use crate::r#match::engine::ball::ball::{
     AwaitedRestart, Ball, PassChainEntry, PassOriginRestart, RestartQuiet,
 };
-use crate::r#match::engine::coach::CoachInstruction;
+use crate::r#match::engine::coach::{Outlook, Situation, Stance, Temperament};
 use crate::r#match::engine::flow::context::PendingAdvantage;
-use crate::r#match::engine::officiating::management::{Dissent, TimeWastingRestart};
+use crate::r#match::engine::officiating::management::{Dissent, TimeWasting, TimeWastingRestart};
 use crate::r#match::engine::player::events::players::{
-    FoulResolver, FoulSeverity, FoulSource, PlayerEvent,
+    FoulCommitted, FoulResolver, FoulSeverity, FoulSource, PlayerEvent,
 };
 use crate::r#match::engine::result::Score;
 use crate::r#match::engine::result::{DeadTime, OffenceTally, PlayingTime};
@@ -174,11 +175,22 @@ fn a_second_foul_inside_the_window_still_books_the_first() {
     context.rng = MatchRng::from_seed(0x2AD_F0);
 
     let mut events = EventCollection::with_capacity(4);
-    events.add_player_event(PlayerEvent::CommitFoul(
-        second,
-        FoulSeverity::Violent,
-        FoulSource::Tackle,
-    ));
+    let fouled = field
+        .players
+        .iter()
+        .find(|p| {
+            p.side == Some(PlayerSide::Left)
+                && !p.tactical_position.current_position.is_goalkeeper()
+        })
+        .map(|p| p.id)
+        .unwrap();
+    events.add_player_event(PlayerEvent::CommitFoul(FoulCommitted {
+        fouler: second,
+        fouled,
+        severity: FoulSeverity::Violent,
+        source: FoulSource::Tackle,
+        challenge: Some(ChallengeKind::Block),
+    }));
     let mut match_data = ResultMatchPositionData::empty();
     EventDispatcher::dispatch(&mut events, &mut field, &mut context, &mut match_data, true);
 
@@ -216,11 +228,13 @@ fn professional_foul_on_a_breakaway(seed: u64) -> OffenceTally {
     field.ball.current_owner = Some(carrier);
 
     let mut events = EventCollection::with_capacity(4);
-    events.add_player_event(PlayerEvent::CommitFoul(
+    events.add_player_event(PlayerEvent::CommitFoul(FoulCommitted {
         fouler,
-        FoulSeverity::Normal,
-        FoulSource::ProfessionalFoul,
-    ));
+        fouled: carrier,
+        severity: FoulSeverity::Normal,
+        source: FoulSource::ProfessionalFoul,
+        challenge: None,
+    }));
     let mut match_data = ResultMatchPositionData::empty();
     EventDispatcher::dispatch(&mut events, &mut field, &mut context, &mut match_data, true);
     context.tally.offences[FoulSource::ProfessionalFoul.index()]
@@ -238,11 +252,12 @@ fn a_professional_foul_is_seen_and_always_carded() {
 
 // ── Time-wasting ──────────────────────────────────────────────────────
 
-/// The home side one up in the 85th minute, told to waste time.
-fn home_ahead_late(context: &mut MatchContext, instruction: CoachInstruction) {
+/// The home side one up in the 85th minute, its stance turned this far
+/// toward protecting the lead.
+fn home_ahead_late(context: &mut MatchContext, protecting: f32) {
     context.score.increment_home_goals();
     context.total_match_time = 85 * 60_000;
-    context.coach_home.instruction = instruction;
+    context.tactical_home.stance = -protecting;
     context.rng = MatchRng::from_seed(0x7_1AE);
 }
 
@@ -280,7 +295,7 @@ fn home_throw_in_ready(field: &mut MatchField, context: &MatchContext) -> u32 {
 }
 
 #[test]
-fn only_a_side_ahead_late_and_told_to_slows_its_restarts() {
+fn only_a_side_protecting_slows_its_restarts() {
     let (field, mut context) = kickoff();
     let home = field.home_team_id;
     assert_eq!(
@@ -288,15 +303,15 @@ fn only_a_side_ahead_late_and_told_to_slows_its_restarts() {
         0
     );
 
-    home_ahead_late(&mut context, CoachInstruction::Normal);
+    home_ahead_late(&mut context, 0.0);
     assert_eq!(
         context.time_wasting_delay_ms(home, 10.0, TimeWastingRestart::ThrowIn),
         0
     );
 
-    context.coach_home.instruction = CoachInstruction::WasteTime;
+    context.tactical_home.stance = -1.0;
     let full = context.time_wasting_delay_ms(home, 10.0, TimeWastingRestart::ThrowIn);
-    context.coach_home.instruction = CoachInstruction::SlowDown;
+    context.tactical_home.stance = -0.5;
     let half = context.time_wasting_delay_ms(home, 10.0, TimeWastingRestart::ThrowIn);
     assert!(
         full > 0 && half > 0 && half < full,
@@ -311,9 +326,33 @@ fn only_a_side_ahead_late_and_told_to_slows_its_restarts() {
 }
 
 #[test]
+fn restarts_slow_as_the_whistle_nears_for_a_side_protecting_a_lead() {
+    let outlook = Outlook::default();
+    let level_at_kickoff = Stance::reading(&outlook, &Temperament::neutral(), &Situation::default());
+    let delay = |minute: f32| {
+        let reading = Stance::reading(
+            &outlook,
+            &Temperament::neutral(),
+            &Situation {
+                difference: 1,
+                minutes_left: 90.0 - minute,
+                ..Situation::default()
+            },
+        );
+        let lever = (reading - level_at_kickoff) * MatchContext::SCORE_REACTION_GAIN;
+        TimeWasting::delay_ms((-lever).max(0.0), TimeWastingRestart::ThrowIn, 10.0)
+    };
+    let (seventy, eighty, eighty_eight) = (delay(70.0), delay(80.0), delay(88.0));
+    assert!(
+        seventy < eighty && eighty < eighty_eight,
+        "{seventy} {eighty} {eighty_eight}"
+    );
+}
+
+#[test]
 fn a_wasted_throw_in_is_held_as_delay_and_given_back() {
     let (mut field, mut context) = kickoff();
-    home_ahead_late(&mut context, CoachInstruction::WasteTime);
+    home_ahead_late(&mut context, 1.0);
     home_throw_in_ready(&mut field, &context);
 
     let players = field.players.clone();

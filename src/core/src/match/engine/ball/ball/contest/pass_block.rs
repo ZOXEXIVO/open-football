@@ -1,83 +1,47 @@
 //! **The foot in** — a defender's leg, shin or body in the path of a
-//! PASS, as opposed to a shot.
+//! pass, as opposed to a shot.
 //!
-//! # The hole this fills
+//! # Two kinds of block
 //!
-//! Reported from the viewer: *"the attacking team calmly passes through
-//! the defenders in the penalty area, without them even attempting to
-//! intercept the ball or put a foot in to block it."*
+//! * **The charge-down.** A ball struck into a man before he can react
+//!   is stopped by his body or it is not. It is greatest square on the
+//!   ball's line and falls linearly to a toe's at 1 m off it, and a ball
+//!   above his standing reach goes over him. It is the same anywhere on
+//!   the pitch. Its size is held where blocked passes stay real, which is
+//!   below the body's own while passers strike the ball past a man a
+//!   stride away.
+//! * **The lunge.** A man with time to read the pass throws a leg at it,
+//!   and only in front of his own goal: [`PassBlock::danger`] ramps it from
+//!   nothing upfield to full on the goal line.
 //!
-//! That is a literally accurate description of the model. Two contests
-//! can touch a ball in flight and neither of them is this one:
+//! Each man is rolled once per flight. Skill enters as a duel
+//! ([`InterceptionDuel`]) against the passer's delivery, so at parity the
+//! rate is the same at every level.
 //!
-//! * `Ball::try_block_shot` opens with
-//!   `let shot_target = self.cached_shot_target else { return }`. It sees
-//!   shots and nothing else.
-//! * `Ball::try_intercept` is the only model that
-//!   ever looks at a pass, and it scores nobody outside
-//!   `INTERCEPT_RADIUS` — **5.5u, 69 cm**. That is a standing radius: the
-//!   ball has to come within two thirds of a metre of where the defender
-//!   is already stood. It also grants CLEAN POSSESSION when it fires,
-//!   which is not what getting a toe to a ball does.
+//! # A deflection, not a takeaway
 //!
-//! Measured with the BOX-PASS census (`mid_run_diag::BOXPASS_SAMPLES`),
-//! 200 fixtures at L14, over 1.7 M ticks of a pass in flight inside the
-//! defending side's own penalty area: **4.4 defenders are standing in
-//! that area**, the nearest is **3.73 m from the ball and 1.85 m off its
-//! line**, and only **4.7% of those ticks** ever put anybody inside the
-//! interception radius. The bodies are there; nothing lets them do
-//! anything. The stat sheet says the same thing from the other side —
-//! blocks 0.39 per defender against a real ~0.9, clearances 1.67 against
-//! ~3.5, tackles 9.8 a team against ~18, while interceptions run 26.6
-//! against ~10. The engine wins the ball by standing in the right place
-//! and almost never by doing something.
+//! A blocked pass is a loose ball: the defender kills its pace and its
+//! direction and everybody scrambles. Modelling it as possession would
+//! move the interception rate, which is load-bearing.
 //!
-//! # What this is, and what it deliberately is not
+//! # Every pass decision reads it
 //!
-//! It is a **deflection**, not a takeaway. A blocked pass in football is
-//! a loose ball: the defender kills its pace and its direction and
-//! everybody scrambles. Modelling it as possession would be the same
-//! error `try_intercept` makes, and it would move the interception rate,
-//! which is load-bearing (see [`InterceptionDuel`]). So this channel adds
-//! **turnovers of the kind that break up a move**, not turnovers of the
-//! kind that hand the ball over — the one the report is about.
-//!
-//! It is also **priced by danger**, not applied flat across the pitch. A
-//! defender does not throw a leg at a square ball on the halfway line;
-//! he does it in front of his own goal, and the closer the ball is to it
-//! the more of himself he will put in the way. [`PassBlock::danger`] is that
-//! ramp, and it is what keeps a model of last-ditch defending out of the
-//! calibration of ordinary midfield passing.
-//!
-//! # Measured
-//!
-//! Matched 400-vs-400 at level 14 in the same binary, against
-//! `OF_BOX_DEFENCE_OFF` (which also reverts the keeper's calls and the
-//! box restraint — the three landed together and are judged together):
-//!
-//! | | off | on | real |
-//! |---|---|---|---|
-//! | goals/match | 3.15 | **3.03** | ~2.5 |
-//! | shots a team | 15.0 | **14.5** | ~13 |
-//! | pass accuracy | 88.5% | **87.6%** | ~85% |
-//! | penalties/match | 0.110 | **0.157** | 0.25-0.30 |
-//! | DEF blocks | 0.40 | **1.49** | ~1.4 (shots+passes) |
-//! | MID blocks | 0.03 | **0.98** | ~1.3 |
-//! | fouls a team | 12.2 | 12.3 | ~12 |
-//! | yellows/match | 3.45 | 3.43 | 3.5-4.5 |
-//!
-//! 18.2 passes a match are blocked, **5.7 of them inside the penalty
-//! area** — the part a viewer can see. Every calibration axis moved
-//! toward its reference or did not move; the ones that did not move are
-//! the discipline numbers, which is the pairing this had to preserve.
+//! [`PassBlock::priced`] gives the lane price every pass decision reads
+//! (`PassEvaluator::lane_risk`) the same chance, so a passer sees a man on
+//! his line before he strikes it, and a choice between lanes takes the
+//! cleaner.
 
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::ball::ball::contest::interception::InterceptionDuel;
 #[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::diagnostics::delivery_diag::TouchKind;
+#[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::block_diag::{BlockDiag, PassBlockCensus};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::strike_diag::GrantPath;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::TakeRule;
 use crate::r#match::engine::ball::ball::flight::motion::Carrier;
 use crate::r#match::engine::ball::ball::{
     AerialReach, Ball, BlockContact, CONTROL_DISTANCE, FlightProtection, GRAVITY_PER_TICK,
@@ -265,16 +229,12 @@ impl PassBlock {
     /// Scale on the charge-down, before the duel. `OF_CHARGE_GAIN`
     /// overrides for titration.
     ///
-    /// **Measured, not chosen** — `stats 300 14 14` per arm, 2026-10-10,
-    /// blocked passes / pass accuracy (HEAD 17.6 / 85.7%):
-    /// 0.60 → 55.5 / 83.6%, 0.30 → 38.3 / 84.6%, 0.15 → 24.4 / 85.3%,
-    /// 0.08 → 17.7 / 85.7%. The block price is calibrated at every gain:
-    /// the surplus comes from pass pickers that call any lane under
-    /// `PlayerOps::clear_lane` clear and do not prefer the cleaner of
-    /// two clear lanes. Tightening that threshold instead sent passes
-    /// over the side's own byline when nothing was clear (4.8 "ordinary
-    /// play" corners a match at 0.05), so the gain carries the level
-    /// until the pickers rank lanes by risk.
+    /// **The highest gain that keeps blocked passes real**, not the body's
+    /// own: passers strike the ball past a man a stride away even when
+    /// they rank lanes by risk, so every step toward a body-sized
+    /// charge-down blocks those passes instead. `stats 300 14 14`, blocked
+    /// passes a team / pass completion: 0.11 → 9.5 / 86.3%, 0.25 → 15.9 /
+    /// 85.7%, 0.5 → 25.4 / 84.7%, 1.0 → 32.6 / 84.4% (real 9–11).
     fn charge_gain() -> f32 {
         use std::sync::OnceLock;
         static V: OnceLock<f32> = OnceLock::new();
@@ -560,7 +520,7 @@ impl Ball {
         let mut best_chance = 0.0f32;
 
         for (slot, player) in players.iter().enumerate() {
-            if player.team_id == passer.team_id {
+            if player.team_id == passer.team_id || !player.can_play_ball() {
                 continue;
             }
             // One flight, one roll per man — see
@@ -695,6 +655,10 @@ impl Ball {
                 .map(|origin| (blocker.position - origin).xy().norm()),
             reaction >= 0.5,
         );
+        #[cfg(feature = "match-logs")]
+        {
+            self.touch_kind_hint = Some(TouchKind::Block);
+        }
         self.record_touch(blocker_id, blocker_team, tick, controlled);
         #[cfg(feature = "match-logs")]
         if controlled {
@@ -709,7 +673,13 @@ impl Ball {
 
         if controlled {
             #[cfg(feature = "match-logs")]
-            self.open_arrival(GrantPath::CONTEST, blocker.position);
+            {
+                self.open_arrival(GrantPath::CONTEST, blocker.position);
+                context
+                    .defender_census
+                    .borrow_mut()
+                    .tag_take(TakeRule::PassBlock, blocker_id, tick);
+            }
             self.current_owner = Some(blocker_id);
             self.touch(blocker_id, Carrier::of(blocker));
             self.flags.in_flight_state = 0;
@@ -890,6 +860,13 @@ mod pass_block_tests {
         let off_the_line = PassBlock::chance(&at(6.0, 16.0, 10.0, 1.0, 0.0), 0.6, 0.6);
         assert!(square > 0.0, "a ball struck into a body is not a ball through it");
         assert!(square > off_the_line, "{square} square on vs {off_the_line} a toe away");
+    }
+
+    /// A metre off its line the charge-down is a toe's.
+    #[test]
+    fn a_metre_off_the_line_the_charge_down_is_a_toe() {
+        let toe = PassBlock::chance(&at(PassBlock::BODY - 0.1, 12.0, 0.0, 0.5, 0.0), 0.6, 0.6);
+        assert!(toe < 0.01, "{toe}");
     }
 
     #[test]

@@ -9,8 +9,10 @@ use crate::PlayerPositionType;
 use crate::r#match::engine::flow::arena::formation_variant::{
     FormationLine, FormationVariant, VacatedSlot,
 };
-use crate::r#match::engine::teamplay::coach::instruction::CoachInstruction;
-use crate::r#match::{MatchCoach, MatchField, PlayerSide, RollingTeamMetrics};
+use crate::r#match::{
+    CoachCard, MatchCoach, MatchField, Outlook, PlayerSide, ReadCounters, Situation,
+    SquadFit,
+};
 
 fn holder(field: &MatchField, team_id: u32, position: PlayerPositionType) -> Option<u32> {
     field
@@ -118,30 +120,62 @@ fn the_ten_man_shape_survives_the_change_of_ends() {
 
 #[test]
 fn a_coach_a_man_down_protects_from_the_first_minute() {
-    let evaluate = |score_diff: i8, deficit: i8, progress: f32| {
+    let coach_at = |difference: i32, minute: f32| {
         let mut coach = MatchCoach::new();
-        coach.evaluate_with_metrics(
-            score_diff,
-            deficit,
-            progress,
-            0.9,
-            1_000,
-            RollingTeamMetrics::default(),
+        coach.on_kickoff(
+            CoachCard::neutral(),
+            Outlook::default(),
+            &SquadFit::default(),
+            None,
         );
-        coach.instruction
+        coach.observe(
+            Situation {
+                difference,
+                minutes_left: 90.0 - minute,
+                ..Situation::default()
+            },
+            minute,
+            ReadCounters::default(),
+        );
+        coach
     };
 
-    // Half an hour in, leading: eleven men play on, ten protect it.
-    assert_eq!(evaluate(1, 0, 0.33), CoachInstruction::Normal);
-    assert_eq!(evaluate(1, 1, 0.33), CoachInstruction::SlowDown);
-    // Two down, they sit in.
-    assert_eq!(evaluate(1, 2, 0.33), CoachInstruction::ParkTheBus);
-    // Chasing late with ten, they push, but cannot throw everyone forward.
-    assert_eq!(evaluate(-1, 0, 0.95), CoachInstruction::AllOutAttack);
-    assert_eq!(evaluate(-1, 1, 0.95), CoachInstruction::PushForward);
+    // Half an hour in, leading: from the sending-off on, ten protect it
+    // harder than eleven do.
+    let mut eleven = coach_at(1, 30.0);
+    let mut ten = coach_at(1, 30.0);
+    ten.on_sending_off(true, 30.0);
+    let a_minute_on = |coach: &mut MatchCoach, own_men: u8| {
+        coach.observe(
+            Situation {
+                difference: 1,
+                minutes_left: 59.0,
+                own_men,
+                ..Situation::default()
+            },
+            31.0,
+            ReadCounters::default(),
+        );
+        coach.stance()
+    };
+    let (with_eleven, with_ten) = (a_minute_on(&mut eleven, 11), a_minute_on(&mut ten, 10));
+    assert!(with_ten < with_eleven, "{with_ten} {with_eleven}");
 
-    let mut chasing = MatchCoach::new();
-    chasing.instruction = CoachInstruction::AllOutAttack;
+    // Chasing late with ten, he still commits, and gives up a midfielder
+    // rather than a forward.
+    let mut chasing = coach_at(-1, 85.0);
+    chasing.on_sending_off(true, 85.0);
+    chasing.observe(
+        Situation {
+            difference: -1,
+            minutes_left: 4.0,
+            own_men: 10,
+            ..Situation::default()
+        },
+        86.0,
+        ReadCounters::default(),
+    );
+    assert!(chasing.stance() > 0.0);
     assert_eq!(chasing.spare_line(), FormationLine::Midfield);
-    assert_eq!(MatchCoach::new().spare_line(), FormationLine::Attack);
+    assert_eq!(coach_at(1, 85.0).spare_line(), FormationLine::Attack);
 }

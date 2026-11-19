@@ -1,6 +1,7 @@
 use crate::Tactics;
 use crate::club::staff::CoachMatchSnapshot;
 use crate::r#match::ball::Ball;
+use crate::r#match::common_states::CounterPress;
 use crate::r#match::engine::flow::arena::formation_variant::{
     FormationLine, FormationVariant, VacatedSlot,
 };
@@ -296,6 +297,26 @@ impl MatchField {
         FormationVariant::respace(self);
     }
 
+    /// `team_id` switches to `tactics`: its men take up the new roles, and a
+    /// side a man short leaves empty the ones from the line its coach can
+    /// `spare`.
+    pub fn change_formation(&mut self, team_id: u32, tactics: Tactics, spare: FormationLine) {
+        let roles = *tactics.positions();
+        if self.side_of(team_id) == PlayerSide::Left {
+            self.left_team_tactics = tactics;
+        } else {
+            self.right_team_tactics = tactics;
+        }
+        let empty = FormationVariant::lay_out(self, team_id, &roles, spare);
+        self.vacated.retain(|v| v.team_id != team_id);
+        self.vacated.extend(
+            empty
+                .into_iter()
+                .map(|position| VacatedSlot { team_id, position }),
+        );
+        FormationVariant::respace(self);
+    }
+
     /// The end a team is attacking from in the current period.
     pub fn side_of(&self, team_id: u32) -> PlayerSide {
         if self
@@ -355,6 +376,28 @@ impl MatchField {
 
     pub fn get_player(&self, id: u32) -> Option<&MatchPlayer> {
         self.players.iter().find(|p| p.id == id)
+    }
+
+    /// The ball has been taken off `player_id`: he, and each team-mate near
+    /// enough to join him, decides whether to go straight back at it.
+    pub fn on_dispossessed(&mut self, player_id: u32, tick: u64) {
+        let Some((team_id, at)) = self
+            .get_player(player_id)
+            .map(|loser| (loser.team_id, loser.position))
+        else {
+            return;
+        };
+        for p in self
+            .players
+            .iter_mut()
+            .filter(|p| p.team_id == team_id && !p.off_pitch)
+        {
+            if p.id == player_id {
+                p.on_dispossessed(tick);
+            } else if (p.position - at).norm() <= CounterPress::RANGE {
+                p.on_side_dispossessed(tick);
+            }
+        }
     }
 
     pub fn get_player_mut(&mut self, id: u32) -> Option<&mut MatchPlayer> {

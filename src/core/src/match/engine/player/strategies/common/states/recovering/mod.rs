@@ -17,16 +17,20 @@ pub enum ChallengeKind {
     Block,
     /// A stretch or a slide, with his weight gone.
     Slide,
+    /// A keeper's dive, smother or block, ending on the ground.
+    Dive,
 }
 
 impl ChallengeKind {
     /// AI ticks to get back up after missing with this challenge, for a man
     /// of no agility or balance, and how many of them the best in the game
-    /// save. A block costs 0.3-0.5 s and a slide 0.8-1.2 s.
+    /// save. A block costs 0.3-0.5 s, a slide 0.8-1.2 s and a keeper's dive
+    /// 0.6-1.1 s.
     fn recovery_range(self) -> (f32, f32) {
         match self {
             ChallengeKind::Block => (25.0, 10.0),
             ChallengeKind::Slide => (60.0, 20.0),
+            ChallengeKind::Dive => (55.0, 25.0),
         }
     }
 

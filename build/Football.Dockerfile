@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Define Rust version
-ARG RUST_VERSION=1.99
+ARG RUST_VERSION=1.100
 
 # ── Source ────────────────────────────────────────────────────────────
 #

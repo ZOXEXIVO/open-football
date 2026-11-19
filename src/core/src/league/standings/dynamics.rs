@@ -1,12 +1,11 @@
 use crate::league::LeagueTable;
-use crate::r#match::{MatchResult, MatchResultOutcome, Score};
+use crate::r#match::{MatchResultOutcome, Score};
 use chrono::Weekday;
 use log::debug;
 use rustc_hash::FxHashMap;
 
 #[derive(Debug, Clone)]
 pub struct LeagueDynamics {
-    pub team_momentum: FxHashMap<u32, f32>,
     pub team_streaks: FxHashMap<u32, TeamStreak>,
     pub title_race: TitleRace,
     pub relegation_battle: RelegationBattle,
@@ -24,7 +23,6 @@ impl Default for LeagueDynamics {
 impl LeagueDynamics {
     pub fn new() -> Self {
         LeagueDynamics {
-            team_momentum: FxHashMap::default(),
             team_streaks: FxHashMap::default(),
             title_race: TitleRace::default(),
             relegation_battle: RelegationBattle::default(),
@@ -32,42 +30,6 @@ impl LeagueDynamics {
             rivalries: Vec::new(),
             attendance_multiplier: 1.0,
         }
-    }
-
-    pub fn get_team_momentum(&self, team_id: u32) -> f32 {
-        *self.team_momentum.get(&team_id).unwrap_or(&0.5)
-    }
-
-    pub fn update_team_momentum_after_match(
-        &mut self,
-        home_id: u32,
-        away_id: u32,
-        result: &MatchResult,
-    ) {
-        // Use true outcome (including shootouts) so knockout ties that end
-        // on penalties push momentum toward the actual winner, not a draw.
-        let outcome = result.score.outcome();
-
-        let home_val = *self.team_momentum.entry(home_id).or_insert(0.5);
-        let away_val = *self.team_momentum.entry(away_id).or_insert(0.5);
-
-        let (new_home, new_away) = match outcome {
-            MatchResultOutcome::HomeWin => (
-                (home_val * 0.8 + 0.3).min(1.0),
-                (away_val * 0.8 - 0.1).max(0.0),
-            ),
-            MatchResultOutcome::Draw => (
-                (home_val * 0.9 + 0.05).min(1.0),
-                (away_val * 0.9 + 0.05).min(1.0),
-            ),
-            MatchResultOutcome::AwayWin => (
-                (home_val * 0.8 - 0.1).max(0.0),
-                (away_val * 0.8 + 0.3).min(1.0),
-            ),
-        };
-
-        self.team_momentum.insert(home_id, new_home);
-        self.team_momentum.insert(away_id, new_away);
     }
 
     pub fn update_team_streaks(&mut self, home_id: u32, away_id: u32, score: &Score) {
@@ -189,7 +151,6 @@ impl LeagueDynamics {
     }
 
     pub fn reset_for_new_season(&mut self) {
-        self.team_momentum.clear();
         self.team_streaks.clear();
         self.title_race = TitleRace::default();
         self.relegation_battle = RelegationBattle::default();

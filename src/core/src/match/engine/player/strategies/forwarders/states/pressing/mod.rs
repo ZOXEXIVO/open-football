@@ -1,129 +1,90 @@
-use crate::r#match::forwarders::states::ForwardCreatingSpaceState;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{
-    ActivityIntensity, ForwardCondition, ForwardPress,
+    ActivityIntensity, ForwardCondition, ForwardRead, ReadLevel,
 };
-use crate::r#match::player::strategies::common::states::{ClosingPoint, TackleEngagement};
+use crate::r#match::player::strategies::common::states::{
+    ChallengeKind, ClosingPoint, RecoveryChallenge, TackleEngagement,
+};
 use crate::r#match::{
     ConditionContext, MatchContext, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
+/// **The run to the man on the ball.** Inside challenge range and goal-side
+/// of him he contains (`Jockeying`), whatever his tackle cooldown says. He
+/// presses while the licence is his; a presser the plan sends with a pass
+/// stays on it while the plan names him.
 #[derive(Default, Clone)]
 pub struct ForwardPressingState {}
 
 impl StateProcessingHandler for ForwardPressingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        if ctx.player.has_ball(ctx) {
+        if let Some(change) = ForwardRead::change_above(ctx, ReadLevel::Engage) {
+            return Some(change);
+        }
+        let Some(carrier) = ctx.players().opponents().with_ball().next() else {
+            if TackleEngagement::is_nominated_presser(ctx) && !ctx.team().is_control_ball() {
+                return None;
+            }
+            return Some(ForwardRead::change(ctx));
+        };
+        if !ForwardRead::is_man_for_carrier(ctx) {
+            return Some(ForwardRead::change(ctx));
+        }
+        if ForwardRead::duel_rung(ctx, &carrier) == ForwardState::Jockeying {
             return Some(StateChangeResult::with_forward_state(
-                ForwardState::Dribbling,
+                ForwardState::Jockeying,
             ));
         }
-
-        // Back off during foul protection — don't crowd the free kick
-        if ctx.ball().is_in_flight() && ctx.ball().is_owned() {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
-        }
-
-        // Opponent GK holds ball in hands — can't challenge, retreat
-        if ctx.ball().is_held_by_opponent_goalkeeper() {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
-        }
-
-        // Loose ball nearby — go claim it directly instead of pressing thin air
-        if !ctx.ball().is_owned()
-            && ctx.ball().distance() < 50.0
-            && ctx.ball().speed() < 3.0
-            && ctx.team().is_best_player_to_chase_ball()
+        // Gone past him: the stretch from behind is the challenge left.
+        let distance = carrier.distance(ctx);
+        let lead = RecoveryChallenge::lead(ctx, carrier.position);
+        if !MatchContext::forward_duel_off()
+            && RecoveryChallenge::is_available(ctx, distance, lead)
+            && RecoveryChallenge::is_eligible(ctx)
+            && ctx
+                .context
+                .rng
+                .bernoulli(RecoveryChallenge::commits_now(ctx, distance, lead))
         {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::TakeBall,
-            ));
+            return Some(
+                StateChangeResult::with_forward_state(ForwardState::Tackling)
+                    .with_staged_challenge(ChallengeKind::Slide),
+            );
         }
-
-        // Commit to a challenge only at genuine contact range, and only
-        // when this forward can actually make one. At the old flat 30u
-        // this fed `Tackling` continuously — including throughout the
-        // tackle cooldown, which `Tackling` answers by handing him back —
-        // and the pair ran ~15k round trips a match with 98.8% of
-        // `Forward: Tackling` visits lasting a single tick.
-        // `should_commit` takes CARRIER distance. This passed
-        // `ball().distance()`, which is 3-D and mixes the ball's METRE z
-        // with unit x/y — a different quantity in different units.
-        if let Some(carrier) = ctx.players().opponents().with_ball().next()
-            && TackleEngagement::should_commit(ctx, carrier.distance(ctx))
-        {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Tackling,
-            ));
-        }
-
-        if ctx.team().is_control_ball() {
-            return Some(StateChangeResult::with_forward_state(
-                if ctx.player.has_ball(ctx) {
-                    ForwardState::Running
-                } else {
-                    ForwardCreatingSpaceState::off_ball_support(ctx)
-                },
-            ));
-        }
-
-        // ── The nominated presser does not give himself up ────────────
-        //
-        // The three exits below are all tighter than the reach the plan
-        // nominates over (`DutyAssigner::PRESS_REACH`, 200u ≈ 25 m), so a
-        // forward sent here from 20 m out satisfied his own give-up
-        // condition on the tick he arrived — the `COMMIT < DISENGAGE`
-        // violation `TackleEngagement` was written to remove, restated in
-        // the press. He holds the duty until the plan takes it off him,
-        // which is at most one tactical refresh (250 ms) away.
-        if ForwardPress::called_off(ctx) {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Returning,
-            ));
-        }
-
         None
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        let ball_distance = ctx.ball().distance();
-        // The man the plan sent runs at the ball from wherever he is,
-        // instead of drifting home from inside his own duty — the plan
-        // nominates over `DutyAssigner::PRESS_REACH` (200u), well outside
-        // both radii below. See the note in `process`.
-        let nominated = TackleEngagement::is_nominated_presser(ctx);
-        let carrier_reach = if nominated {
-            f32::INFINITY
-        } else {
-            ForwardPress::MAX_BALL_DISTANCE
-        };
-        let loose_reach = if nominated { f32::INFINITY } else { 80.0 };
+        if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+            let carrier_velocity = ctx.tick_context.positions.players.velocity(carrier.id);
+            // A stride off the carrier, across his line to our box — the
+            // same point every closer takes (`ClosingPoint`).
+            let target = if MatchContext::cross_line_off() {
+                ctx.tick_context.positions.ball.position
+            } else {
+                ClosingPoint::for_carrier(ctx, &carrier)
+            };
+            let separation = if carrier.distance(ctx) < 25.0 {
+                ctx.player().separation_velocity() * 0.05
+            } else {
+                ctx.player().separation_velocity() * 0.15
+            };
+            return Some(
+                SteeringBehavior::Pursuit {
+                    target,
+                    target_velocity: carrier_velocity,
+                }
+                .calculate(ctx.player)
+                .velocity
+                    + separation,
+            );
+        }
 
-        // Only pursue if opponent has the ball and it's within pressing range
-        if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-            if ball_distance < carrier_reach {
-                // A stride off the carrier, across his line to our box —
-                // the same point every closer takes (`ClosingPoint`).
-                let target = if MatchContext::cross_line_off() {
-                    ctx.tick_context.positions.ball.position
-                } else {
-                    ClosingPoint::for_carrier(ctx, &opponent)
-                };
-                return Some(
-                    SteeringBehavior::Pursuit {
-                        target,
-                        target_velocity: ctx.tick_context.positions.ball.velocity,
-                    }
-                    .calculate(ctx.player)
-                    .velocity
-                        + ctx.player().separation_velocity(),
-                );
-            }
-        } else if !ctx.ball().is_owned() && ball_distance < loose_reach {
-            // Loose ball or a pass in flight — go with it. A press is
-            // made ON the pass, not after it lands.
+        // Nobody has it — a pass in flight the plan has sent him with. A
+        // press is made on the pass, not after it lands.
+        if !ctx.ball().is_owned() {
             return Some(
                 SteeringBehavior::Pursuit {
                     target: ctx.tick_context.positions.ball.position,
@@ -131,15 +92,14 @@ impl StateProcessingHandler for ForwardPressingState {
                 }
                 .calculate(ctx.player)
                 .velocity
-                    + ctx.player().separation_velocity(),
+                    + ctx.player().separation_velocity() * 0.15,
             );
         }
 
-        // Ball too far or teammate has it — drift back toward start position
         Some(
             SteeringBehavior::Arrive {
                 target: ctx.team().my_anchor(),
-                slowing_distance: 30.0,
+                slowing_distance: 25.0,
             }
             .calculate(ctx.player)
             .velocity,
@@ -147,7 +107,8 @@ impl StateProcessingHandler for ForwardPressingState {
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
-        // Pressing is high intensity - sustained running and pressure
-        ForwardCondition::with_velocity(ActivityIntensity::High).process(ctx);
+        // Closing the man on the ball is a sprint: at `High`, 0.78 of top
+        // speed, the presser cannot arrive on a carrier running flat out.
+        ForwardCondition::new(ActivityIntensity::chase()).process(ctx);
     }
 }

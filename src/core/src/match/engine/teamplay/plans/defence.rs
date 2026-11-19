@@ -40,6 +40,7 @@
 //! anybody.
 
 use crate::r#match::MatchField;
+use crate::r#match::engine::ball::ball::OffsideLine;
 use crate::r#match::engine::teamplay::plans::duties::DutyAssigner;
 use crate::r#match::engine::teamplay::plans::line_step::LineStepCall;
 
@@ -110,6 +111,37 @@ pub struct DefensivePlan {
 }
 
 impl DefensivePlan {
+    /// Whether `team_id`'s last line has been broken: an opponent has the
+    /// ball in open play beyond the line the side holds — its second-last
+    /// man, the line it steps and traps with.
+    pub fn line_broken(field: &MatchField, team_id: u32) -> bool {
+        if field.ball.restart_in_progress().is_some() || field.ball.kickoff_taker.is_some() {
+            return false;
+        }
+        let Some(carrier) = field
+            .ball
+            .current_owner
+            .and_then(|id| field.get_player(id))
+            .filter(|p| p.team_id != team_id)
+        else {
+            return false;
+        };
+        let Some(attacking) = carrier.side else {
+            return false;
+        };
+        let line = OffsideLine::second_last(
+            field
+                .players
+                .iter()
+                .filter(|p| p.team_id == team_id && !p.off_pitch)
+                .map(|p| p.position.x),
+            attacking,
+        );
+        line.is_some_and(|line| {
+            (field.ball.position.x - line) * attacking.forward_dir_x() > 0.0
+        })
+    }
+
     pub const fn idle() -> Self {
         DefensivePlan {
             duties: [(0, DefensiveDuty::HoldZone); MAX_UNIT],
@@ -148,6 +180,17 @@ impl DefensivePlan {
         self.duties[..self.len]
             .iter()
             .find(|(_, d)| matches!(d, DefensiveDuty::Press))
+            .map(|(id, _)| *id)
+    }
+
+    /// The man covering the presser.
+    pub fn cover(&self) -> Option<u32> {
+        if !self.active {
+            return None;
+        }
+        self.duties[..self.len]
+            .iter()
+            .find(|(_, d)| matches!(d, DefensiveDuty::Cover))
             .map(|(id, _)| *id)
     }
 

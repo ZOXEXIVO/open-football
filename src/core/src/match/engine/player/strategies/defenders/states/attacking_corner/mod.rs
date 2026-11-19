@@ -1,5 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, DefenderRead, ReadLevel,
+};
 use crate::r#match::engine::ball::ball::KICKABLE_DISTANCE;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
@@ -71,13 +73,18 @@ impl StateProcessingHandler for DefenderAttackingCornerState {
         // A header the aerial contest awarded him is already won: it is his
         // within the reach the engine granted it at, and the contact is
         // made — the shooting pipeline grades how good it is.
-        let awarded = ctx.tick_context.ball.aerial_contest_winner == Some(ctx.player.id);
+        // …and one awarded to somebody else is his, not this man's.
+        let winner = ctx.tick_context.ball.aerial_contest_winner;
+        let awarded = winner == Some(ctx.player.id);
         let reach = if awarded {
             KICKABLE_DISTANCE
         } else {
             HEADER_REACH
         };
-        if ball_pos.z >= HEADER_HEIGHT && ctx.ball().distance() < reach {
+        if (winner.is_none() || awarded)
+            && ball_pos.z >= HEADER_HEIGHT
+            && ctx.ball().distance() < reach
+        {
             #[cfg(feature = "match-logs")]
             {
                 use std::sync::atomic::Ordering;
@@ -108,22 +115,15 @@ impl StateProcessingHandler for DefenderAttackingCornerState {
         // Corner over (ball controlled in open play / possession lost) —
         // recover defensive shape immediately.
         if !ctx.ball().is_team_attacking_corner() {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Returning,
-            ));
+            return Some(DefenderRead::change(ctx));
         }
 
-        // A ground ball loose right at our feet — pounce on it.
-        if !ctx.ball().is_owned()
-            && ctx.ball().distance() < 8.0
-            && ctx.team().is_best_player_to_chase_ball()
-        {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::TakeBall,
-            ));
-        }
-
-        None
+        // A loose ball is the election's, as for any defender. The header
+        // door names this state for a centre-back at the corner; that one
+        // is decided above.
+        DefenderRead::above(ctx, ReadLevel::Engage)
+            .filter(|next| *next != DefenderState::AttackingCorner)
+            .map(StateChangeResult::with_defender_state)
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
@@ -198,7 +198,7 @@ impl StateProcessingHandler for DefenderAttackingCornerState {
     fn process_conditions(&self, ctx: ConditionContext) {
         // Sprinting up for a corner and jumping for the header is high
         // intensity — this run should cost real stamina.
-        DefenderCondition::with_velocity(ActivityIntensity::High).process(ctx);
+        DefenderCondition::new(ActivityIntensity::High).process(ctx);
     }
 }
 

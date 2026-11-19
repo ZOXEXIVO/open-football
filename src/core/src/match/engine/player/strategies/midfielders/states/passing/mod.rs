@@ -1,10 +1,11 @@
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
-    ActivityIntensity, MidfieldPlay, MidfieldRole, MidfielderCondition, Opportunity,
+    ActivityIntensity, MidfieldPlay, MidfieldRole, MidfielderCondition, MidfielderRead, Opportunity,
 };
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::passing::ThroughBall;
+use crate::r#match::player::strategies::common::players::ops::clearance::TouchlineCall;
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
@@ -32,8 +33,15 @@ impl StateProcessingHandler for MidfielderPassingState {
         // Check if the midfielder still has the ball
         if !ctx.player.has_ball(ctx) {
             // Lost possession, transition to Running
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
+            return Some(MidfielderRead::change(ctx));
+        }
+
+        // Pinned at his own touchline with no safe out: over the line, up
+        // it — the rule every role plays by (`TouchlineCall`).
+        if TouchlineCall::decide(ctx).is_some() {
+            return Some(StateChangeResult::with_midfielder_state_and_event(
+                MidfielderRead::released(ctx),
+                TouchlineCall::put_out(ctx),
             ));
         }
 
@@ -101,7 +109,7 @@ impl StateProcessingHandler for MidfielderPassingState {
                 .flatten()
             {
                 return Some(StateChangeResult::with_midfielder_state_and_event(
-                    MidfielderState::Standing,
+                    MidfielderRead::released(ctx),
                     Event::PlayerEvent(PlayerEvent::PassTo(
                         PassingEventContext::builder()
                             .with_from_player_id(ctx.player.id)
@@ -116,7 +124,7 @@ impl StateProcessingHandler for MidfielderPassingState {
             // Find the best regular pass option with improved logic
             if let Some((target_teammate, _reason)) = self.find_best_pass_option(ctx) {
                 return Some(StateChangeResult::with_midfielder_state_and_event(
-                    MidfielderState::Running,
+                    MidfielderRead::released(ctx),
                     Event::PlayerEvent(PlayerEvent::PassTo(
                         PassingEventContext::builder()
                             .with_from_player_id(ctx.player.id)

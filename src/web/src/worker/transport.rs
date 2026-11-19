@@ -126,7 +126,7 @@ mod tests {
     use chrono::NaiveDate;
     use core::club::player::mind::KickoffMind;
     use core::r#match::{MatchPlayer, MatchResultRaw};
-    use core::{PersonAttributes, PlayerAttributes, PlayerPositionType, PlayerSkills};
+    use core::{PersonAttributes, PlayerAttributes, PlayerPositionType, PlayerSkills, RoleLevels};
     use tokio::net::TcpListener;
 
     fn handshake() -> Request {
@@ -243,6 +243,8 @@ mod tests {
             1.0,
             1.0,
             mind,
+            RoleLevels::natural(PlayerPositionType::Goalkeeper),
+            0.5,
             false,
         ));
         player = Frame::decode(&Frame::encode(&player).unwrap()).unwrap();

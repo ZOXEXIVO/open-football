@@ -1,6 +1,8 @@
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, MidfielderCondition, MidfielderRead,
+};
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -15,21 +17,7 @@ impl StateProcessingHandler for MidfielderShootingState {
         // Check if the midfielder still has the ball
         if !ctx.player.has_ball(ctx) {
             // Lost possession, transition to Pressing
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Pressing,
-            ));
-        }
-
-        // Offside abort — an attack-minded midfielder pushed past the
-        // defensive line shouldn't fire: the goal wouldn't count and
-        // the shot would just waste a cooldown. Drop back to Returning
-        // instead. Complements the offside checks on Running/Standing
-        // by catching the edge case where a player entered Shooting
-        // while legal but became stranded before the actual strike.
-        if ctx.player().defensive().is_stranded_offside() {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Returning,
-            ));
+            return Some(MidfielderRead::change(ctx));
         }
 
         // Per-player cooldown — same reasoning as the forward
@@ -74,7 +62,7 @@ impl StateProcessingHandler for MidfielderShootingState {
         });
 
         Some(StateChangeResult::with_midfielder_state_and_event(
-            MidfielderState::Standing,
+            MidfielderRead::released(ctx),
             Event::PlayerEvent(PlayerEvent::Shoot(
                 ShootingEventContext::builder()
                     .with_player_id(ctx.player.id)

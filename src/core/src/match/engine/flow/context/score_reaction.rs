@@ -1,11 +1,13 @@
 //! **The score-reactive regime**, and the A/B switches that measure it.
 //!
-//! When teams are allowed to read the scoreline at all
-//! ([`SCORE_REACTION_FROM_MINUTE`](MatchContext::SCORE_REACTION_FROM_MINUTE)),
-//! how hard it pulls when they do
-//! ([`SCORE_REACTION_GAIN`](MatchContext::SCORE_REACTION_GAIN)), and the
-//! four env-var switches that turn whole engine layers off so a
-//! calibration run can attribute an effect to one of them.
+//! How hard the score pulls on play: each coach's stance — how much his
+//! side should commit, from what the next goal is worth — reaches the
+//! plan's levers as its move since kickoff, scaled by
+//! [`SCORE_REACTION_GAIN`](MatchContext::SCORE_REACTION_GAIN)
+//! ([`stance_gain`](MatchContext::stance_gain)). Also whether anything may
+//! see the score at all (`OF_SCORE_BLIND`), and the env-var switches that
+//! turn whole engine layers off so a calibration run can attribute an
+//! effect to one of them.
 //!
 //! All of it is debug/calibration infrastructure as much as it is match
 //! behaviour, which is why it lives apart from the context's own state:
@@ -27,6 +29,15 @@ impl MatchContext {
         use std::sync::OnceLock;
         static BLIND: OnceLock<bool> = OnceLock::new();
         *BLIND.get_or_init(|| std::env::var("OF_SCORE_BLIND").is_ok())
+    }
+
+    /// A/B control: with `OF_TEAM_STANCE=off` each coach still reads his
+    /// stance, but it moves none of the levers. Read once per process —
+    /// debug infrastructure, do not remove.
+    pub fn team_stance_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_TEAM_STANCE").is_ok_and(|v| v == "off"))
     }
 
     /// Diagnostic switch: when the `OF_SHAPE_OFF` env var is set, the
@@ -82,6 +93,126 @@ impl MatchContext {
         use std::sync::OnceLock;
         static OFF: OnceLock<bool> = OnceLock::new();
         *OFF.get_or_init(|| std::env::var("OF_CHARGE_DOWN_OFF").is_ok())
+    }
+
+    /// Diagnostic switch: with `OF_TAKEOVER_DUEL=off`, an opponent at a
+    /// carrier's feet takes the ball by comparison, as before, instead of
+    /// by a challenge decided on the block tackle's odds. The A/B control
+    /// for `BlockChallenge` at the ball. Read once per process — debug
+    /// infrastructure, do not remove.
+    pub fn takeover_duel_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_TAKEOVER_DUEL").is_ok_and(|v| v == "off"))
+    }
+
+    /// Diagnostic switch: with `OF_MIDFIELDER_DUEL=off`, a midfielder the
+    /// carrier has gone past has no challenge left to him, as before the
+    /// duel was split into closing, containing and challenging. The A/B
+    /// control for the midfielder's duel. Read once per process.
+    pub fn midfielder_duel_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_MIDFIELDER_DUEL").is_ok_and(|v| v == "off"))
+    }
+
+    /// Diagnostic switch: with `OF_MIDFIELDER_MARK_PACE=off`, a midfielder
+    /// marking a man arrives flat out at his point and stops on it, as before
+    /// he moved with his man. The A/B control for the marker's pace. Read
+    /// once per process.
+    pub fn midfielder_mark_pace_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_MIDFIELDER_MARK_PACE").is_ok_and(|v| v == "off"))
+    }
+
+    /// A/B control: with `OF_CROSS_OWN_GOAL=off` a goal is credited as it
+    /// was before the football rule: a defending touch of under 0.3 s hands
+    /// the goal to the most recent opposing passer. Read once per process —
+    /// debug infrastructure, do not remove.
+    pub fn cross_own_goal_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_CROSS_OWN_GOAL").is_ok_and(|v| v == "off"))
+    }
+
+    /// A/B control: with `OF_CROSS_HEAD_ARRIVAL=off` a won delivery arrives
+    /// within a boot's reach of its winner and a midfielder or a defender
+    /// plays the header he won by his role's old rule, as before. Read once
+    /// per process — debug infrastructure, do not remove.
+    pub fn cross_head_arrival_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_CROSS_HEAD_ARRIVAL").is_ok_and(|v| v == "off"))
+    }
+
+    /// A/B control: with `OF_CROSS_BOOKING=off` a pass is booked as a cross
+    /// by the old geometry (from a wide channel of the final third to the
+    /// box or within 10 u of its edge) and its completion is credited when
+    /// a team-mate receives it, as before. Read once per process — debug
+    /// infrastructure, do not remove.
+    pub fn cross_booking_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_CROSS_BOOKING").is_ok_and(|v| v == "off"))
+    }
+
+    /// A/B control: with `OF_CROSS_BYLINE=off` the wide carrier's drive ends
+    /// at the corner of the penalty area, the wide area stops at the outer
+    /// fifth of the pitch, a ball from the byline is typed by depth alone,
+    /// and a full-back carries at the goal, as before. Read once per
+    /// process — debug infrastructure, do not remove.
+    pub fn cross_byline_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_CROSS_BYLINE").is_ok_and(|v| v == "off"))
+    }
+
+    /// A/B control: with `OF_CROSS_TOUCHLINE=off` nobody pinned at his own
+    /// touchline puts the ball out of play on purpose, as before. Read once
+    /// per process — debug infrastructure, do not remove.
+    pub fn cross_touchline_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_CROSS_TOUCHLINE").is_ok_and(|v| v == "off"))
+    }
+
+    /// A/B control: with `OF_FORWARD_RUN_PACE=off` the runner in behind
+    /// sprints along the line he waits on, as before he kept station on it.
+    /// Read once per process — debug infrastructure, do not remove.
+    pub fn forward_run_pace_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_FORWARD_RUN_PACE").is_ok_and(|v| v == "off"))
+    }
+
+    /// A/B control: with `OF_FORWARD_BOX_PACE=off` a forward attacking a
+    /// place in the box declares the `Moderate` tier, as before. Read once
+    /// per process — debug infrastructure, do not remove.
+    pub fn forward_box_pace_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_FORWARD_BOX_PACE").is_ok_and(|v| v == "off"))
+    }
+
+    /// A/B control: with `OF_FORWARD_DUEL=off` a containing forward is not
+    /// capped below a sprint, his challenge does not read how he arrived,
+    /// and a forward the carrier has gone past has no challenge left to him.
+    /// Read once per process — debug infrastructure, do not remove.
+    pub fn forward_duel_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_FORWARD_DUEL").is_ok_and(|v| v == "off"))
+    }
+
+    /// Diagnostic switch: with `OF_SECOND_BALL_DUEL=off`, a ball dropping
+    /// with nobody named for it is not contested: whoever reaches it plays
+    /// it, as before. The A/B control for the second ball. Read once per
+    /// process.
+    pub fn second_ball_duel_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_SECOND_BALL_DUEL").is_ok_and(|v| v == "off"))
     }
 
     /// Diagnostic switch: with `OF_CROSS_LINE_OFF` set, every man closing
@@ -305,142 +436,50 @@ impl MatchContext {
         *OFF.get_or_init(|| std::env::var("OF_PRESS_OFF").is_ok())
     }
 
-    /// Match minute before which BEHAVIORAL score reactions stay off —
-    /// teams play their football regardless of the scoreline until the
-    /// final quarter, exactly like real sides do (managers don't park
-    /// the bus at minute 30 or go all-out at minute 40; reactive
-    /// game-state football is a post-~65' phenomenon, which is also
-    /// where real substitution/instruction activity clusters).
-    ///
-    /// Why this gate is load-bearing: a score-blind A/B run measured
-    /// the engine at rho = −0.05 / 23.5% draws (real: ~0 / 25%) with
-    /// reactions off, versus rho = +0.51 / 43-46% draws with them on —
-    /// the score-reactive regime, running from minute 1, carried the
-    /// ENTIRE equal-strength draw surplus (trailing teams scored 2.35
-    /// goals/90 vs leaders' 1.08; real football keeps game-state rates
-    /// nearly equal). Bounding the regime to the final ~28 minutes
-    /// keeps its realistic late-game drama while capping its
-    /// correlation budget.
-    pub const SCORE_REACTION_FROM_MINUTE: u32 = 62;
-
-    /// Match minute from which the **bench** may read the scoreline, which
-    /// is earlier than the minute the eleven on the pitch may.
-    ///
-    /// The two are separate because the thing the gate above is rationing
-    /// is not knowledge, it is *play*. What carried the draw surplus was
-    /// trailing sides attacking harder and leading sides sitting deeper —
-    /// eleven men changing how they play, on every tick, for the rest of
-    /// the match. A manager deciding at 40' that his left winger is coming
-    /// off at the interval changes nothing about how anybody plays until
-    /// the change is made, and then it changes one player.
-    ///
-    /// It is also simply what managers do. Nobody watches his side go two
-    /// down on the half-hour and thinks about the bench for the first time
-    /// twenty-two minutes later; the whole point of a half-time change is
-    /// that it was decided during the first half. Holding the substitution
-    /// engine to the play gate meant the earliest a deficit could reach
-    /// the bench at all was 62' — by which time the first change had
-    /// usually already been made, blind, and the scoreline could no longer
-    /// move it.
-    ///
-    /// Set at the half-hour: late enough that a fluke early goal does not
-    /// empty a bench, early enough to reach the interval with a view.
-    ///
-    /// **Measured, both arms, 400 fixtures on `dev_match subs 400 14` —
-    /// the only harness that fields a bench, so the only one that can see
-    /// this at all:**
-    ///
-    /// | | gate at 62' | gate at 30' |
-    /// |---|---|---|
-    /// | team-goal rho | +0.301 | **+0.184** |
-    /// | draws | 25.5% | 25.0% |
-    /// | first change, mean | 64.0' | 59.6' |
-    /// | first change, sd | 4.0 | **8.3** |
-    /// | modal minute's share of the slot | 30% | 11% |
-    /// | first change, behind vs ahead | 63.2' / 64.6' | **55.4' / 63.9'** |
-    ///
-    /// It does not spend correlation budget — it *returns* some, because a
-    /// trailing side that changes earlier changes into a weaker player and
-    /// the comeback dynamic that carries rho gets damped rather than fed.
-    ///
-    /// The other half of that table is the more interesting half, and it
-    /// is why this constant is part of the timing fix rather than a
-    /// concession to it: with the bench blind until 62', every side's read
-    /// of its own match was *identical* — the clock and nothing else — so
-    /// every side crossed the bar in the same minute. The old gate was
-    /// itself one of the reasons substitutions all happened at once.
-    pub const BENCH_SCORE_FROM_MINUTE: u32 = 30;
-
-    /// Whether the substitution layer may read the real scoreline yet.
-    ///
-    /// Shares the `OF_SCORE_BLIND` control with
-    /// [`behavioral_score_visible`](Self::behavioral_score_visible) so the
-    /// score-blind A/B arm stays genuinely blind everywhere.
+    /// Whether the substitution layer may read the real scoreline: from the
+    /// goal, unless `OF_SCORE_BLIND` keeps every reader of it blind.
     pub fn bench_score_visible(&self) -> bool {
-        if Self::score_blind() {
-            return false;
-        }
-        (self.total_match_time / 60_000) as u32 >= Self::BENCH_SCORE_FROM_MINUTE
+        !Self::score_blind()
     }
 
-    /// **How hard the score-reactive regime pulls, as one number.**
+    /// How hard the score moves play, as one number: the share of each
+    /// coach's stance that reaches the levers and the plans he changes to.
     ///
-    /// The gate above decides WHEN teams start reading the scoreline;
-    /// this decides HOW MUCH. It scales every continuous score-reactive
-    /// magnitude in the engine — game-management intensity, the chasing
-    /// risk lift, defensive urgency, the desperation conversion penalty —
-    /// and shifts the coach's escalation ladder later in the match, so the
-    /// whole regime moves together.
-    ///
-    /// # Why it has to be ONE number
-    ///
-    /// The regime is a dozen small channels that compound, and the
-    /// previous calibration round tuned them one at a time: halving the
-    /// instruction coefficients, the chasing-risk lift, the
-    /// game-management risk slope and the line drop each moved the
-    /// measured draw surplus by **under 10%**, because the other eleven
-    /// channels were still at full strength. Nothing short of a common
-    /// factor moves the regime as a whole.
-    ///
-    /// # What it was titrated against
-    ///
-    /// `OF_SCORE_BLIND` is the regime's own A/B and it lands on real
-    /// football almost exactly — rho +0.03, variance/mean 1.12/1.05,
-    /// 22.5% draws at equal strength — while the regime at full strength
-    /// ran rho +0.36, variance/mean **0.65/0.84** and 37.5% draws. The
-    /// under-dispersion is the part a viewer actually sees: a team that
-    /// goes two up stops scoring, so 3-0 and 4-0 essentially never happen
-    /// (1.2% and 0.5% against a real 5.5% and 2%) and every match ends
-    /// 1-0, 1-1 or 2-1. Post-62' the leader was scoring at 0.55 goals/90
-    /// against the trailer's 2.77 — a five-fold swing where real football
-    /// has a mild one.
-    ///
-    /// # The sweep, 400 equal-strength matches a point
-    ///
-    /// | gain | goals | draws | correlation surplus | post-62' lead / trail |
-    /// |---|---|---|---|---|
-    /// | 1.0 | 2.81 | 36.8% | **+11.2pp** | 0.75 / 2.67 |
-    /// | 0.6 | 2.70 | 35.0% | +8.6pp | 0.87 / 2.57 |
-    /// | 0.4 | 2.47 | 33.0% | +5.2pp | 0.75 / 2.03 |
-    /// | 0.2 | 2.50 | **27.0%** | **+0.4pp** | 1.10 / 1.80 |
-    /// | blind | 2.62 | 22.5% | −2.3pp | 1.57 / 1.23 |
-    ///
-    /// The surplus is the metric to read — it is the observed draw rate
-    /// against the rate the same two goal counts would produce if they
-    /// were independent, so it isolates the correlation from the goal
-    /// level. It falls cleanly with the gain where `rho` and the
-    /// equalizer share are too noisy at n=400 to rank neighbouring points.
-    ///
-    /// 0.25 is the setting: real football's surplus is zero, and the
-    /// regime keeps a quarter of its amplitude — a leader still slows
-    /// down and a trailer still pushes, visibly, without the leader
-    /// scoring at a third of the trailer's rate. The sweep above was run
-    /// BEFORE the situational shape swap joined the gain, so a given
-    /// number now carries slightly more of the regime than it did there.
-    ///
-    /// `OF_SCORE_GAIN` overrides it for a sweep; read once per process.
-    /// Calibration infrastructure — do not remove.
+    /// Re-fitted with the score open from the first minute, 300 equal
+    /// matches a point: 0.25 holds the goal correlation (+0.05), the draw
+    /// surplus (+0.5 pp) and the leader/trailer rate ratios (0.87 before
+    /// 62', 1.06 after); 0.5 already carries a +5.2 pp surplus and 1.0 the
+    /// old draw machine (rho +0.38). `OF_SCORE_GAIN` overrides it for a
+    /// sweep; read once per process.
     pub const SCORE_REACTION_GAIN: f32 = 0.25;
+
+    /// A/B control: with `OF_TEAM_ADHERENCE=off` every man reads the
+    /// neutral adherence, so the shape pull, the press and the jobs treat
+    /// the whole squad alike. Read once per process.
+    pub fn adherence_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_TEAM_ADHERENCE").is_ok_and(|v| v == "off"))
+    }
+
+    /// A/B control: with `OF_TEAM_TALK=off` the coach still chooses and
+    /// records his half-time talk, and nobody reacts to it. Read once per
+    /// process.
+    pub fn team_talk_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_TEAM_TALK").is_ok_and(|v| v == "off"))
+    }
+
+    /// The gain the stance reaches the plan and its levers through: the
+    /// regime's, or none under `OF_TEAM_STANCE=off`.
+    pub fn stance_gain() -> f32 {
+        if Self::team_stance_off() {
+            0.0
+        } else {
+            Self::score_reaction_gain()
+        }
+    }
 
     /// The gain in force, honouring `OF_SCORE_GAIN` and `OF_SCORE_BLIND`.
     pub fn score_reaction_gain() -> f32 {
@@ -456,18 +495,6 @@ impl MatchContext {
                 .map(|v| v.clamp(0.0, 2.0))
                 .unwrap_or(Self::SCORE_REACTION_GAIN)
         })
-    }
-
-    /// A progress threshold moved later in proportion as the gain falls.
-    ///
-    /// The coach's escalation ladder is DISCRETE — a trailing side is on
-    /// `AllOutAttack` or it is not — so the gain cannot scale it. What it
-    /// can do is decide how much of the match is spent past each rung:
-    /// at gain 1.0 the ladder is untouched, at 0.5 a threshold sits
-    /// halfway between where it was and the final whistle, and at 0 the
-    /// coach never escalates at all.
-    pub fn score_reaction_threshold(progress: f32) -> f32 {
-        1.0 - (1.0 - progress) * Self::score_reaction_gain()
     }
 
     /// Diagnostic switch: with `OF_SUB_WALK_OFF` set, a substitution goes
@@ -502,14 +529,9 @@ impl MatchContext {
         *OFF.get_or_init(|| std::env::var("OF_SUB_WALK_OFF").is_ok())
     }
 
-    /// The scoreline as BEHAVIOR is allowed to see it: 0-0 (level)
-    /// before `SCORE_REACTION_FROM_MINUTE`, the real difference after.
-    /// All tactical / coach / desperation score reads route through
-    /// the three aggregation points that consume this.
+    /// Whether behaviour may see the real scoreline: from the goal, unless
+    /// `OF_SCORE_BLIND` keeps every reader of it level.
     pub fn behavioral_score_visible(&self) -> bool {
-        if Self::score_blind() {
-            return false;
-        }
-        (self.total_match_time / 60_000) as u32 >= Self::SCORE_REACTION_FROM_MINUTE
+        !Self::score_blind()
     }
 }

@@ -27,17 +27,21 @@
 //!    the ball in front of him. [`CrossModel`] already owns *which*
 //!    delivery — floated, whipped, driven or pulled back — so this rung
 //!    only decides *whether*.
-//! 3. **Drive the byline.** Nothing is on yet, but the grass between the
-//!    full-back and the goal line is. Carrying into it is what creates
-//!    rungs 1 and 2 a second later, and it is the difference between a
-//!    wide player and a man who happens to be standing wide.
+//! 3. **Drive the byline, then the line.** Nothing is on yet, but the
+//!    grass between the full-back and the goal line is. He carries to the
+//!    byline just outside the corner of the area; there, with the goal
+//!    line open toward the near post, he carries on along it to the corner
+//!    of the six-yard box, where the pull-back and the ball across the
+//!    face of goal are on. A man closing the line turns him back to the
+//!    corner of the area. Carrying is what creates rungs 1 and 2 a second
+//!    later.
 //!
 //! Rung 3 is not a state change — it is a change of *aim*, applied to
-//! the carry the player was making anyway ([`Self::carry_aim`]). Every
-//! ball-carrying state in this engine drives at the goal, which for a man
-//! on the touchline means cutting infield into the crowd. That single
-//! substitution is most of the difference between "he ran inside and lost
-//! it" and "he got to the byline".
+//! the carry the player was making anyway ([`FlankPlay::carry_aim`]).
+//! Every ball-carrying state drives at the goal, which for a man on the
+//! touchline means cutting infield into the crowd. The full-back's carry
+//! asks it too, so a full-back wide and high drives the line as a winger
+//! does.
 
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::block_diag::CrossPriceCensus;
@@ -50,7 +54,9 @@ use crate::r#match::player::strategies::common::passing::CrossModel;
 use crate::r#match::player::strategies::players::ops::skill::traits_bias::movement_bias;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
-use crate::r#match::{MatchContext, MatchPlayerLite, StateProcessingContext};
+use crate::r#match::{MatchContext, MatchPlayerLite, PlayerSide, StateProcessingContext};
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::WideDiag;
 use nalgebra::Vector3;
 
 /// What the wide area is offering the carrier.
@@ -186,6 +192,8 @@ impl FlankPlay {
         if !ctx.player.has_ball(ctx) || !Self::in_channel(ctx) {
             return None;
         }
+        #[cfg(feature = "match-logs")]
+        Self::note_byline_box(ctx);
         let progress = Self::progress(ctx);
 
         // 1. The man outside you. No depth bar of its own — a simple
@@ -273,6 +281,40 @@ impl FlankPlay {
         (appetite >= bar).then_some(FlankAction::Deliver)
     }
 
+    /// Are the box runners at the near post and the edge of the area while
+    /// he is on the ball inside the box at the byline?
+    #[cfg(feature = "match-logs")]
+    fn note_byline_box(ctx: &StateProcessingContext) {
+        /// The near post's patch (within 7 m of the goal line, out to just
+        /// beyond the six-yard box on his side) and the edge of the area
+        /// (13-19 m out, within 12 m of centre).
+        const NEAR_POST_DEPTH: f32 = 56.0;
+        const NEAR_POST_WIDTH: f32 = 90.0;
+        const EDGE: (f32, f32) = (104.0, 152.0);
+        const EDGE_WIDTH: f32 = 96.0;
+        let goal = ctx.player().opponent_goal_position();
+        let me = ctx.player.position;
+        const BOX_HALF: f32 = 161.0;
+        if (goal.x - me.x).abs() > CrossModel::BYLINE_STRIP || (me.y - goal.y).abs() > BOX_HALF {
+            return;
+        }
+        let near = if me.y >= goal.y { 1.0 } else { -1.0 };
+        let mut near_post = false;
+        let mut edge = false;
+        for mate in ctx
+            .players()
+            .teammates()
+            .all()
+            .filter(|t| t.id != ctx.player.id)
+        {
+            let depth = (goal.x - mate.position.x).abs();
+            let across = (mate.position.y - goal.y) * near;
+            near_post |= depth <= NEAR_POST_DEPTH && (0.0..=NEAR_POST_WIDTH).contains(&across);
+            edge |= (EDGE.0..=EDGE.1).contains(&depth) && across.abs() <= EDGE_WIDTH;
+        }
+        WideDiag::note_byline_box(near_post, edge);
+    }
+
     /// Where the man nearest the carrier stands against this delivery —
     /// see [`CrossPriceCensus::CLOSERS`].
     #[cfg(feature = "match-logs")]
@@ -331,20 +373,33 @@ impl FlankPlay {
     /// The patch of grass a byline drive is aimed at, on the carrier's
     /// own flank.
     fn byline_point(ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        let side = ctx.player.side?;
-        let field_height = ctx.context.field_size.height as f32;
-        let field_width = ctx.context.field_size.width as f32;
-        let goal = ctx.player().opponent_goal_position();
-        let outward = if ctx.player.position.y < field_height * 0.5 {
+        Some(Self::byline_point_from(
+            ctx.player.position,
+            ctx.player.side?,
+            ctx.player().opponent_goal_position(),
+            ctx.context.field_size.width as f32,
+            ctx.context.field_size.height as f32,
+        ))
+    }
+
+    /// [`Self::byline_point`] for a carrier at `position` attacking `goal`.
+    pub(crate) fn byline_point_from(
+        position: Vector3<f32>,
+        side: PlayerSide,
+        goal: Vector3<f32>,
+        field_width: f32,
+        field_height: f32,
+    ) -> Vector3<f32> {
+        let outward = if position.y < field_height * 0.5 {
             -1.0
         } else {
             1.0
         };
-        Some(Vector3::new(
+        Vector3::new(
             (goal.x - side.forward_dir_x() * Self::BYLINE_DEPTH).clamp(14.0, field_width - 14.0),
             (goal.y + outward * Self::BYLINE_LATERAL).clamp(20.0, field_height - 20.0),
             0.0,
-        ))
+        )
     }
 
     /// How near an opponent has to be to make the delivery his (~2.5 m),
@@ -441,13 +496,55 @@ impl FlankPlay {
         if lane_openness > inside_bar {
             return None;
         }
+        if !MatchContext::cross_byline_off()
+            && let Some(along) = Self::along_the_line(ctx)
+        {
+            return Some(along);
+        }
         Self::byline_point(ctx)
+    }
+
+    /// How near the goal line the carry along it aims (~2.5 m), and how far
+    /// off the goal's centre: the corner of the six-yard box, never inside
+    /// it.
+    const ALONG_THE_LINE_DEPTH: f32 = 20.0;
+    const SIX_YARD_CORNER: f32 = 73.0;
+
+    /// **The second leg**: at the byline, along the goal line into the box.
+    ///
+    /// Within 6 m of the goal line, with the line toward the near post open
+    /// for [`Self::RUN_ROOM`], he carries on to the corner of the six-yard
+    /// box and stops there. When a man closes the line it is `None`, and the
+    /// first leg's point — the corner of the area behind him — is where he
+    /// turns back to.
+    fn along_the_line(ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        let side = ctx.player.side?;
+        let goal = ctx.player().opponent_goal_position();
+        let me = ctx.player.position;
+        if (goal.x - me.x).abs() > CrossModel::BYLINE_STRIP {
+            return None;
+        }
+        let outward = if me.y < goal.y { -1.0 } else { 1.0 };
+        let corner = Vector3::new(
+            goal.x - side.forward_dir_x() * Self::ALONG_THE_LINE_DEPTH,
+            goal.y + outward * Self::SIX_YARD_CORNER,
+            0.0,
+        );
+        if (me.y - goal.y).abs() <= Self::SIX_YARD_CORNER {
+            return Some(corner);
+        }
+        let heading = (corner - me).try_normalize(f32::EPSILON)?;
+        LaneAhead::read_along(ctx, heading)
+            .nearest
+            .is_none_or(|distance| distance > Self::RUN_ROOM)
+            .then_some(corner)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::FlankPlay;
+    use crate::r#match::player::strategies::common::passing::CrossModel;
 
     /// The ladder only works if the drive comes before the delivery: a
     /// carrier who may cross from further out than he may drive never
@@ -475,12 +572,11 @@ mod tests {
         );
     }
 
-    /// The byline aim must be a place a footballer would actually stand:
-    /// outside the width of the six-yard box (or he is running into the
-    /// keeper) and inside the width of the penalty area (or he is on the
-    /// paint and the ball goes out).
+    /// The drive ends at the corner of the area: outside the width of the
+    /// six-yard box (or he is running into the keeper) and of the penalty
+    /// area, near the byline.
     #[test]
-    fn the_byline_target_is_the_corner_of_the_box() {
+    fn the_drive_ends_at_the_corner_of_the_area() {
         /// Half the width of the six-yard box, in game units.
         const SIX_YARD_HALF: f32 = 73.0;
         /// …and of the penalty area.
@@ -501,6 +597,41 @@ mod tests {
             assert!(
                 FlankPlay::BYLINE_DEPTH > 0.0 && FlankPlay::BYLINE_DEPTH < 100.0,
                 "the byline aim is not near the byline"
+            )
+        };
+    }
+
+    /// The carry along the goal line ends at the corner of the six-yard
+    /// box: inside the width of the area, never inside the six-yard box,
+    /// and inside the byline strip the drive hands it on in.
+    #[test]
+    fn the_carry_along_the_line_ends_at_the_corner_of_the_six_yard_box() {
+        const SIX_YARD_HALF: f32 = 73.0;
+        const SIX_YARD_DEPTH: f32 = 44.0;
+        const BOX_HALF: f32 = 161.0;
+        const {
+            assert!(
+                FlankPlay::SIX_YARD_CORNER >= SIX_YARD_HALF,
+                "the carry goes into the six-yard box"
+            )
+        };
+        const {
+            assert!(
+                FlankPlay::SIX_YARD_CORNER < BOX_HALF,
+                "the carry stops short of the box's width"
+            )
+        };
+        const {
+            assert!(
+                FlankPlay::ALONG_THE_LINE_DEPTH > 0.0
+                    && FlankPlay::ALONG_THE_LINE_DEPTH < SIX_YARD_DEPTH,
+                "the carry is not along the goal line"
+            )
+        };
+        const {
+            assert!(
+                FlankPlay::BYLINE_DEPTH <= CrossModel::BYLINE_STRIP,
+                "the drive does not reach the strip the carry starts from"
             )
         };
     }

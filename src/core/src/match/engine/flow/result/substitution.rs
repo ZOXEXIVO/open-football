@@ -58,3 +58,15 @@ pub enum SubstitutionReason {
     /// doubt — never a frustration trigger.
     GoalkeeperEmergency,
 }
+
+impl SubstitutionReason {
+    /// A change the side had to make rather than chose to.
+    pub fn is_forced(self) -> bool {
+        matches!(
+            self,
+            SubstitutionReason::CriticalInjury
+                | SubstitutionReason::Exhaustion
+                | SubstitutionReason::GoalkeeperEmergency
+        )
+    }
+}

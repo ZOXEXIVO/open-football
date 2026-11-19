@@ -183,26 +183,22 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 s,
                 DefenderState::Standing
                     | DefenderState::Walking
-                    | DefenderState::Running
                     | DefenderState::Returning
-                    | DefenderState::Resting
                     | DefenderState::HoldingLine
             ),
             PlayerState::Midfielder(s) => matches!(
                 s,
                 MidfielderState::Standing
                     | MidfielderState::Walking
-                    | MidfielderState::Running
+                    | MidfielderState::HoldingShape
                     | MidfielderState::Returning
-                    | MidfielderState::Resting
             ),
             PlayerState::Forward(s) => matches!(
                 s,
                 ForwardState::Standing
                     | ForwardState::Walking
-                    | ForwardState::Running
                     | ForwardState::Returning
-                    | ForwardState::Resting
+                    | ForwardState::HoldingShape
             ),
             _ => false,
         }

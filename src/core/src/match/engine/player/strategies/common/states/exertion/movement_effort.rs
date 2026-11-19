@@ -117,6 +117,20 @@ impl MovementEffort {
         base * Self::self_pacing(intensity, condition_pct)
     }
 
+    /// The lowest tier whose ceiling admits `fraction` of his conditioned
+    /// top speed — the tier a man moving at that pace is working at.
+    pub fn tier_containing(fraction: f32, condition_pct: u32) -> ActivityIntensity {
+        [
+            ActivityIntensity::Recovery,
+            ActivityIntensity::Low,
+            ActivityIntensity::Moderate,
+            ActivityIntensity::High,
+        ]
+        .into_iter()
+        .find(|tier| fraction <= Self::speed_fraction(*tier, condition_pct))
+        .unwrap_or(ActivityIntensity::VeryHigh)
+    }
+
     /// The speed ceiling for the man ON the ball, as a fraction of his
     /// conditioned max speed.
     ///

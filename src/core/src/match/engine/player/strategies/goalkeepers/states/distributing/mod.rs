@@ -47,7 +47,8 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
             }
         }
 
-        // Try to find the best pass option
+        // Every way in here is a short release: the hold's short choice,
+        // the feet decision's play-out, a short goal kick.
         if let Some(teammate) = self.find_best_pass_option(ctx) {
             #[cfg(feature = "match-logs")]
             crate::mid_run_diag::KeeperReleaseDiag::note_short(
@@ -87,22 +88,15 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
 }
 
 impl GoalkeeperDistributingState {
-    /// Pick a teammate to kick the ball to, strongly preferring the
-    /// *centre of the field* — a midfielder near the halfway line — so
-    /// the GK clears the defensive third rather than passing short to a
-    /// defender who immediately gets pressed and loses possession back
-    /// to the attacking team.
+    /// The team-mate a short release goes to: within
+    /// `KeeperRelease::SHORT_RANGE`, whoever he is, scored on the space
+    /// round him and the risk of the pass.
     ///
-    /// The earlier "safe short pass to the nearest defender" version
-    /// produced a death loop: save → pass to full-back → opponent
-    /// closes him down → turnover 20m from goal → shot → save → repeat.
-    /// Real GKs under any pressure clear long, landing the ball at the
-    /// halfway line where their own midfielders can contest it. That's
-    /// the target zone this scoring favours.
-    ///
-    /// Unit scale: 1u = 0.125m, field 840u = 105m. The halfway line
-    /// sits at x = field_width/2. A GK at x ≈ 20u kicks towards x ≈ 420u
-    /// (~50m), matching a real goal kick.
+    /// A short pass to a pressed defender is a death loop: save → pass to
+    /// full-back → closed down → turnover 20 m from goal → shot → save.
+    /// What guards it is what gates a short release before he is here — a
+    /// free outlet, composure and no press — and the patience bound in
+    /// `KeeperRelease::may_keep_looking`, after which he goes long.
     fn find_best_pass_option<'a>(
         &'a self,
         ctx: &'a StateProcessingContext<'a>,
@@ -110,14 +104,8 @@ impl GoalkeeperDistributingState {
         const MIN_RECEIVE_DISTANCE: f32 = 30.0; // no back-passes / tap-outs
         const BLOCK_CORRIDOR: f32 = 8.0; // lane width for interception check
 
-        // Maximum search range scales with distribution skill: weak
-        // keepers can't reliably hit a 70m punt, so they shouldn't even
-        // look that far. Range 380..620u (~47..78m).
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
-        let max_search = 380.0 + prof.distribution * 240.0;
-
-        let field_width = ctx.context.field_size.width as f32;
-        let halfway_x = field_width * 0.5;
+        let max_search = KeeperRelease::SHORT_RANGE;
 
         let mut best_option: Option<MatchPlayerLite> = None;
         let mut best_score = 0.0;
@@ -164,18 +152,8 @@ impl GoalkeeperDistributingState {
 
             let recency_penalty = ctx.ball().passer_recency_penalty(teammate.id);
 
-            // PRIMARY SIGNAL: how close to the halfway line is this
-            // teammate? Peaks at x = halfway, falls off in both
-            // directions. A receiver at the halfway line scores 3.0;
-            // deep in own half or deep in opponent half scores ~0.5.
-            // This is what drives "kick to the middle of the field".
-            let dist_from_halfway = (teammate.position.x - halfway_x).abs();
-            let halfway_score = 3.0 - (dist_from_halfway / halfway_x) * 2.5;
-            let halfway_score = halfway_score.max(0.5);
-
-            // Receiver-is-open is the other safety signal — a teammate
-            // at the halfway line surrounded by three opponents is still
-            // a bad target.
+            // Receiver-is-open: a team-mate with two opponents on him is
+            // still a bad target, however near.
             let nearby_opponents = ctx.tick_context.grid.opponents(teammate.id, 15.0).count();
             let space_bonus = match nearby_opponents {
                 0 => 2.0,
@@ -183,26 +161,14 @@ impl GoalkeeperDistributingState {
                 _ => 0.5,
             };
 
-            // Role bias — kicks to midfielders are the canonical goal
-            // kick; forwards OK too (long ball to striker is classic);
-            // defenders get a heavy penalty because this is exactly the
-            // short-pass-to-full-back trap that spawns the loss-loop.
-            let position_bonus = match teammate.tactical_positions.position_group() {
-                PlayerFieldPositionGroup::Midfielder => 1.6,
-                PlayerFieldPositionGroup::Forward => 1.2,
-                PlayerFieldPositionGroup::Defender => 0.4,
-                PlayerFieldPositionGroup::Goalkeeper => 0.0,
-            };
-
-            // Turnover risk: long, traffic-heavy passes by weak keepers
+            // Turnover risk: longer, traffic-heavier passes by weak keepers
             // are punished. `pass_difficulty` proxied by distance and
             // pressure on the receiver.
             let pass_difficulty = (distance / max_search).clamp(0.0, 1.0);
             let pressure = (nearby_opponents as f32 / 4.0).clamp(0.0, 1.0);
             let turnover = prof.turnover_risk(pass_difficulty, pressure, 0.0);
             let safety_factor = (1.0 - turnover * 0.6).max(0.2);
-            let score =
-                halfway_score * space_bonus * position_bonus * recency_penalty * safety_factor;
+            let score = space_bonus * recency_penalty * safety_factor;
 
             if score > best_score {
                 best_score = score;
@@ -247,13 +213,5 @@ impl GoalkeeperDistributingState {
         const PRESS_RADIUS: f32 = 90.0;
         let close = ctx.players().opponents().nearby(PRESS_RADIUS).count() as f32;
         1.0 - (-close / 1.8).exp()
-    }
-
-    pub fn calculate_pass_power(&self, teammate_id: u32, ctx: &StateProcessingContext) -> f64 {
-        let distance = ctx.tick_context.grid.get(ctx.player.id, teammate_id);
-
-        let pass_skill = ctx.player.skills.technical.passing;
-
-        (distance / pass_skill * 10.0) as f64
     }
 }

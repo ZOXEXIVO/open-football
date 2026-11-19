@@ -290,6 +290,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                         );
                         FlightProtection::for_launch(b.velocity, b.position.z)
                     }
+                    AerialOutcome::HeadedAway { velocity, .. } => {
+                        b.velocity = velocity;
+                        FlightProtection::for_launch(b.velocity, b.position.z)
+                    }
                 };
                 // There is no delivery to carry the heading transition, so
                 // it is stashed straight away — the arrival is now.

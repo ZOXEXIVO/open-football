@@ -1,492 +1,62 @@
-use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, BoxEmergency, DefenderCondition, DefensiveLine, Interception, StationKeeping,
+    ActivityIntensity, DefenderCondition, DefenderRead, DefensiveLine, ReadLevel,
 };
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
-use crate::r#match::player::strategies::common::states::TackleEngagement;
-use crate::r#match::player::strategies::players::DefensiveRole;
+use crate::r#match::player::strategies::common::states::StationKeeping;
 use crate::r#match::{
-    ConditionContext, DefensiveDuty, PlayerSide, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior,
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
 
-const MARKING_DISTANCE: f32 = 25.0; // Increased from 15.0 - pick up attackers earlier
-const INTERCEPTION_DISTANCE: f32 = 120.0; // Increased from 100.0
-const FIELD_THIRD_THRESHOLD: f32 = 0.33;
-const PUSH_UP_HYSTERESIS: f32 = 0.05;
-const THREAT_SCAN_DISTANCE: f32 = 100.0; // Increased from 70.0 - wider threat detection
-const DANGEROUS_RUN_SPEED: f32 = 0.40; // 5 m/s in u/tick (1u=0.125m, 10ms tick) — a genuine attacking run. Old values 1.0-3.0 exceeded human max speed (0.63 u/tick), so run-tracking never fired.
-const DANGEROUS_RUN_ANGLE: f32 = 0.6; // Reduced from 0.7 - wider angle
-const MIN_STATE_TIME_DEFAULT: u64 = 20; // Reduced - faster reactions
-const MIN_STATE_TIME_WITH_THREAT: u64 = 5; // Reduced - very fast reaction to threats
-// Aerial-contest band — same values as the Marking / Intercepting
-// hand-offs so an incoming cross reads identically from every defensive
-// state.
-const AERIAL_HEADING_HEIGHT: f32 = 1.5;
-const AERIAL_HEADING_DISTANCE: f32 = 5.0;
-
+/// **Covering the man engaging the carrier**: the diagonal behind him, so
+/// the carrier who beats him runs into the cover. Entered on the plan's
+/// cover duty and left when it goes.
 #[derive(Default, Clone)]
 pub struct DefenderCoveringState {}
 
 impl StateProcessingHandler for DefenderCoveringState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // A player who has won the ball is not doing this any more.
-        //
-        // Nothing here asked whether HE had it, so a defender who
-        // intercepted or was simply the nearest body when it arrived
-        // carried on with an off-ball job while holding it — the same
-        // fixed point `Defender: Marking` was measured freezing on
-        // (99% of its stuck ticks with the owner 250-plus AI ticks into
-        // the state). `Running` is where a defender's on-ball decisions
-        // live, and this is the hand-off `DefenderStandingState` has
-        // always made.
-        if ctx.player.has_ball(ctx) || ctx.team().is_control_ball() {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Running,
-            ));
+        if let Some(change) = DefenderRead::change_above(ctx, ReadLevel::Cover) {
+            return Some(change);
         }
-
-        // AERIAL BALL — a cross dropping onto a covering defender is
-        // headed clear. Checked first: the heading window is a couple of
-        // ticks wide and everything below assumes a ball playable with
-        // the feet.
-        if ctx.tick_context.positions.ball.position.z > AERIAL_HEADING_HEIGHT
-            && ctx.ball().distance() < AERIAL_HEADING_DISTANCE
-            && ctx.ball().is_towards_player_with_angle(0.6)
-        {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Heading,
-            ));
-        }
-
-        // BOX EMERGENCY — override every other consideration. If the
-        // carrier is in our penalty area and we're one of the two
-        // closest defenders, stop covering and engage immediately.
-        if let Some(state) = BoxEmergency::response(ctx) {
-            return Some(StateChangeResult::with_defender_state(state));
-        }
-
-        // A live challenge or a new pressing duty cannot wait for the
-        // minimum dwell time. Otherwise keep the cover the team assigned;
-        // local distance ranks must not send us back to marking a runner.
-        if let Some(carrier) = ctx.players().opponents().with_ball().next() {
-            if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Tackling,
-                ));
-            }
-            match ctx.team().my_duty() {
-                DefensiveDuty::Press => {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Pressing,
-                    ));
-                }
-                DefensiveDuty::Cover => return None,
-                _ => {}
-            }
-        }
-
-        // Adaptive reaction time based on threat detection
-        let min_time = if self.has_dangerous_threat_nearby(ctx) {
-            MIN_STATE_TIME_WITH_THREAT
-        } else {
-            MIN_STATE_TIME_DEFAULT
-        };
-
-        if ctx.in_state_time < min_time {
+        if DefenderRead::has_cover_duty(ctx) {
             return None;
         }
+        Some(DefenderRead::change(ctx))
+    }
 
-        let ball_ops = ctx.ball();
-
-        // Loose ball nearby — go claim it directly
-        if !ctx.ball().is_owned()
-            && ctx.ball().distance() < 30.0
-            && ctx.ball().speed() < 3.0
-            && ctx.team().is_best_player_to_chase_ball()
-        {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::TakeBall,
-            ));
-        }
-
-        // STEP UP — while in Covering, also watch for attackers
-        // approaching our penalty area. Standing/HoldingLine have this
-        // check but Covering doesn't re-check, so a cover defender
-        // stays deep as the carrier walks into the 18-yard box. Even
-        // the cover role should break to engage when the ball gets
-        // close to goal AND this defender is now the nearest option.
-        if ctx.player().defensive().should_step_up_to_meet_attacker() {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Pressing,
-            ));
-        }
-
-        // COUNTER-PRESS: break from cover into the press only inside
-        // the team-shared counterpress window. press_intensity already
-        // reflects counter-press tactic, defensive-transition state,
-        // condition, and game-management — so a tired late-leading team
-        // won't trigger here.
-        if ctx.team().counterpress_window() {
-            let press = ctx.team().press_intensity();
-            if press > 0.4 {
-                let ball_dist = ctx.ball().distance();
-                let counter_press_range = 35.0 + press * 55.0;
-                if ball_dist < counter_press_range {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Pressing,
-                    ));
-                }
-            }
-        }
-
-        // Role-aware engagement. The primary case this state handles is
-        // Cover — we sit goal-side of the ball carrier. If the carrier
-        // is dribbled past our primary (role flips to Primary because
-        // we're now closest), step up and press. If role drops to Help
-        // or Hold (another defender is now cover), reselect state via
-        // Standing.
-        if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
-            let distance = opponent_with_ball.distance(ctx);
-            // Very close — tackle immediately regardless of role.
-            if TackleEngagement::should_commit(ctx, distance) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Tackling,
-                ));
-            }
-            match ctx.player().defensive().defensive_role_for_ball_carrier() {
-                DefensiveRole::Primary => {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Pressing,
-                    ));
-                }
-                DefensiveRole::Help => {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Marking,
-                    ));
-                }
-                DefensiveRole::Cover => {
-                    // Stay in Covering; velocity() below steers to the
-                    // goal-side cover point.
-                }
-                DefensiveRole::Hold => {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Standing,
-                    ));
-                }
-            }
-        }
-
-        if ball_ops.on_own_side() {
-            // Stay active in covering if opponents are in the area
-            // Check both ball carrier AND unmarked attackers making runs
-            let ball_carrier_nearby = ctx
+    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // The plan's cover anchor — a stride and a half behind the point
+        // of attack on the line to goal — held inside the shape: cover is
+        // a line role, and sitting behind the presser is exactly the
+        // `DEPTH_DROP` the constraint allows.
+        let Some(anchor) = ctx.team().my_duty_anchor() else {
+            return Some(Vector3::zeros());
+        };
+        let target = DefensiveLine::hold_shape(ctx, anchor);
+        let to_target = target - ctx.player.position;
+        let distance = to_target.magnitude();
+        if distance < 2.0 {
+            let point_velocity = ctx
                 .players()
                 .opponents()
                 .with_ball()
                 .next()
-                .map(|opp| opp.distance(ctx) < 150.0)
-                .unwrap_or(false);
-
-            let opponents_in_area = ctx.players().opponents().nearby(80.0).next().is_some();
-
-            if !ball_carrier_nearby && !opponents_in_area {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Standing,
-                ));
-            }
-            // Threats in area — fall through to active covering checks
+                .map_or(ctx.tick_context.positions.ball.velocity, |c| c.velocity(ctx));
+            return Some(
+                StationKeeping::hold(point_velocity, to_target)
+                    + ctx.player().separation_velocity() * 0.3,
+            );
         }
-
-        if ball_ops.distance_to_opponent_goal()
-            < ctx.context.field_size.width as f32 * (FIELD_THIRD_THRESHOLD - PUSH_UP_HYSTERESIS)
-            && self.should_push_up(ctx)
-        {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::PushingUp,
-            ));
-        }
-
-        // No live ball-carrier (would've been handled by the role block
-        // above). Generic fallback: if unmarked attackers are within
-        // marking range, pick them up.
-        if ctx
-            .player()
-            .defensive()
-            .find_unmarked_opponent(MARKING_DISTANCE)
-            .is_some()
-            || ctx
-                .players()
-                .opponents()
-                .nearby(MARKING_DISTANCE)
-                .next()
-                .is_some()
-        {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Marking,
-            ));
-        }
-
-        // Guard unmarked attackers who are trying to find space
-        if let Some(unmarked) = ctx
-            .player()
-            .defensive()
-            .find_unmarked_opponent(MARKING_DISTANCE * 3.0)
-            && !unmarked.has_ball(ctx)
-        {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Guarding,
-            ));
-        }
-
-        if Interception::is_available(ctx)
-            && ball_ops.is_towards_player()
-            && ball_ops.distance() < INTERCEPTION_DISTANCE
-        {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Intercepting,
-            ));
-        }
-
-        None
-    }
-
-    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Cover role: sit right behind the primary presser on the line
-        // between ball carrier and own goal. This is what "defending in
-        // pairs" actually means — if Primary is beaten, the attacker
-        // runs straight into Cover's zone rather than finding open space.
-        if let Some(cover_point) = ctx.player().defensive().cover_target_position()
-            && let Some(opponent) = ctx.players().opponents().with_ball().next()
-        {
-            let opp_velocity = opponent.velocity(ctx);
-            // Small tether toward tactical position prevents all
-            // defenders collapsing onto the same spot when multiple
-            // are in Cover-adjacent states.
-            let tether = 0.2;
-            let target = cover_point * (1.0 - tether) + ctx.team().my_anchor() * tether;
-            // The last shape-holding state that still answered only to
-            // its own job. Cover is a line role — sitting behind the
-            // presser is exactly the `DEPTH_DROP` this constraint
-            // exists to allow — so it belongs inside the shape, not
-            // outside it.
-            let target = DefensiveLine::hold_shape(ctx, target);
-            let to_target = target - ctx.player.position;
-            let distance = to_target.magnitude();
-
-            if distance < 2.0 {
-                // At the cover point — hold station on a MOVING man.
-                //
-                // This returned `opp_velocity * 0.4`: run the way he
-                // is running, at 40% of his speed. See
-                // [`StationKeeping`] for why that is a defender being
-                // left behind by construction, and why it is the
-                // reported behaviour written down.
-                return Some(
-                    StationKeeping::hold(opp_velocity, to_target)
-                        + ctx.player().separation_velocity() * 0.3,
-                );
-            }
-
-            let direction = to_target.normalize();
-            // Recovery_run_mult bakes pace/stamina/condition into a
-            // realistic 0.58..1.05 multiplier on the chase speed.
-            let def_profile = DefenderSkillProfile::from_ctx(ctx);
-            let speed = ctx.player.skills.physical.pace * 0.9 * def_profile.recovery_run_mult;
-            let urgency = (distance / 20.0).clamp(0.7, 1.4);
-            return Some(direction * speed * urgency + ctx.player().separation_velocity() * 0.2);
-        }
-
-        let target = self.calculate_optimal_covering_position(ctx);
-        let ball_velocity = ctx.tick_context.positions.ball.velocity;
-        // Project ball movement influence onto covering position
-        let ball_influence = ball_velocity * 0.3;
-
-        Some(
-            SteeringBehavior::Pursuit {
-                target,
-                target_velocity: ball_influence,
-            }
-            .calculate(ctx.player)
-            .velocity,
-        )
+        let def_profile = DefenderSkillProfile::from_ctx(ctx);
+        let speed = ctx.player.skills.physical.pace * 0.9 * def_profile.recovery_run_mult;
+        let urgency = (distance / 20.0).clamp(0.7, 1.4);
+        Some(to_target.normalize() * speed * urgency + ctx.player().separation_velocity() * 0.2)
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
         // Covering a gap during a live attack is a hard recovery run —
-        // a sprint, not a jog. `High` (0.78 of top speed) put the cover
-        // man permanently behind an attack whose carrier runs at a
-        // flat-out ceiling; see the note in `DefenderPressingState`.
-        DefenderCondition::with_velocity(ActivityIntensity::chase()).process(ctx);
-    }
-}
-
-impl DefenderCoveringState {
-    fn should_push_up(&self, ctx: &StateProcessingContext) -> bool {
-        let ball_ops = ctx.ball();
-        let player_ops = ctx.player();
-
-        let ball_in_attacking_third = ball_ops.distance_to_opponent_goal()
-            < ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD;
-        let team_in_possession = ctx.team().is_control_ball();
-        // Side-aware shared helper — the previous local copy only knew
-        // the Left-team geometry, so the genuine last man on a Right
-        // team was cleared to push up.
-        let defender_not_last_man = !ctx.player().defensive().is_last_defender();
-
-        ball_in_attacking_third
-            && team_in_possession
-            && defender_not_last_man
-            && player_ops.distance_from_position() < ctx.context.field_size.width as f32 * 0.25
-    }
-
-    fn calculate_optimal_covering_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let ball_position = ctx.tick_context.positions.ball.position;
-        let player_position = ctx.player.position;
-        let field_width = ctx.context.field_size.width as f32;
-        let field_height = ctx.context.field_size.height as f32;
-
-        // Calculate the center of the middle third with slight offset
-        // towards own goal — mirrored for Right-side teams (own goal at
-        // x = width), so a cover defender biases toward HIS OWN half.
-        // The clamp bounds below mirror the same way; the previous
-        // hard-coded [0.1w, 0.7w] band meant a Right-team cover
-        // defender could never drop deeper than the edge of his own
-        // defensive third.
-        let (center_x, clamp_min_x, clamp_max_x) = match ctx.player.side {
-            Some(PlayerSide::Right) => (field_width * 0.6, field_width * 0.3, field_width * 0.9),
-            _ => (field_width * 0.4, field_width * 0.1, field_width * 0.7),
-        };
-        let middle_third_center = Vector3::new(center_x, field_height * 0.5, 0.0);
-
-        // Cache own goal position (expensive to recompute)
-        let own_goal = ctx.ball().direction_to_own_goal();
-
-        // Get direction to own goal and normalize it
-        let ball_to_goal = (own_goal - ball_position).normalize();
-
-        // Calculate base covering position with better distance scaling
-        let covering_distance = (ball_position - own_goal).magnitude() * 0.35;
-        let covering_position =
-            ball_position + ball_to_goal * covering_distance.min(field_width * 0.3);
-
-        // Apply exponential moving average for position smoothing
-        const SMOOTHING_FACTOR: f32 = 0.15; // Adjust this value (0.0 to 1.0) to control smoothing
-        let previous_position = ctx.player.position;
-
-        // Check for dangerous spaces that need covering
-        let dangerous_space = self.find_dangerous_space(ctx);
-
-        // Calculate blended position with weighted factors
-        let target_position = if let Some(danger_pos) = dangerous_space {
-            // Prioritize covering dangerous space
-            Vector3::new(
-                danger_pos.x * 0.5 + covering_position.x * 0.3 + player_position.x * 0.2,
-                danger_pos.y * 0.5 + covering_position.y * 0.3 + player_position.y * 0.2,
-                0.0,
-            )
-        } else {
-            // Default covering behavior - reduced middle_third bias
-            Vector3::new(
-                covering_position.x * 0.5 +
-                    middle_third_center.x * 0.3 + // Reduced from 0.4
-                    player_position.x * 0.2, // Increased from 0.1
-                covering_position.y * 0.5 + middle_third_center.y * 0.3 + player_position.y * 0.2,
-                0.0,
-            )
-        };
-
-        // Apply smoothing between frames
-        let smoothed_position = previous_position.lerp(&target_position, SMOOTHING_FACTOR);
-
-        // Ensure the position stays within reasonable bounds
-        let max_distance_from_center = field_width * 0.35;
-        let position_relative_to_center = smoothed_position - middle_third_center;
-        let capped_position = if position_relative_to_center.magnitude() > max_distance_from_center
-        {
-            middle_third_center + position_relative_to_center.normalize() * max_distance_from_center
-        } else {
-            smoothed_position
-        };
-
-        // Final boundary check (side-mirrored, see above)
-        Vector3::new(
-            capped_position.x.clamp(clamp_min_x, clamp_max_x), // Prevent getting too close to either goal
-            capped_position
-                .y
-                .clamp(field_height * 0.1, field_height * 0.9), // Keep away from sidelines
-            0.0,
-        )
-    }
-
-    /// Check if there are dangerous threats nearby that require immediate attention
-    fn has_dangerous_threat_nearby(&self, ctx: &StateProcessingContext) -> bool {
-        // Check for immediate threats within marking distance
-        if ctx
-            .players()
-            .opponents()
-            .nearby(MARKING_DISTANCE)
-            .next()
-            .is_some()
-        {
-            return true;
-        }
-
-        // Check for dangerous runs
-        let own_goal_position = ctx.ball().direction_to_own_goal();
-
-        ctx.players()
-            .opponents()
-            .nearby(THREAT_SCAN_DISTANCE)
-            .any(|opp| {
-                let velocity = opp.velocity(ctx);
-                let speed_sq = velocity.norm_squared();
-
-                if speed_sq < DANGEROUS_RUN_SPEED * DANGEROUS_RUN_SPEED {
-                    return false;
-                }
-
-                let speed = speed_sq.sqrt();
-                let to_goal = (own_goal_position - opp.position).normalize();
-                let velocity_dir = velocity * (1.0 / speed);
-
-                velocity_dir.dot(&to_goal) >= DANGEROUS_RUN_ANGLE
-            })
-    }
-
-    /// Find dangerous space that needs to be covered — zero allocation
-    fn find_dangerous_space(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        let own_goal_position = ctx.ball().direction_to_own_goal();
-        let ball_pos = ctx.tick_context.positions.ball.position;
-        let ball_distance_to_goal = (ball_pos - own_goal_position).magnitude();
-
-        // Find the most dangerous opponent closest to goal — no collect needed
-        let most_dangerous = ctx
-            .players()
-            .opponents()
-            .nearby(THREAT_SCAN_DISTANCE)
-            .filter(|opp| {
-                let velocity = opp.velocity(ctx);
-                let speed_sq = velocity.norm_squared();
-
-                if speed_sq >= DANGEROUS_RUN_SPEED * DANGEROUS_RUN_SPEED {
-                    let speed = speed_sq.sqrt();
-                    let to_goal = (own_goal_position - opp.position).normalize();
-                    let velocity_dir = velocity * (1.0 / speed);
-                    velocity_dir.dot(&to_goal) >= DANGEROUS_RUN_ANGLE
-                } else {
-                    let distance_to_goal = (opp.position - own_goal_position).magnitude();
-                    distance_to_goal < ball_distance_to_goal && distance_to_goal < 300.0
-                }
-            })
-            .min_by(|a, b| {
-                let dist_a = (a.position - own_goal_position).norm_squared();
-                let dist_b = (b.position - own_goal_position).norm_squared();
-                dist_a.total_cmp(&dist_b)
-            })?;
-
-        let direction_to_goal = (own_goal_position - most_dangerous.position).normalize();
-        Some(most_dangerous.position + direction_to_goal * 15.0)
+        // a sprint, not a jog. See the note in `DefenderPressingState`.
+        DefenderCondition::new(ActivityIntensity::chase()).process(ctx);
     }
 }

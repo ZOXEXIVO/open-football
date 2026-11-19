@@ -65,6 +65,8 @@ fn legs_go_sooner_in_the_mud() {
                 player: &mut player,
                 conditions,
                 match_progress: 0.5,
+                side_on_ball: false,
+                ball_dead: false,
             });
         }
         player.player_attributes.condition

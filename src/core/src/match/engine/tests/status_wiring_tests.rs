@@ -8,20 +8,17 @@ use super::goal_celebration_tests::{squad, squad_in};
 use crate::MatchTacticType;
 use crate::PlayerPositionType;
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::DefensiveRest;
+use crate::r#match::defenders::states::common::DefenderRead;
 use crate::r#match::engine::engine::FootballEngine;
 use crate::r#match::engine::result::Score;
 use crate::r#match::engine::teamplay::possession::TeamPossession;
 use crate::r#match::engine::wide::Flank;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::MidfieldSupport;
+use crate::r#match::midfielders::states::common::MidfielderRead;
 use crate::r#match::player::state::PlayerState;
-use crate::r#match::player::strategies::defenders::states::resting::DefenderRestingState;
-use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::squad::squad::MatchSquad;
 use crate::r#match::{
     GameTickContext, MatchContext, MatchField, MatchPlayerCollection, StateProcessingContext,
-    StateProcessingHandler,
 };
 use nalgebra::Vector3;
 
@@ -46,172 +43,117 @@ fn in_role(field: &MatchField, wanted: fn(&PlayerState) -> bool) -> u32 {
         .id
 }
 
-/// Everybody a long way off, the ball with `owner` at the far end.
-fn quiet_pitch(field: &mut MatchField, owner: u32) {
+// ── A tired midfielder eases off in his place ───────────────────────────
+
+/// The away side on the ball 40 m from a home central midfielder standing on
+/// his place: the phase he reads at `condition`.
+fn phase_of_a_midfielder_at(condition: i16) -> MidfielderState {
+    let (mut field, context) = pitch();
+    let id = field
+        .players
+        .iter()
+        .find(|p| p.team_id == 1 && p.tactical_position.current_position.is_central_midfielder())
+        .expect("a home central midfielder")
+        .id;
+    let place = field.get_player(id).expect("him").start_position;
     for (index, player) in field.players.iter_mut().enumerate() {
-        player.position = Vector3::new(780.0, 20.0 + index as f32 * 22.0, 0.0);
+        player.position = Vector3::new(820.0, 20.0 + index as f32 * 22.0, 0.0);
+        player.velocity = Vector3::zeros();
     }
-    field.ball.current_owner = Some(owner);
-    field.ball.position = field.get_player(owner).expect("owner").position;
-}
-
-// ── A midfielder with nothing to run for walks ──────────────────────────
-
-#[test]
-fn a_fresh_midfielder_with_nothing_to_run_for_walks() {
-    let (mut field, context) = pitch();
-    let owner = in_role(&field, |s| matches!(s, PlayerState::Forward(_)));
-    let id = in_role(&field, |s| matches!(s, PlayerState::Midfielder(_)));
-    quiet_pitch(&mut field, owner);
-    let at = field.get_player(id).expect("him").start_position;
-    let player = field.get_player_mut(id).expect("him");
-    player.position = at;
-    player.player_attributes.condition = 9500;
-
-    let tick = GameTickContext::new(&field, &context.players);
-    let ctx = StateProcessingContext {
-        in_state_time: 40,
-        player: field.get_player(id).expect("him"),
-        context: &context,
-        tick_context: &tick,
-    };
-    assert!(MidfieldSupport::walks(&ctx));
-    assert_eq!(
-        MidfieldSupport::wanted(&ctx),
-        Some(MidfielderState::Walking),
-        "the off-ball decision reads the walk gate, not only `Standing`",
-    );
-}
-
-#[test]
-fn a_midfielder_near_the_ball_does_not_walk() {
-    let (mut field, context) = pitch();
-    let owner = in_role(&field, |s| matches!(s, PlayerState::Forward(_)));
-    let id = in_role(&field, |s| matches!(s, PlayerState::Midfielder(_)));
-    quiet_pitch(&mut field, owner);
-    let at = field.get_player(id).expect("him").start_position;
-    field.get_player_mut(id).expect("him").position = at;
-    field.ball.position = at + Vector3::new(120.0, 0.0, 0.0);
-    field.get_player_mut(owner).expect("owner").position = field.ball.position;
-
-    let tick = GameTickContext::new(&field, &context.players);
-    let ctx = StateProcessingContext {
-        in_state_time: 40,
-        player: field.get_player(id).expect("him"),
-        context: &context,
-        tick_context: &tick,
-    };
-    assert!(!MidfieldSupport::walks(&ctx));
-}
-
-// ── A tired defender eases off when he can ──────────────────────────────
-
-fn tired_defender(field: &mut MatchField) -> u32 {
-    let id = in_role(field, |s| matches!(s, PlayerState::Defender(_)));
-    let player = field.get_player_mut(id).expect("him");
-    player.position = Vector3::new(60.0, 270.0, 0.0);
-    player.player_attributes.condition = 5500;
-    id
-}
-
-#[test]
-fn a_tired_defender_eases_off_when_he_can() {
-    let (mut field, context) = pitch();
-    let owner = in_role(&field, |s| matches!(s, PlayerState::Forward(_)));
-    quiet_pitch(&mut field, owner);
-    let id = tired_defender(&mut field);
-    let tick = GameTickContext::new(&field, &context.players);
-    let ctx = StateProcessingContext {
-        in_state_time: 80,
-        player: field.get_player(id).expect("him"),
-        context: &context,
-        tick_context: &tick,
-    };
-    assert!(DefensiveRest::may_stand_down(&ctx));
-    assert!(
-        !DefensiveRest::is_wanted(&ctx),
-        "entry sits inside the exit"
-    );
-}
-
-#[test]
-fn a_fresh_defender_keeps_going() {
-    let (mut field, context) = pitch();
-    let owner = in_role(&field, |s| matches!(s, PlayerState::Forward(_)));
-    quiet_pitch(&mut field, owner);
-    let id = tired_defender(&mut field);
+    field.get_player_mut(id).expect("him").position = place;
+    let carrier = field
+        .players
+        .iter()
+        .find(|p| p.team_id == 2 && p.tactical_position.current_position.is_forward())
+        .expect("an away forward")
+        .id;
+    let ball_at = place + Vector3::new(0.0, if place.y < 272.0 { 320.0 } else { -320.0 }, 0.0);
+    field.get_player_mut(carrier).expect("him").position = ball_at;
+    field.ball.position = ball_at;
+    field.ball.current_owner = Some(carrier);
     field
         .get_player_mut(id)
         .expect("him")
         .player_attributes
-        .condition = 9000;
+        .condition = condition;
     let tick = GameTickContext::new(&field, &context.players);
     let ctx = StateProcessingContext {
-        in_state_time: 80,
+        in_state_time: 40,
         player: field.get_player(id).expect("him"),
         context: &context,
         tick_context: &tick,
     };
-    assert!(!DefensiveRest::may_stand_down(&ctx));
+    MidfielderRead::phase(&ctx)
 }
 
-fn resting_decision(field: &MatchField, context: &MatchContext, id: u32) -> Option<PlayerState> {
-    let tick = GameTickContext::new(field, &context.players);
-    let ctx = StateProcessingContext {
-        in_state_time: 80,
-        player: field.get_player(id).expect("him"),
-        context,
-        tick_context: &tick,
+#[test]
+fn a_tired_midfielder_is_relaxed_where_a_fresh_one_is_alert() {
+    assert_eq!(
+        phase_of_a_midfielder_at(9000),
+        MidfielderState::HoldingShape
+    );
+    assert_eq!(phase_of_a_midfielder_at(5500), MidfielderState::Walking);
+}
+
+// ── A tired defender eases off when he can ──────────────────────────────
+
+/// The away side on the ball 50 m from the home goal, the home back line
+/// on its slots: the phase a home centre-back at `condition` reads.
+fn phase_of_a_defender_at(condition: i16) -> DefenderState {
+    let (mut field, context) = pitch();
+    let home_left = field.side_of(1) == crate::r#match::PlayerSide::Left;
+    let x = |from_home_goal: f32| {
+        if home_left {
+            from_home_goal
+        } else {
+            840.0 - from_home_goal
+        }
     };
-    DefenderRestingState::default()
-        .process(&ctx)
-        .and_then(|change| change.state)
-}
-
-#[test]
-fn a_resting_defender_comes_back_for_the_ball() {
-    let (mut field, context) = pitch();
-    let owner = in_role(&field, |s| matches!(s, PlayerState::Forward(_)));
-    quiet_pitch(&mut field, owner);
-    let id = tired_defender(&mut field);
-    field.get_player_mut(id).expect("him").transition_to(
-        PlayerState::Defender(DefenderState::Resting),
-        TransitionSource::Reset,
-    );
-    assert_eq!(
-        resting_decision(&field, &context, id),
-        None,
-        "nothing wants him yet"
-    );
-
-    field.ball.position = Vector3::new(150.0, 270.0, 0.0);
-    assert_eq!(
-        resting_decision(&field, &context, id),
-        Some(PlayerState::Defender(DefenderState::HoldingLine)),
-    );
-}
-
-#[test]
-fn a_resting_defender_comes_back_for_a_man() {
-    let (mut field, context) = pitch();
-    let owner = in_role(&field, |s| matches!(s, PlayerState::Forward(_)));
-    quiet_pitch(&mut field, owner);
-    let id = tired_defender(&mut field);
-    let threat = field
+    for (index, player) in field.players.iter_mut().enumerate() {
+        player.position = Vector3::new(x(760.0), 20.0 + index as f32 * 22.0, 0.0);
+        player.velocity = Vector3::zeros();
+    }
+    for player in field
+        .players
+        .iter_mut()
+        .filter(|p| p.team_id == 1 && p.tactical_position.current_position.is_defender())
+    {
+        player.position = Vector3::new(x(120.0), player.start_position.y, 0.0);
+    }
+    let carrier = field
         .players
         .iter()
-        .find(|p| p.team_id == 2)
-        .expect("an opponent")
+        .find(|p| p.team_id == 2 && p.tactical_position.current_position.is_forward())
+        .expect("an away forward")
         .id;
-    field.get_player_mut(threat).expect("him").position = Vector3::new(100.0, 270.0, 0.0);
-    field.get_player_mut(id).expect("him").transition_to(
-        PlayerState::Defender(DefenderState::Resting),
-        TransitionSource::Reset,
-    );
-    assert_eq!(
-        resting_decision(&field, &context, id),
-        Some(PlayerState::Defender(DefenderState::HoldingLine)),
-    );
+    field.get_player_mut(carrier).expect("him").position = Vector3::new(x(400.0), 272.0, 0.0);
+    field.ball.position = Vector3::new(x(400.0), 272.0, 0.0);
+    field.ball.current_owner = Some(carrier);
+    let id = field
+        .players
+        .iter()
+        .find(|p| p.team_id == 1 && p.tactical_position.current_position.is_central_defender())
+        .expect("a home centre-back")
+        .id;
+    field
+        .get_player_mut(id)
+        .expect("him")
+        .player_attributes
+        .condition = condition;
+    let tick = GameTickContext::new(&field, &context.players);
+    let ctx = StateProcessingContext {
+        in_state_time: 40,
+        player: field.get_player(id).expect("him"),
+        context: &context,
+        tick_context: &tick,
+    };
+    DefenderRead::phase(&ctx)
+}
+
+#[test]
+fn a_tired_defender_stands_down_where_a_fresh_one_is_alert() {
+    assert_eq!(phase_of_a_defender_at(9000), DefenderState::HoldingLine);
+    assert_eq!(phase_of_a_defender_at(5500), DefenderState::Walking);
 }
 
 // ── A front three holds the width ───────────────────────────────────────

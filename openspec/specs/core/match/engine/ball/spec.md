@@ -6,11 +6,33 @@ Owns the ball itself — flight physics, boundary/goal detection, possession cla
 ## Requirements
 
 ### Requirement: Goal detection and scoring
-The system SHALL detect when the ball fully crosses the goal line within the goal frame and SHALL credit the goal to the scoring team's tally and to the responsible player (including recording own goals against the scoring team when the ball is turned into a player's own net), triggering the post-goal restart sequence.
+The system SHALL detect when the ball fully crosses the goal line within the goal frame. It SHALL credit the goal to the scoring team's tally and to the responsible player, and trigger the post-goal restart sequence.
+
+The responsible player SHALL be decided by the football rule for own goals:
+- When the last player to touch the ball belongs to the side whose goal it entered, the goal SHALL be an own goal against that player.
+- The one exception is a shot by the other side that reached him untouched and was already heading on frame when he touched it. That goal SHALL stay the shooter's.
+- How long the defender had the ball SHALL NOT decide whose goal it is.
+- An own goal SHALL carry no assist.
 
 #### Scenario: Own goal credited correctly
-- **WHEN** a defending player deflects the ball into their own goal
+- **WHEN** a defending player deflects a cross into his own goal
 - **THEN** the goal is added to the opposing team's tally and recorded as an own goal against the defending player, not as a goal for any attacking player
+
+#### Scenario: A shot on target deflected in is the shooter's goal
+- **WHEN** a shot heading on frame touches a defender on its way and goes in
+- **THEN** the goal is credited to the shooter
+
+#### Scenario: A shot going wide turned in is an own goal
+- **WHEN** a shot heading wide of the frame is turned into the net by a defender
+- **THEN** the goal is recorded as an own goal against the defender
+
+#### Scenario: A save that comes back in off a defender is an own goal
+- **WHEN** the keeper parries a shot and the ball goes into the net off a team-mate of the keeper
+- **THEN** the goal is recorded as an own goal against that team-mate, because the ball that reached him was no longer the shot
+
+#### Scenario: A brief touch is still an own goal
+- **WHEN** a defender gets the faintest touch to a low ball driven across his six-yard box and it goes in
+- **THEN** the goal is recorded as an own goal against him, however short his touch
 
 ### Requirement: Pass interception contest
 A pass in flight SHALL be contestable by defending players positioned to intercept it, evaluated once per opposing player at that player's closest point of approach to the ball's flight path, rather than being resolved once at the moment the ball is kicked.
@@ -20,7 +42,7 @@ A pass in flight SHALL be contestable by defending players positioned to interce
 - **THEN** that player has a chance to win the ball determined by the contest at that closest-approach moment, not by a single check at the pass's origin
 
 ### Requirement: Ball possession claims and loose balls
-The system SHALL track who currently owns the ball and how they came by it (received a pass, won a loose ball, intercepted, or tackled it away), SHALL resolve claims on an uncontrolled or contested ball by proximity and challenge outcome, and SHALL treat a ball received far outside close control range as not yet under control rather than as an automatically completed reception.
+The system SHALL track who currently owns the ball and how they came by it (received a pass, won a loose ball, intercepted, or tackled it away). It SHALL resolve claims on a ball nobody controls by proximity, and claims on a ball a player controls by the outcome of a challenge. It SHALL treat a ball received far outside close control range as not yet under control rather than as an automatically completed reception.
 
 #### Scenario: Ball received well beyond control range stays loose
 - **WHEN** a pass arrives near a team-mate but beyond the distance at which the ball is considered under a player's control
@@ -29,6 +51,10 @@ The system SHALL track who currently owns the ball and how they came by it (rece
 #### Scenario: Possession source is attributed correctly
 - **WHEN** a player gains the ball by winning a tackle rather than by receiving a pass
 - **THEN** the resulting possession is attributed to a tackle-win rather than to a pass reception
+
+#### Scenario: A ball taken off a carrier is a tackle-win
+- **WHEN** a player takes the ball off an opponent who controls it, by whichever rule decides the challenge
+- **THEN** the resulting possession is attributed to a tackle-win, and never to a loose ball
 
 ### Requirement: Offside detection on passes
 The system SHALL snapshot every attacker's offside status at the moment a team-mate plays the ball, using the position of the ball, each attacker, and the second-last defender on the defending team, and SHALL apply a small tolerance to absorb positional ambiguity rather than flagging on exact coordinate equality. The snapshot SHALL remain valid until the ball is next deliberately played by any player — not for a fixed time — and the offence SHALL be committed by whichever attacker first becomes involved in play from an offside position, whether or not they were the intended receiver, including a ball that reaches them from a defender's deflection, a keeper's save or the woodwork. A deliberate play by a defender SHALL reset the snapshot. The offence SHALL restart with an indirect free kick to the defending side, and the passer's own decision-making SHALL account for the same offside line when choosing whether to attempt the pass.
@@ -135,7 +161,10 @@ delivery's deadline passes, or when another player touches the ball.
 ### Requirement: A pass in flight can be blocked by the men it passes
 Every opponent a pass, cross included, passes on its way SHALL have one chance per flight to block it. The chance SHALL be one rule that changes continuously with the blocker's time to react, the time the ball takes to reach him:
 
-- With almost no time, the block is a **charge-down**. It is decided by his body: how near the ball's line he stands, and whether the ball is below his standing reach when it gets to him. It SHALL NOT depend on where on the pitch the pass is played.
+- With almost no time, the block is a **charge-down**. It is decided by his body: how near the ball's line he stands, and whether the ball is below his standing reach when it gets to him.
+  - The chance SHALL be greatest for a ball whose line runs through his body, and SHALL fall to a toe's at a metre off the line.
+  - Its size SHALL be the largest that keeps blocked passes within the real 9 to 11 a team. A charge-down the size of the body stops a ball struck through a man square on, at equal standing, six times in ten. That size blocks about 32 passes a team while passers still strike the ball past a man a stride away, so the size stays below it until they stop doing so.
+  - It SHALL NOT depend on where on the pitch the pass is played.
 - With time to read the pass, the block is a **lunge**. It is decided by how well he reads it and how far he must stretch, below the height of a leg. It SHALL apply only toward his own goal, rising as the ball gets nearer to it.
 
 Skill SHALL enter as a duel between the blocker and the striker's technique for that strike: crossing for a cross, passing otherwise. A blocker and a striker of equal standing SHALL produce the same block rate at every level of football.
@@ -145,6 +174,10 @@ A block SHALL turn the ball loose, not hand it to the blocker, except when it wa
 #### Scenario: A ball struck into a man a stride away is charged down
 - **WHEN** a pass is struck along a line through an opponent a stride from the striker, and the ball is below his standing reach as it reaches him
 - **THEN** he has a chance of blocking it that does not depend on having read the pass, and it is greatest when he is square on the line
+
+#### Scenario: Blocked passes stay at the real rate
+- **WHEN** two sides of equal standing play a match
+- **THEN** each side blocks between about 9 and 11 of the other's passes
 
 #### Scenario: The charge-down applies anywhere on the pitch
 - **WHEN** the same pass, struck into a man a stride away, is played once on the halfway line and once in front of the blocker's own goal
@@ -277,3 +310,220 @@ When a player evaluates whether a shooting or passing lane is clear, the lane ch
 #### Scenario: Defender on the shooting line
 - **WHEN** a defender stands on the straight line between the ball and the goal within the lane's width
 - **THEN** the lane is reported obstructed
+
+### Requirement: A goalkeeper's save is decided once, where the shot meets him
+Every shot that reaches a goalkeeper SHALL be adjudicated exactly once, by one save model. The adjudication SHALL read:
+- the keeper's position;
+- his posture at the moment of contact (set, moving, diving, or on the ground);
+- how far across him the ball passes and how high it passes him;
+- the shot's pace;
+- his skills.
+
+It SHALL produce one outcome:
+- held;
+- parried and kept in play;
+- tipped over or round the frame;
+- spilled in front of him;
+- deflected, carrying on at reduced pace;
+- beaten.
+
+No second adjudication of the same shot SHALL exist anywhere else. Only a shot that would have entered the goal SHALL be counted as on target. A save SHALL be credited only for such a shot. A keeper may still touch or collect a ball that was heading wide or over, and that touch SHALL NOT count as a save.
+
+#### Scenario: No shot is adjudicated twice
+- **WHEN** a 100-match batch is played
+- **THEN** every shot that reaches a keeper has exactly one adjudication, and the census shows no shot resolved by a second path
+
+#### Scenario: A shot over the bar is not a save
+- **WHEN** a keeper tips over a shot whose centre would have crossed the line above the bar
+- **THEN** it is recorded as a shot off target and the keeper is not credited with a save, though the restart is still a corner
+
+#### Scenario: A beaten shot stays beaten
+- **WHEN** the adjudication decides a shot beats the keeper
+- **THEN** no later tick of that flight gives the ball to him
+
+### Requirement: A rebound comes to rest where a real one lies
+A ball a goalkeeper does not hold SHALL leave him at the pace that brings it to rest at the distance its outcome describes. The distances, measured from where he met the ball, SHALL be:
+
+| Outcome | Comes to rest |
+|---|---|
+| Spill | 1.5–6 m in front of him |
+| Parry kept in play | 5–15 m from him, wide of the middle of his goal |
+| Rebound off his body | within 5 m of him |
+| Ball knocked away in a smother | within 5 m of him, away from his goal |
+| Flapped cross | within 10 m of where he touched it |
+
+No such ball SHALL travel the distance of a clearance. A ball a keeper knocks away, or punches, SHALL be booked to the keeper as the player who struck it, and SHALL be guarded against going toward his own goal on his account, not on the account of the opponent who had it.
+
+#### Scenario: A spill drops in the box
+- **WHEN** a keeper spills a shot he could not hold
+- **THEN** the ball comes to rest between 1.5 m and 6 m in front of where he met it
+
+#### Scenario: A smother knock-away goes away from his goal
+- **WHEN** a keeper smothers at a striker's feet and knocks the ball away
+- **THEN** the ball moves away from the keeper's goal, and the keeper is booked as the player who played it
+
+#### Scenario: A flap stays near the goal
+- **WHEN** a keeper flaps at a cross
+- **THEN** the ball comes to rest within 10 m of where he touched it, where the attackers can still reach it
+
+### Requirement: A goalkeeper uses his hands only where the Laws allow
+A goalkeeper SHALL use his hands only on a ball inside his own penalty area that the Laws let him handle. This SHALL hold for every way a save or gather is made, including:
+- a catch;
+- a parry;
+- a tip over or round the frame;
+- a gather in a dive;
+- a smother.
+
+Outside his area he SHALL play the ball only with his body, his legs or his head. His reach there SHALL be only what those can cover.
+
+#### Scenario: A dive outside the area
+- **WHEN** a keeper who has come out of his area dives at a loose ball outside it
+- **THEN** he does not take the ball into his hands, and plays it with his body or feet instead
+
+#### Scenario: A shot met outside the area
+- **WHEN** a shot reaches a keeper standing outside his penalty area
+- **THEN** he can stop it only with his body or legs, and is never credited with a catch, a parry with the hands or a tip
+
+### Requirement: An injured goalkeeper makes no saves
+A goalkeeper who is down injured SHALL NOT make any save, catch, parry or claim. He SHALL stop a ball only by being struck by it, lying where he is.
+
+#### Scenario: A shot while the keeper is down injured
+- **WHEN** a shot is struck at goal while the keeper lies injured and play goes on
+- **THEN** it can be stopped only by striking his body where he lies; he does not dive, catch, parry or move toward it
+
+### Requirement: A high ball is contested once
+A ball in the air SHALL be contested once in its flight, whichever rule decides it: the contest for a cross or a corner, or the duel for any other lofted pass. A flight one of them has decided SHALL NOT be decided again by the other, nor by the player who goes up for it. The outcome SHALL be handed to the player who won it, and he SHALL carry it out.
+
+#### Scenario: A cross is not rolled twice
+- **WHEN** a cross is decided by the aerial duel before it comes down into the cross contest's band
+- **THEN** the cross contest does not decide it again
+
+#### Scenario: A batch shows no flight decided twice
+- **WHEN** a 100-match batch is played
+- **THEN** no flight is decided by more than one aerial rule, and no player who has been awarded a high ball rolls again for it
+
+#### Scenario: The winner carries it out
+- **WHEN** a defender wins a high ball
+- **THEN** the header is played by him, from the state he heads in, and his state is not written by the rule that decided the contest
+
+### Requirement: A carried ball is taken by a challenge that is decided once
+A player in possession SHALL lose the ball to an opponent only through a challenge that opponent makes, an interception or a block of a ball he has released, or his own loss of control. An opponent who is merely close to him SHALL NOT take it by being close.
+
+A challenge SHALL be decided once, by both players' relevant attributes, the carrier's ability to carry the ball among them. It SHALL be able to be a foul, and the challenger SHALL NOT be able to challenge again at once. A ball taken off a carrier SHALL be credited to the player who took it as a tackle.
+
+#### Scenario: Standing close is not winning it
+- **WHEN** an opponent with the better tackling stands within 0.6 m of a carrier for a second
+- **THEN** the ball changes hands only if a challenge is made and won, and never by a comparison of the two players alone
+
+#### Scenario: The carrier's skill counts
+- **WHEN** the same opponent challenges a poor carrier and an excellent one from within 0.6 m
+- **THEN** the excellent carrier keeps the ball more often
+
+#### Scenario: A missed challenge is not overruled
+- **WHEN** a defender's challenge on a carrier is decided as a miss
+- **THEN** the defender does not have the ball on any of the following ticks unless he wins it again after recovering
+
+#### Scenario: The ball taken is a tackle
+- **WHEN** a 100-match batch is played
+- **THEN** every time a player takes the ball off an opponent who has it, a tackle is credited to him
+
+#### Scenario: The duel does not open the game
+- **WHEN** a 300-match batch is played
+- **THEN** goals, shots, fouls and penalties per match stay inside their realism bands
+
+### Requirement: A ball knocked away by a block or a tackle comes to rest where a real one lies
+A ball that comes off a defender without being kept SHALL leave him at a pace that brings it to rest where a real one lies:
+- a blocked shot that drops loose SHALL come to rest within 3 to 10 m of the blocker;
+- a blocked shot turned sideways SHALL come to rest within 8 to 25 m of him;
+- a ball knocked away by a tackle SHALL come to rest within 2 to 8 m of the challenge;
+- a ball turned behind or wide SHALL still go out of play.
+
+A blocked shot SHALL NOT leave the blocker faster than it reached him. A block SHALL be made only by a player within a lunge of the ball's line when the ball reaches him, and SHALL be recorded once, as a block.
+
+#### Scenario: A blocked shot drops near the blocker
+- **WHEN** a shot is blocked and drops loose with nobody touching it afterwards
+- **THEN** it comes to rest within 3 to 10 m of the blocker, against a roll of 74 m or more before this change
+
+#### Scenario: A tackled ball stays near the tackle
+- **WHEN** a tackle knocks the ball loose and nobody touches it afterwards
+- **THEN** it comes to rest within 2 to 8 m of the challenge, against 27 m before this change
+
+#### Scenario: A deflection is no faster than the shot
+- **WHEN** any shot is blocked
+- **THEN** the ball's speed after the block is no greater than its speed before it
+
+#### Scenario: The ball comes off the man
+- **WHEN** a shot is blocked
+- **THEN** the blocker is within a lunge of the ball when it changes direction
+
+#### Scenario: A controlled block is a block
+- **WHEN** a defender blocks a shot and keeps the ball
+- **THEN** one block is recorded for him, and no interception
+
+#### Scenario: Blocks stay in their band
+- **WHEN** a 300-match batch is played
+- **THEN** between 18% and 26% of shots are blocked
+
+### Requirement: A player who cannot play the ball contests nothing
+A player who is injured, or who is recovering from a challenge he has just missed, SHALL NOT intercept a pass, charge down or block a pass or a shot, or take the ball off an opponent, until he can play the ball again.
+
+#### Scenario: A man on the ground does not intercept
+- **WHEN** a pass travels within reach of a defender who is recovering from a missed slide
+- **THEN** he does not intercept or block it
+
+#### Scenario: An injured man takes nothing
+- **WHEN** a carrier runs within 0.6 m of an opponent who is down injured
+- **THEN** the ball does not change hands
+
+### Requirement: A ball dropping with no intended receiver is contested once by the men under it
+A ball in the air that was played to nobody in particular (a clearance, a deflection, a header away) SHALL be contested when it comes down into heading reach of players of both sides. The contest SHALL be decided once in the ball's flight, by both players' aerial attributes and by how hard the ball is for each of them to reach. It SHALL be the same single decision a high ball played to a named receiver gets, and no other rule and no player SHALL decide that flight again.
+
+The outcome SHALL be handed to the player who won it, and he SHALL play the header himself. A ball that players of only one side can reach is not contested: it is that side's to play, and nothing rolls for whether the nearest of them makes contact.
+
+#### Scenario: A clearance dropping in midfield
+- **WHEN** a clearance comes down between two opposing midfielders who can both reach it
+- **THEN** one contest decides which of them wins it, and the winner heads it
+
+#### Scenario: Decided once
+- **WHEN** a 100-match batch is played
+- **THEN** no dropping ball is decided by more than one aerial rule, and no player rolls for a ball already decided
+
+#### Scenario: Nobody to beat
+- **WHEN** a dropping ball can be reached by one midfielder and by no opponent
+- **THEN** no contest is rolled, and the ball is his to play
+
+#### Scenario: A second ball exists
+- **WHEN** a 100-match batch is played
+- **THEN** the batch reports how many dropping balls with no named receiver were contested per match, the count is above zero, and pass completion and goals per match stay inside their realism bands
+
+### Requirement: A cross is booked by what it is and completed by its first contact
+The following SHALL be booked as crosses:
+- every delivery the crossing decision makes;
+- every corner delivered into the penalty area;
+- any other pass played from a wide area of the attacking third into the opponents' penalty area as a delivery, either lofted into it, or driven or pulled back across it.
+
+A ball played along the ground to a team-mate standing at the edge of the area, or to a team-mate within 10 m of the passer, SHALL be booked as a pass.
+
+A cross SHALL be booked as completed when the first player to play it after the strike is a team-mate of the crosser. That includes taking it under control, heading it, and striking it.
+
+It SHALL be booked as not completed when the first player to play it is an opponent: a block, a header, a clearance, an interception, or a keeper's claim or punch. It SHALL also be booked as not completed when it leaves the pitch or comes to rest without anybody playing it. The booking SHALL be made once, at that first contact.
+
+#### Scenario: A ground ball to the edge of the area is a pass
+- **WHEN** a wide player plays the ball along the ground to a team-mate standing at the edge of the penalty area
+- **THEN** it is booked as a pass, not a cross
+
+#### Scenario: A lofted ball into the box from wide is a cross
+- **WHEN** a player in a wide area of the attacking third lofts the ball into the penalty area, whichever decision chose the pass
+- **THEN** it is booked as a cross
+
+#### Scenario: A cross won in the air is completed
+- **WHEN** an attacker wins the aerial contest for a cross and heads it
+- **THEN** the cross is booked as completed
+
+#### Scenario: A blocked cross is not completed
+- **WHEN** a cross is blocked by the defender closing the crosser and runs loose to an attacker
+- **THEN** the cross is booked as not completed, because the defender played it first
+
+#### Scenario: A claimed cross is not completed
+- **WHEN** the keeper claims or punches a cross before anybody else touches it
+- **THEN** the cross is booked as not completed

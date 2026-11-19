@@ -5,8 +5,12 @@
 //! parallel can be summed without any process-global counter.
 
 use crate::r#match::engine::ball::ball::PassOriginRestart;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::delivery_diag::DeliveryTally;
 use crate::r#match::engine::player::events::players::FoulSource;
 use crate::r#match::engine::player::injury::{InjuryCause, InjuryGrade};
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::result::team_census::TeamCensusTally;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +111,42 @@ pub struct MatchTally {
     #[cfg(feature = "match-logs")]
     #[serde(default)]
     pub outfield_motion: OutfieldMotionTally,
+    /// Both keepers' time on the ground after a dive that left them
+    /// without the ball.
+    #[cfg(feature = "match-logs")]
+    #[serde(default)]
+    pub keeper_ground: KeeperGroundTally,
+    /// Summed over the players who run the defender state machine.
+    #[cfg(feature = "match-logs")]
+    #[serde(default)]
+    pub defender_motion: RoleMotionTally,
+    /// …and over the players who run the midfielder one.
+    #[cfg(feature = "match-logs")]
+    #[serde(default)]
+    pub midfielder_motion: RoleMotionTally,
+    /// …and over the players who run the forward one.
+    #[cfg(feature = "match-logs")]
+    #[serde(default)]
+    pub forward_motion: RoleMotionTally,
+    /// How each side played, by game state. See `TeamCensus`.
+    #[cfg(feature = "match-logs")]
+    #[serde(default)]
+    pub team_census: TeamCensusTally,
+    /// Every cross from its strike to its end, and where corners,
+    /// throw-ins and own goals came from. See `DeliveryCensus`.
+    #[cfg(feature = "match-logs")]
+    #[serde(default)]
+    pub delivery: DeliveryTally,
+}
+
+/// A keeper's spells on the ground without the ball: how many, how many
+/// engine ticks they lasted in all, and how far he travelled during them.
+#[cfg(feature = "match-logs")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeeperGroundTally {
+    pub spells: u64,
+    pub ticks: u64,
+    pub path_mm: u64,
 }
 
 /// How much the outfielders of a match moved and changed their minds, in
@@ -118,6 +158,18 @@ pub struct OutfieldMotionTally {
     pub state_changes: u64,
     pub path_mm: u64,
     pub ticks: u64,
+}
+
+/// One role's share of [`OutfieldMotionTally`], and how much of the live ball
+/// its players spent at or below a walk (2 m/s over a quarter second).
+#[cfg(feature = "match-logs")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoleMotionTally {
+    pub state_changes: u64,
+    pub path_mm: u64,
+    pub ticks: u64,
+    pub live_ticks: u64,
+    pub slow_live_ticks: u64,
 }
 
 impl MatchTally {
@@ -227,6 +279,26 @@ impl MatchTally {
             self.outfield_motion.state_changes += other.outfield_motion.state_changes;
             self.outfield_motion.path_mm += other.outfield_motion.path_mm;
             self.outfield_motion.ticks += other.outfield_motion.ticks;
+            self.keeper_ground.spells += other.keeper_ground.spells;
+            self.keeper_ground.ticks += other.keeper_ground.ticks;
+            self.keeper_ground.path_mm += other.keeper_ground.path_mm;
+            self.defender_motion.state_changes += other.defender_motion.state_changes;
+            self.defender_motion.path_mm += other.defender_motion.path_mm;
+            self.defender_motion.ticks += other.defender_motion.ticks;
+            self.defender_motion.live_ticks += other.defender_motion.live_ticks;
+            self.defender_motion.slow_live_ticks += other.defender_motion.slow_live_ticks;
+            self.midfielder_motion.state_changes += other.midfielder_motion.state_changes;
+            self.midfielder_motion.path_mm += other.midfielder_motion.path_mm;
+            self.midfielder_motion.ticks += other.midfielder_motion.ticks;
+            self.midfielder_motion.live_ticks += other.midfielder_motion.live_ticks;
+            self.midfielder_motion.slow_live_ticks += other.midfielder_motion.slow_live_ticks;
+            self.forward_motion.state_changes += other.forward_motion.state_changes;
+            self.forward_motion.path_mm += other.forward_motion.path_mm;
+            self.forward_motion.ticks += other.forward_motion.ticks;
+            self.forward_motion.live_ticks += other.forward_motion.live_ticks;
+            self.forward_motion.slow_live_ticks += other.forward_motion.slow_live_ticks;
+            self.team_census.absorb(&other.team_census);
+            self.delivery.absorb(&other.delivery);
         }
     }
 }

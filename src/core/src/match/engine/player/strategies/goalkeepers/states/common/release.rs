@@ -10,7 +10,6 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::StateProcessingContext;
 use crate::r#match::engine::flow::context::MATCH_TIME_INCREMENT_MS;
-use crate::r#match::teamplay::coach::CoachInstruction;
 
 pub struct KeeperRelease;
 
@@ -34,6 +33,10 @@ impl KeeperRelease {
     /// splitting to the edge of the box.
     pub const SHORT_RANGE: f32 = 140.0;
 
+    /// A counter is on past this [`Self::counter_opportunity`]: he goes as
+    /// soon as the ball is his.
+    pub const COUNTER_ON: f32 = 0.45;
+
     /// Radius used to judge whether an outlet is actually free (~5 m).
     const MARKING_RADIUS: f32 = 40.0;
 
@@ -44,6 +47,11 @@ impl KeeperRelease {
     /// How far up the pitch we look for an opponent when deciding whether
     /// our own third is being pressed (~17.5 m).
     const PRESS_RADIUS: f32 = 140.0;
+    /// The keeper's directness on a neutral plan at a level stance, how far
+    /// the plan's directness moves it, and how far the stance does.
+    const DIRECTNESS_NEUTRAL: f32 = 0.30;
+    const DIRECTNESS_SPAN: f32 = 0.6;
+    const DIRECTNESS_STANCE: f32 = 0.6;
 
     /// How long he keeps looking for the release he chose before he goes
     /// long, in AI ticks: three seconds for a side playing at no tempo,
@@ -180,21 +188,16 @@ impl KeeperRelease {
         exposure * outlet
     }
 
-    /// How direct the manager wants the side to be (0..1). A side told to
-    /// push forward or chase the game bypasses midfield; one told to slow
-    /// down or keep the ball plays out.
+    /// How direct the manager wants the side to be (0..1): the plan's
+    /// directness, moved by how hard the side is chasing the match.
     pub fn directness(ctx: &StateProcessingContext) -> f32 {
-        let from_instruction = match ctx.team().coach_instruction() {
-            CoachInstruction::AllOutAttack => 0.90,
-            CoachInstruction::PushForward => 0.60,
-            CoachInstruction::ParkTheBus => 0.55,
-            CoachInstruction::Normal => 0.30,
-            CoachInstruction::SlowDown => 0.10,
-            CoachInstruction::WasteTime => 0.0,
-        };
-        // Patient build-up sides go long less often regardless of the
-        // in-game instruction.
-        let patience = ctx.team().build_up_patience().clamp(0.0, 1.0);
-        (from_instruction * (1.0 - patience * 0.5)).clamp(0.0, 1.0)
+        let team = ctx.team();
+        let wanted = (Self::DIRECTNESS_NEUTRAL
+            + Self::DIRECTNESS_SPAN * (team.coach().plan.directness - 0.5)
+            + Self::DIRECTNESS_STANCE * team.tactical().stance)
+            .clamp(0.0, 1.0);
+        // Patient build-up sides go long less often.
+        let patience = team.build_up_patience().clamp(0.0, 1.0);
+        (wanted * (1.0 - patience * 0.5)).clamp(0.0, 1.0)
     }
 }

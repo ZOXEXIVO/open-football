@@ -1,7 +1,6 @@
 use super::*;
 use crate::PlayerSkills;
 use crate::club::player::builder::PlayerBuilder;
-use crate::r#match::MatchCoach;
 use crate::r#match::MatchPlayer;
 use crate::shared::fullname::FullName;
 use crate::{
@@ -190,100 +189,4 @@ fn test_increment() {
     let incremented_time_again = match_time.increment(5);
     assert_eq!(match_time.time, 15);
     assert_eq!(incremented_time_again, 15);
-}
-
-fn make_input(
-    xg_for: f32,
-    xg_against: f32,
-    shots: u32,
-    pressures: u32,
-    succ: u32,
-    deep: u32,
-    turnovers: u32,
-) -> RollingMetricsInput {
-    RollingMetricsInput {
-        cum_xg_for: xg_for,
-        cum_xg_against: xg_against,
-        cum_shots_for: shots,
-        cum_pressures: pressures,
-        cum_successful_pressures: succ,
-        cum_deep_entries: deep,
-        cum_dangerous_turnovers: turnovers,
-    }
-}
-
-#[test]
-fn rolling_metrics_first_call_diffs_from_zero() {
-    // First evaluate_coaches pass: snapshot tick is 0 (default),
-    // current_tick is well below the 90 000 window. The window is
-    // not rotated, so the snapshot stays at zero and the deltas
-    // equal the absolute current totals.
-    let mut coach = MatchCoach::new();
-    coach.cum_possession_ticks = 600; // 6 sim s
-    coach.cum_field_tilt_ticks = 300; // 3 sim s
-    let m = FootballEngine::<840, 545>::build_rolling_metrics(
-        &mut coach,
-        1_000,
-        &make_input(0.5, 0.2, 4, 30, 12, 7, 1),
-    );
-    assert!((m.xg_for_last_15 - 0.5).abs() < 1e-4);
-    assert!((m.xg_against_last_15 - 0.2).abs() < 1e-4);
-    assert_eq!(m.shots_for_last_15, 4);
-    assert_eq!(m.deep_entries_for_last_15, 7);
-    assert_eq!(m.dangerous_turnovers_last_10, 1);
-    // 30 pressures, 12 successful → 0.4
-    assert!((m.press_success_rate_last_10 - 0.40).abs() < 1e-4);
-    // possession 600 / window 1000 = 0.6 (window clamped to elapsed)
-    assert!((m.possession_last_10 - 0.6).abs() < 1e-4);
-    // Snapshot must NOT have rotated yet (elapsed << 90 000).
-    assert_eq!(coach.metric_snapshot.tick, 0);
-}
-
-#[test]
-fn rolling_metrics_window_rotates_at_15_minutes() {
-    // After 15 sim minutes (≈ 90 000 ticks) the snapshot rotates
-    // forward; subsequent deltas are computed from the new
-    // baseline, not the start of the match.
-    let mut coach = MatchCoach::new();
-    // Pretend we already had 60 sim s of possession before the rotation.
-    coach.cum_possession_ticks = 6_000;
-    coach.cum_field_tilt_ticks = 0;
-
-    // First pass at exactly the window boundary — rotates.
-    let _ = FootballEngine::<840, 545>::build_rolling_metrics(
-        &mut coach,
-        90_000,
-        &make_input(1.5, 0.6, 12, 80, 30, 18, 3),
-    );
-    assert_eq!(coach.metric_snapshot.tick, 90_000);
-    assert!((coach.metric_snapshot.xg_for - 1.5).abs() < 1e-4);
-    assert_eq!(coach.metric_snapshot.shots_for, 12);
-    assert_eq!(coach.metric_snapshot.deep_entries_for, 18);
-    assert_eq!(coach.metric_snapshot.dangerous_turnovers, 3);
-
-    // Second pass shortly after rotation: deltas are vs the new
-    // baseline (1.5 xg, 12 shots, 18 deep, 3 turnovers).
-    let m = FootballEngine::<840, 545>::build_rolling_metrics(
-        &mut coach,
-        95_000,
-        &make_input(1.7, 0.6, 13, 82, 31, 19, 3),
-    );
-    assert!((m.xg_for_last_15 - 0.2).abs() < 1e-4);
-    assert_eq!(m.shots_for_last_15, 1);
-    assert_eq!(m.deep_entries_for_last_15, 1);
-    assert_eq!(m.dangerous_turnovers_last_10, 0);
-}
-
-#[test]
-fn rolling_metrics_zero_pressures_returns_neutral_press_rate() {
-    // Press rate is undefined when no pressures occurred; we pin
-    // it to 0.5 so the smart coach evaluator's "failing press"
-    // branch doesn't fire spuriously.
-    let mut coach = MatchCoach::new();
-    let m = FootballEngine::<840, 545>::build_rolling_metrics(
-        &mut coach,
-        500,
-        &make_input(0.0, 0.0, 0, 0, 0, 0, 0),
-    );
-    assert!((m.press_success_rate_last_10 - 0.5).abs() < 1e-4);
 }

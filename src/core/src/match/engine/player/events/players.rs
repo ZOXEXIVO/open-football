@@ -6,6 +6,8 @@ use crate::r#match::engine::ball::ball::contest::save::SaveModel;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::block_diag::BlockDiag;
 #[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::diagnostics::delivery_diag::{DeliveryCensus, TouchKind};
+#[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::flight_diag::FlightDiag;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::goal_kick_diag::{
@@ -33,15 +35,25 @@ use crate::r#match::engine::psychology::{
 };
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::psychology::lapse::lapse_diag;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::DefenderCensus;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::midfielder_census::MidfielderCensus;
 use crate::r#match::engine::set_pieces::{FreeKickBand, wall_block_prob, wall_size_for};
 use crate::r#match::engine::zones::MatchZone;
 use crate::r#match::engine::zones::Progression;
 use crate::r#match::events::{Event, EventCollection};
+use crate::r#match::common_states::{BlockChallenge, ChallengeKind, TackleOutcome};
+use crate::r#match::goalkeepers::states::common::KeeperAerialClaim;
+use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::gk_claim::GkClaimContest;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::keeper_census::KeeperCensus;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::{DeflectionKind, TakeRule};
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::events::gk_claim::gk_claim_diag;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
-#[cfg(feature = "match-logs")]
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::player::strategies::passing::{CrossModel, CrossType};
@@ -510,6 +522,9 @@ pub mod save_accounting_stats {
     pub static PENDING_NO_SHOOTER: AtomicU64 = AtomicU64::new(0);
     /// Staged credit successfully booked against keeper and shooter.
     pub static PENDING_DELIVERED: AtomicU64 = AtomicU64::new(0);
+    /// Staged for a shot going wide or over: his outcome was carried out
+    /// and nothing was booked.
+    pub static PENDING_OFF_FRAME: AtomicU64 = AtomicU64::new(0);
     /// Dropped at delivery: one of the two ids was not on the field.
     pub static PENDING_LOST_NO_PLAYER: AtomicU64 = AtomicU64::new(0);
     /// Dropped at delivery: keeper and shooter were team-mates.
@@ -703,6 +718,19 @@ impl TrajectoryType {
     }
 }
 
+/// A foul: who made it, on whom, how hard, what kind of offence, and the
+/// challenge it came from when it was one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FoulCommitted {
+    pub fouler: u32,
+    /// The man the contact was made on: the carrier for a challenge on the
+    /// ball, the man held for a holding foul.
+    pub fouled: u32,
+    pub severity: FoulSeverity,
+    pub source: FoulSource,
+    pub challenge: Option<ChallengeKind>,
+}
+
 /// How dirty was the foul — drives card probabilities.
 /// `Normal`: shirt pull, mistimed challenge → occasional yellow.
 /// `Reckless`: studs-up, late, from behind → high yellow, sometimes red.
@@ -773,6 +801,13 @@ pub enum PlayerEvent {
     /// `(clearer_id, velocity)` — a clearance he miscued: struck as hit,
     /// wherever that is, and his giveaway if an opponent gets to it.
     MiscuedClearance(u32, Vector3<f32>),
+    /// `(header_id, velocity)` — a header knocked down into the space ahead
+    /// of him: struck as a clearance is, and booked as neither a clearance
+    /// nor a shot.
+    KnockDown(u32, Vector3<f32>),
+    /// `(player_id, velocity)` — the ball played over his own touchline
+    /// under pressure, up the line: struck and booked as a clearance.
+    PutOut(u32, Vector3<f32>),
     RushOut(u32),
     Shoot(ShootingEventContext),
     MovePlayer(u32, Vector3<f32>),
@@ -794,15 +829,9 @@ pub enum PlayerEvent {
     ClaimBall(u32),
     GainBall(u32),
     CaughtBall(u32),
-    /// Goalkeeper got a touch on a real shot but couldn't catch it —
-    /// the ball deflected away (parried wide, palmed over the bar,
-    /// punched off the line). Emitted by the diving and catching states
-    /// when they exit on "ball moving away" while `cached_shot_target`
-    /// was set. The handler credits a save and increments `shots_faced`
-    /// so the rating helper sees the GK's full workload.
-    ParriedBall(u32),
-    /// Foul committed by (fouler_id, severity). Dispatcher decides cards.
-    CommitFoul(u32, FoulSeverity, FoulSource),
+    /// A foul, as the state that committed it states it. The dispatcher
+    /// decides the whistle, the restart and the cards.
+    CommitFoul(FoulCommitted),
     Offside(u32, Vector3<f32>), // (offside_player_id, position_for_free_kick)
     /// A booking with no foul behind it — time-wasting, dissent.
     Caution(u32, FoulSource),
@@ -810,8 +839,11 @@ pub enum PlayerEvent {
     HeldTooLong(u32),
     /// A shot struck this man's arm; true when it was going in.
     Handball(u32, bool),
-    /// The ball was just taken off this man by an opponent.
-    Dispossessed(u32),
+    /// The ball was just taken off this man (the first) by an opponent (the
+    /// second).
+    Dispossessed(u32, u32),
+    /// This man's challenge is made; `Some` the kind he missed with.
+    ChallengeSpent(u32, Option<ChallengeKind>),
     /// A keeper let through a shot he had saved. The shot goes on, and the
     /// error leading to it is his.
     Howler(u32),
@@ -838,7 +870,10 @@ impl PlayerEvent {
             PlayerEvent::TacklingBall(..) => 3,
             PlayerEvent::BallOwnerChange(..) => 4,
             PlayerEvent::PassTo(..) => 5,
-            PlayerEvent::ClearBall(..) | PlayerEvent::MiscuedClearance(..) => 6,
+            PlayerEvent::ClearBall(..)
+            | PlayerEvent::MiscuedClearance(..)
+            | PlayerEvent::KnockDown(..)
+            | PlayerEvent::PutOut(..) => 6,
             PlayerEvent::RushOut(..) => 7,
             PlayerEvent::Shoot(..) => 8,
             PlayerEvent::MovePlayer(..) => 9,
@@ -850,18 +885,18 @@ impl PlayerEvent {
             PlayerEvent::ClaimBall(..) => 15,
             PlayerEvent::GainBall(..) => 16,
             PlayerEvent::CaughtBall(..) => 17,
-            PlayerEvent::ParriedBall(..) => 18,
-            PlayerEvent::CommitFoul(..) => 19,
-            PlayerEvent::Offside(..) => 20,
-            PlayerEvent::RequestHeading(..) => 21,
-            PlayerEvent::RequestShot(..) => 22,
-            PlayerEvent::RequestBallReceive(..) => 23,
-            PlayerEvent::TakeBall(..) => 24,
-            PlayerEvent::Caution(..) => 25,
-            PlayerEvent::HeldTooLong(..) => 26,
-            PlayerEvent::Handball(..) => 27,
-            PlayerEvent::Dispossessed(..) => 28,
-            PlayerEvent::Howler(..) => 29,
+            PlayerEvent::CommitFoul(..) => 18,
+            PlayerEvent::Offside(..) => 19,
+            PlayerEvent::RequestHeading(..) => 20,
+            PlayerEvent::RequestShot(..) => 21,
+            PlayerEvent::RequestBallReceive(..) => 22,
+            PlayerEvent::TakeBall(..) => 23,
+            PlayerEvent::Caution(..) => 24,
+            PlayerEvent::HeldTooLong(..) => 25,
+            PlayerEvent::Handball(..) => 26,
+            PlayerEvent::Dispossessed(..) => 27,
+            PlayerEvent::Howler(..) => 28,
+            PlayerEvent::ChallengeSpent(..) => 29,
         }
     }
 }
@@ -1323,7 +1358,13 @@ impl PlayerEventDispatcher {
         let aerial = declared_aerial
             || player.is_striking_in_the_air()
             || field.ball.pending_aerial_strike == Some(striker_id);
-        if PlayerReach::can_strike(&field.ball, player, aerial) {
+        // A keeper's fist reaches what his claim committed him to.
+        let reached = if player.state == PlayerState::Goalkeeper(GoalkeeperState::Punching) {
+            KeeperAerialClaim::within_reach(player, field.ball.position)
+        } else {
+            PlayerReach::can_strike(&field.ball, player, aerial)
+        };
+        if reached {
             #[cfg(feature = "match-logs")]
             {
                 use crate::r#match::engine::ball::ball::strike_diag::StrikeCensus;
@@ -1387,11 +1428,12 @@ impl PlayerEventDispatcher {
                     | PlayerEvent::Shoot(_)
                     | PlayerEvent::ClearBall(_, _)
                     | PlayerEvent::MiscuedClearance(_, _)
+                    | PlayerEvent::KnockDown(_, _)
+                    | PlayerEvent::PutOut(_, _)
                     | PlayerEvent::MoveBall(_, _)
                     | PlayerEvent::ClaimBall(_)
                     | PlayerEvent::GainBall(_)
                     | PlayerEvent::CaughtBall(_)
-                    | PlayerEvent::ParriedBall(_)
                     | PlayerEvent::TakeBall(_)
                     | PlayerEvent::TacklingBall(_)
                     | PlayerEvent::BallCollision(_)
@@ -1429,11 +1471,12 @@ impl PlayerEventDispatcher {
                     | PlayerEvent::Shoot(_)
                     | PlayerEvent::ClearBall(_, _)
                     | PlayerEvent::MiscuedClearance(_, _)
+                    | PlayerEvent::KnockDown(_, _)
+                    | PlayerEvent::PutOut(_, _)
                     | PlayerEvent::MoveBall(_, _)
                     | PlayerEvent::ClaimBall(_)
                     | PlayerEvent::GainBall(_)
                     | PlayerEvent::CaughtBall(_)
-                    | PlayerEvent::ParriedBall(_)
                     | PlayerEvent::TacklingBall(_)
                     | PlayerEvent::BallCollision(_)
                     | PlayerEvent::BallOwnerChange(_)
@@ -1475,7 +1518,7 @@ impl PlayerEventDispatcher {
                 Self::handle_tackling_ball_event(player_id, field, context);
             }
             PlayerEvent::BallOwnerChange(player_id) => {
-                Self::handle_ball_owner_change_event(player_id, field);
+                Self::handle_ball_owner_change_event(player_id, field, context);
             }
             PlayerEvent::PassTo(pass_event_model) => {
                 #[cfg(feature = "match-logs")]
@@ -1506,6 +1549,11 @@ impl PlayerEventDispatcher {
                 if Self::offside_on_strike(pass_event_model.from_player_id, field, context, &mut remaining_events) {
                     return remaining_events;
                 }
+                #[cfg(feature = "match-logs")]
+                context
+                    .forward_census
+                    .borrow_mut()
+                    .note_pass_struck(pass_event_model.from_player_id);
                 // Build (but don't yet fire) the offside snapshot. The
                 // resolver fires only when the receiver becomes active —
                 // touches the ball, claims, or actively challenges. This
@@ -1571,7 +1619,36 @@ impl PlayerEventDispatcher {
                     || passer_side.is_some_and(|side| {
                         CrossModel::is_cross(passer_position, pass_target, side, context)
                     });
-                Self::handle_pass_to_event(pass_event_model, field, context, was_cross);
+                let lofted =
+                    Self::handle_pass_to_event(pass_event_model, field, context, was_cross);
+                // **Booked** as a cross by what it is, once its shape is known:
+                // a delivery the model built, a corner, or a ball lofted — or
+                // driven or pulled back — into the box from wide. The flag
+                // above stays what the strike and the keeper read.
+                let booked_cross = if MatchContext::cross_booking_off() {
+                    was_cross
+                } else {
+                    declared_cross.is_some()
+                        || passer_side.is_some_and(|side| {
+                            CrossModel::books_as_cross(
+                                passer_position,
+                                pass_target,
+                                lofted,
+                                side,
+                                context,
+                            )
+                        })
+                };
+                #[cfg(feature = "match-logs")]
+                DeliveryCensus::on_strike(
+                    field,
+                    context,
+                    passer_id,
+                    declared_cross,
+                    booked_cross,
+                    lofted,
+                    pass_target,
+                );
                 // A modelled cross arms the open-play aerial contest: the
                 // delivery is aimed at a patch of the box, so it must be
                 // contestable rather than reserved for one named receiver
@@ -1742,8 +1819,13 @@ impl PlayerEventDispatcher {
                 field.ball.pending_pass_origin = Some(passer_position);
                 field.ball.pending_pass_target = Some(pass_target);
                 field.ball.pending_pass_was_cross = was_cross;
-                if was_cross && let Some(passer) = field.get_player_mut(passer_id) {
-                    passer.statistics.add_cross_attempt();
+                if booked_cross {
+                    if let Some(passer) = field.get_player_mut(passer_id) {
+                        passer.statistics.add_cross_attempt();
+                    }
+                    if !MatchContext::cross_booking_off() {
+                        field.ball.on_cross_struck(passer_id, passer_team);
+                    }
                 }
                 field.ball.offside_snapshot = snapshot;
                 // After the kick, restart context decays back to OpenPlay —
@@ -1775,7 +1857,7 @@ impl PlayerEventDispatcher {
                     *refusal = Some(StrikeKind::Carry.refusal());
                     return remaining_events;
                 }
-                Self::handle_move_ball_event(player_id, ball_velocity, field);
+                Self::handle_move_ball_event(player_id, ball_velocity, field, context);
             }
             PlayerEvent::GainBall(player_id) => {
                 Self::handle_gain_ball_event(player_id, field, context);
@@ -1982,19 +2064,20 @@ impl PlayerEventDispatcher {
             PlayerEvent::CaughtBall(player_id) => {
                 Self::handle_caught_ball_event(player_id, field, context);
             }
-            PlayerEvent::ParriedBall(player_id) => {
-                Self::handle_parried_ball_event(player_id, field);
-            }
             PlayerEvent::MovePlayer(player_id, position) => {
                 Self::handle_move_player_event(player_id, position, field);
             }
             PlayerEvent::Leap(player_id, apex) => {
                 Self::handle_leap_event(player_id, apex, field);
             }
-            PlayerEvent::Dispossessed(player_id) => {
+            PlayerEvent::ChallengeSpent(player_id, missed) => {
                 if let Some(player) = field.get_player_mut(player_id) {
-                    player.on_dispossessed(context.current_tick());
+                    player.on_challenge_spent(missed);
                 }
+            }
+            PlayerEvent::Dispossessed(player_id, taker) => {
+                field.on_dispossessed(player_id, context.current_tick());
+                Self::credit_take(taker, Some(player_id), field, context);
             }
             PlayerEvent::Howler(keeper_id) => {
                 let Some(keeper_team) = field.get_player_mut(keeper_id).map(|keeper| {
@@ -2033,6 +2116,7 @@ impl PlayerEventDispatcher {
                     clearer_id,
                     velocity,
                     false,
+                    true,
                     field,
                     context,
                     refusal,
@@ -2044,17 +2128,46 @@ impl PlayerEventDispatcher {
                     clearer_id,
                     velocity,
                     true,
+                    true,
                     field,
                     context,
                     refusal,
                     &mut remaining_events,
                 );
             }
+            PlayerEvent::KnockDown(header_id, velocity) => {
+                Self::strike_clearance(
+                    header_id,
+                    velocity,
+                    false,
+                    false,
+                    field,
+                    context,
+                    refusal,
+                    &mut remaining_events,
+                );
+            }
+            PlayerEvent::PutOut(player_id, velocity) => {
+                Self::strike_clearance(
+                    player_id,
+                    velocity,
+                    false,
+                    true,
+                    field,
+                    context,
+                    refusal,
+                    &mut remaining_events,
+                );
+                #[cfg(feature = "match-logs")]
+                if field.ball.last_touch_player_id == Some(player_id) {
+                    field.ball.last_touch_kind = TouchKind::PutOut;
+                }
+            }
             PlayerEvent::RequestBallReceive(player_id) => {
                 Self::handle_request_ball_receive(player_id, field, context);
             }
-            PlayerEvent::CommitFoul(fouler_id, severity, source) => {
-                Self::handle_commit_foul_event(fouler_id, severity, source, field, context);
+            PlayerEvent::CommitFoul(foul) => {
+                Self::handle_commit_foul_event(foul, field, context);
             }
             PlayerEvent::Offside(player_id, _spot) => {
                 Self::handle_offside_event(player_id, field);
@@ -2093,6 +2206,9 @@ impl PlayerEventDispatcher {
         context: &mut MatchContext,
     ) {
         let scorer_team_id = field.get_player(player_id).map(|p| p.team_id);
+        if let Some(team_id) = scorer_team_id {
+            context.on_goal((team_id == context.field_home_team_id) != is_auto_goal);
+        }
         let origin = field
             .ball
             .in_net
@@ -2292,11 +2408,11 @@ impl PlayerEventDispatcher {
         // secure_ball_for nulls them out — the tackle handler treats
         // the previous owner as the dribbler losing a duel.
         let dispossessed_id = field.ball.current_owner.filter(|&id| id != player_id);
+        let zone = field
+            .get_player(player_id)
+            .and_then(|player| Self::zone_for_player(player, ball_pos, context));
         if let Some(player) = field.get_player_mut(player_id) {
-            player.statistics.tackles += 1;
-            if let Some(zone) = Self::zone_for_player(player, ball_pos, context) {
-                player.statistics.note_tackle_zone(zone);
-            }
+            player.on_tackle_won(zone);
         }
         // Failed-dribble producer: the carrier lost a 1-v-1 to the
         // tackler. Real engine doesn't separately resolve dribble
@@ -2322,6 +2438,23 @@ impl PlayerEventDispatcher {
             }
             None => true,
         };
+        #[cfg(feature = "match-logs")]
+        {
+            let tick = context.current_tick();
+            let tackler_position = field.get_player(player_id).map(|p| p.position);
+            let census = context.defender_census.get_mut();
+            if kept {
+                census.tag_take(TakeRule::Tackle, player_id, tick);
+            } else if let Some(at) = tackler_position {
+                census.note_deflection(
+                    DeflectionKind::TackleKnock,
+                    field.ball.position,
+                    field.ball.velocity,
+                    at,
+                    tick,
+                );
+            }
+        }
         if kept {
             if Self::secure_ball_for(player_id, field) {
                 if let Some(team_id) = field.get_player(player_id).map(|p| p.team_id) {
@@ -2333,10 +2466,10 @@ impl PlayerEventDispatcher {
                     .ball
                     .note_possession_source(player_id, PossessionSource::Tackle);
             }
-        } else if let Some(p) = dispossessed_id.and_then(|id| field.get_player_mut(id)) {
+        } else if let Some(id) = dispossessed_id {
             // Knocked off him all the same — `secure_ball_for` tells the
             // loser on the kept branch.
-            p.on_dispossessed(context.current_tick());
+            field.on_dispossessed(id, context.current_tick());
         }
         // A clean tackle still put a body into him.
         if let Some(victim) = dispossessed_id
@@ -2347,8 +2480,36 @@ impl PlayerEventDispatcher {
         }
     }
 
-    fn handle_ball_owner_change_event(player_id: u32, field: &mut MatchField) {
-        Self::secure_ball_for(player_id, field);
+    fn handle_ball_owner_change_event(player_id: u32, field: &mut MatchField, context: &MatchContext) {
+        let carrier = field.ball.current_owner;
+        if Self::secure_ball_for(player_id, field) {
+            Self::credit_take(player_id, carrier, field, context);
+        }
+    }
+
+    /// The ball has come to `taker` off `carrier`, who had it at his feet:
+    /// a ball taken off an opponent is a tackle won, whichever rule decided
+    /// it.
+    fn credit_take(
+        taker: u32,
+        carrier: Option<u32>,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
+        let Some(carrier) = carrier.filter(|id| *id != taker) else {
+            return;
+        };
+        let team = |id: u32| field.get_player(id).map(|p| p.team_id);
+        if team(carrier).is_none() || team(carrier) == team(taker) {
+            return;
+        }
+        let ball = field.ball.position;
+        let zone = field
+            .get_player(taker)
+            .and_then(|player| Self::zone_for_player(player, ball, context));
+        if let Some(player) = field.get_player_mut(taker) {
+            player.on_tackle_won(zone);
+        }
     }
 
     /// Classify a position from a player's defensive perspective.
@@ -2524,8 +2685,16 @@ impl PlayerEventDispatcher {
                 passer.statistics.passes_completed.saturating_add(1);
         }
         #[cfg(feature = "match-logs")]
-        if let (Some(origin), Some(aim)) = (origin, field.ball.pending_pass_aim.or(target)) {
-            FlightDiag::note_pass_completed((aim - origin).xy().norm());
+        {
+            if let (Some(origin), Some(aim)) = (origin, field.ball.pending_pass_aim.or(target)) {
+                FlightDiag::note_pass_completed((aim - origin).xy().norm());
+            }
+            if was_cross
+                && MatchContext::cross_booking_off()
+                && let Some((kind, slot)) = field.ball.delivery_identity
+            {
+                field.ball.delivery_tally.booked_completed[kind][slot] += 1;
+            }
         }
         if let (Some(origin), Some(target)) = (origin, target) {
             Self::classify_completed_pass(
@@ -2910,7 +3079,7 @@ impl PlayerEventDispatcher {
                     passer.statistics.note_central_pass_into_box();
                 }
             }
-            if was_cross {
+            if was_cross && MatchContext::cross_booking_off() {
                 passer.statistics.add_cross_completed();
             }
             if switch_of_play {
@@ -3148,12 +3317,14 @@ impl PlayerEventDispatcher {
         (closing + crowd).clamp(0.0, 1.0)
     }
 
+    /// Strikes the pass. Returns whether the ball went up rather than
+    /// along the deck — the shape a cross is booked by.
     fn handle_pass_to_event(
         event_model: PassingEventContext,
         field: &mut MatchField,
         context: &MatchContext,
         was_cross: bool,
-    ) {
+    ) -> bool {
         let total_match_time_ms = context.total_match_time;
         let rng = &context.rng;
         let minute = sc::minute_from_ms(total_match_time_ms);
@@ -3741,6 +3912,14 @@ impl PlayerEventDispatcher {
         // does not — that is the second-touch rule above, and
         // `is_backpass_to` excludes him from his own bar anyway.
         if !passer_is_goalkeeper {
+            #[cfg(feature = "match-logs")]
+            {
+                field.ball.touch_kind_hint = Some(if was_cross {
+                    TouchKind::Cross
+                } else {
+                    TouchKind::Pass
+                });
+            }
             field.ball.note_deliberate_kick(
                 event_model.from_player_id,
                 passer_team_id,
@@ -3803,6 +3982,7 @@ impl PlayerEventDispatcher {
         // before the ball came down.
         field.ball.flags.in_flight_state =
             FlightProtection::for_pass(final_velocity, actual_horizontal_distance);
+        trajectory_type.is_ballistic()
     }
 
     fn calculate_horizontal_distance(ball_pass_vector: &Vector3<f32>) -> f32 {
@@ -4148,7 +4328,7 @@ impl PlayerEventDispatcher {
         }
     }
 
-    fn handle_claim_ball_event(player_id: u32, field: &mut MatchField, context: &MatchContext) {
+    fn handle_claim_ball_event(player_id: u32, field: &mut MatchField, context: &mut MatchContext) {
         // A claim from out of reach is not a reception — it is a booking
         // that `Ball::move_to` cancels next tick, having already consumed
         // `pass_target_player_id` and the pass window with it. The
@@ -4211,21 +4391,36 @@ impl PlayerEventDispatcher {
                 return;
             }
 
-            // Different player trying to claim - this is a tackle/interception
-            // Reject if current owner hasn't held ball long enough (prevents ping-pong)
-            let min_duration = if field.ball.contested_claim_count > 3 {
-                60
+            let team = |id: u32| field.get_player(id).map(|p| p.team_id);
+            if team(current_owner) != team(player_id) && !MatchContext::takeover_duel_off() {
+                // A claim on an opponent's carried ball is a challenge,
+                // decided as the scan's is, not won by waiting long enough.
+                if !Self::claim_is_won(player_id, current_owner, field, context) {
+                    return;
+                }
             } else {
-                25
-            };
-            if field.ball.ownership_duration < min_duration {
-                return;
+                // Reject if current owner hasn't held ball long enough
+                // (prevents ping-pong).
+                let min_duration = if field.ball.contested_claim_count > 3 {
+                    60
+                } else {
+                    25
+                };
+                if field.ball.ownership_duration < min_duration {
+                    return;
+                }
             }
 
             // Allow claim with escalated cooldown
+            #[cfg(feature = "match-logs")]
+            context
+                .defender_census
+                .borrow_mut()
+                .tag_take(TakeRule::ClaimOwned, player_id, context.current_tick());
             field.ball.previous_owner = Some(current_owner);
             field.ball.current_owner = Some(player_id);
             Self::touch_on_taking(player_id, field, context.current_tick());
+            Self::credit_take(player_id, Some(current_owner), field, context);
             field.ball.pass_target_player_id = None;
             field.ball.ownership_duration = 0;
             field.ball.contested_claim_count += 1;
@@ -4252,7 +4447,12 @@ impl PlayerEventDispatcher {
         field.ball.flags.in_flight_state = 30;
     }
 
-    fn handle_move_ball_event(player_id: u32, ball_velocity: Vector3<f32>, field: &mut MatchField) {
+    fn handle_move_ball_event(
+        player_id: u32,
+        ball_velocity: Vector3<f32>,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
         // Nobody dribbles a ball out of a keeper's hands either.
         if field.ball.held_in_hands && field.ball.current_owner != Some(player_id) {
             return;
@@ -4263,12 +4463,14 @@ impl PlayerEventDispatcher {
         if !Self::can_take_possession(player_id, field) {
             return;
         }
-        let taking = field.ball.current_owner != Some(player_id);
-        field.ball.previous_owner = field.ball.current_owner;
+        let carrier = field.ball.current_owner;
+        let taking = carrier != Some(player_id);
+        field.ball.previous_owner = carrier;
         field.ball.current_owner = Some(player_id);
         if taking {
             let tick = field.ball.current_tick_cached;
             Self::touch_on_taking(player_id, field, tick);
+            Self::credit_take(player_id, carrier, field, context);
         }
         // Carrying it, therefore not holding it.
         field.ball.held_in_hands = false;
@@ -4277,9 +4479,11 @@ impl PlayerEventDispatcher {
     }
 
     fn handle_gain_ball_event(player_id: u32, field: &mut MatchField, context: &MatchContext) {
+        let carrier = field.ball.current_owner;
         if !Self::secure_ball_for(player_id, field) {
             return;
         }
+        Self::credit_take(player_id, carrier, field, context);
         Self::resolve_pending_pass_on_control(player_id, field, context);
         if let Some(team_id) = field.get_player(player_id).map(|p| p.team_id) {
             field.ball.note_possession(team_id);
@@ -4504,6 +4708,44 @@ impl PlayerEventDispatcher {
     /// Taking the ball is touching it, and the ball's last touch is what
     /// the byline reads: a ball a defender won off an attacker and then
     /// lost over his own line was still the attacker's, a goal kick.
+    /// A claim on an opponent's carried ball, decided as the challenge it
+    /// is (`BlockChallenge`): his challenge is spent either way, a foul is
+    /// whistled and a miss puts him down.
+    fn claim_is_won(
+        claimer: u32,
+        carrier: u32,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) -> bool {
+        let (Some(challenger), Some(owner)) = (field.get_player(claimer), field.get_player(carrier))
+        else {
+            return false;
+        };
+        if !challenger.can_attempt_tackle() {
+            return false;
+        }
+        let outcome = BlockChallenge::between(challenger, owner, context)
+            .resolve(&context.rng, context.psychology.get(claimer));
+        let missed = (outcome == TackleOutcome::Missed).then_some(ChallengeKind::Block);
+        if let Some(player) = field.get_player_mut(claimer) {
+            player.on_challenge_spent(missed);
+        }
+        if let TackleOutcome::Foul(severity) = outcome {
+            Self::handle_commit_foul_event(
+                FoulCommitted {
+                    fouler: claimer,
+                    fouled: carrier,
+                    severity,
+                    source: FoulSource::Tackle,
+                    challenge: Some(ChallengeKind::Block),
+                },
+                field,
+                context,
+            );
+        }
+        outcome == TackleOutcome::Won
+    }
+
     fn touch_on_taking(player_id: u32, field: &mut MatchField, tick: u64) {
         if let Some(team_id) = field.get_player(player_id).map(|p| p.team_id) {
             field.ball.record_touch(player_id, team_id, tick, true);
@@ -4591,10 +4833,9 @@ impl PlayerEventDispatcher {
         field.ball.current_owner = Some(player_id);
         Self::touch_on_taking(player_id, field, tick);
         if let Some(loser) = field.ball.previous_owner.filter(|&id| id != player_id)
-            && let Some(loser) = field.get_player_mut(loser)
-            && Some(loser.team_id) != team_id
+            && field.get_player(loser).is_some_and(|p| Some(p.team_id) != team_id)
         {
-            loser.on_dispossessed(tick);
+            field.on_dispossessed(loser, tick);
         }
         field.ball.pass_target_player_id = None;
         if let Some(carrier) = touch {
@@ -4693,8 +4934,6 @@ impl PlayerEventDispatcher {
         // constant, not a copy of it, so the strike model and the
         // goal-line test can never disagree about where the posts are.
         const GOAL_WIDTH: f32 = GOAL_MOUTH_HALF_WIDTH;
-        #[allow(dead_code)]
-        const GOAL_HEIGHT: f32 = 8.0; // Height of crossbar
         // Shot velocity cap. Field is 840u = 105m, so 1u = 0.125m, and at
         // 100-tick/s simulation a cap of 5.6 u/tick meant 70 m/s (~252 km/h)
         // — about 2× the real-world top shot speed (~35 m/s = 2.8 u/tick).
@@ -5927,11 +6166,16 @@ impl PlayerEventDispatcher {
         }
         field.ball.last_shot_shooter_id = Some(shoot_event_model.from_player_id);
         field.ball.last_shot_struck_tick = context.current_tick();
+        field.ball.last_shot_on_frame = false;
         // His strike is the ball's last touch. A header or a volley is
         // struck off a ball he never owned, and left on whoever touched it
         // before — the defender who headed the cross out — a shot he put
         // wide was given as a corner. Uncontrolled: a strike is not a
         // possession, and it does not spend a set piece's touches.
+        #[cfg(feature = "match-logs")]
+        {
+            field.ball.touch_kind_hint = Some(TouchKind::Shot);
+        }
         field.ball.record_touch(
             shoot_event_model.from_player_id,
             shooter_team_id,
@@ -6028,6 +6272,13 @@ impl PlayerEventDispatcher {
             field.ball.census_shot_live = true;
             field.ball.census_shot_dist = horizontal_distance;
             field.ball.census_shot_side = shooter_side;
+            if let Some(side) = shooter_side {
+                let tick = context.current_tick();
+                context
+                    .keeper_census
+                    .get_mut()
+                    .note_strike(field, side.opposite(), tick);
+            }
         }
 
         // Project where the ball will cross the goal line so the
@@ -6359,6 +6610,15 @@ impl PlayerEventDispatcher {
                     if nearest_def < f32::MAX {
                         BlockDiag::note_shot_pressure(nearest_def);
                     }
+                    MidfielderCensus::note_strike(
+                        field,
+                        shoot_event_model.from_player_id,
+                        &context.penalty_area(defending_side == PlayerSide::Left),
+                    );
+                    context
+                        .forward_census
+                        .get_mut()
+                        .note_shot_struck(shoot_event_model.from_player_id);
                     BlockDiag::note_strike(
                         goalside,
                         near_line,
@@ -6370,7 +6630,7 @@ impl PlayerEventDispatcher {
                         },
                     );
                 }
-                field.ball.cached_shot_target = Some(ShotTarget {
+                let target = ShotTarget {
                     goal_line_y,
                     goal_line_z,
                     defending_side,
@@ -6381,7 +6641,9 @@ impl PlayerEventDispatcher {
                     shooter_threat,
                     struck_from: field.ball.position,
                     seen_from,
-                });
+                };
+                field.ball.last_shot_on_frame = target.struck_on_frame(&context.goal_positions);
+                field.ball.cached_shot_target = Some(target);
             } else {
                 #[cfg(feature = "match-logs")]
                 crate::r#match::engine::ball::ball::ownership::reception_diag::SHOT_NO_TARGET
@@ -6395,12 +6657,8 @@ impl PlayerEventDispatcher {
         }
     }
 
-    /// Credit a goalkeeper save for a parried shot — the GK touched the
-    /// ball mid-flight but couldn't claim it cleanly. Emitted from the
-    /// diving and catching states when they exit on "ball moving away"
-    /// while `cached_shot_target` was set. The same `cached_shot_target`
-    /// is then cleared so the eventual rest position (out of bounds,
-    /// to a defender, or back into play) doesn't double-credit anyone.
+    /// Book a save credited outside the physics path under its
+    /// `save_accounting_stats` site.
     #[cfg(feature = "match-logs")]
     #[inline]
     fn dbg_save_credit(site: usize, had_shooter: bool, prev_owner_none: bool, shooter_found: bool) {
@@ -6418,49 +6676,11 @@ impl PlayerEventDispatcher {
         }
     }
 
-    fn handle_parried_ball_event(player_id: u32, field: &mut MatchField) {
-        // Only credit when the ball was a real shot — guards against
-        // the diving state calling this when the GK gave up on a long
-        // pass. The state-machine emitters are gated on the same flag,
-        // so this is belt-and-braces.
-        //
-        // `save_rolled` blocks the second bite: a shot the physics already
-        // resolved as beating this keeper is not his parry. See the note in
-        // `handle_caught_ball_event`.
-        let Some(target) = field.ball.cached_shot_target.as_ref() else {
-            return;
-        };
-        if target.save_rolled {
-            return;
-        }
-        let shooter_id = field.ball.previous_owner;
-        let shot_xg = field.ball.last_shot_xgot;
-        if let Some(gk) = field.get_player_mut(player_id) {
-            gk.statistics.note_shot_faced(shot_xg, true);
-        }
-        field.ball.clear_shot_metadata();
-        // Credit on-target to the shooter — a parry IS the keeper
-        // touching a shot that reached the goal frame. Without this,
-        // saves > on-target shots, an impossible ratio.
-        let mut shooter_found = false;
-        if let Some(sid) = shooter_id
-            && let Some(shooter) = field.get_player_mut(sid)
-        {
-            shooter.memory.credit_shot_on_target();
-            shooter_found = true;
-        }
-        #[cfg(feature = "match-logs")]
-        Self::dbg_save_credit(0, shooter_id.is_some(), shooter_id.is_none(), shooter_found);
-        let _ = shooter_found;
-        field.ball.cached_shot_target = None;
-    }
-
     /// Book one state-machine gather into [`KeeperGatherDiag`]: how far the
     /// ball was, how fast it was still going, what the keeper was doing, and
     /// whether the shot it belonged to was ever going to hit the goal.
     #[cfg(feature = "match-logs")]
     fn census_gather(player_id: u32, field: &MatchField, context: &MatchContext) {
-        use crate::r#match::goalkeepers::states::state::GoalkeeperState;
         let Some(player) = field.players.iter().find(|p| p.id == player_id) else {
             return;
         };
@@ -6468,7 +6688,7 @@ impl PlayerEventDispatcher {
             .hypot(player.position.y - field.ball.position.y);
         let diving = player.state == PlayerState::Goalkeeper(GoalkeeperState::Diving);
         if let PlayerState::Goalkeeper(s) = player.state {
-            crate::mid_run_diag::KeeperGatherDiag::note_state(s as usize, player.is_airborne());
+            crate::mid_run_diag::KeeperGatherDiag::note_state(s, player.is_airborne());
         }
         let shot = field.ball.cached_shot_target.as_ref().map(|t| {
             let (goal_x, goal_y) = match t.defending_side {
@@ -6524,6 +6744,12 @@ impl PlayerEventDispatcher {
         }
         #[cfg(feature = "match-logs")]
         Self::census_gather(player_id, field, context);
+        #[cfg(feature = "match-logs")]
+        if let Some(target) = field.ball.cached_shot_target.as_ref()
+            && field.get_player(player_id).and_then(|p| p.side) == Some(target.defending_side)
+        {
+            KeeperCensus::note_machine(target.save_rolled);
+        }
 
         // Detect saves: ball was moving and came from an opponent
         let ball_was_moving = field.ball.velocity.norm_squared() > 0.25;
@@ -6568,7 +6794,7 @@ impl PlayerEventDispatcher {
                 .as_ref()
                 .is_some_and(|t| t.save_rolled);
             let was_shot = field.ball.cached_shot_target.is_some() && !already_adjudicated;
-            if was_shot {
+            if was_shot && field.ball.shot_on_frame(&context.goal_positions) {
                 let shooter_id = field.ball.previous_owner;
                 let shot_xg = field.ball.last_shot_xgot;
                 if let Some(player) = field.get_player_mut(player_id) {
@@ -6585,151 +6811,46 @@ impl PlayerEventDispatcher {
                 Self::dbg_save_credit(1, shooter_id.is_some(), shooter_id.is_none(), shooter_found);
                 let _ = shooter_found;
                 field.ball.clear_shot_metadata();
-            } else if Self::handle_gk_claim(player_id, field, context) {
-                // Claim flapped — the keeper does NOT get the ball. The
-                // spill is already staged on the ball, so fall through
-                // without taking ownership; `GoalkeeperHoldingState`
-                // drops him back to Standing next tick when it finds he
-                // has nothing in his hands.
-                return;
+            } else if was_shot {
+                // Going wide or over: he has collected it, and it was no save.
+                field.ball.clear_shot_metadata();
+            } else {
+                Self::credit_command_moment(player_id, field, context);
             }
         }
 
-        field.ball.previous_owner = field.ball.current_owner;
-        field.ball.current_owner = Some(player_id);
-        // Ball must stop when caught — prevent it from continuing into the goal
-        field.ball.velocity = Vector3::zeros();
-        field.ball.flags.in_flight_state = 0;
-        // It is in his GLOVES, which the rest of the engine can now see:
-        // no claim, no tackle, no interception, and no point pressing him.
-        // The `claim_cooldown` below used to be the whole of that
-        // protection — a timer that merely made stealing the ball off a
-        // keeper's hands unlikely for a while rather than impossible.
         if let Some(team_id) = field.get_player(player_id).map(|p| p.team_id) {
             field
                 .ball
-                .gather_in_hands(player_id, team_id, context.current_tick());
+                .take_into_hands(player_id, team_id, context.current_tick());
         }
-        // Belt and braces behind `held_in_hands`: covers the hold (up to
-        // ~5.5 s) plus the distribution that follows it.
-        field.ball.claim_cooldown = 700;
-        field.ball.pass_target_player_id = None;
-        // Shot is dead — clear the projected intercept so the keeper
-        // doesn't keep chasing a ghost target next tick.
-        field.ball.cached_shot_target = None;
     }
 
-    /// Resolve a goalkeeper's attempt to claim a non-shot ball from the
-    /// opposition — a cross, a high ball into the box, a through-ball he
-    /// comes to collect.
-    ///
-    /// Returns `true` if the claim was FLAPPED, in which case the ball has
-    /// been spilled and the caller must not hand the keeper possession.
-    ///
-    /// Two things happen here that used to be unconditional. The command-
-    /// action credit is now earned rather than granted (see
-    /// [`GkClaimContest`] on why ~15 gathers a match were being counted as
-    /// commanding the box), and the claim can fail — which is what makes
-    /// `gk_failed_claims_to_shot` / `_to_goal` reachable at last.
-    fn handle_gk_claim(player_id: u32, field: &mut MatchField, context: &MatchContext) -> bool {
-        let is_keeper = field
-            .players
-            .iter()
-            .find(|p| p.id == player_id)
-            .map(|p| {
-                p.tactical_position.current_position.position_group()
+    /// A gather of an opponent's ball that reads as commanding the box is
+    /// credited as one — earned rather than granted (see [`GkClaimContest`]
+    /// on why ~15 gathers a match were being counted as commanding the
+    /// box). The weight IS the probability, so a half-contested ball counts
+    /// half the time. Whether a claim holds is the aerial contest's.
+    fn credit_command_moment(player_id: u32, field: &mut MatchField, context: &MatchContext) {
+        let is_keeper = field.players.iter().any(|p| {
+            p.id == player_id
+                && p.tactical_position.current_position.position_group()
                     == PlayerFieldPositionGroup::Goalkeeper
-            })
-            .unwrap_or(false);
+        });
         if !is_keeper {
-            return false;
+            return;
         }
-
         let situation = GkClaimContest::assess(field, player_id);
         #[cfg(feature = "match-logs")]
         gk_claim_diag::GATHERS.fetch_add(1, Ordering::Relaxed);
-        // Does this gather read as a command-of-area moment at all? The
-        // weight IS the probability — no threshold, so a half-contested
-        // ball counts half the time.
-        let is_command_moment = context.rng.unit_f32() < situation.command_weight;
-        if !is_command_moment {
-            // Routine collection: no credit, no contest, keeper gathers.
-            return false;
+        if context.rng.unit_f32() >= situation.command_weight {
+            return;
         }
         #[cfg(feature = "match-logs")]
         gk_claim_diag::COMMAND_MOMENTS.fetch_add(1, Ordering::Relaxed);
-
-        let minute = sc::minute_from_ticks(field.ball.current_tick_cached);
-        let failure = ActionLapse::scaled(
-            LapseFamily::Claim,
-            GkClaimContest::failure_probability(field, player_id, &situation, minute),
-            context.psychology.get(player_id),
-        )
-        .min(0.95);
-        if context.rng.unit_f32() >= failure {
-            if let Some(gk) = field.get_player_mut(player_id) {
-                gk.statistics.note_gk_command_action();
-            }
-            return false;
+        if let Some(gk) = field.get_player_mut(player_id) {
+            gk.statistics.note_gk_command_action();
         }
-        #[cfg(feature = "match-logs")]
-        gk_claim_diag::FLAPS.fetch_add(1, Ordering::Relaxed);
-
-        // Flapped it. The ball has to end up somewhere an attacker can
-        // reach: a spill that dies at the keeper's feet is one he simply
-        // picks up again, which is what made the first version of this
-        // contest produce flaps that never led to a single shot.
-        //
-        // So it is pushed 10-26u (1.2-3.2m) OUT from the goal — the
-        // punched-cross trajectory, landing around the six-yard line and
-        // the penalty spot where the box contest actually happens — with
-        // the keeper as last toucher so `try_intercept` treats the loose
-        // ball as an attacking opportunity rather than a keeper's pass.
-        let (keeper_pos, keeper_team, keeper_side) = field
-            .players
-            .iter()
-            .find(|p| p.id == player_id)
-            .map(|p| (p.position, p.team_id, p.side))
-            .unwrap_or((field.ball.position, 0, None));
-        let tick = field.ball.current_tick_cached;
-        let out_distance = context.rng.range_f32(10.0, 26.0);
-        let lateral = context.rng.range_f32(-14.0, 14.0);
-        let out_x = match keeper_side {
-            Some(PlayerSide::Left) => keeper_pos.x + out_distance,
-            Some(PlayerSide::Right) => keeper_pos.x - out_distance,
-            None => keeper_pos.x,
-        };
-        let drop = Vector3::new(out_x, keeper_pos.y + lateral, 0.0);
-        // Above 1.0 u/tick on purpose: `try_intercept` ignores balls
-        // whose speed² is under 1.0, so a slower spill is not a loose
-        // ball anybody can attack — it just rolls until the nearest
-        // player (usually the keeper himself) picks it up.
-        let drop_speed = context.rng.range_f32(1.1, 1.8);
-        let ball = &mut field.ball;
-        let dx = drop.x - keeper_pos.x;
-        let dy = drop.y - keeper_pos.y;
-        let dist = (dx * dx + dy * dy).sqrt().max(1.0);
-        // The spill leaves from where he got a glove to it, not from his
-        // body: a failed touch happens where the ball is.
-        ball.velocity.x = dx / dist * drop_speed;
-        ball.velocity.y = dy / dist * drop_speed;
-        ball.sink_to_ground();
-        ball.current_owner = None;
-        ball.previous_owner = Some(player_id);
-        ball.pass_target_player_id = None;
-        ball.pending_pass_passer = None;
-        ball.pending_pass_was_cross = false;
-        ball.flags.in_flight_state = 10;
-        ball.claim_cooldown = 0;
-        // Arm the rebound window so the follow-up shot isn't killed by
-        // the team shot-spacing gate, and stamp the pending failed claim
-        // so a shot / goal from this possession is charged to the keeper.
-        ball.last_rebound_tick = tick;
-        ball.pending_failed_claim_gk_id = Some(player_id);
-        ball.pending_failed_claim_tick = tick;
-        ball.pending_failed_claim_charged = false;
-        ball.record_touch(player_id, keeper_team, tick, false);
-        true
     }
 
     fn handle_move_player_event(player_id: u32, position: Vector3<f32>, field: &mut MatchField) {
@@ -6768,6 +6889,8 @@ impl PlayerEventDispatcher {
             PlayerEvent::Shoot(shot) => Some(shot.from_player_id),
             PlayerEvent::ClearBall(id, _)
             | PlayerEvent::MiscuedClearance(id, _)
+            | PlayerEvent::KnockDown(id, _)
+            | PlayerEvent::PutOut(id, _)
             | PlayerEvent::BallCollision(id)
             | PlayerEvent::TacklingBall(id)
             | PlayerEvent::BallOwnerChange(id)
@@ -6775,7 +6898,6 @@ impl PlayerEventDispatcher {
             | PlayerEvent::ClaimBall(id)
             | PlayerEvent::GainBall(id)
             | PlayerEvent::CaughtBall(id)
-            | PlayerEvent::ParriedBall(id)
             | PlayerEvent::RequestHeading(id, _)
             | PlayerEvent::RequestShot(id, _)
             | PlayerEvent::RequestBallReceive(id)
@@ -6822,8 +6944,10 @@ impl PlayerEventDispatcher {
             // Taking control settles the live pass window — see
             // `resolve_pending_pass_on_control`.
             Self::resolve_pending_pass_on_control(player_id, field, context);
-            field.ball.previous_owner = field.ball.current_owner;
+            let carrier = field.ball.current_owner;
+            field.ball.previous_owner = carrier;
             field.ball.current_owner = Some(player_id);
+            Self::credit_take(player_id, carrier, field, context);
             field.ball.pass_target_player_id = None;
             field.ball.ownership_duration = 0;
             field.ball.claim_cooldown = 15;
@@ -6837,13 +6961,11 @@ impl PlayerEventDispatcher {
     /// player — and it is applied after the whistle, so the physio holds the
     /// free kick rather than a drop ball replacing it.
     fn handle_commit_foul_event(
-        fouler_id: u32,
-        severity: FoulSeverity,
-        source: FoulSource,
+        foul: FoulCommitted,
         field: &mut MatchField,
         context: &mut MatchContext,
     ) {
-        let victim = Self::foul_victim(fouler_id, field);
+        let victim = field.get_player(foul.fouled).map(|p| p.id);
         // Where the offence was: on the man fouled, which is the ball for a
         // challenge on the carrier and somewhere else for a shirt pulled
         // off it.
@@ -6851,11 +6973,16 @@ impl PlayerEventDispatcher {
             .and_then(|id| field.get_player(id))
             .map_or(field.ball.position, |p| p.position);
         let injury = victim.and_then(|victim| {
-            MatchInjury::roll_contact(field, context, victim, InjuryRisk::foul_impulse(severity))
+            MatchInjury::roll_contact(
+                field,
+                context,
+                victim,
+                InjuryRisk::foul_impulse(foul.severity),
+            )
                 .map(|hurt| (victim, hurt))
         });
         let stops_play = injury.is_some_and(|(_, hurt)| hurt > InjuryGrade::Knock);
-        Self::whistle_foul(fouler_id, severity, source, spot, stops_play, field, context);
+        Self::whistle_foul(foul, spot, stops_play, field, context);
         if let Some((victim, hurt)) = injury {
             MatchInjury::befall(field, context, victim, InjuryCause::Contact, hurt);
         }
@@ -6891,37 +7018,20 @@ impl PlayerEventDispatcher {
         );
     }
 
-    /// The man the contact was made on: the carrier when the fouler took
-    /// him down on the ball, otherwise the nearest opponent — the runner he
-    /// was holding.
-    fn foul_victim(fouler_id: u32, field: &MatchField) -> Option<u32> {
-        let fouler = field.get_player(fouler_id)?;
-        if let Some(carrier) = field.ball.current_owner.and_then(|id| field.get_player(id))
-            && carrier.team_id != fouler.team_id
-        {
-            return Some(carrier.id);
-        }
-        field
-            .players
-            .iter()
-            .filter(|p| p.team_id != fouler.team_id && !p.off_pitch)
-            .min_by(|a, b| {
-                let da = (a.position - fouler.position).magnitude_squared();
-                let db = (b.position - fouler.position).magnitude_squared();
-                da.total_cmp(&db)
-            })
-            .map(|p| p.id)
-    }
 
     fn whistle_foul(
-        fouler_id: u32,
-        severity: FoulSeverity,
-        source: FoulSource,
+        foul: FoulCommitted,
         spot: Vector3<f32>,
         injury_stops_play: bool,
         field: &mut MatchField,
         context: &mut MatchContext,
     ) {
+        let FoulCommitted {
+            fouler: fouler_id,
+            severity,
+            source,
+            ..
+        } = foul;
         // Referee marginal-call gate. The tackling code emits a foul
         // whenever a contact passes its `committed_foul` roll; the
         // referee then decides whether to actually blow the whistle.
@@ -6964,6 +7074,9 @@ impl PlayerEventDispatcher {
             // marginal-call behaviour that lets a lenient referee
             // produce a low-foul match without changing the underlying
             // tackle / press model.
+            if let Some(fouler) = field.get_player_mut(fouler_id) {
+                fouler.on_foul_played_on(foul.challenge);
+            }
             return;
         }
 
@@ -6985,16 +7098,25 @@ impl PlayerEventDispatcher {
         // the card immediately or to stash on a pending advantage.
         let match_second = context.total_match_time;
         let card_modifier = context.referee.card_modifier(&context.environment);
-        let (card_yellow_prob, card_red_prob) = match source {
-            FoulSource::ProfessionalFoul => match Self::professional_foul_cards(fouler_id, spot, field, context) {
-                Some(p) => p,
-                None => return,
-            },
-            _ => match Self::compute_card_probs(fouler_id, severity, field, match_second, card_modifier)
-            {
-                Some(p) => p,
-                None => return,
-            },
+        let cards = match source {
+            FoulSource::ProfessionalFoul => {
+                Self::professional_foul_cards(fouler_id, spot, field, context)
+            }
+            FoulSource::KeeperSmother | FoulSource::Tackle | FoulSource::Holding => {
+                Self::denial_cards(foul, spot, field, context).or_else(|| {
+                    Self::compute_card_probs(
+                        fouler_id,
+                        severity,
+                        field,
+                        match_second,
+                        card_modifier,
+                    )
+                })
+            }
+            _ => Self::compute_card_probs(fouler_id, severity, field, match_second, card_modifier),
+        };
+        let Some((card_yellow_prob, card_red_prob)) = cards else {
+            return;
         };
 
         // Advantage: if the fouled team kept possession, the ball is in
@@ -7039,6 +7161,7 @@ impl PlayerEventDispatcher {
             if let Some(p) = field.get_player_mut(fouler_id) {
                 p.fouls_committed = p.fouls_committed.saturating_add(1);
                 p.statistics.add_foul(match_second);
+                p.on_foul_played_on(foul.challenge);
             }
             return;
         }
@@ -7110,6 +7233,57 @@ impl PlayerEventDispatcher {
                 .map(|p| (p.position, p.tactical_position.current_position.is_goalkeeper())),
         );
         Some((1.0, ProfessionalFoul::red_card_prob(threat)))
+    }
+
+    /// A foul on a man through on goal, judged as Law 12 judges a denied
+    /// obvious goal-scoring opportunity — see
+    /// [`ProfessionalFoul::denial_cards`]. A challenge, a tackle or a
+    /// keeper going down at the ball, is a genuine attempt to play it; a
+    /// man held is not. A man held is only denied a chance when the ball
+    /// is his or is on its way to him: the law weighs the likelihood of
+    /// his having it.
+    fn denial_cards(
+        foul: FoulCommitted,
+        spot: Vector3<f32>,
+        field: &MatchField,
+        context: &MatchContext,
+    ) -> Option<(f32, f32)> {
+        let FoulCommitted {
+            fouler: fouler_id,
+            source,
+            ..
+        } = foul;
+        if source == FoulSource::Holding
+            && field.ball.current_owner != Some(foul.fouled)
+            && field.ball.pass_target_player_id != Some(foul.fouled)
+        {
+            return None;
+        }
+        let fouler = field.get_player(fouler_id)?;
+        let side = fouler.side?;
+        let goal = match side {
+            PlayerSide::Left => context.goal_positions.left,
+            PlayerSide::Right => context.goal_positions.right,
+        };
+        let threat = CounterAttackThreat::from_positions(
+            spot,
+            goal,
+            fouler.position,
+            field
+                .players
+                .iter()
+                .filter(|p| p.team_id == fouler.team_id && p.id != fouler_id && !p.off_pitch)
+                .map(|p| {
+                    (
+                        p.position,
+                        p.tactical_position.current_position.is_goalkeeper(),
+                    )
+                }),
+        );
+        let in_area = context
+            .penalty_area(side == PlayerSide::Left)
+            .contains(&spot);
+        ProfessionalFoul::denial_cards(threat, in_area, source != FoulSource::Holding)
     }
 
     /// Compute the (yellow_prob, red_prob) pair for the foul. Reads
@@ -7344,6 +7518,7 @@ impl PlayerEventDispatcher {
             && let Some(team_id) = field.get_player(fouler_id).map(|p| p.team_id)
         {
             field.take_off(fouler_id, context.coach_for_team(team_id).spare_line());
+            context.on_sending_off(team_id);
             // Roster effectively changed (one fewer active player) —
             // invalidate the cached team skill composites.
             context.invalidate_skill_aggregates();
@@ -7412,6 +7587,13 @@ impl PlayerEventDispatcher {
         #[cfg(feature = "match-logs")]
         if snapshot.is_some() {
             crate::mid_run_diag::RestartCensus::note_offside_snapshot();
+            if let Some(setter) = field
+                .players
+                .iter()
+                .find(|p| p.side == Some(defending) && !p.off_pitch && p.position.x == line_x)
+            {
+                DefenderCensus::note_offside_line(setter);
+            }
         }
         snapshot
     }
@@ -7619,10 +7801,14 @@ impl PlayerEventDispatcher {
     /// handler that used to carry no player id and check nothing at all,
     /// and it is how a defender in a tackling state hooked a clearance out
     /// of a ball 6.6 m over his head.
+    /// `credited`: whether a ball struck away in his own half counts as his
+    /// clearance — a knock-down does not.
+    #[allow(clippy::too_many_arguments)]
     fn strike_clearance(
         clearer_id: u32,
         velocity: Vector3<f32>,
         miscued: bool,
+        credited: bool,
         field: &mut MatchField,
         context: &MatchContext,
         refusal: &mut Option<&'static str>,
@@ -7641,13 +7827,14 @@ impl PlayerEventDispatcher {
         if Self::offside_on_strike(clearer_id, field, context, remaining_events) {
             return;
         }
-        Self::handle_clear_ball_event(clearer_id, velocity, miscued, field, context);
+        Self::handle_clear_ball_event(clearer_id, velocity, miscued, credited, field, context);
     }
 
     fn handle_clear_ball_event(
         clearer_id: u32,
         velocity: Vector3<f32>,
         miscued: bool,
+        credited: bool,
         field: &mut MatchField,
         context: &MatchContext,
     ) {
@@ -7656,17 +7843,38 @@ impl PlayerEventDispatcher {
         // (handle_caught_ball_event) already credits saves; this is the
         // companion that closes the long-standing gap where punched and
         // parried shots stayed at zero saves regardless of effort.
-        let gk_save_id = Self::gk_clearing_shot(field);
+        let gk_shot_id = Self::gk_clearing_shot(field);
+        let gk_save_id = gk_shot_id.filter(|_| {
+            field
+                .ball
+                .cached_shot_target
+                .is_some_and(|t| t.struck_on_frame(&context.goal_positions))
+        });
         let is_gk_shot_save = gk_save_id.is_some();
+        // A knock-down is a header, and so is a ball cleared off the head.
+        #[cfg(feature = "match-logs")]
+        let kind = if !credited || field.ball.position.z > AerialReach::VOLLEY {
+            TouchKind::Head
+        } else {
+            TouchKind::Clearance
+        };
         // A ball cleared out of the air was never his, so nothing else
         // books the contact: put behind, it is his side that concedes the
         // corner.
         if field.ball.current_owner != Some(clearer_id)
             && let Some(team_id) = field.get_player(clearer_id).map(|p| p.team_id)
         {
+            #[cfg(feature = "match-logs")]
+            {
+                field.ball.touch_kind_hint = Some(kind);
+            }
             field
                 .ball
                 .record_touch(clearer_id, team_id, context.current_tick(), false);
+        }
+        #[cfg(feature = "match-logs")]
+        if field.ball.last_touch_player_id == Some(clearer_id) {
+            field.ball.last_touch_kind = kind;
         }
         if let Some(gk_id) = gk_save_id {
             // Capture shooter BEFORE we mutate the field — the previous
@@ -7686,21 +7894,21 @@ impl PlayerEventDispatcher {
             #[cfg(feature = "match-logs")]
             Self::dbg_save_credit(2, shooter_id.is_some(), shooter_id.is_none(), shooter_found);
             let _ = shooter_found;
+        }
+        if gk_shot_id.is_some() {
             field.ball.cached_shot_target = None;
         }
 
         // Clearance cap, HORIZONTAL only — the vertical axis is in metres
         // and shares no scale with it, so there is no total magnitude worth
-        // capping. 2.8 u/tick = 35 m/s, harder than any pass and about as
-        // hard as a defender hits a ball.
+        // capping. See `Ball::MAX_CLEARANCE_SPEED`.
         //
         // Was a 7.0 cap on the whole vector, which (a) mixed the two unit
         // systems and (b) rescaled, so a big hoof lost forward travel to
         // stay inside the budget — the same defect the pass path had.
-        const MAX_CLEAR_HORIZONTAL: f32 = 2.8;
         let horizontal_speed = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
-        let mut capped_velocity = if horizontal_speed > MAX_CLEAR_HORIZONTAL {
-            let scale = MAX_CLEAR_HORIZONTAL / horizontal_speed;
+        let mut capped_velocity = if horizontal_speed > Ball::MAX_CLEARANCE_SPEED {
+            let scale = Ball::MAX_CLEARANCE_SPEED / horizontal_speed;
             Vector3::new(velocity.x * scale, velocity.y * scale, velocity.z)
         } else {
             velocity
@@ -7710,14 +7918,28 @@ impl PlayerEventDispatcher {
             Self::give_away(clearer_id, LapseFamily::Clearance, field, context);
         }
 
+        // The man who struck it, not the ball's owner: a keeper who knocks
+        // the ball off a striker's feet is not the owner, and a punch has
+        // none. A strike in his own half is a clearance, guarded and
+        // credited; one in the opponents' half is a knock-down or a glance.
+        let field_width = context.field_size.width as f32;
+        let ball_x = field.ball.position.x;
+        let (clearer_team_id, clears_own_half) = field
+            .get_player(clearer_id)
+            .map(|p| {
+                let own_half = p.side.is_some_and(|side| {
+                    (ball_x - side.own_goal_x(field_width)).abs() <= field_width * 0.5
+                });
+                (Some(p.team_id), own_half)
+            })
+            .unwrap_or((None, false));
+
         // SAFETY: Prevent clearances from going toward own goal
         // A clearance should always go AWAY from own goal, never toward it
         // — unless he miscued it, which is the one that can.
-        if !miscued {
+        if !miscued && clears_own_half {
             use crate::r#match::PlayerSide;
-            if let Some(clearer_id) = field.ball.current_owner
-                && let Some(clearer) = field.get_player(clearer_id)
-            {
+            if let Some(clearer) = field.get_player(clearer_id) {
                 match clearer.side {
                         Some(PlayerSide::Left) => {
                             // Own goal at x ≈ 0 — clearance must go forward (positive x)
@@ -7752,16 +7974,14 @@ impl PlayerEventDispatcher {
 
         // A clearance is a release: it ends any hold and, for a keeper,
         // arms Law 12's second-touch bar until somebody else plays it.
-        if let Some(clearer_id) = field.ball.current_owner {
-            let from = field.ball.position;
-            field
-                .ball
-                .note_release(clearer_id, from, context.current_tick());
-            #[cfg(feature = "match-logs")]
-            {
-                field.ball.strike_origin =
-                    Some(crate::r#match::engine::ball::ball::block_diag::StrikeOrigin::clearance());
-            }
+        let from = field.ball.position;
+        field
+            .ball
+            .note_release(clearer_id, from, context.current_tick());
+        #[cfg(feature = "match-logs")]
+        {
+            field.ball.strike_origin =
+                Some(crate::r#match::engine::ball::ball::block_diag::StrikeOrigin::clearance());
         }
 
         // Clearance credit. A GK who just deflected a real shot away
@@ -7770,10 +7990,7 @@ impl PlayerEventDispatcher {
         // so the shot-save branch is excluded here. Outfielders and a
         // GK doing routine sweeper work both get clearance credit + the
         // zone classification.
-        if !is_gk_shot_save
-            && !from_the_gloves
-            && let Some(clearer_id) = field.ball.current_owner
-        {
+        if credited && !is_gk_shot_save && !from_the_gloves && clears_own_half {
             let ball_pos = field.ball.position;
             if let Some(clearer) = field.get_player_mut(clearer_id) {
                 clearer.statistics.add_clearance();
@@ -7799,14 +8016,6 @@ impl PlayerEventDispatcher {
                 }
             }
         }
-
-        // Captured before ownership is dropped below — the possession
-        // check needs to know whose team just played the ball.
-        let clearer_team_id = field
-            .ball
-            .current_owner
-            .and_then(|id| field.get_player(id))
-            .map(|p| p.team_id);
 
         // Apply the clearing velocity to the ball
         field.ball.velocity = capped_velocity;

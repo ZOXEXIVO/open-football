@@ -113,7 +113,7 @@ fn a_cut_inside_winger_comes_inside_where_a_plain_one_goes_down_the_line() {
 fn a_man_who_dives_in_goes_in_more_readily_than_one_who_stays_on_his_feet() {
     let (mut field, context) = kickoff();
     let id = winger(&mut field);
-    let temper = |ctx: &StateProcessingContext| TackleDecision::trait_temper(ctx);
+    let temper = |ctx: &StateProcessingContext| TackleDecision::trait_temper(ctx.player);
 
     let plain = read(&mut field, &context, id, vec![], temper);
     let dives = read(

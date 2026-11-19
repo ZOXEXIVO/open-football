@@ -127,6 +127,23 @@ impl GoalSight {
     }
 }
 
+/// The chance a ball to a team-mate gets to him, read off a clear lane.
+#[derive(Debug, Clone, Copy)]
+pub struct PassOdds(f32);
+
+impl PassOdds {
+    /// What a choice between lanes ranks: the worth of the ball that
+    /// arrives. A gain shrinks with the risk and a cost grows with it, so
+    /// a score of either sign keeps its sense.
+    pub fn price(self, score: f32) -> f32 {
+        if score >= 0.0 {
+            score * self.0
+        } else {
+            score / self.0
+        }
+    }
+}
+
 pub struct PlayerOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
 }
@@ -441,11 +458,17 @@ impl<'p> PlayerOperationsImpl<'p> {
     /// sweep a 1.5 m corridor of standing bodies, and the man who cuts a
     /// pass out was rarely standing in it when it was struck — booked
     /// over 100 fixtures, the interceptor stood 3.5 m off the lane at
-    /// the strike four times in five. Asked by the cut-back finder, the
-    /// better-placed-team-mate deferral, the emergency outlet and both
-    /// safe-pass searches, so every one of them reads the same lane.
+    /// the strike four times in five. Asked where any clear lane will do;
+    /// a choice between lanes reads [`Self::clear_pass`].
     pub fn has_clear_pass(&self, player_id: u32) -> bool {
-        self.lane_risk(player_id) < Self::clear_lane()
+        self.clear_pass(player_id).is_some()
+    }
+
+    /// The lane to this team-mate priced, when it is clear: what a choice
+    /// between lanes ranks by, so the cleaner of two clear lanes wins.
+    pub fn clear_pass(&self, player_id: u32) -> Option<PassOdds> {
+        let risk = self.lane_risk(player_id);
+        (risk < Self::clear_lane()).then_some(PassOdds(1.0 - risk))
     }
 
     /// A lane he would lose one ball in four on is not clear.

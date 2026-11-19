@@ -5,11 +5,9 @@
 //! exactly the events the GK state machine would have emitted had the
 //! physics save not pre-empted it.
 
+use crate::r#match::SaveOutcome;
 use crate::r#match::engine::engine::*;
-use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::state::PlayerState;
 use crate::r#match::engine::psychology::PositiveEvent;
-use crate::r#match::player::transition::TransitionSource;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// Consume `Ball::pending_save_credit` left behind by the physics
@@ -29,6 +27,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let Some((keeper_id, shooter_id)) = field.ball.pending_save_credit.take() else {
             return;
         };
+        let on_frame = std::mem::take(&mut field.ball.pending_save_on_frame);
         // One pass over the 22-player list resolves both ids. The team-
         // mismatch guard is defence in depth against any accidental
         // same-team shooter — deflections through the save handler
@@ -49,85 +48,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             return;
         }
         let shot_xg = field.ball.last_shot_xgot;
-        // ── Make the save VISIBLE ─────────────────────────────────────
-        //
-        // The physics save resolves a shot entirely inside ball physics:
-        // it changes ball state, credits the stats, and never touches the
-        // keeper's state machine. So he made ~86 saves a match while
-        // `Goalkeeper: Diving` sat below 0.25% of his ticks — the ball
-        // simply stopped at a standing man, which is the "he doesn't
-        // catch anything, he just sits on it" report.
-        //
-        // Put him into the state the save actually demanded. `reach_ratio`
-        // is how far he had to stretch, and it is already the quantity the
-        // save model scores, so the state and the physics agree about how
-        // hard the save was rather than rolling it twice.
-        {
-            /// Beyond this he has left his feet. 0.22 of full stretch is
-            /// roughly a step and a reach — anything past that is a dive,
-            /// which is most saves a keeper makes. Only the ball hit
-            /// straight at him is taken standing.
-            const DIVE_STRETCH: f32 = 0.22;
-            let reach = field.ball.pending_save_reach;
-            let held = field.ball.current_owner == Some(keeper_id);
-            let next = if reach >= DIVE_STRETCH {
-                // Full-stretch — he goes to ground whether he holds it or
-                // pushes it away.
-                GoalkeeperState::Diving
-            } else if held {
-                // Straight at him and gathered: a clean catch.
-                GoalkeeperState::Catching
-            } else {
-                // Straight at him and NOT held — he got something behind
-                // it and the rebound is live. That is a parry, and
-                // `Punching` is the state for it; `PreparingForSave`
-                // would say he is still waiting for a shot he has already
-                // stopped.
-                GoalkeeperState::Punching
-            };
-            // …UNLESS HE IS ALREADY DOING IT.
-            //
-            // A keeper who left his feet during the flight (see
-            // `KeeperShotDive`) is ALREADY in `Diving` when the ball
-            // reaches him, and `transition_to` RESETS `in_state_time` — so
-            // re-issuing the same state here restarted his dive timer at
-            // the moment of contact and pinned him to the floor for another
-            // full dive on top of the one he had just made. It also
-            // double-counted him in the action census, which is how the
-            // dive count came out at more than twice the number of saves.
-            //
-            // This site exists to make an INVISIBLE save visible. When the
-            // save is already visible it has nothing to add, and the
-            // crediting below carries on exactly as before.
-            let already = field.players[keeper_idx].state == PlayerState::Goalkeeper(next);
-            if !already {
-                #[cfg(feature = "match-logs")]
-                {
-                    crate::mid_run_diag::KeeperSweepDiag::note_exit(match next {
-                        GoalkeeperState::Diving => 1,
-                        GoalkeeperState::Catching => 3,
-                        _ => 4,
-                    });
-                    // …and into the action census as well. This site does
-                    // not go through `PlayerMatchState::process`, so the
-                    // counters there never see it — leaving the physics
-                    // save, which is where most of a keeper's dives come
-                    // from, out of the one table that reports how often he
-                    // dives.
-                    crate::mid_run_diag::KeeperActionDiag::note(match next {
-                        GoalkeeperState::Diving => 0,
-                        GoalkeeperState::Punching => 2,
-                        _ => usize::MAX,
-                    });
-                }
-                let gk = &mut field.players[keeper_idx];
-                gk.transition_to(
-                    PlayerState::Goalkeeper(next),
-                    TransitionSource::EventHandler,
-                );
-            }
-        }
-        field.ball.pending_save_reach = 0.0;
+        // The keeper carries the save out himself: diving, it lands him
+        // with the ball or without it; on his feet, his next decision takes
+        // a held ball into his body. See `MatchPlayer::on_save_outcome`.
+        let held = field.ball.current_owner == Some(keeper_id);
+        field.players[keeper_idx].on_save_outcome(if held {
+            SaveOutcome::Held
+        } else {
+            SaveOutcome::Loose
+        });
         // Read the outcome BEFORE resetting it — the accounting block at the
         // bottom of this function needs it, and resetting here first is why
         // the table kept reporting `parry 0` while the parry branch was
@@ -135,6 +64,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let save_site = field.ball.pending_save_site;
         field.ball.pending_save_site = 1;
         let _ = save_site; // only read by the `match-logs` accounting below
+        let spot_kick = std::mem::take(&mut field.ball.pending_save_spot_kick);
+        // Going wide or over: he still touched it, but it kept nothing out.
+        if !on_frame {
+            #[cfg(feature = "match-logs")]
+            save_accounting_stats::PENDING_OFF_FRAME
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            field.ball.clear_shot_metadata();
+            return;
+        }
         {
             let gk = &mut field.players[keeper_idx];
             // The GK denied a shot worth `shot_xg` xG — books the save,
@@ -148,7 +86,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 .psychology
                 .record_positive(keeper_id, PositiveEvent::BigSave, context.current_tick());
         }
-        if std::mem::take(&mut field.ball.pending_save_spot_kick) {
+        if spot_kick {
             context.penalty_saves.push(keeper_id);
         }
         // Shot has resolved (saved). Drop the metadata so any

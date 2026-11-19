@@ -9,10 +9,10 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
-use chrono::Datelike;
-use core::SimulatorData;
-use core::transfers::TransferType;
-use core::utils::FormattingUtils;
+use chrono::{Datelike, NaiveDate};
+use core::transfers::{CompletedTransfer, TransferType};
+use core::utils::{DateUtils, FormattingUtils};
+use core::{Player, PlayerFieldPositionGroup, PlayerSquadStatus, SimulatorData, Team, TeamType};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -56,37 +56,319 @@ pub struct TeamTransfersTemplate {
     pub show_academy_tab: bool,
     /// Printed items waiting on the newspaper tab, for the tabbar badge.
     pub newspaper_count: usize,
-    pub items: Vec<TransferListItem>,
-    pub incoming_transfers: Vec<TransferHistoryItem>,
-    pub outgoing_transfers: Vec<TransferHistoryItem>,
-    pub incoming_loans: Vec<LoanHistoryItem>,
-    pub outgoing_loans: Vec<LoanHistoryItem>,
+    pub items: Vec<TransferListRow>,
+    pub list_value: String,
+    pub ledger: TransferLedger,
     pub seasons: Vec<SeasonOption>,
 }
 
-pub struct TransferListItem {
-    pub player_slug: String,
-    pub player_name: String,
-    pub position: String,
+/// A player as every transfers table shows him. A record whose player
+/// no longer exists keeps only the stored name, shown with initials.
+pub struct TransferPlayerView {
+    pub id: u32,
+    pub slug: String,
+    pub name: String,
+    pub initials: String,
+    pub known: bool,
+    pub generated: bool,
+    pub country_code: String,
+    pub country_name: String,
+    pub age: u8,
+    pub position: &'static str,
+    pub position_group: &'static str,
+}
+
+impl TransferPlayerView {
+    fn of(data: &SimulatorData, player: &Player, now: NaiveDate) -> Self {
+        let (country_code, country_name) = data
+            .country(player.country_id)
+            .map(|c| (c.code.clone(), c.name.clone()))
+            .or_else(|| {
+                data.country_info
+                    .get(&player.country_id)
+                    .map(|i| (i.code.clone(), i.name.clone()))
+            })
+            .unwrap_or_default();
+        let first = player.full_name.display_first_name();
+        let last = player.full_name.display_last_name();
+        let position = player.position();
+
+        TransferPlayerView {
+            id: player.id,
+            slug: player.slug(),
+            name: format!("{} {}", first, last),
+            initials: Self::initials(&format!("{} {}", first, last)),
+            known: true,
+            generated: player.is_generated(),
+            country_code,
+            country_name,
+            age: DateUtils::age(player.birth_date, now),
+            position: position.get_short_name(),
+            position_group: match position.position_group() {
+                PlayerFieldPositionGroup::Goalkeeper => "gk",
+                PlayerFieldPositionGroup::Defender => "def",
+                PlayerFieldPositionGroup::Midfielder => "mid",
+                PlayerFieldPositionGroup::Forward => "fwd",
+            },
+        }
+    }
+
+    fn of_record(data: &SimulatorData, id: u32, stored_name: &str, now: NaiveDate) -> Self {
+        match data.player(id) {
+            Some(player) => Self::of(data, player, now),
+            None => TransferPlayerView {
+                id,
+                slug: player_history_slug(data, id, stored_name),
+                name: stored_name.to_string(),
+                initials: Self::initials(stored_name),
+                known: false,
+                generated: false,
+                country_code: String::new(),
+                country_name: String::new(),
+                age: 0,
+                position: "",
+                position_group: "",
+            },
+        }
+    }
+
+    fn initials(name: &str) -> String {
+        let mut words = name.split_whitespace();
+        let first = words.next().and_then(|w| w.chars().next());
+        let last = words.last().and_then(|w| w.chars().next());
+        first.into_iter().chain(last).collect()
+    }
+}
+
+/// The other side of a move: a club in its colours, or the free-agent pool.
+pub struct TransferClubView {
+    pub name: String,
+    pub slug: String,
+    pub background: String,
+    pub foreground: String,
+    pub free_agent: bool,
+}
+
+impl TransferClubView {
+    fn of(data: &SimulatorData, club_id: u32, stored_name: &str, i18n: &I18n) -> Self {
+        if club_id == 0 {
+            return TransferClubView {
+                name: i18n.t("free_agent").to_string(),
+                slug: String::new(),
+                background: String::new(),
+                foreground: String::new(),
+                free_agent: true,
+            };
+        }
+        let club = data.club(club_id);
+        TransferClubView {
+            name: stored_name.to_string(),
+            slug: club
+                .and_then(|c| c.teams.teams.iter().find(|t| t.team_type == TeamType::Main))
+                .map(|t| t.slug.clone())
+                .unwrap_or_default(),
+            background: club
+                .map(|c| c.colors.background.clone())
+                .unwrap_or_default(),
+            foreground: club
+                .map(|c| c.colors.foreground.clone())
+                .unwrap_or_default(),
+            free_agent: false,
+        }
+    }
+}
+
+pub struct TransferListRow {
+    pub player: TransferPlayerView,
+    pub squad_status: String,
+    pub squad_tone: &'static str,
+    pub contract_until: String,
+    pub wage: String,
     pub value: String,
 }
 
-pub struct TransferHistoryItem {
-    pub player_slug: String,
-    pub player_name: String,
-    pub other_team: String,
-    pub other_team_slug: String,
-    pub fee: String,
-    pub date: String,
+impl TransferListRow {
+    /// Most valuable first, with the summed value of the whole list.
+    fn collect(
+        data: &SimulatorData,
+        team: &Team,
+        now: NaiveDate,
+        i18n: &I18n,
+    ) -> (Vec<TransferListRow>, String) {
+        let league_rep = team
+            .league_id
+            .and_then(|id| data.league(id))
+            .map(|l| l.reputation)
+            .unwrap_or(0);
+        let club_rep = team.reputation.market_value_score();
+        let players = team.players();
+
+        let mut valued: Vec<(&Player, f64)> = team
+            .transfer_list
+            .items()
+            .iter()
+            .filter_map(|item| players.iter().find(|p| p.id == item.player_id).copied())
+            .map(|p| (p, p.value(now, league_rep, club_rep)))
+            .collect();
+        valued.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+        let total = valued.iter().map(|(_, v)| v).sum();
+        let rows = valued
+            .into_iter()
+            .map(|(p, value)| {
+                let contract = p.contract.as_ref();
+                TransferListRow {
+                    player: TransferPlayerView::of(data, p, now),
+                    squad_status: contract
+                        .map(|c| i18n.t(c.squad_status.i18n_key()).to_string())
+                        .unwrap_or_default(),
+                    squad_tone: match contract.map(|c| &c.squad_status) {
+                        Some(
+                            PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular,
+                        ) => "regular",
+                        Some(PlayerSquadStatus::FirstTeamSquadRotation) => "rotation",
+                        _ => "backup",
+                    },
+                    contract_until: contract
+                        .map(|c| i18n.format_month_year(c.expiration))
+                        .unwrap_or_default(),
+                    wage: contract
+                        .map(|c| FormattingUtils::format_money(c.salary as f64))
+                        .unwrap_or_default(),
+                    value: FormattingUtils::format_money(value),
+                }
+            })
+            .collect();
+        (rows, TransferLedger::money(total))
+    }
 }
 
-pub struct LoanHistoryItem {
-    pub player_slug: String,
-    pub player_name: String,
-    pub other_team: String,
-    pub other_team_slug: String,
+pub struct TransferHistoryRow {
+    pub player: TransferPlayerView,
+    pub club: TransferClubView,
     pub date: String,
-    pub end_date: String,
+    pub fee: String,
+    pub free: bool,
+}
+
+pub struct LoanHistoryRow {
+    pub player: TransferPlayerView,
+    pub club: TransferClubView,
+    pub start: String,
+    pub end: String,
+    pub progress: u8,
+}
+
+/// One season of a club's completed moves, newest first.
+pub struct TransferLedger {
+    pub incoming_transfers: Vec<TransferHistoryRow>,
+    pub outgoing_transfers: Vec<TransferHistoryRow>,
+    pub incoming_loans: Vec<LoanHistoryRow>,
+    pub outgoing_loans: Vec<LoanHistoryRow>,
+    pub spent: String,
+    pub received: String,
+}
+
+impl TransferLedger {
+    fn collect(
+        data: &SimulatorData,
+        club_id: u32,
+        season: u16,
+        now: NaiveDate,
+        i18n: &I18n,
+    ) -> Self {
+        // A cross-border move is recorded only in the buying country's
+        // market, so every country is scanned or foreign sales go missing.
+        let mut records: Vec<&CompletedTransfer> = data
+            .continents
+            .iter()
+            .flat_map(|continent| continent.countries.iter())
+            .flat_map(|country| country.transfer_market.transfer_history.iter())
+            .filter(|t| t.season_year == season)
+            .filter(|t| t.to_club_id == club_id || t.from_club_id == club_id)
+            .collect();
+        records.sort_by(|a, b| b.transfer_date.cmp(&a.transfer_date));
+
+        let mut ledger = TransferLedger {
+            incoming_transfers: Vec::new(),
+            outgoing_transfers: Vec::new(),
+            incoming_loans: Vec::new(),
+            outgoing_loans: Vec::new(),
+            spent: String::new(),
+            received: String::new(),
+        };
+        let (mut spent, mut received) = (0.0, 0.0);
+
+        for t in records {
+            let incoming = t.to_club_id == club_id;
+            let (other_id, other_name) = if incoming {
+                (t.from_club_id, &t.from_team_name)
+            } else {
+                (t.to_club_id, &t.to_team_name)
+            };
+            let player = TransferPlayerView::of_record(data, t.player_id, &t.player_name, now);
+            let club = TransferClubView::of(data, other_id, other_name, i18n);
+
+            match &t.transfer_type {
+                TransferType::Loan(end) => {
+                    let row = LoanHistoryRow {
+                        player,
+                        club,
+                        start: i18n.format_date(t.transfer_date),
+                        end: i18n.format_date(*end),
+                        progress: Self::progress(t.transfer_date, *end, now),
+                    };
+                    if incoming {
+                        ledger.incoming_loans.push(row);
+                    } else {
+                        ledger.outgoing_loans.push(row);
+                    }
+                }
+                TransferType::Permanent | TransferType::Free => {
+                    let fee = t.fee.amount;
+                    let row = TransferHistoryRow {
+                        player,
+                        club,
+                        date: i18n.format_date(t.transfer_date),
+                        fee: if fee > 0.0 {
+                            FormattingUtils::format_money(fee)
+                        } else {
+                            i18n.t("fee_free").to_string()
+                        },
+                        free: fee <= 0.0,
+                    };
+                    if incoming {
+                        spent += fee;
+                        ledger.incoming_transfers.push(row);
+                    } else {
+                        received += fee;
+                        ledger.outgoing_transfers.push(row);
+                    }
+                }
+            }
+        }
+
+        ledger.spent = Self::money(spent);
+        ledger.received = Self::money(received);
+        ledger
+    }
+
+    fn progress(start: NaiveDate, end: NaiveDate, now: NaiveDate) -> u8 {
+        let length = (end - start).num_days();
+        if length <= 0 {
+            return 100;
+        }
+        let elapsed = (now - start).num_days().clamp(0, length);
+        (elapsed * 100 / length) as u8
+    }
+
+    fn money(amount: f64) -> String {
+        if amount > 0.0 {
+            FormattingUtils::format_money(amount)
+        } else {
+            "0".to_string()
+        }
+    }
 }
 
 pub async fn team_transfers_action(
@@ -134,17 +416,14 @@ pub async fn team_transfers_action(
 
     let club_id = team.club_id;
 
-    // Compute season options
-    let sim_date = simulator_data.date.date();
-    let current_season_year = if sim_date.month() >= 8 {
-        sim_date.year() as u16
+    let current_season_year = if now.month() >= 8 {
+        now.year() as u16
     } else {
-        (sim_date.year() - 1) as u16
+        (now.year() - 1) as u16
     };
 
     let selected_season = query.season.unwrap_or(current_season_year);
 
-    // Find earliest season that has any transfer involving this club (across all countries)
     let min_season_year = simulator_data
         .continents
         .iter()
@@ -164,140 +443,8 @@ pub async fn team_transfers_action(
         })
         .collect();
 
-    // Current transfer list items
-    let items: Vec<TransferListItem> = team
-        .transfer_list
-        .items()
-        .iter()
-        .filter_map(|ti| {
-            let player = team.players().into_iter().find(|p| p.id == ti.player_id)?;
-            Some(TransferListItem {
-                player_slug: player.slug(),
-                player_name: format!(
-                    "{} {}",
-                    player.full_name.display_first_name(),
-                    player.full_name.display_last_name()
-                ),
-                position: player.position().get_short_name().to_string(),
-                value: FormattingUtils::format_money(player.value(
-                    now,
-                    league.map(|l| l.reputation).unwrap_or(0),
-                    team.reputation.market_value_score(),
-                )),
-            })
-        })
-        .collect();
-
-    // Incoming/outgoing transfers: scan ALL countries because cross-country
-    // transfers are recorded in the buying country's transfer_market, not the
-    // selling country's. Without this, foreign sales/purchases are invisible.
-    // Transfers and loans both come from transfer_history so they are season-
-    // filterable. Loans are distinguished by TransferType::Loan, whose payload
-    // carries the loan end date.
-    let mut incoming_transfers: Vec<TransferHistoryItem> = Vec::new();
-    let mut outgoing_transfers: Vec<TransferHistoryItem> = Vec::new();
-    let mut incoming_loans: Vec<LoanHistoryItem> = Vec::new();
-    let mut outgoing_loans: Vec<LoanHistoryItem> = Vec::new();
-
-    for continent in &simulator_data.continents {
-        for c in &continent.countries {
-            for t in &c.transfer_market.transfer_history {
-                if t.season_year != selected_season {
-                    continue;
-                }
-                let is_incoming = t.to_club_id == club_id;
-                let is_outgoing = t.from_club_id == club_id;
-                if !is_incoming && !is_outgoing {
-                    continue;
-                }
-
-                match &t.transfer_type {
-                    TransferType::Loan(end_date) => {
-                        let end_date = end_date.format("%d.%m.%Y").to_string();
-                        if is_incoming {
-                            incoming_loans.push(LoanHistoryItem {
-                                player_slug: player_history_slug(
-                                    simulator_data,
-                                    t.player_id,
-                                    &t.player_name,
-                                ),
-                                player_name: t.player_name.clone(),
-                                other_team: if t.from_club_id == 0 {
-                                    i18n.t("free_agent").to_string()
-                                } else {
-                                    t.from_team_name.clone()
-                                },
-                                other_team_slug: find_team_slug(simulator_data, t.from_club_id),
-                                date: t.transfer_date.format("%d.%m.%Y").to_string(),
-                                end_date: end_date.clone(),
-                            });
-                        }
-                        if is_outgoing {
-                            outgoing_loans.push(LoanHistoryItem {
-                                player_slug: player_history_slug(
-                                    simulator_data,
-                                    t.player_id,
-                                    &t.player_name,
-                                ),
-                                player_name: t.player_name.clone(),
-                                other_team: if t.to_club_id == 0 {
-                                    i18n.t("free_agent").to_string()
-                                } else {
-                                    t.to_team_name.clone()
-                                },
-                                other_team_slug: find_team_slug(simulator_data, t.to_club_id),
-                                date: t.transfer_date.format("%d.%m.%Y").to_string(),
-                                end_date,
-                            });
-                        }
-                    }
-                    TransferType::Permanent | TransferType::Free => {
-                        let fee = if t.fee.amount > 0.0 {
-                            FormattingUtils::format_money(t.fee.amount)
-                        } else {
-                            i18n.t("fee_free").to_string()
-                        };
-                        if is_incoming {
-                            incoming_transfers.push(TransferHistoryItem {
-                                player_slug: player_history_slug(
-                                    simulator_data,
-                                    t.player_id,
-                                    &t.player_name,
-                                ),
-                                player_name: t.player_name.clone(),
-                                other_team: if t.from_club_id == 0 {
-                                    i18n.t("free_agent").to_string()
-                                } else {
-                                    t.from_team_name.clone()
-                                },
-                                other_team_slug: find_team_slug(simulator_data, t.from_club_id),
-                                fee: fee.clone(),
-                                date: t.transfer_date.format("%d.%m.%Y").to_string(),
-                            });
-                        }
-                        if is_outgoing {
-                            outgoing_transfers.push(TransferHistoryItem {
-                                player_slug: player_history_slug(
-                                    simulator_data,
-                                    t.player_id,
-                                    &t.player_name,
-                                ),
-                                player_name: t.player_name.clone(),
-                                other_team: if t.to_club_id == 0 {
-                                    i18n.t("free_agent").to_string()
-                                } else {
-                                    t.to_team_name.clone()
-                                },
-                                other_team_slug: find_team_slug(simulator_data, t.to_club_id),
-                                fee,
-                                date: t.transfer_date.format("%d.%m.%Y").to_string(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let (items, list_value) = TransferListRow::collect(simulator_data, team, now, &i18n);
+    let ledger = TransferLedger::collect(simulator_data, club_id, selected_season, now, &i18n);
 
     let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
     let current_path = format!("/{}/teams/{}/transfers", route_params.lang, team.slug);
@@ -341,29 +488,13 @@ pub async fn team_transfers_action(
         team_slug: team.slug.clone(),
         active_tab: "transfers",
         show_finances_tab: team.team_type.is_own_team(),
-        show_academy_tab: team.team_type == core::TeamType::Main
-            || team.team_type == core::TeamType::U18,
+        show_academy_tab: team.team_type == TeamType::Main || team.team_type == TeamType::U18,
         newspaper_count: NewspaperCounter::count(simulator_data, team),
         items,
-        incoming_transfers,
-        outgoing_transfers,
-        incoming_loans,
-        outgoing_loans,
+        list_value,
+        ledger,
         seasons,
     })
-}
-
-/// Find the main team slug for a club across all countries.
-fn find_team_slug(data: &SimulatorData, club_id: u32) -> String {
-    data.club(club_id)
-        .and_then(|c| {
-            c.teams
-                .teams
-                .iter()
-                .find(|t| t.team_type == core::TeamType::Main)
-        })
-        .map(|t| t.slug.clone())
-        .unwrap_or_default()
 }
 
 fn get_neighbor_teams(

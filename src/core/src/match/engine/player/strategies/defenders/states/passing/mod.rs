@@ -1,8 +1,12 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, DefenderRead,
+};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::player::strategies::common::players::ops::clearance::ClearanceCall;
+use crate::r#match::player::strategies::common::players::ops::clearance::{
+    ClearanceCall, TouchlineCall,
+};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
@@ -29,7 +33,7 @@ impl StateProcessingHandler for DefenderPassingState {
         // 65-tick timeout) and none of them consults `ClearanceCall`, so
         // a defender routed here rather than to `Running` answered the
         // same question a different way.
-        if let Some(release) = ClearanceCall::decide(ctx) {
+        if let Some(release) = ClearanceCall::decide(ctx).or_else(|| TouchlineCall::decide(ctx)) {
             return Some(release.resolve(ctx));
         }
 
@@ -50,7 +54,7 @@ impl StateProcessingHandler for DefenderPassingState {
         // tackled out of a buildup phase.
         if let Some(target) = Self::find_counter_attack_target(ctx) {
             return Some(StateChangeResult::with_defender_state_and_event(
-                DefenderState::Standing,
+                DefenderRead::released(ctx),
                 Event::PlayerEvent(PlayerEvent::PassTo(
                     PassingEventContext::builder()
                         .with_from_player_id(ctx.player.id)
@@ -82,7 +86,7 @@ impl StateProcessingHandler for DefenderPassingState {
             }
             return if let Some(safe_option) = ctx.player().passing().find_safe_pass_option() {
                 Some(StateChangeResult::with_defender_state_and_event(
-                    DefenderState::Standing,
+                    DefenderRead::released(ctx),
                     Event::PlayerEvent(PlayerEvent::PassTo(
                         PassingEventContext::builder()
                             .with_from_player_id(ctx.player.id)
@@ -110,7 +114,7 @@ impl StateProcessingHandler for DefenderPassingState {
             let dist = (safe_target.position - ctx.player.position).magnitude();
             if dist >= 20.0 {
                 return Some(StateChangeResult::with_defender_state_and_event(
-                    DefenderState::Standing,
+                    DefenderRead::released(ctx),
                     Event::PlayerEvent(PlayerEvent::PassTo(
                         PassingEventContext::builder()
                             .with_from_player_id(ctx.player.id)
@@ -141,7 +145,7 @@ impl StateProcessingHandler for DefenderPassingState {
 
             if pass_distance >= 30.0 && forward_component > -0.3 {
                 return Some(StateChangeResult::with_defender_state_and_event(
-                    DefenderState::Standing,
+                    DefenderRead::released(ctx),
                     Event::PlayerEvent(PlayerEvent::PassTo(
                         PassingEventContext::builder()
                             .with_from_player_id(ctx.player.id)
@@ -168,7 +172,7 @@ impl StateProcessingHandler for DefenderPassingState {
                 .find_best_pass_option_with_distance(220.0)
             {
                 return Some(StateChangeResult::with_defender_state_and_event(
-                    DefenderState::Standing,
+                    DefenderRead::released(ctx),
                     Event::PlayerEvent(PlayerEvent::PassTo(
                         PassingEventContext::builder()
                             .with_from_player_id(ctx.player.id)
@@ -205,7 +209,7 @@ impl StateProcessingHandler for DefenderPassingState {
                 let dist = (safe_target.position - ctx.player.position).magnitude();
                 if dist >= 20.0 {
                     return Some(StateChangeResult::with_defender_state_and_event(
-                        DefenderState::Standing,
+                        DefenderRead::released(ctx),
                         Event::PlayerEvent(PlayerEvent::PassTo(
                             PassingEventContext::builder()
                                 .with_from_player_id(ctx.player.id)

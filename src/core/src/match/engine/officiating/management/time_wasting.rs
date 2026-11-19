@@ -73,16 +73,16 @@ impl TimeWastingLedger {
 pub struct TimeWasting;
 
 impl TimeWasting {
-    /// Compute how long a leading team can drag a restart. Positive values
-    /// in milliseconds added to the natural stoppage. Returns 0 outside the
-    /// 75th-minute leading-team window.
+    /// How long a side drags a restart, in milliseconds added to the
+    /// natural stoppage: the full drag at a fully protecting stance
+    /// (`protecting` 1), none while it is not protecting at all.
     pub fn delay_ms(
-        score_diff: i32,
-        match_minute: u32,
+        protecting: f32,
         restart_kind: TimeWastingRestart,
         team_aggression_0_20: f32,
     ) -> u64 {
-        if score_diff <= 0 || match_minute < 75 {
+        let protecting = protecting.clamp(0.0, 1.0);
+        if protecting <= 0.0 {
             return 0;
         }
         let aggressiveness = (team_aggression_0_20 / 20.0).clamp(0.0, 1.0);
@@ -94,7 +94,7 @@ impl TimeWasting {
             TimeWastingRestart::FreeKick => 6_000.0,
             TimeWastingRestart::KeeperHold => 3_500.0,
         };
-        (base_ms * scale) as u64
+        (base_ms * scale * protecting) as u64
     }
 
     /// Probability of a yellow card for time-wasting given the cumulative
@@ -119,24 +119,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn time_wasting_zero_when_not_leading() {
-        let zero = TimeWasting::delay_ms(0, 80, TimeWastingRestart::ThrowIn, 12.0);
-        assert_eq!(zero, 0);
-        let losing = TimeWasting::delay_ms(-1, 85, TimeWastingRestart::ThrowIn, 12.0);
-        assert_eq!(losing, 0);
+    fn time_wasting_zero_when_not_protecting() {
+        assert_eq!(TimeWasting::delay_ms(0.0, TimeWastingRestart::ThrowIn, 12.0), 0);
+        assert_eq!(TimeWasting::delay_ms(-0.4, TimeWastingRestart::ThrowIn, 12.0), 0);
     }
 
     #[test]
-    fn time_wasting_zero_before_75th() {
-        let p = TimeWasting::delay_ms(1, 60, TimeWastingRestart::ThrowIn, 12.0);
-        assert_eq!(p, 0);
+    fn time_wasting_grows_with_the_protecting_stance() {
+        let some = TimeWasting::delay_ms(0.3, TimeWastingRestart::ThrowIn, 12.0);
+        let full = TimeWasting::delay_ms(1.0, TimeWastingRestart::ThrowIn, 12.0);
+        assert!(some > 0 && some < full);
     }
 
     #[test]
     fn time_wasting_substitution_longest() {
-        let throw = TimeWasting::delay_ms(1, 85, TimeWastingRestart::ThrowIn, 12.0);
-        let goal_kick = TimeWasting::delay_ms(1, 85, TimeWastingRestart::GoalKick, 12.0);
-        let sub = TimeWasting::delay_ms(1, 85, TimeWastingRestart::Substitution, 12.0);
+        let throw = TimeWasting::delay_ms(1.0, TimeWastingRestart::ThrowIn, 12.0);
+        let goal_kick = TimeWasting::delay_ms(1.0, TimeWastingRestart::GoalKick, 12.0);
+        let sub = TimeWasting::delay_ms(1.0, TimeWastingRestart::Substitution, 12.0);
         assert!(sub > goal_kick);
         assert!(goal_kick > throw);
     }

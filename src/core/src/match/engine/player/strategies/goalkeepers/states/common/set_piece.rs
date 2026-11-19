@@ -42,8 +42,10 @@
 //! `OF_KEEPER_SETPIECE=off` is the A/B control: the old rest model
 //! everywhere, the old late reaction at penalties.
 
+use crate::PlayerFieldPositionGroup;
 use crate::r#match::engine::ball::ball::DeadBall;
 use crate::r#match::engine::goal::GOAL_WIDTH;
+use crate::r#match::engine::officiating::restart_shape::RestartShape;
 use crate::r#match::goalkeepers::states::common::{
     KeeperRestPosition, KeeperSetPosition, KeeperShotReaction, KeeperShotSave,
 };
@@ -87,8 +89,9 @@ impl KeeperSetPieceStance {
     /// keeper is coached to start and the far post is where an inswinger
     /// ends up.
     const CORNER_FAR_POST_BIAS: f32 = 0.33;
-    /// …and at a free kick, where the wall has the near side. A quarter.
-    const FREE_KICK_FAR_BIAS: f32 = 0.25;
+    /// How far from the restraining distance a team-mate can stand and
+    /// still be in the wall, in units: 2 m either way.
+    const WALL_BAND: f32 = 16.0;
     /// A ball within this of the goal's centre line is central and has no
     /// far post. 12u = 1.5 m.
     const CENTRAL: f32 = 12.0;
@@ -171,11 +174,56 @@ impl KeeperSetPieceStance {
             ),
             SetPiece::DirectFreeKick => (
                 Self::FREE_KICK_DEPTH,
-                far_sign * GOAL_WIDTH * Self::FREE_KICK_FAR_BIAS,
+                Self::open_middle(ctx, goal, ball) - goal.y,
             ),
             SetPiece::Penalty => (Self::PENALTY_DEPTH, 0.0),
         };
         Some(Vector3::new(goal.x + into * depth, goal.y + across, 0.0))
+    }
+
+    /// The middle of the widest stretch of his goal the wall leaves open,
+    /// as the ball sees it: each of his team-mates standing in it covers
+    /// his own width, cast from the ball onto the goal line. The men
+    /// actually there, not their stations, so he follows a wall that is
+    /// late to its marks.
+    fn open_middle(ctx: &StateProcessingContext, goal: Vector3<f32>, ball: Vector3<f32>) -> f32 {
+        let span = goal.x - ball.x;
+        let half_body = RestartShape::WALL_SPACING * 0.5;
+        let mut shadows: Vec<(f32, f32)> = ctx
+            .players()
+            .teammates()
+            .all()
+            .filter(|m| {
+                m.tactical_positions.position_group() != PlayerFieldPositionGroup::Goalkeeper
+            })
+            .filter_map(|m| {
+                let along = m.position.x - ball.x;
+                if along * span <= 0.0 || along.abs() >= span.abs() {
+                    return None;
+                }
+                let from_ball = (m.position - ball).xy().norm();
+                if (from_ball - RestartShape::WALL_DISTANCE).abs() > Self::WALL_BAND {
+                    return None;
+                }
+                let scale = span / along;
+                let y = ball.y + (m.position.y - ball.y) * scale;
+                Some((y - half_body * scale, y + half_body * scale))
+            })
+            .collect();
+        shadows.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (low, high) = (goal.y - GOAL_WIDTH, goal.y + GOAL_WIDTH);
+        let (mut open, mut from) = ((low, low), low);
+        for (start, end) in shadows {
+            let to = start.min(high);
+            if to - from > open.1 - open.0 {
+                open = (from, to);
+            }
+            from = from.max(end);
+        }
+        if high - from > open.1 - open.0 {
+            open = (from, high);
+        }
+        (open.0 + open.1) * 0.5
     }
 
     /// Is he on his mark?
@@ -265,6 +313,13 @@ impl KeeperPenaltyStance {
     /// metre beyond that, and a ball placed further out beats a right
     /// guess.
     const CORNER: f32 = 12.0;
+    /// How often a keeper stays central rather than going to a corner: 6.3%
+    /// of kicks in Bar-Eli et al. (2007), who saved 33% of those he stayed
+    /// for. The one guess a taker going down the middle loses to.
+    const STAY_CENTRAL: f32 = 0.05;
+    /// …and how far his composure moves it: the keeper who can wait does.
+    /// ±0.03 at the ends of the range.
+    const STAY_NERVE: f32 = 0.06;
 
     /// Is the shot in flight a penalty kick at his goal?
     pub fn facing(ctx: &StateProcessingContext) -> bool {
@@ -321,16 +376,23 @@ impl KeeperPenaltyStance {
             ball.velocity.y.signum()
         };
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+        let composure = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
+        let stays =
+            ctx.context.rng.unit_f32() < Self::STAY_CENTRAL + (composure - 0.5) * Self::STAY_NERVE;
         let read = Self::BASE_READ
             + (prof.positioning.clamp(0.0, 1.0) - GoalkeeperSkillProfile::POPULATION_READ)
                 * Self::READ_SPREAD;
-        let side = if ctx.context.rng.unit_f32() < read.clamp(0.5, 0.75) {
+        let side = if stays {
+            0.0
+        } else if ctx.context.rng.unit_f32() < read.clamp(0.5, 0.75) {
             truth
         } else {
             -truth
         };
         // Full length, to the corner — bounded by his own reach so a heavy
-        // keeper is not asked to travel further than his dive can.
+        // keeper is not asked to travel further than his dive can. A keeper
+        // staying central commits to the middle, and the geometry
+        // adjudicates the save as it does any other.
         let corner = Self::CORNER.min(KeeperShotSave::base_reach(&prof) * 1.4);
         let mut result = StateChangeResult::with_goalkeeper_state(GoalkeeperState::Diving);
         result.dive_aim = Some(goal.y + side * corner);

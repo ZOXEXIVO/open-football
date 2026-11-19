@@ -30,11 +30,14 @@ pub use teamplay::chemistry::{
 pub use teamplay::coach::*;
 pub use teamplay::defence::{DefenceRefreshInputs, DefensiveDuty, DefensivePlan};
 pub use teamplay::shape::{ShapeRefreshInputs, TeamShape};
+pub use teamplay::adherence::Adherence;
 pub use teamplay::standard::MatchStandard;
 pub use teamplay::tactical::*;
 pub use teamplay::wide::{Flank, WidePlan};
 pub use teamplay::zones::{LateralLane, MatchZone, ZoneCoeffs, ZoneStats};
-pub use teamplay::{attack, chemistry, coach, defence, shape, standard, tactical, wide, zones};
+pub use teamplay::{
+    adherence, attack, chemistry, coach, defence, history, shape, standard, tactical, wide, zones,
+};
 
 // flow/
 pub use flow::celebration::GoalCelebration;
@@ -77,10 +80,10 @@ pub use rating::*;
 
 // Re-export player items except conflicting ones
 pub use player::{
-    BallOperationsImpl, GraphEdge, GraphInvariantViolation, MatchPlayer, MatchPlayerLite,
-    PlayerSide, TransitionGraph, TransitionSource, behaviours, closure, common_states, decision,
-    defender_states, defenders, forwarders, goalkeepers, midfielders, objects, passing, team,
-    transition,
+    BallOperationsImpl, ClaimIntent, ClaimOutcome, GraphEdge, GraphInvariantViolation, MatchPlayer,
+    MatchPlayerLite, PlayerSide, SaveOutcome, TransitionGraph, TransitionSource, behaviours,
+    closure, common_states, defender_states, defenders, forwarders, goalkeepers,
+    midfielders, objects, passing, team, transition,
 };
 
 // Re-export specific types from player submodules that code expects at this level

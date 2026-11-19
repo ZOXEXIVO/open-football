@@ -8,6 +8,8 @@
 //!
 //! * [`set_piece`] — the pending restart teleport, and the corner shape's
 //!   station lifecycle from arming to sweep.
+//! * [`claim`] — a keeper's claim of a high ball he came for, decided once
+//!   and carried out when it reaches him.
 //! * [`cross`] — the aerial contest for every lofted delivery, a corner's
 //!   included.
 //! * [`delivery`] — the arm the contest finishes through: flying the ball
@@ -19,6 +21,7 @@
 //! Every number in here is calibration-critical: the aerial win rate and
 //! the save credit are both tracked run to run.
 
+pub mod claim;
 pub mod cross;
 pub mod delivery;
 pub mod save_credit;

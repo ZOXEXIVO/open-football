@@ -10,6 +10,7 @@
 
 use crate::r#match::engine::teamplay::tactical::inputs::TacticalRefreshInputs;
 use crate::r#match::engine::teamplay::tactical::phase::{BallSideZone, BallZone, GamePhase};
+use crate::r#match::engine::teamplay::tactical::signals::StyleInputs;
 
 /// Team-level tactical context, shared across all eleven players. Cheap
 /// to copy (plain POD).
@@ -34,14 +35,15 @@ pub struct TeamTacticalState {
     /// Approximates the "defensive line" a tactical manager sets: high
     /// when we're pressing forward, low when we're in a low block.
     pub defensive_line_x: f32,
-    /// 0.0 = play normally; 1.0 = full "park the bus / waste time" mode.
-    /// Rises when leading, late in the game, and/or when we are the
-    /// weaker side. Read by pass selection (prefer safe backward /
-    /// sideways balls) and by the forward running state (hold the ball,
-    /// don't shoot speculatively). A single continuous signal keeps
-    /// behaviour smooth and avoids hard "weak team" / "strong team"
-    /// branching.
+    /// The coach's stance as it reaches the levers: −1 holding on to what
+    /// the side has … +1 throwing everything forward, already scaled by the
+    /// regime's gain and measured from the kickoff stance the plan carries.
+    pub stance: f32,
+    /// The protecting share of `stance`, 0..1. Read by pass selection
+    /// (prefer safe backward / sideways balls).
     pub game_management_intensity: f32,
+    /// The plan's appetite for risk before the stance moves it.
+    pub plan_risk: f32,
     /// 0.0 = passive (sit deep, wait); 1.0 = full hunt-the-ball press.
     /// Combines tactic style, coach instruction, condition, and phase.
     /// Defenders/midfielders read this to decide whether to step up or
@@ -73,11 +75,6 @@ pub struct TeamTacticalState {
     /// counter-attacking style. Used by FB/CB states to decide whether
     /// to overlap or hold.
     pub rest_defense_count: u8,
-    /// True for the short window after losing possession during which
-    /// the nearest 2-3 players should counter-press instead of falling
-    /// back to shape. Equivalent to phase == DefensiveTransition with
-    /// a short tail.
-    pub counterpress_window: bool,
     /// 0.0 = direct/long-ball when stuck; 1.0 = always recycle and
     /// rebuild. High-possession teams + leads push toward 1.0;
     /// counter-attacking + losing late toward 0.
@@ -101,14 +98,15 @@ impl TeamTacticalState {
             ball_side: BallSideZone::Center,
             in_possession: false,
             defensive_line_x: 0.0,
+            stance: 0.0,
             game_management_intensity: 0.0,
+            plan_risk: 0.5,
             press_intensity: 0.5,
             compactness_target: 0.5,
             team_width_target: 0.5,
             tempo: 0.5,
             risk_appetite: 0.5,
             rest_defense_count: 4,
-            counterpress_window: false,
             build_up_patience: 0.5,
             side_density_left: 4,
             side_density_center: 3,
@@ -227,56 +225,29 @@ impl TeamTacticalState {
         away.ball_side = side_zone;
 
         // ── No-phase-dependency signals first ────────────────────────
-        // game_management_intensity, risk_appetite and build_up_patience
-        // depend on score / time / ability / tactic — none of them on
-        // phase. Compute them up-front so the phase decision can use
+        // The protecting share of each side's stance, risk appetite and
+        // build-up patience depend on the plan and the stance — none of
+        // them on phase. Computed up-front so the phase decision can use
         // build_up_patience to size its transition window.
-        let minute = (inputs.match_time_ms as f32) / 60_000.0;
-        home.game_management_intensity = Self::compute_game_management_intensity(
-            inputs.home_score_diff,
-            minute,
-            inputs.home_avg_ability,
-            inputs.away_avg_ability,
-        );
-        away.game_management_intensity = Self::compute_game_management_intensity(
-            -inputs.home_score_diff,
-            minute,
-            inputs.away_avg_ability,
-            inputs.home_avg_ability,
-        );
+        home.stance = inputs.home_stance;
+        away.stance = inputs.away_stance;
+        home.game_management_intensity = (-home.stance).max(0.0);
+        away.game_management_intensity = (-away.stance).max(0.0);
 
-        let home_pressing = inputs.home_tactics.pressing_intensity();
-        let home_counter_press = inputs.home_tactics.counter_press_intensity();
-        let home_compact = inputs.home_tactics.compactness();
-        let away_pressing = inputs.away_tactics.pressing_intensity();
-        let away_counter_press = inputs.away_tactics.counter_press_intensity();
-        let away_compact = inputs.away_tactics.compactness();
+        let home_style = StyleInputs::of_plan(&inputs.home_plan);
+        let away_style = StyleInputs::of_plan(&inputs.away_plan);
 
-        home.risk_appetite = Self::compute_risk_appetite(
-            inputs.home_score_diff,
-            minute,
-            home.game_management_intensity,
-            home_pressing,
-        );
-        away.risk_appetite = Self::compute_risk_appetite(
-            -inputs.home_score_diff,
-            minute,
-            away.game_management_intensity,
-            away_pressing,
-        );
+        home.risk_appetite = Self::compute_risk_appetite(home_style.risk, home.stance);
+        away.risk_appetite = Self::compute_risk_appetite(away_style.risk, away.stance);
+        home.plan_risk = home_style.risk;
+        away.plan_risk = away_style.risk;
 
-        home.build_up_patience = Self::compute_build_up_patience(
-            home_pressing,
-            home_counter_press,
-            home.game_management_intensity,
-            home.risk_appetite,
-        );
-        away.build_up_patience = Self::compute_build_up_patience(
-            away_pressing,
-            away_counter_press,
-            away.game_management_intensity,
-            away.risk_appetite,
-        );
+        home.build_up_patience =
+            Self::compute_build_up_patience(home_style.patience, home.stance, home.risk_appetite);
+        away.build_up_patience =
+            Self::compute_build_up_patience(away_style.patience, away.stance, away.risk_appetite);
+        let home_high_press = Self::wants_high_press(home_style.pressing, home.stance);
+        let away_high_press = Self::wants_high_press(away_style.pressing, away.stance);
 
         // Skill-aware nudges to build-up patience: a side that can
         // genuinely play out (high passing-execution composite) buys
@@ -296,15 +267,15 @@ impl TeamTacticalState {
         // patience and tactic signals.
         let home_attack_window = Self::attacking_transition_window_ticks(home.build_up_patience);
         let away_attack_window = Self::attacking_transition_window_ticks(away.build_up_patience);
-        let home_def_window = Self::defensive_transition_window_ticks(home_counter_press);
-        let away_def_window = Self::defensive_transition_window_ticks(away_counter_press);
+        let home_def_window = Self::defensive_transition_window_ticks(home_style.counter_press);
+        let away_def_window = Self::defensive_transition_window_ticks(away_style.counter_press);
 
         home.phase = Self::compute_phase(
             home.in_possession,
             home.ball_zone,
             home.ticks_since_turnover,
             home.possession_ticks,
-            inputs.coach_wants_high_press_home,
+            home_high_press,
             home_attack_window,
             home_def_window,
         );
@@ -313,7 +284,7 @@ impl TeamTacticalState {
             away.ball_zone,
             away.ticks_since_turnover,
             away.possession_ticks,
-            inputs.coach_wants_high_press_away,
+            away_high_press,
             away_attack_window,
             away_def_window,
         );
@@ -331,17 +302,20 @@ impl TeamTacticalState {
         // (also 0.333), so they only happened to agree while home was
         // Left. After the half-time swap both tables were read off the
         // wrong end.
-        let base_line_progress = |phase: GamePhase| -> f32 {
-            match phase {
-                GamePhase::HighPress | GamePhase::Attack => 0.55,
-                GamePhase::AttackingTransition | GamePhase::Progression => 0.45,
-                GamePhase::BuildUp => 0.25,
-                GamePhase::MidBlock | GamePhase::DefensiveTransition => 1.0 / 3.0,
-                GamePhase::LowBlock => 0.18,
-            }
-        };
-        let home_base_line = home_side.x_at_progress(base_line_progress(home.phase), field_width);
-        let away_base_line = away_side.x_at_progress(base_line_progress(away.phase), field_width);
+        let home_base_line = home_side.x_at_progress(
+            Self::line_progress(
+                home.phase,
+                home_style.line_shift + Self::STANCE_LINE * home.stance,
+            ),
+            field_width,
+        );
+        let away_base_line = away_side.x_at_progress(
+            Self::line_progress(
+                away.phase,
+                away_style.line_shift + Self::STANCE_LINE * away.stance,
+            ),
+            field_width,
+        );
         // Defensive-quality risk drop: weak back lines lower their
         // line by up to 0.06 of the pitch so a shaky 5-rated CB pair
         // doesn't get caught chasing through-balls they can't recover.
@@ -357,53 +331,31 @@ impl TeamTacticalState {
         // dominant signal.
         let home_gk_lift = Self::gk_line_lift(inputs.home_skills.gk_quality, field_width);
         let away_gk_lift = Self::gk_line_lift(inputs.away_skills.gk_quality, field_width);
-        // Game-management line drop: a side protecting a result actually
-        // sits DEEPER, not just slower. Before this, game management only
-        // reduced the leader's own tempo/risk/press — their block stayed
-        // at phase height, so "parking the bus" parked nothing: the
-        // chasing side's risk lift met an unchanged defensive structure
-        // and conceding teams scored the next goal 72% of the time over
-        // 10+ minute horizons (equal-strength dev_match), feeding the
-        // engine's chronic equalizer/draw inflation. Up to 8% of pitch
-        // width at full GM pulls extra bodies between ball and goal so
-        // the existing shot-clarity, block-corridor and xG channels make
-        // the lead genuinely harder to break down — defense by geometry,
-        // not by a hidden modifier.
-        // History: 0.08 → 0.12 → 0.05. The deeper block A/B-measured
-        // COUNTERPRODUCTIVE in this engine: depth invites permanent
-        // siege territory, and siege volume (more willingness rolls
-        // against) outweighs the chance-quality reduction the extra
-        // bodies buy — post-62' trailing rate went UP, not down. The
-        // engine's effective lead-protection is a MODERATE line (keep
-        // the trailer's build-up further from goal) plus the counter
-        // window; not a six-yard-box bus.
-        let home_gm_drop = field_width * 0.05 * home.game_management_intensity;
-        let away_gm_drop = field_width * 0.05 * away.game_management_intensity;
         // Drops pull the line toward that side's OWN goal and the GK lift
         // pushes it away from it, so both are signed by the side's
         // attacking direction rather than written out twice by hand.
         home.defensive_line_x = (home_base_line
-            + home_side.forward_dir_x() * (home_gk_lift - home_line_drop_units - home_gm_drop))
+            + home_side.forward_dir_x() * (home_gk_lift - home_line_drop_units))
             .clamp(0.0, field_width);
         away.defensive_line_x = (away_base_line
-            + away_side.forward_dir_x() * (away_gk_lift - away_line_drop_units - away_gm_drop))
+            + away_side.forward_dir_x() * (away_gk_lift - away_line_drop_units))
             .clamp(0.0, field_width);
 
         // ── Phase-dependent signals ──────────────────────────────────
         home.press_intensity = Self::compute_press_intensity(
-            home_pressing,
-            home_counter_press,
-            inputs.coach_wants_high_press_home,
+            home_style.pressing,
+            home_style.counter_press,
+            home_high_press,
             inputs.home_avg_condition,
-            home.game_management_intensity,
+            home.stance,
             home.is_defensive_transition(),
         );
         away.press_intensity = Self::compute_press_intensity(
-            away_pressing,
-            away_counter_press,
-            inputs.coach_wants_high_press_away,
+            away_style.pressing,
+            away_style.counter_press,
+            away_high_press,
             inputs.away_avg_condition,
-            away.game_management_intensity,
+            away.stance,
             away.is_defensive_transition(),
         );
         // High-press sustainability: when press_quality < 0.45, scale
@@ -416,25 +368,15 @@ impl TeamTacticalState {
             Self::press_skill_adjustment(away.press_intensity, inputs.away_skills.press_quality);
 
         home.compactness_target =
-            Self::compute_compactness(home_compact, home.phase, home.game_management_intensity);
+            Self::compute_compactness(home_style.compactness, home.phase, home.stance);
         away.compactness_target =
-            Self::compute_compactness(away_compact, away.phase, away.game_management_intensity);
+            Self::compute_compactness(away_style.compactness, away.phase, away.stance);
 
-        home.team_width_target = Self::compute_team_width(home_compact, home.phase);
-        away.team_width_target = Self::compute_team_width(away_compact, away.phase);
+        home.team_width_target = Self::compute_team_width(home_style.width, home.phase);
+        away.team_width_target = Self::compute_team_width(away_style.width, away.phase);
 
-        home.tempo = Self::compute_tempo(
-            home_pressing,
-            home_counter_press,
-            home.phase,
-            home.game_management_intensity,
-        );
-        away.tempo = Self::compute_tempo(
-            away_pressing,
-            away_counter_press,
-            away.phase,
-            away.game_management_intensity,
-        );
+        home.tempo = Self::compute_tempo(home_style.tempo, home.phase);
+        away.tempo = Self::compute_tempo(away_style.tempo, away.phase);
 
         // ── Home advantage (play-quality half) ───────────────────────
         // Real equal-strength matches split ~45/25/30 toward the home
@@ -470,57 +412,10 @@ impl TeamTacticalState {
         home.press_intensity = home.press_intensity.min(inputs.press_ceiling);
         away.press_intensity = away.press_intensity.min(inputs.press_ceiling);
 
-        // Attacking-quality bias: a side with elite finishers chasing
-        // a goal late should bias slightly more direct (higher tempo
-        // + risk appetite). Bounded to ±0.05 each so it tunes existing
-        // signals rather than driving them. A losing weak attacking
-        // side does NOT get a free kicker bonus — only sides good
-        // enough to actually convert get to play more direct.
-        let home_chasing = inputs.home_score_diff < 0;
-        let away_chasing = inputs.home_score_diff > 0;
-        if home_chasing {
-            let lift = Self::attacking_chase_lift(inputs.home_skills.attacking_quality, minute);
-            home.tempo = (home.tempo + lift).clamp(0.10, 1.0);
-            home.risk_appetite = (home.risk_appetite + lift).clamp(0.0, 1.0);
-        }
-        if away_chasing {
-            let lift = Self::attacking_chase_lift(inputs.away_skills.attacking_quality, minute);
-            away.tempo = (away.tempo + lift).clamp(0.10, 1.0);
-            away.risk_appetite = (away.risk_appetite + lift).clamp(0.0, 1.0);
-        }
-
-        // Protect-lead damping: a leading side with concentrated /
-        // high-teamwork players is less prone to "panic" tempo spikes
-        // and rash forward passes. We damp the tempo slightly when
-        // game-management intensity is high AND the side organises
-        // well. The 0.85..1.05 factor keeps the effect subtle.
-        if home.game_management_intensity > 0.05 {
-            let damp = Self::protect_lead_damping(inputs.home_skills.concentration_teamwork_avg);
-            // Scale only the protect-lead delta, not the whole tempo.
-            let delta = damp - 1.0; // negative when damping
-            home.tempo = (home.tempo + delta * home.game_management_intensity).clamp(0.10, 1.0);
-        }
-        if away.game_management_intensity > 0.05 {
-            let damp = Self::protect_lead_damping(inputs.away_skills.concentration_teamwork_avg);
-            let delta = damp - 1.0;
-            away.tempo = (away.tempo + delta * away.game_management_intensity).clamp(0.10, 1.0);
-        }
-
-        home.rest_defense_count = Self::compute_rest_defense_count(
-            inputs.home_tactics.defender_count(),
-            home.phase,
-            inputs.home_score_diff,
-            minute,
-        );
-        away.rest_defense_count = Self::compute_rest_defense_count(
-            inputs.away_tactics.defender_count(),
-            away.phase,
-            -inputs.home_score_diff,
-            minute,
-        );
-
-        home.counterpress_window = home.is_defensive_transition();
-        away.counterpress_window = away.is_defensive_transition();
+        home.rest_defense_count =
+            Self::compute_rest_defense_count(home_style.rest_defence, home.phase, home.stance);
+        away.rest_defense_count =
+            Self::compute_rest_defense_count(away_style.rest_defence, away.phase, away.stance);
 
         // Side density: count own players on left/center/right thirds
         // of the pitch (vertically). Cheap O(N=22) pass.

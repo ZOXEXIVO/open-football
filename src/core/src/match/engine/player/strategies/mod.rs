@@ -13,7 +13,6 @@ pub use common::{
 };
 
 // Re-export defenders items
-pub use defenders::decision;
 pub use defenders::states as defender_states;
 
 pub use processor::*;

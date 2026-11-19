@@ -89,7 +89,7 @@
 //! model does not move a single roll in a fixture that has no bench to use.
 
 use crate::PlayerPositionType;
-use crate::club::staff::CoachProfile;
+use crate::r#match::CoachCard;
 use crate::r#match::MatchPlayer;
 use crate::r#match::engine::sub_scoring::LiveSubstitutionStats;
 
@@ -471,7 +471,7 @@ impl SubstitutionUrgency {
         goal_diff: i32,
         starters: &[&MatchPlayer],
         live: &[LiveSubstitutionStats],
-        profile: Option<&CoachProfile>,
+        card: &CoachCard,
         seed: u64,
         team_id: u32,
     ) -> BenchPressure {
@@ -498,7 +498,7 @@ impl SubstitutionUrgency {
 
         let legs = Self::legs(starters);
         let trouble = Self::trouble(starters, live, progress);
-        let temperament = Self::temperament(profile, seed, team_id);
+        let temperament = Self::temperament(card, seed, team_id);
 
         let total = (clock + chase + close_out + legs + trouble + temperament).max(0.0);
 
@@ -585,26 +585,20 @@ impl SubstitutionUrgency {
     /// bench.
     ///
     /// Two sources, both stable for the whole ninety minutes. The coach's
-    /// own profile supplies the part that should be recognisable across a
-    /// season — a cautious manager is late every week — and a hash of the
-    /// match seed and the team supplies the part that keeps the same
-    /// manager from making his change on the same minute in every fixture.
-    /// With no manager attached (a national side, a test fixture, the
-    /// calibration harness) the whole term comes from the hash, which is
-    /// the honest reading: an unknown manager is a draw from the
-    /// population, not the population mean.
-    fn temperament(profile: Option<&CoachProfile>, seed: u64, team_id: u32) -> f32 {
+    /// card supplies the part that should be recognisable across a season —
+    /// a cautious manager is late every week — and a hash of the match seed
+    /// and the team supplies the part that keeps the same manager from
+    /// making his change on the same minute in every fixture. A side with
+    /// no head coach brings a card drawn from the population, so it is read
+    /// the same way.
+    fn temperament(card: &CoachCard, seed: u64, team_id: u32) -> f32 {
         let afternoon = Self::hash_axis(seed, team_id);
-        let axis = match profile {
-            Some(p) => {
-                // Decisiveness, centred: willing to act on incomplete
-                // information, and not wedded to the plan he started with.
-                let decisive = 0.5 * p.risk_tolerance + 0.5 * (1.0 - p.conservatism);
-                let man = (decisive.clamp(0.0, 1.0) - 0.5) * 2.0;
-                Self::PROFILE_SHARE * man + (1.0 - Self::PROFILE_SHARE) * afternoon
-            }
-            None => afternoon,
-        };
+        // Decisiveness, centred: willing to act on incomplete information,
+        // and not wedded to the plan he started with.
+        let t = &card.temperament;
+        let decisive = 0.5 * t.risk_tolerance + 0.5 * (1.0 - t.caution);
+        let man = (decisive.clamp(0.0, 1.0) - 0.5) * 2.0;
+        let axis = Self::PROFILE_SHARE * man + (1.0 - Self::PROFILE_SHARE) * afternoon;
         axis.clamp(-1.0, 1.0) * Self::TEMPERAMENT_GAIN
     }
 
@@ -642,7 +636,7 @@ mod tests {
     /// nobody booked, and a manager of exactly average temperament. The
     /// baseline every other case is a displacement from.
     fn pressure(minute: u32, goal_diff: i32) -> BenchPressure {
-        let mut p = SubstitutionUrgency::read(minute, goal_diff, &[], &[], None, 0, 0);
+        let mut p = SubstitutionUrgency::read(minute, goal_diff, &[], &[], &CoachCard::neutral(), 0, 0);
         p.total -= p.temperament;
         p.temperament = 0.0;
         p
@@ -709,11 +703,12 @@ mod tests {
 
     #[test]
     fn temperament_is_stable_within_a_match_and_varies_across_them() {
-        let a = SubstitutionUrgency::temperament(None, 12345, 7);
-        let b = SubstitutionUrgency::temperament(None, 12345, 7);
+        let card = CoachCard::neutral();
+        let a = SubstitutionUrgency::temperament(&card, 12345, 7);
+        let b = SubstitutionUrgency::temperament(&card, 12345, 7);
         assert_eq!(a, b, "the same manager must not change his mind mid-match");
-        let other_team = SubstitutionUrgency::temperament(None, 12345, 8);
-        let other_match = SubstitutionUrgency::temperament(None, 12346, 7);
+        let other_team = SubstitutionUrgency::temperament(&card, 12345, 8);
+        let other_match = SubstitutionUrgency::temperament(&card, 12346, 7);
         assert_ne!(a, other_team);
         assert_ne!(a, other_match);
         assert!(a.abs() <= SubstitutionUrgency::TEMPERAMENT_GAIN + 1e-6);
@@ -725,7 +720,7 @@ mod tests {
         // in an otherwise identical game must not be a single value.
         let mut minutes: Vec<u32> = (0..200u64)
             .map(|s| {
-                let t = SubstitutionUrgency::temperament(None, s * 0x9E37, 1);
+                let t = SubstitutionUrgency::temperament(&CoachCard::drawn(s, 1), s * 0x9E37, 1);
                 (20..=95)
                     .find(|&m| {
                         let mut p = pressure(m, 0);
@@ -745,14 +740,14 @@ mod tests {
 
     #[test]
     fn a_cautious_coach_is_later_than_a_bold_one() {
-        let mut bold = CoachProfile::neutral();
-        bold.risk_tolerance = 0.95;
-        bold.conservatism = 0.05;
-        let mut cautious = CoachProfile::neutral();
-        cautious.risk_tolerance = 0.05;
-        cautious.conservatism = 0.95;
-        let b = SubstitutionUrgency::temperament(Some(&bold), 99, 1);
-        let c = SubstitutionUrgency::temperament(Some(&cautious), 99, 1);
+        let mut bold = CoachCard::neutral();
+        bold.temperament.risk_tolerance = 0.95;
+        bold.temperament.caution = 0.05;
+        let mut cautious = CoachCard::neutral();
+        cautious.temperament.risk_tolerance = 0.05;
+        cautious.temperament.caution = 0.95;
+        let b = SubstitutionUrgency::temperament(&bold, 99, 1);
+        let c = SubstitutionUrgency::temperament(&cautious, 99, 1);
         assert!(b > c, "bold {b} should out-press cautious {c}");
         assert!(b - c > 0.10, "and by a meaningful margin: {}", b - c);
     }

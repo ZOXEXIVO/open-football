@@ -41,15 +41,14 @@ impl<'p> PassingOperationsImpl<'p> {
             .players()
             .teammates()
             .nearby(max_distance)
-            .filter(|t| {
-                self.ctx.player().has_clear_pass(t.id) && !self.is_teammate_under_pressure(t)
+            .filter(|t| !self.is_teammate_under_pressure(t))
+            .filter_map(|t| {
+                let odds = self.ctx.player().clear_pass(t.id)?;
+                // How "away from danger" the pass would be, for a ball that gets there.
+                Some((t, odds.price(self.calculate_pass_safety(&t))))
             })
-            .min_by(|a, b| {
-                // Compare how "away from danger" the pass would be
-                let a_safety = self.calculate_pass_safety(a);
-                let b_safety = self.calculate_pass_safety(b);
-                b_safety.partial_cmp(&a_safety).unwrap_or(Ordering::Equal)
-            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(t, _)| t)
     }
 
     /// Find the best pass option using the PassEvaluator

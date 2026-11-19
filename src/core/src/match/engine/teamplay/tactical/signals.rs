@@ -3,14 +3,84 @@
 //! compactness, width, tempo, risk appetite, rest defence and build-up
 //! patience.
 //!
-//! Every one of them is a function of the tactic, the score, the clock
-//! and the phase — nothing here reads a player's ability. The
-//! quality-aware corrections that DO are in [`quality`](super::quality),
-//! and `refresh` applies them on top of these.
+//! Every one of them is a function of the side's style
+//! ([`StyleInputs`], read off its plan), the score, the clock and the phase
+//! — nothing here reads a player's ability. The quality-aware corrections
+//! that DO are in [`quality`](super::quality), and `refresh` applies them
+//! on top of these.
 
-use crate::r#match::MatchContext;
+use crate::r#match::engine::teamplay::coach::plan::GamePlan;
 use crate::r#match::engine::teamplay::tactical::phase::GamePhase;
 use crate::r#match::engine::teamplay::tactical::team_state::TeamTacticalState;
+
+/// What the signals read of a side's football: how hard it presses and how
+/// hard straight after losing the ball, how compact it stays, how wide it
+/// plays, its tempo, its patience, its appetite for risk, how far its line
+/// sits from the phase table's, and how many men it keeps back.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StyleInputs {
+    pub pressing: f32,
+    pub counter_press: f32,
+    pub compactness: f32,
+    pub width: f32,
+    pub tempo: f32,
+    pub patience: f32,
+    pub risk: f32,
+    /// Attacking progress added to every phase's line height.
+    pub line_shift: f32,
+    pub rest_defence: f32,
+}
+
+impl StyleInputs {
+    /// How far a dial's full range moves each input either side of the
+    /// neutral plan.
+    const SPAN: f32 = 0.8;
+    const RISK_SPAN: f32 = 0.4;
+    const PATIENCE_SPAN: f32 = 0.4;
+    /// A full-height block reads every phase this much further up the
+    /// pitch, a full-depth one this much further back.
+    const LINE_SPAN: f32 = 0.25;
+    const REST_SPAN: f32 = 4.0;
+
+    /// The neutral plan: the balanced style every constant in the engine
+    /// was calibrated on, a 4-4-2's.
+    fn neutral() -> Self {
+        Self::of_style(0.6, 0.5, 0.6, 4)
+    }
+
+    fn of_style(pressing: f32, counter_press: f32, compactness: f32, defenders: usize) -> Self {
+        let possession_signal = (counter_press - pressing.min(counter_press)).max(0.0);
+        StyleInputs {
+            pressing,
+            counter_press,
+            compactness,
+            width: (1.0 - compactness).clamp(0.0, 1.0),
+            tempo: (pressing * 0.5 + counter_press * 0.5).clamp(0.0, 1.0),
+            patience: 0.45 + possession_signal * 0.40,
+            risk: 0.45 + pressing * 0.20,
+            line_shift: 0.0,
+            rest_defence: defenders.clamp(2, 5) as f32,
+        }
+    }
+
+    /// A plan's dials, read around the neutral plan. The press dial sets
+    /// both presses; width is its own dial, not what compactness leaves.
+    pub fn of_plan(plan: &GamePlan) -> Self {
+        let n = Self::neutral();
+        let d = |dial: f32| dial - 0.5;
+        StyleInputs {
+            pressing: (n.pressing + Self::SPAN * d(plan.press)).clamp(0.0, 1.0),
+            counter_press: (n.counter_press + Self::SPAN * d(plan.press)).clamp(0.0, 1.0),
+            compactness: (n.compactness + Self::SPAN * d(plan.compactness)).clamp(0.0, 1.0),
+            width: (n.width + Self::SPAN * d(plan.width)).clamp(0.0, 1.0),
+            tempo: (n.tempo + Self::SPAN * d(plan.tempo)).clamp(0.0, 1.0),
+            patience: (n.patience - Self::PATIENCE_SPAN * d(plan.tempo)).clamp(0.0, 1.0),
+            risk: (n.risk + Self::RISK_SPAN * d(plan.directness)).clamp(0.0, 1.0),
+            line_shift: Self::LINE_SPAN * d(plan.block_height),
+            rest_defence: (n.rest_defence - Self::REST_SPAN * d(plan.commitment)).clamp(2.0, 5.0),
+        }
+    }
+}
 
 impl TeamTacticalState {
     // ──────────────────────────────────────────────────────────────────
@@ -20,86 +90,52 @@ impl TeamTacticalState {
     // free helpers floating in the module.
     // ──────────────────────────────────────────────────────────────────
 
-    /// Game-management intensity from this team's perspective.
-    /// Continuous [0.0, 1.0] signal driving "hold the score" behaviour:
-    /// safer passes, slower tempo, hold the ball. A single scalar
-    /// covers every case — strong team protecting a lead, underdog
-    /// clinging to a narrow upset, team settling for a point late —
-    /// instead of hard branching per scenario.
-    pub(in crate::r#match::engine::teamplay::tactical) fn compute_game_management_intensity(
-        score_diff: i8,
-        minute: f32,
-        my_avg_ability: u16,
-        opp_avg_ability: u16,
+    /// How far up the pitch a phase holds the line, as attacking progress
+    /// (0 its own goal line … 1 the opponent's), moved by the plan's block.
+    pub(in crate::r#match::engine::teamplay::tactical) fn line_progress(
+        phase: GamePhase,
+        line_shift: f32,
     ) -> f32 {
-        // Ramp up from minute 60 onward; max at minute 90.
-        let late_factor = ((minute - 60.0).max(0.0) / 30.0).min(1.0);
-        // Positive = we're the weaker side. 40 CA ≈ one league tier.
-        let ability_gap =
-            ((opp_avg_ability as f32 - my_avg_ability as f32) / 40.0).clamp(-1.0, 1.0);
+        let base = match phase {
+            GamePhase::HighPress | GamePhase::Attack => 0.55,
+            GamePhase::AttackingTransition | GamePhase::Progression => 0.45,
+            GamePhase::BuildUp => 0.25,
+            GamePhase::MidBlock | GamePhase::DefensiveTransition => 1.0 / 3.0,
+            GamePhase::LowBlock => 0.18,
+        };
+        (base + line_shift).clamp(0.05, 0.9)
+    }
 
-        if score_diff > 0 {
-            // Leading — defend the score. Lead_base 0.22 + late_bonus
-            // 0.48 puts an equal-squad 1-goal lead at minute 90 at 0.70,
-            // crossing the 0.55 prefer_possession threshold so coaches
-            // and per-tick decisions both shift to "protect".
-            //
-            // The flat lead_base used to apply from minute 1 — a team
-            // going 1-0 up in minute 10 sat off (tempo -9%, risk -12%,
-            // press -12%) for eighty minutes while the trailer got the
-            // chasing risk lift. That persistent asymmetry was the
-            // equal-strength equalizer machine: 12v12 dev_match measured
-            // 56% draws (real ~25%) with conceding teams scoring at ~3×
-            // their baseline rate inside 15 minutes of falling behind.
-            // Real teams keep playing after an early goal and only start
-            // protecting around the hour mark — so the score-state part
-            // of the signal now ramps with time (25% before HT, full at
-            // minute 75) while the late_bonus keeps its existing shape.
-            let lead_base = 0.22 + 0.18 * ((score_diff - 1).clamp(0, 2) as f32);
-            let weaker_bonus = 0.25 * ability_gap.max(0.0);
-            let manage_ramp =
-                (0.25 + 0.75 * ((minute - 45.0).max(0.0) / 30.0).min(1.0)).clamp(0.25, 1.0);
-            // Late bonus 0.48 → 0.30: at 0.48 an equal-squad 1-goal lead
-            // hit 0.70 at minute 90 — deep into "protect" (the 0.55
-            // prefer_possession threshold) — so leaders stopped scoring
-            // entirely late while trailers pushed, compressing score
-            // differences toward 0 (47% equal-strength draws) and
-            // starving the 75-90min goal band (12% vs real 26%). At
-            // 0.30 the same lead peaks at 0.52: cautious, slower, but
-            // still capable of scoring the counter-punch goal that
-            // kills real games off.
-            let late_bonus = 0.30 * late_factor;
-            // Scaled by the regime's single amplitude knob — see
-            // `MatchContext::SCORE_REACTION_GAIN`. This is the biggest of
-            // the score-reactive channels: `game_management_intensity`
-            // feeds tempo, press, compactness, the defensive line drop,
-            // risk appetite, build-up patience and rest defence, so it
-            // has to move with the rest of the regime rather than being
-            // tuned against it.
-            (((lead_base + weaker_bonus) * manage_ramp + late_bonus)
-                * MatchContext::score_reaction_gain())
-            .clamp(0.0, 0.95)
-        } else if score_diff == 0 && ability_gap > 0.2 && late_factor > 0.5 {
-            // Weaker team late in a draw plays for the point.
-            ((0.15 + 0.20 * late_factor) * MatchContext::score_reaction_gain()).clamp(0.0, 0.5)
-        } else {
-            0.0
-        }
+    /// How far each lever moves at a full stance (±1), before the regime's
+    /// gain: the line in attacking progress, the men kept back, the press,
+    /// the appetite for a risky pass, build-up patience and compactness.
+    pub const STANCE_LINE: f32 = 0.12;
+    pub const STANCE_REST: f32 = 2.0;
+    pub const STANCE_PRESS: f32 = 0.4;
+    pub const STANCE_RISK: f32 = 0.2;
+    pub const STANCE_PATIENCE: f32 = 0.3;
+    pub const STANCE_COMPACT: f32 = 0.15;
+    /// The press, with half the stance on it, at which a side presses high.
+    pub const HIGH_PRESS_FROM: f32 = 0.8;
+
+    /// Whether a side presses high: its plan's press and how hard it is
+    /// chasing the match.
+    pub(in crate::r#match::engine::teamplay::tactical) fn wants_high_press(
+        pressing: f32,
+        stance: f32,
+    ) -> bool {
+        pressing + 0.5 * stance >= Self::HIGH_PRESS_FROM
     }
 
     /// Press intensity — how aggressively we hunt the ball when we
-    /// don't have it. Combines tactical style, coach intent, fatigue,
-    /// and game state. Pure function so it's testable.
-    ///
-    /// A team only "presses" when it has the energy and stylistic
-    /// intent. A tired late-lead team should sit off; a fresh attacking
-    /// 4-3-3 with PushForward instruction should hunt.
+    /// don't have it: the plan's press, raised when the side wants to press
+    /// high, cut by fatigue, and moved by the stance.
     pub(in crate::r#match::engine::teamplay::tactical) fn compute_press_intensity(
         tactic_pressing: f32,
         counter_press: f32,
-        coach_high_press: bool,
+        high_press: bool,
         avg_condition: f32,
-        game_management_intensity: f32,
+        stance: f32,
         in_defensive_transition: bool,
     ) -> f32 {
         // Counter-press: short burst right after losing possession.
@@ -110,9 +146,7 @@ impl TeamTacticalState {
             tactic_pressing
         };
 
-        // Coach instruction can push press up but never below the
-        // tactical floor.
-        let with_coach = if coach_high_press {
+        let with_coach = if high_press {
             (base + 0.15).min(1.0)
         } else {
             base
@@ -123,10 +157,9 @@ impl TeamTacticalState {
         // at cond = 0.0.
         let fatigue_mult = (0.4 + (avg_condition / 0.7).min(1.0) * 0.6).clamp(0.4, 1.0);
 
-        // Game management: protecting a lead late = sit off.
-        let gm_mult = (1.0 - game_management_intensity * 0.55).clamp(0.45, 1.0);
+        let stance_mult = (1.0 + Self::STANCE_PRESS * stance).clamp(0.45, 1.4);
 
-        (with_coach * fatigue_mult * gm_mult).clamp(0.0, 1.0)
+        (with_coach * fatigue_mult * stance_mult).clamp(0.0, 1.0)
     }
 
     /// Compactness target — how tight the shape should be vertically
@@ -135,7 +168,7 @@ impl TeamTacticalState {
     pub(in crate::r#match::engine::teamplay::tactical) fn compute_compactness(
         tactic_compactness: f32,
         phase: GamePhase,
-        game_management_intensity: f32,
+        stance: f32,
     ) -> f32 {
         let phase_bias: f32 = match phase {
             GamePhase::LowBlock => 0.20,
@@ -144,17 +177,16 @@ impl TeamTacticalState {
             GamePhase::HighPress => -0.05,
             GamePhase::BuildUp | GamePhase::Progression => 0.0,
         };
-        (tactic_compactness + phase_bias + game_management_intensity * 0.15).clamp(0.0, 1.0)
+        (tactic_compactness + phase_bias - Self::STANCE_COMPACT * stance).clamp(0.0, 1.0)
     }
 
-    /// Width target — how spread out we want to be laterally. Inverse
-    /// of compactness, with a phase bias that pushes width up in attack
-    /// and down when defending.
+    /// Width target — how spread out we want to be laterally: the plan's
+    /// width, with a phase bias that pushes it up in attack and down when
+    /// defending.
     pub(in crate::r#match::engine::teamplay::tactical) fn compute_team_width(
-        tactic_compactness: f32,
+        base_width: f32,
         phase: GamePhase,
     ) -> f32 {
-        let base_width = (1.0 - tactic_compactness).clamp(0.0, 1.0);
         let phase_bias: f32 = match phase {
             GamePhase::Attack => 0.15,
             GamePhase::Progression | GamePhase::AttackingTransition => 0.05,
@@ -167,18 +199,12 @@ impl TeamTacticalState {
         (base_width + phase_bias).clamp(0.0, 1.0)
     }
 
-    /// Tempo — how fast we want to play. Counter-attack and
-    /// transitions are high tempo; possession styles and game
-    /// management are slow.
+    /// Tempo — how fast we want to play: the plan's tempo, quicker in
+    /// transitions and slower while building up.
     pub(in crate::r#match::engine::teamplay::tactical) fn compute_tempo(
-        tactic_pressing: f32,
-        counter_press: f32,
+        style_tempo: f32,
         phase: GamePhase,
-        game_management_intensity: f32,
     ) -> f32 {
-        // Default tempo from style — pressing and counter-attack
-        // tactics play faster.
-        let style_tempo = (tactic_pressing * 0.5 + counter_press * 0.5).clamp(0.0, 1.0);
         let phase_tempo: f32 = match phase {
             GamePhase::AttackingTransition | GamePhase::DefensiveTransition => 0.95,
             GamePhase::Attack | GamePhase::HighPress => 0.75,
@@ -186,65 +212,29 @@ impl TeamTacticalState {
             GamePhase::BuildUp => 0.35,
             GamePhase::MidBlock | GamePhase::LowBlock => 0.40,
         };
-        let blended = style_tempo * 0.4 + phase_tempo * 0.6;
-        // Game-management drags tempo down — protecting a lead = slow.
-        (blended - game_management_intensity * 0.40).clamp(0.10, 1.0)
+        (style_tempo * 0.4 + phase_tempo * 0.6).clamp(0.10, 1.0)
     }
 
-    /// Risk appetite — willingness to take a forward pass / shot when
-    /// the safe option exists. Low when leading or game-managing; HIGH
-    /// when chasing late.
+    /// Risk appetite — willingness to take a forward pass when the safe
+    /// option exists: the plan's directness, moved by the stance.
     pub(in crate::r#match::engine::teamplay::tactical) fn compute_risk_appetite(
-        score_diff: i8,
-        minute: f32,
-        game_management_intensity: f32,
-        tactic_pressing: f32,
+        base: f32,
+        stance: f32,
     ) -> f32 {
-        // Base from tactic — attacking tactics start more risk-tolerant.
-        let base = 0.45 + tactic_pressing * 0.20;
-        // Chasing late = take risks. Symmetric with game-management.
-        // Early floor trimmed 0.4 → 0.25: a team conceding in minute 15
-        // doesn't abandon its structure — real urgency arrives with the
-        // clock. Pairs with the game-management time ramp above to break
-        // the lead→equalizer feedback loop at equal strength.
-        // Magnitude trimmed (0.20+0.10d → 0.14+0.07d) as part of making
-        // the score-reactive regime net-neutral in goal expectation: a
-        // score-blind A/B run measured the regime carrying the ENTIRE
-        // +17pp equal-strength draw-correlation surplus (rho +0.49 with
-        // score reactions on, −0.05 blind). Real chasing pressure exists
-        // but converts poorly — the volume lift here is paired with the
-        // desperation conversion penalty in the shot resolver.
-        // Scaled with the rest of the regime — see
-        // `MatchContext::SCORE_REACTION_GAIN`.
-        let chasing_factor = if score_diff < 0 {
-            let late_factor = ((minute - 60.0).max(0.0) / 30.0).min(1.0);
-            let deficit = (-score_diff).min(3) as f32;
-            (0.08 + deficit * 0.04)
-                * (0.25 + late_factor * 0.75)
-                * MatchContext::score_reaction_gain()
-        } else {
-            0.0
-        };
-        let base_with_chase = base + chasing_factor;
-        // Game-management suppresses risk — slope 0.55 → 0.38: a
-        // protecting team plays safer but keeps genuine counter intent
-        // (the post-62' state-rate instrument showed leaders collapsing
-        // to 0.61 goals/90 vs real ~1.4 — real leads are killed off on
-        // the break, and the risk slope was the leader's main forward-
-        // pass suppressor through the pass evaluator's 0.7-1.3x bias).
-        (base_with_chase - game_management_intensity * 0.38).clamp(0.05, 1.0)
+        (base + Self::STANCE_RISK * stance).clamp(0.05, 1.0)
     }
 
     /// Rest-defence count — how many players the team keeps as a
-    /// safety shield behind the ball during a settled attack. Function
-    /// of the number of nominal defenders, the phase, and game state.
+    /// safety shield behind the ball during a settled attack: the plan's
+    /// count, moved by the phase and the game state.
     pub(in crate::r#match::engine::teamplay::tactical) fn compute_rest_defense_count(
-        nominal_defender_count: usize,
+        rest_defence: f32,
         phase: GamePhase,
-        score_diff: i8,
-        minute: f32,
+        stance: f32,
     ) -> u8 {
-        let base = nominal_defender_count.clamp(2, 5) as i8;
+        let base = (rest_defence - Self::STANCE_REST * stance)
+            .round()
+            .clamp(2.0, 5.0) as i8;
         let phase_delta: i8 = match phase {
             // Sustained attack — pull one defender forward to overload.
             GamePhase::Attack => -1,
@@ -253,97 +243,25 @@ impl TeamTacticalState {
             GamePhase::LowBlock => 1,
             _ => 0,
         };
-        // Chasing late — sacrifice a defender to push for the goal. A
-        // whole man is not a magnitude the regime's gain can scale, so
-        // this rung moves in the clock instead, like the coach ladder —
-        // see `MatchContext::score_reaction_threshold`.
-        let from = 90.0 - (90.0 - 75.0) * MatchContext::score_reaction_gain();
-        let chasing_delta: i8 = if minute <= from {
-            0
-        } else if score_diff < 0 {
-            -1
-        } else if score_diff > 0 {
-            1
-        } else {
-            0
-        };
-        (base + phase_delta + chasing_delta).clamp(2, 5) as u8
+        (base + phase_delta).clamp(2, 5) as u8
     }
 
     /// Build-up patience — how willing we are to recycle when forward
-    /// progress is hard. High in possession styles + leading; low in
-    /// counter-attack / chasing.
+    /// progress is hard: the plan's, raised while protecting a result and
+    /// lowered while chasing one.
     pub(in crate::r#match::engine::teamplay::tactical) fn compute_build_up_patience(
-        tactic_pressing: f32,
-        counter_press: f32,
-        game_management_intensity: f32,
+        base: f32,
+        stance: f32,
         risk_appetite: f32,
     ) -> f32 {
-        // Possession style: counter_press elevated relative to
-        // pressing intensity. Counter-attack: counter_press low.
-        let possession_signal = (counter_press - tactic_pressing.min(counter_press)).max(0.0);
-        let base = 0.45 + possession_signal * 0.40;
-        let gm_bonus = game_management_intensity * 0.30;
         let risk_penalty = (1.0 - risk_appetite) * 0.10; // risk-averse → patient
-        (base + gm_bonus + risk_penalty).clamp(0.0, 1.0)
+        (base - Self::STANCE_PATIENCE * stance + risk_penalty).clamp(0.0, 1.0)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn losing_side_never_manages_the_game() {
-        assert_eq!(
-            TeamTacticalState::compute_game_management_intensity(-1, 85.0, 120, 140),
-            0.0
-        );
-        assert_eq!(
-            TeamTacticalState::compute_game_management_intensity(-2, 30.0, 150, 150),
-            0.0
-        );
-    }
-
-    #[test]
-    fn early_small_lead_produces_mild_signal() {
-        let v = TeamTacticalState::compute_game_management_intensity(1, 20.0, 140, 140);
-        assert!(v > 0.0 && v < 0.25, "got {v}");
-    }
-
-    #[test]
-    fn weaker_side_protecting_late_lead_parks_the_bus() {
-        let strong_even = TeamTacticalState::compute_game_management_intensity(1, 85.0, 150, 150);
-        let weak_late = TeamTacticalState::compute_game_management_intensity(1, 85.0, 110, 150);
-        assert!(
-            weak_late > strong_even,
-            "weak_late={weak_late} strong_even={strong_even}"
-        );
-        // The absolute height belongs to `MatchContext::SCORE_REACTION_GAIN`
-        // — it is the calibration knob for the whole score-reactive regime
-        // and it is titrated against the draw-correlation surplus, not
-        // against this shape. Divide it back out so the test asks what it
-        // has always meant to ask: that the SHAPE of the signal puts a
-        // weaker side protecting a late lead deep into "park the bus".
-        let gain = MatchContext::score_reaction_gain();
-        assert!(
-            gain > 0.0,
-            "the regime is off; this test cannot mean anything"
-        );
-        assert!(weak_late / gain > 0.5, "got {weak_late} at gain {gain}");
-    }
-
-    #[test]
-    fn weaker_side_late_draw_plays_for_point() {
-        let v = TeamTacticalState::compute_game_management_intensity(0, 85.0, 110, 150);
-        assert!(v > 0.0 && v < 0.5, "got {v}");
-    }
-
-    #[test]
-    fn intensity_is_clamped_below_one() {
-        let v = TeamTacticalState::compute_game_management_intensity(5, 90.0, 100, 160);
-        assert!(v <= 0.95, "got {v}");
-    }
 
     #[test]
     fn fresh_attacking_press_is_high() {
@@ -360,9 +278,9 @@ mod tests {
     }
 
     #[test]
-    fn late_lead_suppresses_press() {
+    fn a_protecting_stance_suppresses_press() {
         let normal = TeamTacticalState::compute_press_intensity(0.8, 0.7, false, 0.9, 0.0, false);
-        let leading = TeamTacticalState::compute_press_intensity(0.8, 0.7, false, 0.9, 0.7, false);
+        let leading = TeamTacticalState::compute_press_intensity(0.8, 0.7, false, 0.9, -0.7, false);
         assert!(leading < normal, "leading={leading} normal={normal}");
     }
 
@@ -381,6 +299,11 @@ mod tests {
     }
 
     #[test]
+    fn the_neutral_plan_reads_as_the_balanced_style() {
+        assert_eq!(StyleInputs::of_plan(&GamePlan::neutral()), StyleInputs::neutral());
+    }
+
+    #[test]
     fn width_rises_in_attack() {
         let attacking = TeamTacticalState::compute_team_width(0.5, GamePhase::Attack);
         let low_block = TeamTacticalState::compute_team_width(0.5, GamePhase::LowBlock);
@@ -389,54 +312,131 @@ mod tests {
 
     #[test]
     fn tempo_high_in_transition_low_in_buildup() {
-        let trans = TeamTacticalState::compute_tempo(0.6, 0.6, GamePhase::AttackingTransition, 0.0);
-        let build = TeamTacticalState::compute_tempo(0.6, 0.6, GamePhase::BuildUp, 0.0);
+        let trans = TeamTacticalState::compute_tempo(0.6, GamePhase::AttackingTransition);
+        let build = TeamTacticalState::compute_tempo(0.6, GamePhase::BuildUp);
         assert!(trans > build, "trans={trans} build={build}");
     }
 
     #[test]
-    fn game_management_drops_tempo() {
-        let normal = TeamTacticalState::compute_tempo(0.6, 0.6, GamePhase::Progression, 0.0);
-        let managing = TeamTacticalState::compute_tempo(0.6, 0.6, GamePhase::Progression, 0.7);
-        assert!(managing < normal);
-    }
-
-    #[test]
-    fn risk_appetite_rises_when_chasing_late() {
-        let drawn = TeamTacticalState::compute_risk_appetite(0, 80.0, 0.0, 0.6);
-        let chasing = TeamTacticalState::compute_risk_appetite(-2, 80.0, 0.0, 0.6);
+    fn risk_appetite_rises_when_chasing() {
+        let drawn = TeamTacticalState::compute_risk_appetite(0.57, 0.0);
+        let chasing = TeamTacticalState::compute_risk_appetite(0.57, 0.6);
         assert!(chasing > drawn, "chasing={chasing} drawn={drawn}");
     }
 
     #[test]
-    fn risk_appetite_falls_when_leading_late() {
-        let normal = TeamTacticalState::compute_risk_appetite(0, 80.0, 0.0, 0.6);
-        let leading = TeamTacticalState::compute_risk_appetite(1, 85.0, 0.7, 0.6);
+    fn risk_appetite_falls_when_protecting() {
+        let normal = TeamTacticalState::compute_risk_appetite(0.57, 0.0);
+        let leading = TeamTacticalState::compute_risk_appetite(0.57, -0.7);
         assert!(leading < normal, "leading={leading} normal={normal}");
     }
 
     #[test]
-    fn rest_defense_drops_when_chasing_late() {
+    fn rest_defense_drops_when_chasing() {
         let normal =
-            TeamTacticalState::compute_rest_defense_count(4, GamePhase::Progression, 0, 60.0);
+            TeamTacticalState::compute_rest_defense_count(4.0, GamePhase::Progression, 0.0);
         let chasing_late =
-            TeamTacticalState::compute_rest_defense_count(4, GamePhase::Attack, -1, 85.0);
+            TeamTacticalState::compute_rest_defense_count(4.0, GamePhase::Progression, 0.8);
         assert!(chasing_late < normal);
     }
 
     #[test]
-    fn rest_defense_rises_when_leading_late() {
+    fn rest_defense_rises_when_protecting_and_moves_at_most_two() {
         let normal =
-            TeamTacticalState::compute_rest_defense_count(4, GamePhase::Progression, 0, 60.0);
+            TeamTacticalState::compute_rest_defense_count(4.0, GamePhase::Progression, 0.0);
         let leading_late =
-            TeamTacticalState::compute_rest_defense_count(4, GamePhase::LowBlock, 1, 85.0);
-        assert!(leading_late >= normal);
+            TeamTacticalState::compute_rest_defense_count(4.0, GamePhase::Progression, -0.8);
+        assert!(leading_late > normal);
+        for stance in [-1.0, 1.0] {
+            let moved =
+                TeamTacticalState::compute_rest_defense_count(4.0, GamePhase::Progression, stance);
+            assert!(moved.abs_diff(normal) <= 2);
+        }
+    }
+
+    #[test]
+    fn a_side_protecting_late_holds_a_deeper_line_and_keeps_more_men_back() {
+        use crate::r#match::engine::teamplay::coach::card::Temperament;
+        use crate::r#match::engine::teamplay::coach::stance::{
+            Occasion, Outlook, Situation, Stance,
+        };
+        let outlook = Outlook::default();
+        let at = |difference: i32| Situation {
+            difference,
+            minutes_left: 5.0,
+            ..Situation::default()
+        };
+        // At the levers' full amplitude: the regime's gain only scales it.
+        let lever =
+            |difference: i32| Stance::reading(&outlook, &Temperament::neutral(), &at(difference));
+        let (protecting, level) = (lever(1), lever(0));
+        assert_eq!(outlook.occasion, Occasion::League);
+        for phase in [GamePhase::MidBlock, GamePhase::LowBlock, GamePhase::Progression] {
+            assert!(
+                TeamTacticalState::line_progress(phase, TeamTacticalState::STANCE_LINE * protecting)
+                    < TeamTacticalState::line_progress(phase, TeamTacticalState::STANCE_LINE * level)
+            );
+        }
+        assert!(
+            TeamTacticalState::compute_rest_defense_count(4.0, GamePhase::Progression, protecting)
+                > TeamTacticalState::compute_rest_defense_count(
+                    4.0,
+                    GamePhase::Progression,
+                    level
+                )
+        );
+    }
+
+    #[test]
+    fn width_is_its_own_dial_not_what_compactness_leaves() {
+        let compact = StyleInputs::of_plan(&GamePlan::from_pin("compact=0.9/width=0.8").unwrap());
+        let loose = StyleInputs::of_plan(&GamePlan::from_pin("compact=0.2/width=0.8").unwrap());
+        assert!(compact.compactness > loose.compactness);
+        assert_eq!(compact.width, loose.width);
+        let wide = StyleInputs::of_plan(&GamePlan::from_pin("compact=0.9/width=0.9").unwrap());
+        assert!(
+            TeamTacticalState::compute_team_width(wide.width, GamePhase::Attack)
+                > TeamTacticalState::compute_team_width(compact.width, GamePhase::Attack)
+        );
+    }
+
+    #[test]
+    fn a_high_block_raises_the_line_in_every_phase() {
+        let high = StyleInputs::of_plan(&GamePlan::from_pin("block=0.9").unwrap());
+        let deep = StyleInputs::of_plan(&GamePlan::from_pin("block=0.1").unwrap());
+        for phase in [
+            GamePhase::BuildUp,
+            GamePhase::Progression,
+            GamePhase::Attack,
+            GamePhase::AttackingTransition,
+            GamePhase::HighPress,
+            GamePhase::MidBlock,
+            GamePhase::LowBlock,
+            GamePhase::DefensiveTransition,
+        ] {
+            assert!(
+                TeamTacticalState::line_progress(phase, high.line_shift)
+                    > TeamTacticalState::line_progress(phase, 0.0)
+                    && TeamTacticalState::line_progress(phase, 0.0)
+                        > TeamTacticalState::line_progress(phase, deep.line_shift),
+                "{phase:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_press_dial_sets_both_presses_and_commitment_the_men_kept_back() {
+        let hunting = StyleInputs::of_plan(&GamePlan::from_pin("press=0.9/commit=0.9").unwrap());
+        let sitting = StyleInputs::of_plan(&GamePlan::from_pin("press=0.1/commit=0.1").unwrap());
+        assert!(hunting.pressing > sitting.pressing);
+        assert!(hunting.counter_press > sitting.counter_press);
+        assert!(hunting.rest_defence < sitting.rest_defence);
     }
 
     #[test]
     fn build_up_patience_higher_in_possession_style_with_lead() {
-        let direct = TeamTacticalState::compute_build_up_patience(0.9, 0.4, 0.0, 0.6);
-        let possession_lead = TeamTacticalState::compute_build_up_patience(0.4, 0.9, 0.7, 0.3);
+        let direct = TeamTacticalState::compute_build_up_patience(0.45, 0.0, 0.6);
+        let possession_lead = TeamTacticalState::compute_build_up_patience(0.65, -0.7, 0.3);
         assert!(
             possession_lead > direct,
             "poss_lead={possession_lead} direct={direct}"

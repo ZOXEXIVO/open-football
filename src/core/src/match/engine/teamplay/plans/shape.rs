@@ -83,6 +83,9 @@ pub struct TeamShape {
     pub centre_y: f32,
     /// Block width, in units.
     pub width: f32,
+    /// How fast the block moved at its last refresh, u/tick: the pace a man
+    /// keeping his place moves at.
+    pub pace: f32,
     /// False before the first refresh, or for a side with no players —
     /// consumers then fall back to the kickoff dot.
     pub active: bool,
@@ -97,6 +100,7 @@ impl TeamShape {
             length: LENGTH_COMPACT,
             centre_y: 0.0,
             width: WIDTH_NARROW,
+            pace: 0.0,
             active: false,
         }
     }

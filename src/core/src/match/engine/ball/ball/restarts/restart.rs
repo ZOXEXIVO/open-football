@@ -142,13 +142,19 @@ impl Ball {
                 .and_then(|pid| players.iter().find(|p| p.id == pid))
                 .and_then(|p| p.side);
             let disagree = owner_side.is_some_and(|s| Some(s) != last_toucher_side);
-            let since_last = context.current_tick().saturating_sub(self.last_touch_tick);
+            let now = context.current_tick();
+            let since_previous = self
+                .last_throw_in_tick
+                .replace(now)
+                .map(|previous| now.saturating_sub(previous));
             let walk = players
                 .iter()
                 .find(|p| p.id == thrower_id)
                 .map(|p| (p.position - throw_pos).magnitude())
                 .unwrap_or(0.0);
-            RestartCensus::note_throw_in(disagree, since_last, walk);
+            RestartCensus::note_throw_in(disagree, since_previous, walk);
+            self.delivery_tally.note_throw_in_gap(since_previous);
+            self.note_throw_in_source(players);
             if let Some(census) = self.pass_block_census.take() {
                 census.close(PassBlockCensus::TOUCH);
             }
@@ -380,7 +386,10 @@ impl Ball {
         #[cfg(feature = "match-logs")]
         RestartCensus::note_dead_ball_tick();
 
-        let Some(taker) = players.iter().find(|p| p.id == await_state.taker_id) else {
+        let Some(taker) = players
+            .iter()
+            .find(|p| p.id == await_state.taker_id && !p.off_pitch)
+        else {
             // Substituted or sent off between the award and now. Drop the
             // restart and let the ordinary loose-ball logic have it rather
             // than waiting for a man who is not on the pitch.

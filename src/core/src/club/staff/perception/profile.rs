@@ -1,6 +1,7 @@
 use crate::Staff;
 use crate::club::staff::CoachingStyle;
 use crate::club::staff::StaffCoaching;
+use crate::club::staff::StaffMental;
 
 // ─── PerceptionLens ─────────────────────────────────────────────────
 
@@ -45,6 +46,15 @@ impl PerceptionLens {
 }
 
 // ─── CoachProfile ────────────────────────────────────────────────────
+
+/// How a coach decides, read off his mind and his style.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DecisionTemperament {
+    pub risk_tolerance: f32,
+    pub stubbornness: f32,
+    pub conservatism: f32,
+    pub emotional_volatility: f32,
+}
 
 #[derive(Debug, Clone)]
 pub struct CoachProfile {
@@ -111,14 +121,6 @@ impl CoachProfile {
         let mental = &staff.staff_attributes.mental;
         let knowledge = &staff.staff_attributes.knowledge;
         let coaching = &staff.staff_attributes.coaching;
-
-        let style_adaptability_bonus = match staff.coaching_style {
-            CoachingStyle::LaissezFaire => 0.1,
-            CoachingStyle::Democratic => 0.05,
-            CoachingStyle::Transformational => 0.05,
-            CoachingStyle::Tactical => -0.05,
-            CoachingStyle::Authoritarian => -0.1,
-        };
 
         let style_youth_bonus = match staff.coaching_style {
             CoachingStyle::Transformational => 0.1,
@@ -203,29 +205,18 @@ impl CoachProfile {
             + recency_style_mod)
             .clamp(0.1, 0.9);
 
-        let vol_style_mod = match staff.coaching_style {
-            CoachingStyle::Authoritarian => 0.15,
-            CoachingStyle::Transformational => -0.1,
-            CoachingStyle::Democratic => -0.05,
-            _ => 0.0,
-        };
-        let emotional_volatility = ((1.0 - man_management_norm) * 0.4
-            + determination_norm * 0.3
-            + (1.0 - adaptability_norm) * 0.2
-            + vol_style_mod)
-            .clamp(0.1, 0.9);
-
+        let temperament = Self::temperament_of(mental, staff.coaching_style);
         let perception_lens = PerceptionLens::from_style_and_staff(&staff.coaching_style, coaching);
 
         CoachProfile {
             judging_accuracy: (knowledge.judging_player_ability as f32 / 20.0).clamp(0.0, 1.0),
             potential_accuracy: (knowledge.judging_player_potential as f32 / 20.0).clamp(0.0, 1.0),
-            risk_tolerance: (adaptability_norm + style_adaptability_bonus).clamp(0.0, 1.0),
-            stubbornness: (determination_norm * 0.6 + discipline_norm * 0.4).clamp(0.0, 1.0),
+            risk_tolerance: temperament.risk_tolerance,
+            stubbornness: temperament.stubbornness,
             trust_in_decisions: determination_norm.clamp(0.0, 1.0),
             youth_preference: (coaching.working_with_youngsters as f32 / 20.0 + style_youth_bonus)
                 .clamp(0.0, 1.0),
-            conservatism: ((1.0 - adaptability_norm) * 0.6 + discipline_norm * 0.4).clamp(0.0, 1.0),
+            conservatism: temperament.conservatism,
             man_management: (man_management_norm * 0.6 + mental.motivating as f32 / 20.0 * 0.4)
                 .clamp(0.0, 1.0),
             coach_seed: staff.id,
@@ -237,7 +228,39 @@ impl CoachProfile {
             attitude_weight,
             tactical_blindness,
             recency_bias,
-            emotional_volatility,
+            emotional_volatility: temperament.emotional_volatility,
+        }
+    }
+
+    /// How a coach of this mind and this style decides: the four readings
+    /// the profile and the match's coach card share.
+    pub fn temperament_of(mental: &StaffMental, style: CoachingStyle) -> DecisionTemperament {
+        let adaptability = mental.adaptability as f32 / 20.0;
+        let determination = mental.determination as f32 / 20.0;
+        let discipline = mental.discipline as f32 / 20.0;
+        let man_management = mental.man_management as f32 / 20.0;
+        let style_adaptability_bonus = match style {
+            CoachingStyle::LaissezFaire => 0.1,
+            CoachingStyle::Democratic => 0.05,
+            CoachingStyle::Transformational => 0.05,
+            CoachingStyle::Tactical => -0.05,
+            CoachingStyle::Authoritarian => -0.1,
+        };
+        let vol_style_mod = match style {
+            CoachingStyle::Authoritarian => 0.15,
+            CoachingStyle::Transformational => -0.1,
+            CoachingStyle::Democratic => -0.05,
+            _ => 0.0,
+        };
+        DecisionTemperament {
+            risk_tolerance: (adaptability + style_adaptability_bonus).clamp(0.0, 1.0),
+            stubbornness: (determination * 0.6 + discipline * 0.4).clamp(0.0, 1.0),
+            conservatism: ((1.0 - adaptability) * 0.6 + discipline * 0.4).clamp(0.0, 1.0),
+            emotional_volatility: ((1.0 - man_management) * 0.4
+                + determination * 0.3
+                + (1.0 - adaptability) * 0.2
+                + vol_style_mod)
+                .clamp(0.1, 0.9),
         }
     }
 

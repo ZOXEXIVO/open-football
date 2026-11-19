@@ -53,7 +53,8 @@ pub mod helper_diag {
 ///   * `MID_CUTBACK`        — wide/advanced midfielder laid the cutback.
 #[cfg(feature = "match-logs")]
 pub mod mid_run_diag {
-    use crate::r#match::player::strategies::passing::CrossType;
+    use crate::r#match::goalkeepers::states::state::GoalkeeperState;
+    use crate::r#match::player::strategies::passing::{CrossModel, CrossType};
     use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
     pub static RUNNER_BOX_TICKS: AtomicU64 = AtomicU64::new(0);
     pub static FWD_CUTBACK: AtomicU64 = AtomicU64::new(0);
@@ -2538,19 +2539,9 @@ pub mod mid_run_diag {
     pub static DEF_ONBALL_IN_RANGE: AtomicU64 = AtomicU64::new(0);
     pub static DEF_SHOT_DECISIONS: AtomicU64 = AtomicU64::new(0);
 
-    /// Keeper sweep funnel: how many Standing ticks reach the come-out
-    /// question, how many have an opponent carrying the ball, how many of
-    /// those are inside his scan radius, and how many he actually commits
-    /// to. Says WHERE the sweep is being lost.
-    /// 4 is "…and nobody is covering him", the question that decides
-    /// whether the carrier is the keeper's problem or the defence's.
-    pub static GK_SWEEP: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
-
-    /// Why a keeper ABANDONED a sweep he had committed to. 0 got the
-    /// ball, 1 shot in flight, 2 dived, 3 claimed it, 4 fast ball at him,
-    /// 5 ball beyond his pursuit range, 6 ball crossed halfway,
-    /// 7 opponent too close to risk it, 8 too far from his kickoff slot,
-    /// 9 opponent carrying it away from goal, 10 shot in flight.
+    /// Why a keeper ABANDONED a sweep he had committed to: 2 dived, 5 ball
+    /// beyond his pursuit range or his own, 6 ball crossed halfway,
+    /// 7 somebody has it, 8 outside his territory.
     pub static GK_SWEEP_EXIT: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
 
     /// Overlapping-fullback funnel. `should_overlap` is a conjunction of
@@ -2576,26 +2567,31 @@ pub mod mid_run_diag {
     /// the goal line), 4 flank releases played, 5 deliveries struck by a
     /// DEF, 6 by a MID, 7 by a FWD, 8 deliveries struck from inside the
     /// box's width (a genuine byline ball), 9 sum of delivery distance
-    /// from the goal line in units (÷ total deliveries for the mean).
-    pub static WIDE_PLAY: [AtomicU64; 10] = [const { AtomicU64::new(0) }; 10];
+    /// from the goal line in units (÷ total deliveries for the mean),
+    /// 10 deliveries struck within 6 m of the goal line, 11 deliveries
+    /// struck from either place — the byline ball. 12 ticks a carrier was
+    /// on the ball inside the box's width at the byline, 13 of those with a
+    /// team-mate attacking the near post, 14 with one at the edge of the
+    /// area.
+    pub static WIDE_PLAY: [AtomicU64; 15] = [const { AtomicU64::new(0) }; 15];
 
     pub struct WideDiag;
 
     impl WideDiag {
         pub fn note(slot: usize) {
-            if slot < 10 {
+            if slot < WIDE_PLAY.len() {
                 WIDE_PLAY[slot].fetch_add(1, Ordering::Relaxed);
             }
         }
 
         pub fn add(slot: usize, n: u64) {
-            if slot < 10 {
+            if slot < WIDE_PLAY.len() {
                 WIDE_PLAY[slot].fetch_add(n, Ordering::Relaxed);
             }
         }
 
-        pub fn snapshot() -> [u64; 10] {
-            let mut out = [0u64; 10];
+        pub fn snapshot() -> [u64; 15] {
+            let mut out = [0u64; 15];
             for (slot, c) in out.iter_mut().zip(WIDE_PLAY.iter()) {
                 *slot = c.load(Ordering::Relaxed);
             }
@@ -2613,10 +2609,29 @@ pub mod mid_run_diag {
         /// the crosser stood from the goal line, in units.
         pub fn note_delivery(role: usize, goal_line_gap: f32, inside_box_width: bool) {
             Self::note(5 + role.min(2));
+            let near_the_line = goal_line_gap <= CrossModel::BYLINE_STRIP;
             if inside_box_width {
                 Self::note(8);
             }
+            if near_the_line {
+                Self::note(10);
+            }
+            if inside_box_width || near_the_line {
+                Self::note(11);
+            }
             Self::add(9, goal_line_gap.max(0.0) as u64);
+        }
+
+        /// One tick of a carrier on the ball inside the box at the byline,
+        /// and whether the box runners are where his ball goes.
+        pub fn note_byline_box(near_post: bool, edge: bool) {
+            Self::note(12);
+            if near_post {
+                Self::note(13);
+            }
+            if edge {
+                Self::note(14);
+            }
         }
 
         /// One tick of a player holding a width assignment. `wide` is
@@ -2885,25 +2900,10 @@ pub mod mid_run_diag {
     pub struct KeeperSweepDiag;
 
     impl KeeperSweepDiag {
-        pub fn note(stage: usize) {
-            if stage < GK_SWEEP.len() {
-                GK_SWEEP[stage].fetch_add(1, Ordering::Relaxed);
-            }
-        }
-
         pub fn note_exit(reason: usize) {
             if reason < GK_SWEEP_EXIT.len() {
                 GK_SWEEP_EXIT[reason].fetch_add(1, Ordering::Relaxed);
             }
-        }
-
-        /// `[reached, carrier exists, inside scan, committed, uncovered]`.
-        pub fn snapshot() -> [u64; 5] {
-            let mut out = [0u64; 5];
-            for (slot, c) in out.iter_mut().zip(GK_SWEEP.iter()) {
-                *slot = c.load(Ordering::Relaxed);
-            }
-            out
         }
 
         pub fn exits() -> [u64; 12] {
@@ -3050,8 +3050,9 @@ pub mod mid_run_diag {
     ///
     /// 0 first-tick exits, then by reason: 1 the ball is owned, 2 he has
     /// just played it himself, 3 it is outside the ground he defends,
-    /// 4 a shot is in flight, 5 he has reached it, 6 the timeouts.
-    /// 7 is entries that lasted longer than a first tick, for scale.
+    /// 4 the read took him (the ball his, a shot, a smother, a man through,
+    /// a cross), 5 he has reached it, 6 the timeouts. 7 is entries that
+    /// lasted longer than a first tick, for scale.
     pub static GK_CHASE_EXIT: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 
     /// **How far from his goal does he actually GO — on BOTH axes.**
@@ -3737,7 +3738,8 @@ pub mod mid_run_diag {
     /// Which state is handing him the ball is the whole question — a catch
     /// in `Catching` is a catch, and the same grant in `Diving` mid-fall is
     /// the reported artefact.
-    pub static GK_GATHER_STATE: [AtomicU64; 48] = [const { AtomicU64::new(0) }; 48];
+    pub static GK_GATHER_STATE: [AtomicU64; GoalkeeperState::SLOTS * 2] =
+        [const { AtomicU64::new(0) }; GoalkeeperState::SLOTS * 2];
 
     pub struct KeeperGatherDiag;
 
@@ -3791,22 +3793,16 @@ pub mod mid_run_diag {
         }
 
         /// Which state the grant arrived in, and whether he was airborne.
-        pub fn note_state(state_id: usize, airborne: bool) {
-            let slot = state_id * 2;
-            if slot + 1 < GK_GATHER_STATE.len() {
-                GK_GATHER_STATE[slot].fetch_add(1, Ordering::Relaxed);
-                if airborne {
-                    GK_GATHER_STATE[slot + 1].fetch_add(1, Ordering::Relaxed);
-                }
+        pub fn note_state(state: GoalkeeperState, airborne: bool) {
+            let slot = state as usize * 2;
+            GK_GATHER_STATE[slot].fetch_add(1, Ordering::Relaxed);
+            if airborne {
+                GK_GATHER_STATE[slot + 1].fetch_add(1, Ordering::Relaxed);
             }
         }
 
-        pub fn state_snapshot() -> [u64; 48] {
-            let mut out = [0u64; 48];
-            for (slot, c) in out.iter_mut().zip(GK_GATHER_STATE.iter()) {
-                *slot = c.load(Ordering::Relaxed);
-            }
-            out
+        pub fn state_snapshot() -> [u64; GoalkeeperState::SLOTS * 2] {
+            std::array::from_fn(|slot| GK_GATHER_STATE[slot].load(Ordering::Relaxed))
         }
 
         pub fn note_refused() {
@@ -3890,34 +3886,30 @@ pub mod mid_run_diag {
     /// A two-cycle is always two specific states disagreeing about one
     /// condition, so the matrix is the diagnostic and the scalar never was.
     ///
-    /// `from * 20 + to` over [`GoalkeeperState`]'s compact index, counted
-    /// on real transitions only (a self-return is a hold, not a change of
-    /// mind), plus the same again in the second half of the array for the
-    /// subset that happened within 300 ms of entering `from`.
-    pub static GK_PAIRS: [AtomicU64; 800] = [const { AtomicU64::new(0) }; 800];
+    /// `from * STATES + to` over [`GoalkeeperState`]'s discriminant,
+    /// counted on real transitions only (a self-return is a hold, not a
+    /// change of mind), plus the same again from [`KeeperPairDiag::PAIRS`]
+    /// on for the subset that happened within 300 ms of entering `from`.
+    pub static GK_PAIRS: [AtomicU64; KeeperPairDiag::SLOTS] =
+        [const { AtomicU64::new(0) }; KeeperPairDiag::SLOTS];
 
     pub struct KeeperPairDiag;
 
     impl KeeperPairDiag {
-        pub const STATES: usize = 20;
+        pub const STATES: usize = GoalkeeperState::SLOTS;
+        pub const PAIRS: usize = Self::STATES * Self::STATES;
+        pub const SLOTS: usize = 2 * Self::PAIRS;
 
         pub fn note(from: usize, to: usize, quick: bool) {
-            if from >= Self::STATES || to >= Self::STATES {
-                return;
-            }
             let slot = from * Self::STATES + to;
             GK_PAIRS[slot].fetch_add(1, Ordering::Relaxed);
             if quick {
-                GK_PAIRS[400 + slot].fetch_add(1, Ordering::Relaxed);
+                GK_PAIRS[Self::PAIRS + slot].fetch_add(1, Ordering::Relaxed);
             }
         }
 
-        pub fn snapshot() -> [u64; 800] {
-            let mut out = [0u64; 800];
-            for (slot, c) in out.iter_mut().zip(GK_PAIRS.iter()) {
-                *slot = c.load(Ordering::Relaxed);
-            }
-            out
+        pub fn snapshot() -> [u64; Self::SLOTS] {
+            std::array::from_fn(|slot| GK_PAIRS[slot].load(Ordering::Relaxed))
         }
     }
 
@@ -4098,6 +4090,29 @@ pub mod mid_run_diag {
                 *slot = c.load(Ordering::Relaxed);
             }
             out
+        }
+    }
+
+    /// **Why a goalkeeper's one-on-one ends.** 0 the read above it took him
+    /// (a strike, a smother, the ball his), then by `DuelLapse` + 1: the man
+    /// off the ball, a defender in his path, the man turned away. The same
+    /// again from `QUICK` for the ones inside 300 ms of the duel starting.
+    pub static GK_DUEL_EXIT: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+
+    pub struct KeeperDuelDiag;
+
+    impl KeeperDuelDiag {
+        pub const QUICK: usize = 4;
+
+        pub fn note_exit(reason: usize, quick: bool) {
+            GK_DUEL_EXIT[reason].fetch_add(1, Ordering::Relaxed);
+            if quick {
+                GK_DUEL_EXIT[Self::QUICK + reason].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> [u64; 8] {
+            std::array::from_fn(|slot| GK_DUEL_EXIT[slot].load(Ordering::Relaxed))
         }
     }
 
@@ -4636,6 +4651,34 @@ pub mod mid_run_diag {
     /// finished from its own restart spot — the carry the taker then has.
     pub static RUN_OUT: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 
+    /// **The touchline call's readings**, in on-ball ticks: slot 0 pinned
+    /// (his own half, within 4 m of the touchline), 1 of those pressed (an
+    /// opponent within a stride), 2 of those with the squeeze past his
+    /// tolerance, 3 of the pressed with an out, 4 put out.
+    pub static TOUCHLINE_CALL: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+
+    pub struct TouchlineCallDiag;
+
+    impl TouchlineCallDiag {
+        pub const PINNED: usize = 0;
+        pub const PRESSED: usize = 1;
+        pub const PAST_TOLERANCE: usize = 2;
+        pub const WITH_AN_OUT: usize = 3;
+        pub const PUT_OUT: usize = 4;
+
+        pub fn note(slot: usize) {
+            TOUCHLINE_CALL[slot].fetch_add(1, Ordering::Relaxed);
+        }
+
+        pub fn snapshot() -> [u64; 5] {
+            let mut out = [0u64; 5];
+            for (slot, c) in out.iter_mut().zip(TOUCHLINE_CALL.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
     pub struct RestartCensus;
 
     impl RestartCensus {
@@ -4643,12 +4686,18 @@ pub mod mid_run_diag {
         /// straight back out of play. 300 ticks = 3 s.
         pub const PING_PONG_TICKS: u64 = 300;
 
-        pub fn note_throw_in(toucher_and_owner_disagree: bool, since_last: u64, walk: f32) {
+        /// `since_previous` is the gap since the previous throw-in, by the
+        /// census's own clock: a touch between the two does not reset it.
+        pub fn note_throw_in(
+            toucher_and_owner_disagree: bool,
+            since_previous: Option<u64>,
+            walk: f32,
+        ) {
             RESTARTS[0].fetch_add(1, Ordering::Relaxed);
             if toucher_and_owner_disagree {
                 RESTARTS[1].fetch_add(1, Ordering::Relaxed);
             }
-            if since_last <= Self::PING_PONG_TICKS {
+            if since_previous.is_some_and(|gap| gap <= Self::PING_PONG_TICKS) {
                 RESTARTS[2].fetch_add(1, Ordering::Relaxed);
             }
             RESTARTS[3].fetch_add(walk.max(0.0) as u64, Ordering::Relaxed);
@@ -6429,7 +6478,7 @@ impl BallCarry {
         // keeper then saved 94% of because he was set for every single
         // one. What actually stops a man dribbling into the six-yard box
         // is the goalkeeper coming out to meet him, and that belongs in
-        // the goalkeeper (see `GoalkeeperStandingState::should_rush_out_for_ball`).
+        // the goalkeeper (see `KeeperOneOnOne`).
         let advance = (distance - StrikingRange::carry_hold(ctx)).clamp(0.0, Self::MAX_ADVANCE);
 
         let mut target = me + forward * advance + lateral * (sidestep * Self::SIDESTEP);
@@ -6940,7 +6989,9 @@ pub fn evaluate_forward_shot_decision(
     // the pass evaluator and by the goalkeeper, and never once by the
     // model that decides whether to shoot.
     let desire = {
-        let risk = ctx.team().risk_appetite().clamp(0.0, 1.0);
+        // The plan's appetite, not the stance's: protecting a lead never
+        // changes whether a chance is taken.
+        let risk = ctx.team().plan_risk().clamp(0.0, 1.0);
         let speculative = (distance / striking_range.max(1.0)).clamp(0.0, 1.0);
         (1.0 + (risk - 0.5) * (DESIRE_NEAR + (DESIRE_FAR - DESIRE_NEAR) * speculative))
             .clamp(0.55, 1.45)
@@ -7571,11 +7622,11 @@ pub fn find_cutback_to_arriving_runner(ctx: &StateProcessingContext) -> Option<M
         {
             continue;
         }
-        if !ctx.player().has_clear_pass(t.id) {
+        let Some(odds) = ctx.player().clear_pass(t.id) else {
             continue;
-        }
+        };
         // Prefer the most central runner closest to goal.
-        let score = 200.0 - td - (t.position.y - center_y).abs();
+        let score = odds.price(200.0 - td - (t.position.y - center_y).abs());
         if best.as_ref().map(|(_, s)| score > *s).unwrap_or(true) {
             best = Some((t, score));
         }

@@ -1,63 +1,78 @@
 //! Catching: the keeper gathering a ball that has reached him.
 //!
-//! ⚠ **THE SAVE ROLL FOR A SHOT IN FLIGHT NO LONGER LIVES HERE.** It moved
-//! verbatim to `KeeperShotSave`, along with the whole derivation of
-//! `EXPECTED_SAVE_TICKS` — a number that has been "corrected" four times and
-//! whose history is worth more than the constant. It had to move because the
-//! keeper can now spend part of a flight in `Diving` (see `KeeperShotDive`),
-//! and two copies of one model would make the realised save rate depend on
-//! when he left his feet.
+//! A shot in flight is not his to roll for: the save model settles it once,
+//! on the ball (`Ball::try_save_shot`), and a ball it puts in his hands is
+//! gathered here before he does anything with it. Nor is a high ball he
+//! came for: the aerial contest decides that claim as it reaches him.
 
-use crate::r#match::events::Event;
+use crate::r#match::goalkeepers::states::GoalkeeperPunchingState;
 use crate::r#match::goalkeepers::states::common::{
     ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperDelivery, KeeperFeetDecision,
-    KeeperPenaltyStance, KeeperSetPosition, KeeperShotDive, KeeperShotReaction, KeeperShotSave,
-    KeeperSmother, KeeperSweepLimit,
+    KeeperPenaltyStance, KeeperRead, KeeperSetPosition, KeeperShotDive, KeeperShotReaction,
+    KeeperSmother, ReadLevel,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::keeper_census::{ClaimSite, KeeperCensus};
 use crate::r#match::player::events::PlayerEvent;
-use crate::r#match::player::strategies::common::states::LooseBallChase;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
+    ClaimOutcome, ConditionContext, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperCatchingState {}
 
+impl GoalkeeperCatchingState {
+    /// The gather: from the ball going into his gloves to his having it
+    /// held into his body, in engine ticks (0.3 s).
+    const GATHER_TICKS: u64 = 30;
+}
+
 impl StateProcessingHandler for GoalkeeperCatchingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // **He has just played this ball: it is not his to go and get.**
+        // In his gloves already — a save held on his feet: he takes it into
+        // his body, then holds it.
+        if ctx.player.has_ball(ctx) && ctx.tick_context.ball.held_in_hands {
+            let held = ctx
+                .context
+                .current_tick()
+                .saturating_sub(ctx.tick_context.ball.hands_since_tick);
+            return (held >= Self::GATHER_TICKS)
+                .then(|| StateChangeResult::with_goalkeeper_state(GoalkeeperState::HoldingBall));
+        }
+
+        // **He has just played this ball: it is not his to catch.**
         //
         // The give-up half of [`KeeperDelivery`]. Closing the doors into
         // this state is not enough on its own — he can be standing in it
-        // when he releases (a smother he gathered, a parry he then cleared)
-        // — and this state's `velocity` is a `Pursuit` at the live ball
-        // position with a 1.6-2.6x boost on top, which is what turns "he
-        // is in the wrong state" into "he sprints thirty metres after his
-        // own throw". Above everything, because there is nothing here to
+        // when he releases (a smother he gathered, a parry he then
+        // cleared). Above everything, because there is nothing here to
         // decide. A live shot is never his own delivery, so the save path
         // cannot reach this.
         if KeeperDelivery::is_his(ctx) && ctx.tick_context.ball.cached_shot_target.is_none() {
-            let prof = GoalkeeperSkillProfile::from_ctx(ctx);
-            return Some(StateChangeResult::with_goalkeeper_state(
-                if KeeperSweepLimit::is_within(ctx, &prof) {
-                    GoalkeeperState::Standing
-                } else {
-                    GoalkeeperState::ReturningToGoal
-                },
-            ));
+            return KeeperRead::from(ctx, ReadLevel::Possession).go();
         }
 
-        if self.is_catch_successful(ctx) {
+        // A claim is the aerial contest's: it takes a caught ball into his
+        // gloves (above), and his part of the rest is what it decided.
+        match ctx.player.pending_claim {
+            Some(ClaimOutcome::Punched) => return Some(GoalkeeperPunchingState::strike(ctx)),
+            Some(ClaimOutcome::Flapped) => {
+                return KeeperRead::from(ctx, ReadLevel::Possession).go();
+            }
+            _ => {}
+        }
+
+        if ctx.player.claim_intent.is_none() && self.is_catch_successful(ctx) {
             // Are hands legal on THIS ball? Asked at the moment the gloves
             // close, NOT while he is moving to it. The Laws bite on the act
             // of handling, and a keeper crossing his own box to reach a
             // shot spends most of that journey with the ball still outside
-            // the area â judging it per-tick made him abandon virtually
-            // every save from range (goals went 2.3 â 4.0 a match).
+            // the area — judging it per-tick made him abandon virtually
+            // every save from range (goals went 2.3 → 4.0 a match).
             //
             // Illegal means he plays it with his feet, which is what a
             // keeper receiving a back-pass actually does, and a goal kick
@@ -122,11 +137,10 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
             return Some(guess);
         }
 
-        // He cannot get to this one on his feet. LEAVE THEM â now, while
+        // He cannot get to this one on his feet. LEAVE THEM — now, while
         // the ball is still in the air, so the dive travels to the corner
         // instead of being drawn after the ball has already stopped. See
-        // [`KeeperShotDive`]; the save itself is unaffected, because
-        // `Diving` rolls the identical `KeeperShotSave`.
+        // [`KeeperShotDive`].
         if KeeperShotDive::should_launch(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Diving,
@@ -142,81 +156,18 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
             return None;
         }
 
-        // Ball is moving away from the keeper at speed â only credit
-        // a parry when the ball was actually within reach (the keeper
-        // got a hand to it). Otherwise the shot just missed past the
-        // keeper and "parry" would falsely credit a save for a wide
-        // shot the GK never touched.
-        let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
-        let ball_distance = ctx.ball().distance();
-        if ball_speed > 2.0 && !ctx.ball().is_towards_player_with_angle(0.6) {
-            if ctx.tick_context.ball.cached_shot_target.is_some() && ball_distance < 25.0 {
-                return Some(StateChangeResult::with_goalkeeper_state_and_event(
-                    GoalkeeperState::Standing,
-                    Event::PlayerEvent(PlayerEvent::ParriedBall(ctx.player.id)),
-                ));
-            }
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Standing,
-            ));
-        }
-
-        // If ball is too far, decide based on distance from goal.
-        // "Far from goal" is how far off his LINE he is, bounded by how far
-        // this keeper sweeps â not five metres from his kickoff dot, which
-        // is what `distance_from_position() > 40.0` meant and which
-        // made a keeper who had come to meet a through-ball turn round
-        // instead of gathering it. See [`KeeperSweepLimit`].
-        //
-        // THE GIVE-UP DISTANCE HAS TO BE WIDER THAN EVERY ENTRY INTO THIS
-        // STATE. It was 12u -- 1.5 m -- while `ComingOut` claims at 20u and
-        // `PreparingForSave` at 35u, so the band between them was a
-        // two-cycle by construction: he entered `Catching` at 2.5 m, was
-        // thrown straight back out at 1.6 m, re-entered, and so on.
-        // Measured on a recording: 173 `Catching` -> `ComingOut` and 141
-        // back, mean dwell 87 and 111 ms -- over three hundred state
-        // changes a match spent oscillating across a one-metre band, at the
-        // sprint pace `ComingOut` steers with. From the stands that is a
-        // keeper twitching back and forth over a loose ball in a crowd.
-        //
-        // 45u = 5.6 m is strictly outside the widest entry, so once he goes
-        // for a ball he stays going for it -- the same COMMIT < DISENGAGE
-        // ordering `MAX_COMING_OUT_DISTANCE` and `KeeperSweepLimit`
-        // document.
-        if ctx.ball().distance() > Self::RELEASE_DISTANCE {
-            // If already far from goal, return rather than chasing further
-            let sweeper = GoalkeeperSkillProfile::from_ctx(ctx);
-            if !KeeperSweepLimit::is_within(ctx, &sweeper) {
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::ReturningToGoal,
-                ));
-            }
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::ComingOut,
-            ));
-        }
-
-        // NB the last of the KICKOFF-DOT LEASHES lived here:
-        //
-        //     if position_to_distance() == Big { return ReturningToGoal }
-        //
-        // measured from (20, 275) as a radius, and asked with the ball
-        // already inside gathering range. It told a keeper standing on a
-        // loose ball to turn round and go home because of where he was
-        // relative to a dot, and `ReturningToGoal` sent him straight back
-        // for the same ball at 1.9 m: 68 `Catching` -> `ReturningToGoal`
-        // and 65 back on one recording, mean dwell 57 and 136 ms.
-        //
-        // How far off his line he may be is `KeeperSweepLimit`'s question
-        // and it is already asked, with the ball distance, in the branch
-        // above -- which is the correct place for it, because giving up on
-        // a ball is about the ball. See [`KeeperSweepLimit`] for the other
-        // five sites this same leash was removed from.
-
-        if ctx.in_state_time > 30 {
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Standing,
-            ));
+        // **Not a shot: he catches what arrives at him and goes after
+        // nothing.** A ball he has to go and get is a race (`ComingOut`) or
+        // the chase election (`TakeBall`). This state used to chase it
+        // itself, at 1.6-2.6x with a 0.6 s timeout and a 5.6 m release to
+        // stop it, which made it a third chase with its own bounds; once the
+        // ball is past his reach and not coming to him, or somebody has it,
+        // it is the read's again.
+        let reach = GoalkeeperSkillProfile::from_ctx(ctx).effective_catch_distance;
+        if ctx.ball().is_owned()
+            || (ctx.ball().distance() > reach && !ctx.ball().is_towards_player_with_angle(0.6))
+        {
+            return KeeperRead::from(ctx, ReadLevel::Possession).go();
         }
 
         None
@@ -228,12 +179,12 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
         let speed_boost =
             (1.6 + prof.shot_stopping * 0.5 + prof.dive_reach * 0.5) * prof.explosive_mult;
 
-        // Shot in flight â commit to the intercept line, don't chase
+        // Shot in flight → commit to the intercept line, don't chase
         // the current ball position (it's moving at 5.6 u/tick and
         // outrunning the keeper's pursuit steering).
         if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
             let goal_pos = ctx.ball().direction_to_own_goal();
-            // Off the line, not on it â see `KeeperSetPosition`. This is
+            // Off the line, not on it — see `KeeperSetPosition`. This is
             // the site that decides where a CAUGHT ball ends up, because
             // the physics save snaps the ball onto the keeper.
             let intercept = KeeperSetPosition::set_point(
@@ -278,50 +229,8 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
             ));
         }
 
-        // **Not a shot: a loose ball, and he goes for it the way every
-        // other chase in this engine does.**
-        //
-        // This was a bare `Pursuit` at the ball's LIVE position with the
-        // 1.6-2.6x boost on it, and nothing bounded it — the only chase
-        // state a keeper has that had neither a lead nor a territory,
-        // where `GoalkeeperTakeBallState` next door steers to
-        // `LooseBallChase::meeting_point` and `contain`s it. Two states
-        // doing the same thing two different ways is how the same keeper
-        // comes to chase the same ball to two different places depending
-        // on which door he came in by; and a tail chase at 2.6x with no
-        // bound is what carries him after a ball drifting toward the
-        // touchline until `RELEASE_DISTANCE` finally lets go, 5.6 m later.
-        let meeting = LooseBallChase::meeting_point(
-            ctx,
-            ctx.tick_context.positions.ball.position,
-            ctx.tick_context.positions.ball.velocity,
-        );
-        let meeting = KeeperSweepLimit::contain(ctx, meeting, &prof);
-        let ball_distance = ctx.ball().distance();
-        if ball_distance > 3.0 {
-            Some(
-                SteeringBehavior::Intercept {
-                    target: meeting,
-                    target_velocity: ctx.tick_context.positions.ball.velocity,
-                }
-                .calculate(ctx.player)
-                .velocity
-                    * speed_boost,
-            )
-        } else {
-            // Inside arm's length he is gathering rather than chasing, so
-            // the target is the ball itself and the pace comes off — see
-            // the note on the arrival gate in `is_catch_successful`.
-            Some(
-                SteeringBehavior::Arrive {
-                    target: ctx.tick_context.positions.ball.position,
-                    slowing_distance: 1.5,
-                }
-                .calculate(ctx.player)
-                .velocity
-                    * (speed_boost * 0.8),
-            )
-        }
+        // Not a shot: he takes it where he stands.
+        Some(Vector3::zeros())
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
@@ -331,38 +240,28 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
 }
 
 impl GoalkeeperCatchingState {
-    /// How far the ball has to get before he gives up on gathering it.
-    /// Must stay strictly WIDER than every distance at which another state
-    /// hands him the ball to gather -- `ComingOut` at 20u,
-    /// `PreparingForSave` at 35u -- or the overlap is a two-cycle. 45u =
-    /// 5.6 m.
-    const RELEASE_DISTANCE: f32 = 45.0;
-
     fn is_catch_successful(&self, ctx: &StateProcessingContext) -> bool {
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
 
-        // Shot-in-flight: judge the save from the *intercept line*, not
-        // from current ball distance. A ball aimed into the corner
-        // passes the GK 8-15 units wide of their current position â
-        // real keepers reach 3-4 m (6-8 u) diving, so the relevant
-        // metric is "how far off the line am I?", not "am I touching
-        // the ball right now?".
+        // A shot, live or settled, is the save model's: one adjudication,
+        // on the ball, which also cannot hand him later in its flight a
+        // shot it has already let past him.
         if ctx.tick_context.ball.cached_shot_target.is_some() {
-            return KeeperShotSave::roll(ctx);
+            return false;
         }
 
         // Past a shot in flight, the gloves only close on a ball that is
         // genuinely FREE and genuinely his.
         //
         // This roll runs every tick the keeper spends in `Catching` and
-        // asked nothing at all about who the ball belonged to â only how
+        // asked nothing at all about who the ball belonged to — only how
         // far away it was, how fast, and whether it was coming towards
         // him. A forward carrying the ball into the area satisfies all
         // three, so the keeper rolled `catch_prob` against him on every
         // tick until the dice came up and then took it off his foot.
         // That is the ball ping-ponging between the keeper and the
         // players in front of him, and it is why catches (44 a match)
-        // outnumbered shots (24) â most of them were not saves of
+        // outnumbered shots (24) — most of them were not saves of
         // anything.
         //
         // The keeper still comes for what is his: a loose ball he is
@@ -401,40 +300,9 @@ impl GoalkeeperCatchingState {
             return false;
         }
 
-        // NB this branch is a LOOSE ball, not a shot, so it keeps its own
-        // (gentler) power scale â `SaveModel::strike_power` is centred on
-        // a struck shot and would read every trickling ball as maximally
-        // easy.
-        let ball_height = ctx.tick_context.positions.ball.position.z;
-        let stretch = (distance_to_ball / max_catch_distance).clamp(0.0, 1.0);
-        let power = ((ball_speed - 1.5) / 6.0).clamp(0.0, 1.0);
-
-        // Awkward-height penalty: ground or above-head balls are harder.
-        let height_pen = if (0.5..=1.8).contains(&ball_height) {
-            0.0
-        } else if ball_height < 0.2 {
-            0.18
-        } else if ball_height > 2.5 {
-            0.22
-        } else {
-            0.06
-        };
-
-        let direction_factor = if ctx.ball().is_towards_player_with_angle(0.7) {
-            0.0
-        } else {
-            0.18
-        };
-
-        let catch_difficulty = (power * 0.28
-            + stretch * 0.22
-            + height_pen * 0.18
-            + direction_factor * 0.12
-            + (1.0 - prof.condition_mult) * 0.10
-            + prof.poor_skill_penalty * 0.10)
-            .clamp(0.0, 1.0);
-
-        let catch_prob = prof.catch_probability(catch_difficulty);
-        ctx.context.rng.unit_f32() < catch_prob
+        // The same gather as any other ball he gets his hands to.
+        #[cfg(feature = "match-logs")]
+        KeeperCensus::claim_roll_in(ctx, ClaimSite::Catching);
+        KeeperBallClaim::gathers_this_tick(ctx)
     }
 }

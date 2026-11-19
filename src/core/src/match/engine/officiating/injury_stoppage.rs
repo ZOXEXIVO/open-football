@@ -11,6 +11,7 @@ use crate::r#match::engine::flow::context::MATCH_TIME_INCREMENT_MS;
 use crate::r#match::engine::player::injury::{InjuryGrade, InjuryRisk};
 use crate::r#match::engine::result::DeadTime;
 use crate::r#match::{MatchContext, MatchField, PlayerSide};
+use nalgebra::Vector3;
 
 pub struct InjuryStoppage;
 
@@ -43,7 +44,8 @@ impl InjuryStoppage {
 
     /// Law 8: dropped to the defending goalkeeper when play stopped inside
     /// his penalty area, otherwise to the nearest fit player of the side
-    /// that last touched the ball.
+    /// that last touched the ball. A keeper who is the one down injured is
+    /// not given it: his nearest fit team-mate takes it for him.
     fn drop_ball_taker(field: &MatchField, context: &MatchContext) -> Option<u32> {
         let spot = field.ball.position;
         for side in [PlayerSide::Left, PlayerSide::Right] {
@@ -57,7 +59,11 @@ impl InjuryStoppage {
                         && p.tactical_position.current_position.is_goalkeeper()
                 });
                 if let Some(keeper) = keeper {
-                    return Some(keeper.id);
+                    return if keeper.injury.is_none() {
+                        Some(keeper.id)
+                    } else {
+                        Self::nearest_fit(field, keeper.team_id, spot)
+                    };
                 }
             }
         }
@@ -67,6 +73,10 @@ impl InjuryStoppage {
             .and_then(|id| field.get_player(id))
             .map(|p| p.team_id)
             .or(field.ball.last_touch_team_id)?;
+        Self::nearest_fit(field, team, spot)
+    }
+
+    fn nearest_fit(field: &MatchField, team: u32, spot: Vector3<f32>) -> Option<u32> {
         field
             .players
             .iter()

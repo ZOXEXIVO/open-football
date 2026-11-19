@@ -1,10 +1,13 @@
 use crate::club::player::traits::PlayerTrait;
-use crate::r#match::StateProcessingContext;
+use crate::r#match::events::Event;
+use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::shot_skill::{
     ShotSkillInputs, ShotSkillProfile,
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::ops::xg::ShotType;
+use crate::r#match::{MatchContext, StateProcessingContext};
+use nalgebra::Vector3;
 
 /// Operations for shooting decision-making
 pub struct ShootingOperationsImpl<'p> {
@@ -381,5 +384,100 @@ impl<'p> ShootingOperationsImpl<'p> {
         }
 
         1.0
+    }
+}
+
+/// **The header a contest has given a man**, played by where he meets it —
+/// the same rule whatever his role, because the man who wins a cross is the
+/// one who plays it.
+pub struct WonHeader;
+
+impl WonHeader {
+    /// Headed range, 15 m: the contest resolves where a delivery descends
+    /// through heading height, 12-16 m out, and a header from there is a
+    /// real if low-value attempt — the shot pipeline prices it.
+    const HEADED_RANGE: f32 = 120.0;
+
+    /// At goal from inside headed range, on the odds of his heading and
+    /// jumping — set higher from a corner, which is a jump at a ball aimed
+    /// at his head.
+    pub fn at_goal(ctx: &StateProcessingContext) -> bool {
+        if ctx.ball().distance_to_opponent_goal() > Self::HEADED_RANGE {
+            return false;
+        }
+        let heading = ctx.player.skills.technical.heading / 20.0;
+        let jumping = ctx.player.skills.physical.jumping / 20.0;
+        let (base, floor) = if ctx.ball().is_team_attacking_corner() {
+            (0.62, 0.55)
+        } else {
+            (0.34, 0.28)
+        };
+        let p = (base + (heading + jumping) * 0.5 * 0.30).clamp(floor, 0.95);
+        ctx.context.rng.unit_f32() < p
+    }
+
+    /// Where he goes to meet the header he has won: the spot its delivery
+    /// comes down through heading height, which is where a head reaches it.
+    /// The ground under the ball's landing is where a boot would, and running
+    /// to it backs him away from a ball he can only head. With nothing on
+    /// its way to him, or `OF_CROSS_HEAD_ARRIVAL=off`, it is that landing.
+    pub fn meeting_point(ctx: &StateProcessingContext) -> Vector3<f32> {
+        let ball = &ctx.tick_context.ball;
+        let at = ball
+            .aerial_delivery_target
+            .filter(|_| {
+                !MatchContext::cross_head_arrival_off()
+                    && ball.aerial_delivery_winner == Some(ctx.player.id)
+            })
+            .unwrap_or(ctx.tick_context.positions.ball.landing_position);
+        Vector3::new(at.x, at.y, 0.0)
+    }
+
+    /// A header that is not an attempt at goal: a clearance in his own
+    /// third, a knock-down anywhere else.
+    pub fn glance(ctx: &StateProcessingContext) -> Event {
+        let contact = Self::glanced_contact(ctx);
+        Event::PlayerEvent(if Self::in_own_third(ctx) {
+            PlayerEvent::ClearBall(ctx.player.id, contact)
+        } else {
+            PlayerEvent::KnockDown(ctx.player.id, contact)
+        })
+    }
+
+    pub fn in_own_third(ctx: &StateProcessingContext) -> bool {
+        let field_width = ctx.context.field_size.width as f32;
+        let ball_x = ctx.tick_context.positions.ball.position.x;
+        ctx.player
+            .side
+            .is_some_and(|side| (ball_x - side.own_goal_x(field_width)).abs() <= field_width / 3.0)
+    }
+
+    /// Where a header that is not an attempt goes — the glance, the
+    /// flick-on, the ball headed across the face and away.
+    ///
+    /// Direction is sideways-and-on rather than back toward the crosser,
+    /// which is what a contact you didn't quite get over actually does,
+    /// and it takes the ball out of the six-yard box. A better header of
+    /// the ball keeps more control over even his poor contacts, so the
+    /// glance travels less far and stays more playable.
+    fn glanced_contact(ctx: &StateProcessingContext) -> Vector3<f32> {
+        let heading = (ctx.player.skills.technical.heading / 20.0).clamp(0.0, 1.0);
+        let forward_x = ctx.player.side.map_or(1.0, |side| side.forward_dir_x());
+        let field_height = ctx.context.field_size.height as f32;
+        // Glance toward the nearer touchline — away from the goalmouth.
+        let away_y = if ctx.player.position.y >= field_height / 2.0 {
+            1.0
+        } else {
+            -1.0
+        };
+        // A clean striker of the ball glances it 8-10 m; a poor one skews
+        // it further and higher.
+        let power = 1.5 - heading * 0.4;
+        let lift = 0.10 - heading * 0.03;
+        Vector3::new(
+            -forward_x * power * 0.35 + ctx.context.rng.jitter(0.0, 0.2),
+            away_y * power,
+            lift.max(0.03),
+        )
     }
 }

@@ -16,8 +16,6 @@ use crate::r#match::engine::corner_shape::CornerShape;
 use crate::r#match::engine::officiating::restart_shape::RestartShape;
 use crate::r#match::engine::corner_shape::{CornerDeadline, CornerRole};
 use crate::r#match::engine::engine::*;
-use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::transition::TransitionSource;
 #[cfg(feature = "match-logs")]
@@ -49,8 +47,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             p.in_state_time = 0;
         }
 
-        // A delivery has reached the man who won the duel for it: put him
-        // into his role's heading state so he strikes it.
+        // A high ball has been given to the man who won it: tell him, and he
+        // goes up for it in his own read.
         //
         // Drained here, with `&mut field.players` in hand, because the
         // ball decides the arrival and `Ball::update` holds the players
@@ -60,26 +58,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         if let Some(player_id) = field.ball.pending_aerial_strike.take()
             && let Some(idx) = field.player_index(player_id)
         {
-            let attacking_corner =
-                field.ball.pass_origin_restart == crate::r#match::PassOriginRestart::Corner;
             let p = &mut field.players[idx];
-            let next = if p.tactical_position.current_position.is_forward() {
-                PlayerState::Forward(ForwardState::Heading)
-            } else if p.tactical_position.current_position.is_midfielder() {
-                PlayerState::Midfielder(MidfielderState::Heading)
-            } else if attacking_corner {
-                // A defender who won the ATTACKING corner header goes
-                // to the state that shoots, not the one that clears.
-                PlayerState::Defender(DefenderState::AttackingCorner)
-            } else {
-                PlayerState::Defender(DefenderState::Heading)
-            };
-            // `AttackingCorner` owns its own header — it has a
-            // reach and a shot path of its own, and it is what the
-            // corner contest's winners are usually in. Overriding it
-            // here would take the corner's own heading route away.
-            if p.state != PlayerState::Defender(DefenderState::AttackingCorner) {
-                p.transition_to(next, TransitionSource::EventHandler);
+            if p.plays_his_own_header() {
+                p.on_aerial_award();
             }
         }
 

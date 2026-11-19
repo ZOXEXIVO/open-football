@@ -2,15 +2,21 @@ use super::distances::TackleEngagement;
 use crate::r#match::engine::ball::ball::MAX_OWNER_TRACK_DISTANCE;
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::engine::context::PenaltyArea;
-use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::psychology::lapse::lapse_diag;
+use crate::r#match::engine::psychology::{ActionLapse, LapseFamily, PsychState};
 use crate::r#match::engine::officiating::management::{CounterAttackThreat, ProfessionalFoul};
 use crate::r#match::player::events::FoulSeverity;
 use crate::r#match::player::strategies::players::ops::skill::traits_bias::{
     defending_bias, personality_bias,
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::player::strategies::players::ops::defender_skill::{
+    DefenderSkillInputs, DefenderSkillProfile,
+};
 use crate::r#match::{
-    MATCH_TIME_INCREMENT_MS, MatchContext, MatchPlayerLite, PlayerSide, StateProcessingContext,
+    MATCH_TIME_INCREMENT_MS, MatchContext, MatchPlayer, MatchPlayerLite, MatchRng, PlayerSide,
+    StateProcessingContext,
 };
 use nalgebra::Vector3;
 
@@ -25,10 +31,11 @@ const COVER_SCAN: f32 = 240.0;
 ///
 /// Three places need this answer and two of them used to compute it
 /// differently from the one that matters.
-/// [`FoulResolver::award_restart_for_foul`] — the code that actually
-/// awards the penalty — tests **the BALL's position** against the
-/// fouler's own penalty area. Both restraint models tested **the
-/// FOULER's position** instead.
+/// `PlayerEventDispatcher::award_restart_for_foul` — the code that
+/// actually awards the penalty — tests **where the foul was**, the fouled
+/// man's position, against the fouler's own penalty area; for a challenge
+/// that is the man on the ball, which is why this reads the ball. Both
+/// restraint models tested **the FOULER's position** instead.
 ///
 /// Those differ constantly, and the gap is not symmetric: a defender
 /// standing on the edge of his box challenging for a ball inside it gets
@@ -98,6 +105,83 @@ impl EngagementClock {
     pub fn per_tick(rate: f32, window: f32) -> f32 {
         1.0 - (1.0 - rate).powf(Self::TICK_SECONDS / window)
     }
+
+    /// One engine tick's share — for a rate drawn by the ball, which runs
+    /// on every tick, full or light.
+    #[inline]
+    pub fn per_engine_tick(rate: f32, window: f32) -> f32 {
+        1.0 - (1.0 - rate).powf(MATCH_TIME_INCREMENT_MS as f32 / 1000.0 / window)
+    }
+}
+
+/// **What a man at the carrier's feet weighs** when he decides whether to go
+/// in ([`TackleDecision`]): read off his state, or off the two players where
+/// the ball has them and no state to ask.
+pub struct ChallengeMoment<'a> {
+    pub player: &'a MatchPlayer,
+    pub context: &'a MatchContext,
+    /// A team-mate is goal-side of him within `COVER_SCAN`.
+    pub cover: bool,
+    /// He is in his own penalty area.
+    pub in_own_box: bool,
+    /// The ball's distance from the goal he defends, and the carrier's
+    /// pace, in units.
+    pub ball_to_goal: f32,
+    pub carrier_speed: f32,
+    /// His distance from the carrier.
+    pub distance: f32,
+}
+
+impl<'a> ChallengeMoment<'a> {
+    pub fn of(ctx: &'a StateProcessingContext<'a>, distance: f32) -> Self {
+        let own_goal = ctx.ball().direction_to_own_goal();
+        ChallengeMoment {
+            player: ctx.player,
+            context: ctx.context,
+            cover: TackleDecision::cover_exists(ctx),
+            in_own_box: PenaltyRisk::in_own_box(ctx),
+            ball_to_goal: (ctx.tick_context.positions.ball.position - own_goal).magnitude(),
+            carrier_speed: ctx
+                .players()
+                .opponents()
+                .with_ball()
+                .next()
+                .map(|c| c.velocity(ctx).norm())
+                .unwrap_or(0.0),
+            distance,
+        }
+    }
+
+    /// `challenger` at `carrier`'s feet, among `players`.
+    pub fn between(
+        challenger: &'a MatchPlayer,
+        carrier: &MatchPlayer,
+        players: &[MatchPlayer],
+        context: &'a MatchContext,
+    ) -> Self {
+        let left = challenger.side == Some(PlayerSide::Left);
+        let own_goal = if left {
+            context.goal_positions.left
+        } else {
+            context.goal_positions.right
+        };
+        let depth = (own_goal - challenger.position).magnitude();
+        ChallengeMoment {
+            player: challenger,
+            context,
+            cover: players.iter().any(|mate| {
+                mate.id != challenger.id
+                    && mate.team_id == challenger.team_id
+                    && !mate.tactical_position.current_position.is_goalkeeper()
+                    && (own_goal - mate.position).magnitude() < depth
+                    && (mate.position - challenger.position).magnitude() < COVER_SCAN
+            }),
+            in_own_box: context.penalty_area(left).contains(&challenger.position),
+            ball_to_goal: (carrier.position - own_goal).magnitude(),
+            carrier_speed: carrier.velocity.norm(),
+            distance: (carrier.position - challenger.position).xy().norm(),
+        }
+    }
 }
 
 /// **Bringing a breaking man down on purpose.** The cynical foul a
@@ -145,7 +229,7 @@ impl TacticalFoul {
             desperation,
             minute,
             ctx.player.yellow_cards > 0,
-        );
+        ) * ContactFoul::box_restraint(ctx);
         p > 0.0 && ctx.context.rng.bernoulli(EngagementClock::per_tick(p, Self::RATE_WINDOW))
     }
 }
@@ -178,6 +262,9 @@ impl TacticalFoul {
 pub struct TackleDecision;
 
 impl TackleDecision {
+    /// The minute a side behind starts to press and challenge harder.
+    const URGENCY_FROM_MINUTE: f32 = 62.0;
+
     /// Per-DECISION commitment chance for an ordinary contain, before the
     /// situational terms. Containing is the default action in a duel, so
     /// a typical decision lands near 0.15-0.20 once the multipliers are
@@ -200,8 +287,8 @@ impl TackleDecision {
     /// 22.4 fouls against ~12 — a foul being a failed challenge, the two
     /// move together and both are a function of this number.
     ///
-    /// ⚠ RE-ANCHORED AGAIN, 0.098 → 0.073, AND AGAIN NOT BECAUSE THE
-    /// DECISION CHANGED — because the DIVISOR did.
+    /// ⚠ RE-ANCHORED AGAIN, 0.098 → 0.073 (since re-fitted to 0.062), AND
+    /// AGAIN NOT BECAUSE THE DECISION CHANGED — because the DIVISOR did.
     ///
     /// [`Self::is_eligible`] now counts time in CONTACT rather than
     /// time in the `Tackling` state, and the interval is the one real
@@ -219,7 +306,15 @@ impl TackleDecision {
     /// changes — which is the point: challenges now land where the
     /// contact is, and a carrier in our own box draws roughly three times
     /// as many as before.
-    const BASE: f32 = 0.062;
+    ///
+    /// 0.062 → 0.093 with the defender re-fit: a defender who walks and is
+    /// set before he challenges commits less often per second of contact,
+    /// and the engine was making 10.6 tackles a team against a real ~18.
+    ///
+    /// 0.093 → 0.15 with the midfielder re-fit: a midfielder now has the
+    /// block tackle only goal-side and in contact, and the engine was making
+    /// 7.4 tackles a team; this makes 10.1, with shots back in their band.
+    const BASE: f32 = 0.15;
 
     /// Commitment multiplier inside the defender's own penalty area when
     /// there is cover behind him — see [`Self::box_restraint`].
@@ -319,6 +414,19 @@ impl TackleDecision {
     /// `distance` is defender-to-carrier; closer is a better moment
     /// because the angle to the ball is better.
     pub fn commit_probability(ctx: &StateProcessingContext, distance: f32) -> f32 {
+        let p = Self::odds(&ChallengeMoment::of(ctx, distance));
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::DuelDiag::note_decision(p, PenaltyRisk::in_own_box(ctx));
+        p
+    }
+
+    /// The same odds, drawn over one engine tick, for the ball's scan of a
+    /// man in contact with the carrier — see [`ChallengeMoment::between`].
+    pub fn commits_this_engine_tick(moment: &ChallengeMoment) -> f32 {
+        EngagementClock::per_engine_tick(Self::odds(moment), Self::RATE_WINDOW)
+    }
+
+    fn odds(moment: &ChallengeMoment) -> f32 {
         // ── …AND EVERY ATTRIBUTE IN IT IS READ AGAINST THIS MATCH ──────
         //
         // The `tackling` term below has always been centred on the
@@ -354,7 +462,7 @@ impl TackleDecision {
         // is untouched: the aggressive defender still dives in, the
         // thoughtful one still picks his moment.
         let read = |v: f32| (v / 20.0).clamp(0.0, 1.0);
-        let skills = &ctx.player.skills;
+        let skills = &moment.player.skills;
         let aggression = read(skills.mental.aggression);
         let decisions = read(skills.mental.decisions);
         let anticipation = read(skills.mental.anticipation);
@@ -395,71 +503,60 @@ impl TackleDecision {
         // to commit: with a spare man you can afford to miss, without one
         // a failed tackle is a clear run at goal. The plan knows who the
         // cover is, so this is a fact rather than a guess.
-        let cover_licence = if Self::cover_exists(ctx) { 1.55 } else { 0.75 };
+        let cover_licence = if moment.cover { 1.55 } else { 0.75 };
 
         // Necessity. Near our own goal the cost of NOT engaging rises
         // faster than the cost of missing — this is where last-ditch
         // challenges come from.
-        let own_goal = ctx.ball().direction_to_own_goal();
-        let ball_to_goal = (ctx.tick_context.positions.ball.position - own_goal).magnitude();
         // 1.0 on the goal line, 0 at ~30 m out.
-        let danger = (1.0 - ball_to_goal / 240.0).clamp(0.0, 1.0);
+        let danger = (1.0 - moment.ball_to_goal / 240.0).clamp(0.0, 1.0);
         let necessity = 1.0 + danger * 1.9;
 
         // The moment. A carrier moving quickly across or past the
         // defender has committed his weight and can be challenged; one
         // standing still shielding cannot. Anticipation is how well the
         // defender reads that.
-        let carrier_speed = ctx
-            .players()
-            .opponents()
-            .with_ball()
-            .next()
-            .map(|c| c.velocity(ctx).norm())
-            .unwrap_or(0.0);
-        let exposure = (carrier_speed / 0.45).clamp(0.0, 1.0);
+        let exposure = (moment.carrier_speed / 0.45).clamp(0.0, 1.0);
         let timing = 1.0 + exposure * anticipation * 1.1;
 
         // Angle. At the outer edge of contact range the ball is a lunge
         // away; at his feet it is a clean block tackle.
-        let proximity = (1.0 - distance / TackleEngagement::CONTACT.max(1.0)).clamp(0.0, 1.0);
+        let proximity =
+            (1.0 - moment.distance / TackleEngagement::CONTACT.max(1.0)).clamp(0.0, 1.0);
         let reach = 0.65 + proximity * 0.70;
 
-        let p = (Self::BASE
+        (Self::BASE
             * temperament
             * cover_licence
             * necessity
             * timing
             * reach
-            * Self::urgency(ctx)
-            * Self::box_restraint(ctx)
-            * Self::booked_caution(ctx)
-            * Self::trait_temper(ctx))
-        .clamp(0.0, 0.55);
-        #[cfg(feature = "match-logs")]
-        crate::mid_run_diag::DuelDiag::note_decision(p, PenaltyRisk::in_own_box(ctx));
-        p
+            * Self::urgency(moment.player, moment.context)
+            * Self::box_restraint(moment.in_own_box, moment.cover)
+            * Self::booked_caution(moment.player)
+            * Self::trait_temper(moment.player))
+        .clamp(0.0, 0.55)
     }
 
     /// A man on a yellow picks his moments, because the next mistimed one
     /// is a red. A clear-headed player holds back more than a hothead.
     /// Read where he decides whether to go in, not after he has — a booked
     /// player who commits is no less likely to get it wrong.
-    pub fn booked_caution(ctx: &StateProcessingContext) -> f32 {
-        if ctx.player.yellow_cards == 0 {
+    pub fn booked_caution(player: &MatchPlayer) -> f32 {
+        if player.yellow_cards == 0 {
             return 1.0;
         }
-        let decisions = (ctx.player.skills.mental.decisions / 20.0).clamp(0.0, 1.0);
-        let aggression = (ctx.player.skills.mental.aggression / 20.0).clamp(0.0, 1.0);
+        let decisions = (player.skills.mental.decisions / 20.0).clamp(0.0, 1.0);
+        let aggression = (player.skills.mental.aggression / 20.0).clamp(0.0, 1.0);
         (0.80 - 0.25 * decisions + 0.15 * aggression).clamp(0.5, 0.95)
     }
 
     /// His own nature: a man who dives into tackles goes in more readily,
     /// one who stays on his feet less, and one who winds opponents up
     /// carries the needle into every duel.
-    pub fn trait_temper(ctx: &StateProcessingContext) -> f32 {
-        let diving_in = defending_bias(ctx.player).tackle_attempt_threshold_delta;
-        let needle = personality_bias(ctx.player).own_card_risk_delta;
+    pub fn trait_temper(player: &MatchPlayer) -> f32 {
+        let diving_in = defending_bias(player).tackle_attempt_threshold_delta;
+        let needle = personality_bias(player).own_card_risk_delta;
         (1.0 - diving_in * 2.5 + needle * 5.0).clamp(0.5, 1.6)
     }
 
@@ -479,33 +576,29 @@ impl TackleDecision {
     /// 5-determination player behaved identically at 0-1 down in the 85th
     /// minute, which is the one moment the attribute is *about*.
     ///
-    /// Gated on [`MatchContext::behavioral_score_visible`], like every
-    /// other score-reactive read in the engine — the score-reaction
-    /// regime is deliberately bounded to the closing half-hour to cap its
-    /// draw-correlation budget, and `OF_SCORE_BLIND` has to switch ALL of
-    /// it off or the A/B control means nothing. Within that window
-    /// `pressure` ramps continuously to the whistle, so there is no tick
-    /// where a match visibly changes character.
-    fn urgency(ctx: &StateProcessingContext) -> f32 {
-        if !ctx.context.behavioral_score_visible() {
+    /// It ramps through the closing half-hour, and `OF_SCORE_BLIND`
+    /// switches it off with every other read of the score, or the A/B
+    /// control means nothing.
+    fn urgency(player: &MatchPlayer, context: &MatchContext) -> f32 {
+        if !context.behavioral_score_visible() {
             return 1.0;
         }
-        let minute = sc::minute_from_ms(ctx.context.total_match_time);
-        let from = MatchContext::SCORE_REACTION_FROM_MINUTE as f32;
+        let minute = sc::minute_from_ms(context.total_match_time);
+        let from = Self::URGENCY_FROM_MINUTE;
         // Scaled with the rest of the regime — see
         // `MatchContext::SCORE_REACTION_GAIN`.
         let pressure = ((minute as f32 - from) / (90.0 - from)).clamp(0.0, 1.0)
             * MatchContext::score_reaction_gain();
-        let home = ctx.player.team_id == ctx.context.field_home_team_id;
+        let home = player.team_id == context.field_home_team_id;
         let (mine, theirs) = if home {
             (
-                ctx.context.score.home_team.get() as i32,
-                ctx.context.score.away_team.get() as i32,
+                context.score.home_team.get() as i32,
+                context.score.away_team.get() as i32,
             )
         } else {
             (
-                ctx.context.score.away_team.get() as i32,
-                ctx.context.score.home_team.get() as i32,
+                context.score.away_team.get() as i32,
+                context.score.home_team.get() as i32,
             )
         };
         let deficit = theirs - mine;
@@ -515,7 +608,7 @@ impl TackleDecision {
         // Two goals down is as urgent as it gets — three down is a
         // different kind of resignation, not more chasing.
         let magnitude = (deficit.abs().min(2) as f32) / 2.0;
-        let drive = sc::resilience(ctx.player, minute);
+        let drive = sc::resilience(player, minute);
         if deficit > 0 {
             // Behind: chase. A driven player goes after it much harder
             // than a passenger.
@@ -555,11 +648,11 @@ impl TackleDecision {
     /// because at that point conceding a penalty really is better than
     /// conceding a goal. That is the case the dramatic box challenge is
     /// FOR, and it is rare — which is why the rate it produces is rare too.
-    fn box_restraint(ctx: &StateProcessingContext) -> f32 {
-        if !PenaltyRisk::in_own_box(ctx) {
+    fn box_restraint(in_own_box: bool, cover: bool) -> f32 {
+        if !in_own_box {
             return 1.0;
         }
-        if Self::cover_exists(ctx) {
+        if cover {
             // Somebody is behind me — there is no excuse at all.
             // A/B control — see `MatchContext::box_defence_off`.
             if MatchContext::box_defence_off() {
@@ -604,9 +697,9 @@ impl TackleDecision {
     /// past me; the keeper is the thing being protected, and a defender
     /// who misses in front of him has produced a one-on-one, which is
     /// the opposite of cover. Excluding him is what makes a genuine last
-    /// man behave like one: `box_restraint` 0.14 → 0.60 and
-    /// `cover_licence` 1.55 → 0.75, a net ×2.1 on exactly the duels
-    /// where a real defender does commit.
+    /// man behave like one: `box_restraint` reads its last-man value (0.72
+    /// against 0.44 with cover) and `cover_licence` its lower one, on
+    /// exactly the duels where a real defender does commit.
     fn cover_exists(ctx: &StateProcessingContext) -> bool {
         let own_goal = ctx.ball().direction_to_own_goal();
         let me = ctx.player.position;
@@ -639,6 +732,246 @@ impl TackleDecision {
 /// Replaces a `(won, fouled, severity)` tuple whose two booleans could
 /// both be true and whose precedence lived at the call site — and
 /// differed between roles.
+/// **The block tackle, decided once.** A challenge from in front of the
+/// carrier, at his feet: won on the two men's duel scores, and a foul a share
+/// of the time, more often when it fails. Every path that makes one resolves
+/// it here — the defender's `Tackling`, and the scan's challenge for an owned
+/// ball (`Ball::check_ball_ownership`).
+pub struct BlockChallenge {
+    /// The challenger's duel score (`sc::defensive_duel`).
+    pub tackle: f32,
+    /// The carrier's (`sc::dribble_attack`).
+    pub carry: f32,
+    /// The challenger's aggression, 1..20.
+    pub aggression: f32,
+    /// `DefenderSkillProfile::discipline` and `def_condition_mult`.
+    pub discipline: f32,
+    pub condition: f32,
+    /// The ball is in the challenger's own penalty area.
+    pub in_own_box: bool,
+    /// The challenger already carries a yellow card.
+    pub booked: bool,
+    /// How much he was still diving in, 0..1 (`Self::rush_of`).
+    pub rush: f32,
+}
+
+impl BlockChallenge {
+    /// What a man diving in costs: at a full rush his odds fall by this share
+    /// and his foul rises by this much again.
+    const RUSH_ODDS: f32 = 0.40;
+    const RUSH_FOUL: f32 = 0.80;
+    /// AI ticks set before he has his full value back, half a second.
+    const SET_TICKS: f32 = 25.0;
+
+    /// A/B control: with `OF_DEFENDER_DUEL=off` how he arrives does not count,
+    /// a man containing may sprint, and the closing boosts are back. Read
+    /// once per process — debug infrastructure, do not remove.
+    pub fn duel_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_DEFENDER_DUEL").is_ok_and(|v| v == "off"))
+    }
+
+    /// How much he is still diving in as he challenges, 0..1: his closing
+    /// speed above the carrier's, as a share of his top speed, fading to
+    /// nothing as he has been set at the man for half a second.
+    pub fn rush_of(challenger: &MatchPlayer, carrier: Vector3<f32>, carrier_velocity: Vector3<f32>) -> f32 {
+        if Self::duel_off() {
+            return 0.0;
+        }
+        let Some(towards) = (carrier - challenger.position).xy().try_normalize(1.0e-4) else {
+            return 0.0;
+        };
+        let closing = challenger.velocity.xy().dot(&towards);
+        let carrier_pace = carrier_velocity.xy().norm();
+        let excess = ((closing - carrier_pace)
+            / challenger.max_speed_with_condition_cached().max(1.0e-3))
+        .clamp(0.0, 1.0);
+        let set = (challenger.contact_ticks as f32 / Self::SET_TICKS).clamp(0.0, 1.0);
+        excess * (1.0 - set)
+    }
+
+    /// The challenge `challenger` makes at `carrier`'s feet, priced from the
+    /// two men as they stand — for a path that has the players and not a
+    /// state to ask (the ball's scan, a claim on a carried ball).
+    pub fn between(challenger: &MatchPlayer, carrier: &MatchPlayer, context: &MatchContext) -> Self {
+        let minute = sc::minute_from_ms(context.total_match_time);
+        let left = challenger.side == Some(PlayerSide::Left);
+        let (own_goal, their_goal) = if left {
+            (context.goal_positions.left, context.goal_positions.right)
+        } else {
+            (context.goal_positions.right, context.goal_positions.left)
+        };
+        let profile = DefenderSkillProfile::from_player(
+            challenger,
+            &DefenderSkillInputs {
+                minute,
+                condition_pct: challenger.player_attributes.condition_percentage() as f32 / 100.0,
+                pressure_count_5u: 0,
+                pressure_count_10u: 0,
+                distance_to_own_goal: (challenger.position - own_goal).magnitude(),
+                distance_to_opponent_goal: (challenger.position - their_goal).magnitude(),
+                recent_high_intensity: false,
+            },
+        );
+        BlockChallenge {
+            tackle: sc::defensive_duel(challenger, minute),
+            carry: sc::dribble_attack(carrier, minute),
+            aggression: challenger.skills.mental.aggression,
+            discipline: profile.discipline,
+            condition: profile.def_condition_mult,
+            in_own_box: context.penalty_area(left).contains(&carrier.position),
+            booked: challenger.yellow_cards > 0,
+            rush: Self::rush_of(challenger, carrier.position, carrier.velocity),
+        }
+    }
+
+    /// The block tackle's odds: the duel's two composites, and nothing of
+    /// the pitch — he stays on his feet, so a wet surface carries no slide.
+    pub fn success_chance(tackle: f32, carry: f32) -> f32 {
+        let raw_diff = tackle - carry;
+        (1.0 / (1.0 + (-raw_diff * 2.4).exp())).clamp(0.06, 0.55)
+    }
+
+    pub fn resolve(&self, rng: &MatchRng, psychology: Option<&PsychState>) -> TackleOutcome {
+        let aggression01 = (self.aggression / 20.0).clamp(0.0, 1.0);
+
+        // ⚠ BOTH SIDES OF THE DUEL MUST BE ON ONE SCALE.
+        //
+        // This scored `tackle_profile` against the carry composite, two
+        // quantities on different scales, and the difference left the
+        // standard of the match in the result: the same equal-quality
+        // matchup won 55% at the bottom of the pyramid and 24% at the
+        // top. `defensive_duel` is the same family of composite as
+        // `dribble_attack`, so the difference is level at every level. The profile still drives the decision, the
+        // movement and the discipline — it is a selection model, not a
+        // contest one.
+        let set_odds = Self::success_chance(self.tackle, self.carry) * (1.0 - Self::RUSH_ODDS * self.rush);
+        let tackle_success = rng.random::<f32>() < set_odds;
+
+        // Foul chance driven by discipline (composure/decisions/
+        // concentration/tackling blend) instead of raw composure +
+        // aggression. Tired defenders foul more (low def_condition_mult
+        // adds to foul rate). Failed tackles roughly double the rate.
+        //
+        // Base 0.030 → 0.052 (2026-06 discipline recalibration): the
+        // engine whistled 6.3 fouls/team vs real ~12 — duel contact was
+        // committing too cleanly given the volume of attempts. Raising
+        // the contact-foul rate (paired with the referee Normal-band
+        // lift) brings whistled fouls, free kicks, and the
+        // persistent-infringement card pipeline toward real rates.
+        // Second lift 0.052 → 0.075: the first round's gain was eaten by
+        // the Reckless probability gate reclassifying card-fouls into
+        // normal contact (whistled at ~0.5 instead of ~0.85), netting
+        // only +10% whistles. Real per-duel foul rates are ~15-16%; the
+        // engine sat at ~10% after round one.
+        // A FOUL IS A FAILED CHALLENGE, and the rate has to be read
+        // against the number of challenges actually made.
+        //
+        // These constants were fitted when the engine attempted ten times
+        // as many tackles as football does — the per-attempt rate had to
+        // be tiny to keep the foul TOTAL anywhere near real. With the
+        // jockey model bringing attempts down to a realistic count, the
+        // same rate produced 2.1 fouls per team against a real ~12, 0.88
+        // yellows against 3.5-4.5, and 1.5 direct free kicks against
+        // 20-24: the whole disciplinary chain starved.
+        //
+        // Real football makes roughly 30 challenges a team and fouls on
+        // about 12 of them, so a challenge that does not win the ball
+        // cleanly is a foul a large fraction of the time. Lifted ~3× to
+        // match, with the own-box restraint and the booking damping below
+        // still holding penalties and second yellows down.
+        let mut base_foul = 0.34 + aggression01 * 0.34 - self.discipline * 0.20;
+        if !tackle_success {
+            base_foul *= 1.80;
+        }
+        base_foul += (1.0 - self.condition).max(0.0) * 0.08;
+        base_foul *= 1.0 + Self::RUSH_FOUL * self.rush;
+        // Own-box restraint: real defenders stay on their feet inside
+        // their own penalty area — they jockey, contain and block
+        // rather than commit, because the downside is a spot kick.
+        // Without this, the foul-rate lift would inflate penalties
+        // (already over real rate before the lift). Uses the actual
+        // penalty-area RECTANGLE (the same one the restart award
+        // checks) — an earlier radius-from-goal proxy missed the box
+        // corners and let wide-channel box fouls escape the restraint.
+        // ⚠ 0.008 → 0.06, AND THE OLD VALUE WAS BELOW ITS OWN CLAMP.
+        //
+        // `base_foul` before this line is 0.34-0.68 for a plausible
+        // defender, so ×0.008 lands on 0.003-0.005 — under the
+        // `clamp(0.006, …)` two lines down. Every in-box challenge
+        // therefore fouled at exactly 0.6%, identically, whatever the
+        // defender's aggression, discipline or condition and whether or
+        // not he won it: the constant was saturating a floor rather than
+        // expressing a tendency, and any value below ~0.012 produced the
+        // same match.
+        //
+        // It was also the THIRD restraint stacked on one event.
+        // `TackleDecision::box_restraint` already prices whether he
+        // commits at all (0.44 with cover, 0.72 as the last man) and
+        // `ContactFoul::BOX_PENALTY_RESTRAINT` prices the non-challenge
+        // fouls; between them the tackle path was contributing on the
+        // order of 0.02 penalties a match and the engine sat at 0.18
+        // against a real 0.25-0.30 — under the target while reading as
+        // if the penalty budget were spent, which is why every previous
+        // pass over this area correctly refused to loosen anything.
+        //
+        // 0.06 says a challenge in your own box is about fifteen times
+        // less likely to be a foul than the same challenge in open play
+        // — he goes in with his feet and not through the man — which is
+        // a tendency rather than a floor, and lets the attributes
+        // upstream reach the outcome again.
+        //
+        // ⚠ 0.06 → 0.032, PAIRED WITH `TackleDecision::BOX_RESTRAINT`.
+        //
+        // That constant went 0.14 → 0.32 because a defender was
+        // challenging the carrier in his own area less than half as often
+        // as in open play, which is not how anybody defends a penalty
+        // box. This is a per-CHALLENGE rate and the challenge count
+        // roughly doubles with it, so holding it at 0.06 would have
+        // bought the defending with penalties: the pair together keep the
+        // per-match penalty rate near where it was calibrated.
+        //
+        // It is also the more honest of the two numbers. The whole reason
+        // a defender may commit inside his own box is that he commits
+        // DIFFERENTLY there — front foot, ball first, no follow-through —
+        // and the rate at which that produces a spot kick is the thing
+        // this line is for. ~1.8% of box challenges, against a real ~2.5%
+        // of which the shirt-pull path owns a share of its own.
+        if self.in_own_box {
+            base_foul *= 0.032;
+        }
+        if self.booked {
+            base_foul *= 0.70;
+        }
+        let foul_chance =
+            ActionLapse::scaled(LapseFamily::Challenge, base_foul.clamp(0.006, 0.60), psychology);
+
+        let committed_foul = rng.random::<f32>() < foul_chance;
+        #[cfg(feature = "match-logs")]
+        lapse_diag::note(LapseFamily::Challenge, committed_foul);
+
+        let box_severity = if self.in_own_box { 0.30 } else { 1.0 };
+        let severity = if !committed_foul {
+            FoulSeverity::Normal
+        } else if aggression01 > 0.75
+            && !tackle_success
+            && rng.random::<f32>() < 0.008 * box_severity
+        {
+            FoulSeverity::Violent
+        } else if !tackle_success
+            && aggression01 > 0.55
+            && rng.random::<f32>() < 0.16 * box_severity
+        {
+            FoulSeverity::Reckless
+        } else {
+            FoulSeverity::Normal
+        };
+
+        TackleOutcome::of(tackle_success, committed_foul, severity)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TackleOutcome {
     /// He took the ball. Winning it cleanly is not a foul.
@@ -701,9 +1034,10 @@ impl TackleOutcome {
 /// carrier keeps doing what he does now — he jockeys, closes to contact,
 /// and blocks — because from in front the stretch is the wrong choice and
 /// modelling it would re-open the "defenders lunge at everything" defect
-/// the jockey model was built to close. The two bands are disjoint by
-/// construction: inside `CONTACT` only [`TackleDecision`] fires, outside
-/// it only this does, and only to a man who has been gone past.
+/// the jockey model was built to close. The two are disjoint by side: a
+/// man in front of the carrier contains and blocks, and only one who has
+/// been gone past stretches — at the carrier's heels as much as a stride
+/// off him.
 pub struct RecoveryChallenge;
 
 impl RecoveryChallenge {
@@ -787,13 +1121,12 @@ impl RecoveryChallenge {
 
     /// Can this defender stretch for it at all?
     ///
-    /// Outside block-tackle range, inside his own reach, off cooldown,
-    /// and not in front of the man. The goal-side test is `lead <= 0`
-    /// with no slack: a defender with any of the carrier's body between
-    /// him and the goal is jockeying, and jockeying is right.
+    /// Inside his own reach, off cooldown, and not in front of the man.
+    /// The goal-side test is `lead <= 0` with no slack: a defender with any
+    /// of the carrier's body between him and the goal is jockeying, and
+    /// jockeying is right.
     pub fn is_available(ctx: &StateProcessingContext, distance: f32, lead: f32) -> bool {
         !Self::legacy()
-            && distance > TackleEngagement::CONTACT
             && distance <= Self::REACH
             && lead <= 0.0
             && ctx.player.can_attempt_tackle()
@@ -843,9 +1176,12 @@ impl RecoveryChallenge {
             * desperation
             * stretch
             * necessity
-            * TackleDecision::box_restraint(ctx)
-            * TackleDecision::booked_caution(ctx)
-            * TackleDecision::trait_temper(ctx))
+            * TackleDecision::box_restraint(
+                PenaltyRisk::in_own_box(ctx),
+                TackleDecision::cover_exists(ctx),
+            )
+            * TackleDecision::booked_caution(ctx.player)
+            * TackleDecision::trait_temper(ctx.player))
         .clamp(0.0, 0.45);
         #[cfg(feature = "match-logs")]
         crate::mid_run_diag::RecoveryDiag::note_decision(p);
@@ -875,18 +1211,7 @@ impl RecoveryChallenge {
         let aggression = (ctx.player.skills.mental.aggression / 20.0).clamp(0.0, 1.0);
         let beaten = Self::beaten(lead);
         let over = Self::over(ctx, distance);
-
-        // Winning it. The duel is the same contest of ability the block
-        // tackle scores — `defensive_duel` against the carry — handicapped
-        // by the two things that make this challenge hard: he is behind,
-        // and he is at full stretch. The ceiling is well under the block
-        // tackle's 0.55 because from here even a good defender is mostly
-        // hoping.
-        let handicap = 0.55 + beaten * 0.85 + over * 0.55;
-        let raw_diff = defender_score - attacker_score - handicap * 0.45;
-        let success = (1.0 / (1.0 + (-raw_diff * 2.4).exp())
-            + ctx.context.conditions.sliding_tackle_success)
-            .clamp(0.05, 0.40);
+        let success = Self::success_chance(ctx, defender_score, attacker_score, distance, lead);
         let won = rng.random::<f32>() < success;
 
         // Fouling. A block tackle that misses often just misses; a
@@ -918,7 +1243,7 @@ impl RecoveryChallenge {
         // The same own-box restraint the block tackle applies, and for
         // the same reason: inside your own area the downside of catching
         // him is a spot kick, and real defenders visibly stop doing it.
-        // See `DefenderTacklingState::attempt_sliding_tackle`.
+        // See `DefenderTacklingState::attempt_block_tackle`.
         if PenaltyRisk::applies(ctx) {
             foul *= 0.06;
         }
@@ -944,6 +1269,25 @@ impl RecoveryChallenge {
         #[cfg(feature = "match-logs")]
         crate::mid_run_diag::RecoveryDiag::note_attempt(won, fouled, distance, lead);
         TackleOutcome::of(won, fouled, severity)
+    }
+
+    /// Winning it. The duel is the same contest of ability the block
+    /// tackle scores — `defensive_duel` against the carry — handicapped by
+    /// the two things that make this challenge hard: he is behind, and he
+    /// is at full stretch. The ceiling is well under the block tackle's
+    /// 0.55 because from here even a good defender is mostly hoping. It is
+    /// the challenge that slides, so it is the one a wet pitch carries.
+    pub(crate) fn success_chance(
+        ctx: &StateProcessingContext,
+        defender_score: f32,
+        attacker_score: f32,
+        distance: f32,
+        lead: f32,
+    ) -> f32 {
+        let handicap = 0.55 + Self::beaten(lead) * 0.85 + Self::over(ctx, distance) * 0.55;
+        let raw_diff = defender_score - attacker_score - handicap * 0.45;
+        (1.0 / (1.0 + (-raw_diff * 2.4).exp()) + ctx.context.conditions.sliding_tackle_success)
+            .clamp(0.05, 0.40)
     }
 
     /// How far past contact range he is reaching, 0..1. A wet surface
@@ -1027,7 +1371,7 @@ impl ContactFoul {
     /// a strength that produced the real rate **for the engagement volume
     /// of the day**.
     ///
-    /// Re-fitted 0.30 → 0.11 when the marking work landed. This model
+    /// Re-fitted down from 0.30 when the marking work landed. This model
     /// rolls once a second *per engagement*, so its output scales with
     /// how many defenders are engaged, and putting the back line on its
     /// men took box contacts from 95 to 154 per 200 matches (`FOUL SOURCE
@@ -1049,6 +1393,21 @@ impl ContactFoul {
     /// yet — marking a runner at the back post, tracking into the box.
     /// Careful, but not the catastrophic case. Re-fitted with the one above.
     const BOX_POSITION_RESTRAINT: f32 = 0.034;
+
+    /// Nobody grabs a shirt when the downside is a penalty, and real
+    /// defenders visibly stop doing it. Graded, because "would this be a
+    /// penalty" and "am I standing in the box" are different questions with
+    /// different answers — see `PenaltyRisk`. The professional foul reads
+    /// the same restraint.
+    pub(crate) fn box_restraint(ctx: &StateProcessingContext) -> f32 {
+        if PenaltyRisk::applies(ctx) {
+            Self::BOX_PENALTY_RESTRAINT
+        } else if PenaltyRisk::in_own_box(ctx) {
+            Self::BOX_POSITION_RESTRAINT
+        } else {
+            1.0
+        }
+    }
 
     /// Whether this engagement becomes a foul on this AI tick. A hazard on
     /// the time spent in contact, so nothing about the marker's state can
@@ -1094,20 +1453,7 @@ impl ContactFoul {
         let proximity = (1.0 - gap / Self::CONTACT_RANGE).clamp(0.0, 1.0);
         let closeness = 0.55 + proximity * 0.90;
 
-        // Nobody grabs a shirt when the downside is a penalty, and real
-        // defenders visibly stop doing it. Same test the tackle model
-        // uses — see `PenaltyRisk`.
-        // Nobody grabs a shirt when the downside is a penalty. Graded,
-        // because "would this be a penalty" and "am I standing in the
-        // box" are different questions with different answers — see
-        // `PenaltyRisk`.
-        let box_restraint = if PenaltyRisk::applies(ctx) {
-            Self::BOX_PENALTY_RESTRAINT
-        } else if PenaltyRisk::in_own_box(ctx) {
-            Self::BOX_POSITION_RESTRAINT
-        } else {
-            1.0
-        };
+        let box_restraint = Self::box_restraint(ctx);
 
         // His head scales what is left: a nervous marker grabs more.
         ActionLapse::scaled(
@@ -1117,8 +1463,8 @@ impl ContactFoul {
                 * desperation
                 * closeness
                 * box_restraint
-                * TackleDecision::booked_caution(ctx)
-                * TackleDecision::trait_temper(ctx))
+                * TackleDecision::booked_caution(ctx.player)
+                * TackleDecision::trait_temper(ctx.player))
             .clamp(0.0, 0.30),
             ctx.context.psychology.get(ctx.player.id),
         )

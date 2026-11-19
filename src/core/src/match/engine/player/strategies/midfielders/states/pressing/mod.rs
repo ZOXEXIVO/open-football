@@ -1,238 +1,102 @@
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
-    ActivityIntensity, Interception, MidfielderCondition, PressOwnership,
+    ActivityIntensity, MidfielderCondition, MidfielderRead, ReadLevel,
 };
-use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
-use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
-use crate::r#match::player::strategies::common::states::{ClosingPoint, TackleEngagement};
+use crate::r#match::player::strategies::common::states::{
+    ChallengeKind, ClosingPoint, RecoveryChallenge, TackleEngagement,
+};
 use crate::r#match::{
     ConditionContext, MatchContext, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
+/// **The run to the man on the ball.** Inside challenge range and goal-side
+/// of him he contains (`Jockeying`), whatever his tackle cooldown says; a
+/// man the carrier has gone past has the stretch from behind left to him.
+/// He presses while the licence is his; a presser the plan sends with a
+/// pass stays on it while the plan names him.
 #[derive(Default, Clone)]
 pub struct MidfielderPressingState {}
 
 impl StateProcessingHandler for MidfielderPressingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        if ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
+        if let Some(change) = MidfielderRead::change_above(ctx, ReadLevel::Engage) {
+            return Some(change);
         }
-
-        // Ball coming toward this player (pass to us) — intercept it
-        if Interception::is_available(ctx)
-            && ctx.ball().is_towards_player_with_angle(0.8)
-            && ctx.ball().distance() < 150.0
-        {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Intercepting,
-            ));
-        }
-
-        // Loose ball very close — take it regardless of speed, unless
-        // somebody nearer is already going for it.
-        //
-        // ⚠ The yield half of that is what stops a THREE-cycle. The
-        // dispatcher elects one chaser per side and pulls everybody else
-        // straight back out of `TakeBall` (`should_yield_takeball`), so a
-        // presser who grabbed the state without being the elected chaser
-        // was yielded to `Running` on the next tick, re-entered `Pressing`
-        // on his `DefensiveDuty::Press`, and arrived back here — every AI
-        // tick, with `in_state_time` reset by each hop. It shows up in
-        // the stall census as `Midfielder: Take Ball` holding a
-        // motionless ball with a dwell of 0-1 ticks, and it is the same
-        // guard the "loose ball nearby" branch further down already
-        // carries.
-        //
-        // It only became load-bearing when `teamplay::defence` started
-        // nominating a presser through the whole of a pass rather than
-        // only while an opponent carried the ball — that took the Press
-        // duty from 0.25 to 0.61 per refresh and, without this line,
-        // stalled-ball time from 9.2 to 38.0 s/match with
-        // `Midfielder: Take Ball` taking almost all of it. With it, 15.3
-        // vs 16.9 across the same A/B.
-        if Interception::is_available(ctx)
-            && ctx.ball().distance() < 30.0
-            && ctx.team().is_best_player_to_chase_ball()
-        {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::TakeBall,
-            ));
-        }
-
-        // If team has possession, stop pressing and contribute to attack
-        if ctx.team().is_control_ball() {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::AttackSupporting,
-            ));
-        }
-
-        // Opponent GK holds ball in hands — can't challenge, back off
-        if ctx.ball().is_held_by_opponent_goalkeeper() {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
-        }
-
-        // Press time budget: combines the team-shared press intensity
-        // with the midfielder's own pressing_profile (work_rate/stamina/
-        // anticipation/positioning blend, dampened by condition). Poor
-        // pressers and tired midfielders give up earlier; elite pressers
-        // sustain longer hunts.
-        let intensity = ctx.team().press_intensity();
-        let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
-        let max_press_time = mid_profile.press_time_ticks(intensity);
-        // `Running` sends a nominated presser and the best man to the carrier
-        // straight back here, so for them the clock has nothing to say.
-        let press_stays_his = TackleEngagement::is_nominated_presser(ctx)
-            || ctx.team().is_best_player_to_chase_ball();
-        if ctx.in_state_time > max_press_time && !press_stays_his {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
-        }
-
-        // Back off during foul protection — don't crowd the free kick
-        if ctx.ball().is_in_flight() && ctx.ball().is_owned() {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
-        }
-
-        let ball_distance = ctx.ball().distance();
-        if PressOwnership::belongs_to_a_team_mate(ctx) {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
-        }
-
-        // CRITICAL: Tackle if an opponent has the ball nearby
-        if let Some(opponent) = ctx.players().opponents().nearby(60.0).with_ball(ctx).next() {
-            let opponent_distance = (opponent.position - ctx.player.position).magnitude();
-
-            // Engage only at genuine challenge range. This was 50u
-            // (~6 m) — a distance at which no one can tackle anyone —
-            // while `MidfielderTacklingState` breaks off far closer, so
-            // the pair oscillated for every carrier in between (~35k
-            // round trips a match). `should_commit` also refuses while
-            // the tackle cooldown is running, which is what stops a
-            // midfielder who has just lunged from being fed back into a
-            // state that can only hand him out again.
-            if TackleEngagement::should_commit(ctx, opponent_distance) {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Tackling,
-                ));
+        let Some(carrier) = ctx.players().opponents().with_ball().next() else {
+            if TackleEngagement::is_nominated_presser(ctx) && !ctx.team().is_control_ball() {
+                return None;
             }
+            return Some(MidfielderRead::change(ctx));
+        };
+        if !MidfielderRead::is_man_for_carrier(ctx) {
+            return Some(MidfielderRead::change(ctx));
         }
-
-        // Loose ball nearby — go claim it directly instead of pressing thin air
-        // But only if no teammate is closer (avoid chasing ball during teammate's pass)
-        if !ctx.ball().is_owned()
-            && ball_distance < 50.0
-            && ctx.ball().speed() < 3.0
-            && ctx.team().is_best_player_to_chase_ball()
+        if MidfielderRead::duel_rung(ctx, &carrier) == MidfielderState::Jockeying {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Jockeying,
+            ));
+        }
+        let distance = carrier.distance(ctx);
+        let lead = RecoveryChallenge::lead(ctx, carrier.position);
+        if !MatchContext::midfielder_duel_off()
+            && RecoveryChallenge::is_available(ctx, distance, lead)
+            && RecoveryChallenge::is_eligible(ctx)
+            && ctx
+                .context
+                .rng
+                .bernoulli(RecoveryChallenge::commits_now(ctx, distance, lead))
         {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::TakeBall,
-            ));
+            return Some(
+                StateChangeResult::with_midfielder_state(MidfielderState::Tackling)
+                    .with_staged_challenge(ChallengeKind::Slide),
+            );
         }
-
-        // Only give up pressing if ball is truly far away
-        if ctx.ball().distance() > 300.0 {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Returning,
-            ));
-        }
-
-        // Check if the pressing is ineffective (opponent still has ball after some time)
-        //
-        // …but not for the man the plan sent. `is_making_progress` gives
-        // up as soon as two team-mates are 20% nearer the ball, which in
-        // a block is a positional accident rather than a hand-over, and
-        // it is the same single-player-election reasoning `HANDOVER_MARGIN`
-        // above replaced.
-        if ctx.in_state_time > 30
-            && !TackleEngagement::is_nominated_presser(ctx)
-            && !self.is_making_progress(ctx)
-        {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
-        }
-
         None
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Only pursue if opponent has the ball
-        if let Some(opponent) = ctx
-            .players()
-            .opponents()
-            .nearby(500.0)
-            .with_ball(ctx)
-            .next()
-        {
-            let distance_to_opponent = (opponent.position - ctx.player.position).magnitude();
+        if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+            let distance_to_carrier = carrier.distance(ctx);
 
             // The carrier's velocity leads the aim point, so a running
             // attacker is met where he is going rather than chased.
-            let opp_velocity = ctx.tick_context.positions.players.velocity(opponent.id);
-            let opp_speed = opp_velocity.magnitude();
+            let carrier_velocity = ctx.tick_context.positions.players.velocity(carrier.id);
 
             // A stride off the carrier, across his line to our box —
             // the same point every closer takes (`ClosingPoint`).
-            let intercept_target = if MatchContext::cross_line_off() {
-                let goalside_bias = if opp_speed > 0.1 { 2.0 } else { 0.0 };
-                ClosingPoint::goal_side(ctx, opponent.position, goalside_bias)
+            let target = if MatchContext::cross_line_off() {
+                let goal_side_bias = if carrier_velocity.magnitude() > 0.1 {
+                    2.0
+                } else {
+                    0.0
+                };
+                ClosingPoint::goal_side(ctx, carrier.position, goal_side_bias)
             } else {
-                ClosingPoint::for_carrier(ctx, &opponent)
+                ClosingPoint::for_carrier(ctx, &carrier)
             };
 
-            // Steer, don't teleport. `direction * pace` assigned an
-            // absolute velocity of up to 20 u/tick against a ~0.63 u/tick
-            // top speed, with no reference to the velocity the player
-            // already had — so the engine-wide clamp kept whatever heading
-            // this tick's aim point produced, and the press could invert
-            // between consecutive ticks. `Pursuit` integrates from the
-            // current velocity under a force limit, as every other
-            // well-behaved state does. This took `Midfielder: Pressing`
-            // from 8.6 velocity reversals per second held to below the
-            // reporting threshold (`dev_match trace`).
-            let pressing_velocity = SteeringBehavior::Pursuit {
-                target: intercept_target,
-                target_velocity: opp_velocity,
+            let closing = SteeringBehavior::Pursuit {
+                target,
+                target_velocity: carrier_velocity,
             }
             .calculate(ctx.player)
             .velocity;
 
-            // Reduce separation when actively pressing to allow close approach
-            let separation = if distance_to_opponent < 25.0 {
+            // Little separation while closing, so he can get to the man.
+            let separation = if distance_to_carrier < 25.0 {
                 ctx.player().separation_velocity() * 0.05
             } else {
                 ctx.player().separation_velocity() * 0.15
             };
 
-            Some(pressing_velocity + separation)
-        } else if !ctx.ball().is_owned()
-            && (TackleEngagement::is_nominated_presser(ctx)
-                || (Interception::is_available(ctx) && ctx.ball().distance() < 100.0))
-        {
-            // Nobody has it — a pass in flight, a deflection, a loose
-            // ball. Go with it; that is what the press IS, and since the
-            // plan now nominates a presser through exactly this window
-            // (see `teamplay::defence`'s point of attack) it is no longer
-            // a rare branch.
-            //
-            // ⚠ This used to be `direction * pace` — the same units bug
-            // the carrier branch above documents having removed. `pace`
-            // is a 1-20 SKILL and the result was used as a velocity in
-            // u/tick against a ~0.63 u/tick top speed, so the engine-wide
-            // clamp kept whatever heading this tick's normalize produced
-            // and the presser could invert between consecutive ticks.
-            Some(
+            return Some(closing + separation);
+        }
+
+        // Nobody has it — a pass in flight the plan has sent him with.
+        if !ctx.ball().is_owned() {
+            return Some(
                 SteeringBehavior::Pursuit {
                     target: ctx.tick_context.positions.ball.position,
                     target_velocity: ctx.tick_context.positions.ball.velocity,
@@ -240,50 +104,24 @@ impl StateProcessingHandler for MidfielderPressingState {
                 .calculate(ctx.player)
                 .velocity
                     + ctx.player().separation_velocity() * 0.15,
-            )
-        } else {
-            // Teammate has ball — maintain position
-            Some(Vector3::zeros())
+            );
         }
+
+        Some(
+            SteeringBehavior::Arrive {
+                target: ctx.team().my_anchor(),
+                slowing_distance: 25.0,
+            }
+            .calculate(ctx.player)
+            .velocity,
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
         // Closing the man on the ball is a sprint — see the note in
         // `DefenderPressingState`. `High` is 0.78 of top speed against a
         // carrier running at a flat-out ceiling, so the presser could
-        // not arrive; midfielders measured 17.2 pressures a match for
-        // 0.87 successes against a real ~15 for ~4.5.
-        MidfielderCondition::with_velocity(ActivityIntensity::chase()).process(ctx);
-    }
-}
-
-impl MidfielderPressingState {
-    // New helper function to determine if pressing is making progress
-    fn is_making_progress(&self, ctx: &StateProcessingContext) -> bool {
-        let player_velocity = ctx.player.velocity;
-
-        // Calculate dot product between player velocity and direction to ball
-        let to_ball = ctx.tick_context.positions.ball.position - ctx.player.position;
-        let to_ball_normalized = if to_ball.magnitude() > 0.0 {
-            to_ball / to_ball.magnitude()
-        } else {
-            Vector3::new(0.0, 0.0, 0.0)
-        };
-
-        let moving_toward_ball = player_velocity.dot(&to_ball_normalized) > 0.0;
-
-        // Check if other teammates are better positioned to press
-        let other_pressing_teammates = ctx
-            .players()
-            .teammates()
-            .all()
-            .filter(|t| {
-                let dist = (t.position - ctx.tick_context.positions.ball.position).magnitude();
-                dist < ctx.ball().distance() * 0.8 // 20% closer than current player
-            })
-            .count();
-
-        // Continue pressing if moving toward ball and not many better-positioned teammates
-        moving_toward_ball && other_pressing_teammates < 2
+        // not arrive.
+        MidfielderCondition::new(ActivityIntensity::chase()).process(ctx);
     }
 }

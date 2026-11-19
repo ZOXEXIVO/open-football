@@ -76,10 +76,9 @@ impl TackleEngagement {
     /// …and the duel gate has to accept the TEAM PLAN's answer, not only
     /// the chase election's.
     ///
-    /// `is_best_player_to_chase_ball` scores every candidate with a
-    /// `position_factor` — Forward 1.2, Midfielder 1.1, **Defender 0.9**.
-    /// That is the right bias for a loose ball nobody owns (a forward does
-    /// gamble on those), and the wrong one entirely for "who challenges
+    /// `is_best_player_to_chase_ball` asks the chase table, which prices
+    /// the race to the ball in time. That is the right question for a
+    /// loose ball nobody owns, and the wrong one entirely for "who challenges
     /// the man carrying the ball at our box", where the defender is by
     /// definition the man. Measured, it inverted the whole ladder:
     /// **0.47 tackles per defender per match against 3.01 per forward**,
@@ -102,18 +101,19 @@ impl TackleEngagement {
     /// chances — and two inside our own area, where every defence in
     /// football goes man-to-man because the cost of losing him is a goal.
     ///
-    /// The chase election is the fallback and not an alternative: its
-    /// `position_factor` (Forward 1.2, Midfielder 1.1, Defender 0.9) is
-    /// the right bias for a loose ball and the wrong one entirely for
+    /// The chase election is the fallback and not an alternative: a race
+    /// to the ball priced in time is the right question for a loose ball
+    /// and the wrong one entirely for
     /// "who challenges the man carrying the ball at our box", where the
     /// defender is by definition the man. Read as an alternative it
     /// measured **2.74 tackles per forward per match against a real
     /// ~0.8**, with defenders on 1.37 against ~1.6. The plan nominates
     /// nobody for a ball at rest by design, which is exactly the case the
     /// election is left to answer.
-    /// A nearest defender already within challenge range can also take
-    /// over when the nominated presser is outside the release distance.
-    /// This handles a carrier beating the press between plan refreshes.
+    /// The nearest outfielder to a carrier who has run into him can also
+    /// take over when the nominated presser is outside the release
+    /// distance. This handles a carrier beating the press between plan
+    /// refreshes.
     ///
     /// ⚠ The second man is the one the BOX ELECTION picked, not the
     /// plan's `Cover`. The five states that send a second body into the
@@ -127,16 +127,17 @@ impl TackleEngagement {
     pub fn may_engage_carrier(ctx: &StateProcessingContext) -> bool {
         Self::is_nominated_presser(ctx)
             || ctx.player().defensive().is_box_emergency_for_me()
-            || Self::is_local_defender_challenge(ctx)
+            || Self::carrier_ran_into_him(ctx)
             || (ctx.team().defensive_plan().presser().is_none()
                 && ctx.team().is_best_player_to_chase_ball())
     }
 
-    /// A carrier running into a defender cannot be protected by a distant
-    /// pressing assignment. Only the nearest outfielder may take over, and
-    /// an existing presser within engagement range keeps the duel.
-    fn is_local_defender_challenge(ctx: &StateProcessingContext) -> bool {
-        if !ctx.player.tactical_position.current_position.is_defender() {
+    /// A carrier running into an outfielder, whatever his position, cannot
+    /// be protected by a distant pressing assignment. Only the nearest
+    /// outfielder may take over, and an existing presser within engagement
+    /// range keeps the duel.
+    fn carrier_ran_into_him(ctx: &StateProcessingContext) -> bool {
+        if ctx.player.tactical_position.current_position.is_goalkeeper() {
             return false;
         }
         let Some(carrier) = ctx.players().opponents().with_ball().next() else {

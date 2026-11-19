@@ -757,3 +757,51 @@ impl LatencyTimer {
         self.0.elapsed().as_millis() as u64
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    // `#[tokio::test]` expands to `::core::future`, and this workspace has its
+    // own `core` crate, so the runtime is built by hand.
+    #[test]
+    fn a_worker_on_an_earlier_protocol_is_not_given_matches() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap().to_string();
+                let worker = tokio::spawn(async move {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let request: Request = Frame::read(&mut stream).await.unwrap();
+                    let Request::Handshake {
+                        coordinator_version,
+                        ..
+                    } = request
+                    else {
+                        panic!("expected a handshake");
+                    };
+                    let reply = Response::Handshake {
+                        version: coordinator_version,
+                        protocol_version: 8,
+                        threads: 4,
+                        computer_name: "old-worker".to_string(),
+                        cpu_brand: "test".to_string(),
+                    };
+                    Frame::write(&mut stream, &reply).await.unwrap();
+                });
+                let found =
+                    WorkerRegistry::connect_and_handshake(address, "1.2.3".to_string()).await;
+                worker.await.unwrap();
+                assert!(
+                    matches!(&found.status, WorkerStatus::VersionMismatch { worker_version }
+                        if worker_version.contains("protocol 8")),
+                    "{:?}",
+                    found.status
+                );
+            });
+    }
+}

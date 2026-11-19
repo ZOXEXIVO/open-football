@@ -34,7 +34,7 @@ impl TacticalPositions {
     /// entry, which is only the same thing while nobody changes role.
     /// Both callers that change one — a substitute taking over someone
     /// else's slot (`MatchField::substitute_player`) and an outfielder
-    /// stationed in goal (`Substitutions::station_in_goal`) — write
+    /// stationed in goal (`MatchPlayer::take_position`) — write
     /// `current_position` and then call this, so the entry was left
     /// pointing at the role the player used to hold.
     /// `MatchPlayer::rebuild_waypoint_cache` filters on

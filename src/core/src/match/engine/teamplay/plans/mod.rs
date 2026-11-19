@@ -17,6 +17,9 @@
 //!   inside it ([`TeamShape`](shape::TeamShape)); the rectangle's own
 //!   geometry is in [`block`].
 //!
+//! [`history`] keeps the last few attack and defence plans, so a man who
+//! takes a new job in late reads the plan as it stood a moment ago.
+//!
 //! They reference each other in prose because they overlap by design: a
 //! man given a box slot by the attack plan is a man the rest-defence
 //! count did not keep at home, and the shape catches everybody neither
@@ -27,6 +30,7 @@ pub mod attack;
 pub mod block;
 pub mod defence;
 pub mod duties;
+pub mod history;
 pub mod line_step;
 pub mod matcher;
 pub mod shape;

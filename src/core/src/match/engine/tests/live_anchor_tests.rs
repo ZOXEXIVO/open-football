@@ -37,7 +37,7 @@ fn shaped_pitch(owner_away_nth: usize) -> (MatchField, MatchContext) {
     field.ball.position = field.get_player(owner).expect("owner").position;
     let mut context = MatchContext::new(&field, players, Score::new(1, 2), false, false);
     let possession = TeamPossession::read(&field);
-    FootballEngine::<840, 545>::refresh_tactical_states(&field, &mut context, possession, 1);
+    FootballEngine::<840, 545>::refresh_tactical_states(&mut field, &mut context, possession, 1);
     context.defence_home = DefensivePlan::idle();
     (field, context)
 }
@@ -113,11 +113,12 @@ fn a_man_genuinely_out_of_position_still_goes_back() {
     let (mut field, context) = shaped_pitch(1);
     let id = home_man(&field, |s| matches!(s, PlayerState::Midfielder(_)));
     // Beyond his guarding range of the live anchor, with the kickoff dot
-    // beside him: the old read would have let him carry on.
+    // beside him: the old read would have let him carry on. The opposition
+    // has the ball, so the run back is a recovery run.
     place_guard(&mut field, &context, id, 200.0, -200.0);
     assert_eq!(
         midfielder_decision(&field, &context, id),
-        Some(PlayerState::Midfielder(MidfielderState::Returning)),
+        Some(PlayerState::Midfielder(MidfielderState::TrackingBack)),
     );
 }
 

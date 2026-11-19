@@ -584,7 +584,6 @@ pub const EVENT_LABELS: [&str; EVENTS] = [
     "ClaimBall",
     "GainBall",
     "CaughtBall",
-    "ParriedBall",
     "CommitFoul",
     "Offside",
     "RequestHeading",
@@ -596,6 +595,7 @@ pub const EVENT_LABELS: [&str; EVENTS] = [
     "Handball",
     "Dispossessed",
     "Howler",
+    "ChallengeSpent",
     "?30",
     "?31",
 ];

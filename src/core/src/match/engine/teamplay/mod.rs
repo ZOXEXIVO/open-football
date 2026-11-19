@@ -9,6 +9,7 @@
 //! | [`tactical`] | [`TeamTacticalState`](tactical::TeamTacticalState) and how the game is read: phase, zones, signals |
 //! | [`coach`] | The touchline: the instruction ladder, the metrics it watches, the substitution need |
 //! | [`squad`] | Kickoff-latched properties of the two squads: pair chemistry, and the standard of football |
+//! | `census` | The `match-logs` team census: play by game state, style, possessions |
 //!
 //! [`zones`] stays at the root on purpose. It is the pitch-zone taxonomy
 //! ([`MatchZone`](zones::MatchZone), [`LateralLane`](zones::LateralLane))
@@ -19,6 +20,8 @@
 //! grouping, so every `teamplay::<module>::Item` path in the engine keeps
 //! resolving.
 
+#[cfg(feature = "match-logs")]
+pub mod census;
 pub mod coach;
 pub mod plans;
 pub mod possession;
@@ -26,5 +29,5 @@ pub mod squad;
 pub mod tactical;
 pub mod zones;
 
-pub use plans::{attack, defence, shape, wide};
-pub use squad::{chemistry, standard};
+pub use plans::{attack, defence, history, shape, wide};
+pub use squad::{adherence, chemistry, standard};

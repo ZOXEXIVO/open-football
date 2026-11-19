@@ -22,7 +22,8 @@ use crate::r#match::engine::result::{
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{
-    GoalOrigin, MatchPlayer, MatchResultRaw, MatchRng, MatchSquad, Score, SubstitutionInfo,
+    CoachCard, CoachRecord, GoalOrigin, MatchCoach, MatchPlayer, MatchResultRaw, MatchRng,
+    MatchSquad, Outlook, ReadCounters, Score, Situation, SquadFit, SubstitutionInfo, TeamPins,
     TeamSkillAggregates,
 };
 
@@ -258,6 +259,7 @@ impl<'a> StubMatch<'a> {
         result.weather = self.config.environment.weather;
         result.pitch = self.config.environment.pitch;
         result.standard_of_football = self.fixture.standard;
+        [result.coach_home, result.coach_away] = self.half_time_talks(&home.times, &away.times);
 
         let mut stints = self.stints(true, full_time, &mut result);
         stints.extend(self.stints(false, full_time, &mut result));
@@ -291,6 +293,51 @@ impl<'a> StubMatch<'a> {
         result.score = Some(score);
         MatchRatingPass::rate(&mut result, RatingVolumes::RealUnits);
         result
+    }
+
+    /// What each coach says at the interval, the home side's first: the men
+    /// in charge set up as the engine sets them up, each reading the
+    /// half-time score, the talk chosen by the same rule and recorded.
+    fn half_time_talks(&self, home_goals: &[u64], away_goals: &[u64]) -> [CoachRecord; 2] {
+        let at_half = |goals: &[u64]| {
+            goals
+                .iter()
+                .filter(|&&t| t < Self::REGULATION_MS / 2)
+                .count() as i32
+        };
+        let difference = at_half(home_goals) - at_half(away_goals);
+        let strengths = [self.home, self.away].map(|squad| {
+            MatchStandard::of_side(&TeamSkillAggregates::at_kickoff(squad.main_squad.iter()))
+        });
+        let [home_outlook, away_outlook] = Outlook::for_fixture(
+            strengths,
+            &self.config.environment,
+            self.config.is_knockout,
+            self.config.is_friendly(),
+        );
+        let pins = TeamPins::current();
+        let seed = self.rng.seed();
+        [
+            (self.home, true, difference, home_outlook),
+            (self.away, false, -difference, away_outlook),
+        ]
+        .map(|(squad, home, difference, outlook)| {
+            let mut coach = MatchCoach::new();
+            let card =
+                CoachCard::in_charge(pins.coach(home), squad.coach_card, seed, squad.team_id);
+            coach.on_kickoff(card, outlook, &SquadFit::default(), pins.plan);
+            coach.observe(
+                Situation {
+                    difference,
+                    minutes_left: 45.0,
+                    ..Situation::default()
+                },
+                45.0,
+                ReadCounters::default(),
+            );
+            coach.on_half_time();
+            coach.record
+        })
     }
 
     /// Each side's goal rate from the home edge and how the two elevens

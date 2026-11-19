@@ -15,11 +15,15 @@
 use super::goal_celebration_tests::squad;
 use crate::r#match::engine::result::Score;
 use crate::r#match::goalkeepers::states::GoalkeeperPunchingState;
+use crate::r#match::goalkeepers::states::common::{AerialClaim, KeeperAerialClaim};
+use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::engine::player::events::players::PlayerEventDispatcher;
 use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::state::PlayerState;
+use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::{
-    Ball, GameTickContext, MatchContext, MatchField, MatchPlayerCollection, PlayerSide,
-    ResultMatchPositionData, ShotTarget, StateChangeResult, StateProcessingContext,
+    Ball, ClaimIntent, GameTickContext, MatchContext, MatchField, MatchPlayer,
+    MatchPlayerCollection, PlayerSide, ResultMatchPositionData, ShotTarget, StateProcessingContext,
     StateProcessingHandler,
     events::{Event, EventCollection},
 };
@@ -264,14 +268,16 @@ fn right_keeper_alone_at(field: &mut MatchField, at: Vector3<f32>) -> (u32, u32)
 
 /// The tick the keeper ARRIVES in `Punching` — the one on which the state
 /// decides whether there is a contact left to make.
-fn punch_entry_tick(
+/// `with` run against the right-hand keeper, as a state handler sees him.
+fn as_keeper<T>(
     field: &MatchField,
     context: &MatchContext,
     keeper_id: u32,
-) -> Option<StateChangeResult> {
-    let players = field.players.clone();
+    with: impl FnOnce(&StateProcessingContext) -> T,
+) -> T {
     let tick_context = GameTickContext::new(field, &context.players);
-    let player = players
+    let player = field
+        .players
         .iter()
         .find(|p| p.id == keeper_id)
         .expect("the keeper is on the field");
@@ -281,30 +287,18 @@ fn punch_entry_tick(
         context,
         tick_context: &tick_context,
     };
-    GoalkeeperPunchingState::default().process(&ctx)
+    with(&ctx)
 }
 
-/// **A parry is ONE contact.**
-///
-/// The physics save resolves the shot and sends the spill on its way; the
-/// keeper is then put into `Punching` so that the parry is SEEN. That state
-/// rolls a fresh punch on the tick it is entered whenever a ball is within
-/// a fist's reach — and a spill that has just left his gloves at a metre a
-/// second always is. Off a recorded match: a ground shot spilled at 0.12 m
-/// was struck again on the same tick and looped 7 m into the air, 14 m
-/// back up the pitch, off a keeper who had already made his save.
-///
-/// The same ball off an opponent's boot is a delivery, and he may put a
-/// fist through that.
+/// **The punch state throws no punch of its own.** It is the follow-through
+/// of a punch thrown on the aerial contest's word, so a ball within a fist's
+/// reach, his own spill or an opponent's delivery, is not struck by it.
 #[test]
-fn the_punch_state_does_not_strike_a_ball_that_just_came_off_him() {
+fn the_punch_state_strikes_nothing_the_contest_did_not_give_it() {
     let (mut field, context) = kickoff();
     let (keeper_id, keeper_team) =
         right_keeper_alone_at(&mut field, Vector3::new(811.0, 248.0, 0.0));
     let tick = context.current_tick();
-
-    // The spill exactly as `try_save_shot` leaves it: a metre a second
-    // across the ground, off his hands, uncontrolled.
     field.ball.position = Vector3::new(809.0, 243.0, 0.12);
     field.ball.velocity = Vector3::new(-1.0, -0.5, 0.0);
     field.ball.current_owner = None;
@@ -312,82 +306,95 @@ fn the_punch_state_does_not_strike_a_ball_that_just_came_off_him() {
     field.ball.flags.in_flight_state = 10;
     field.ball.record_touch(keeper_id, keeper_team, tick, false);
 
-    assert!(
-        punch_entry_tick(&field, &context, keeper_id).is_none(),
-        "the keeper struck his own spill a second time"
-    );
-
-    // Off an opponent, at head height: a ball he has yet to touch.
-    field.ball.position.z = 2.0;
-    field.ball.previous_owner = Some(110);
-    field.ball.record_touch(110, 1, tick, false);
-
-    assert!(
-        punch_entry_tick(&field, &context, keeper_id).is_some(),
-        "a delivery within a fist's reach was left alone"
-    );
+    for (z, from) in [(0.12, keeper_id), (2.0, 110)] {
+        field.ball.position.z = z;
+        field.ball.previous_owner = Some(from);
+        let struck = as_keeper(&field, &context, keeper_id, |ctx| {
+            GoalkeeperPunchingState::default().process(ctx)
+        })
+        .is_some_and(|mut change| {
+            change
+                .events
+                .drain()
+                .any(|e| matches!(e, Event::PlayerEvent(PlayerEvent::ClearBall(..))))
+        });
+        assert!(!struck, "the punch state struck a ball at {z} m on its own");
+    }
 }
 
-/// **Nothing below his head is punched.** A ball at the waist is caught,
-/// gathered or dived on; the punch state had a ceiling and no floor, so a
-/// crowded box could have him fisting a ball off the turf.
+/// **Nothing below his head is punched.** However crowded the box, a claim
+/// he meets at the waist is one he means to catch.
 #[test]
 fn a_ball_below_his_head_is_not_punched() {
     let (mut field, context) = kickoff();
     let (keeper_id, _) = right_keeper_alone_at(&mut field, Vector3::new(811.0, 248.0, 0.0));
-    field.ball.position = Vector3::new(809.0, 243.0, 1.0);
+    let keeper = field
+        .players
+        .iter_mut()
+        .find(|p| p.id == keeper_id)
+        .expect("the keeper");
+    keeper.skills.goalkeeping.command_of_area = 20.0;
+    keeper.skills.goalkeeping.aerial_reach = 20.0;
+    keeper.skills.goalkeeping.punching = 20.0;
+    keeper.skills.physical.jumping = 20.0;
     field.ball.velocity = Vector3::new(-1.0, -0.5, 0.0);
-    field.ball.current_owner = None;
-    field.ball.previous_owner = Some(110);
-    field
-        .ball
-        .record_touch(110, 1, context.current_tick(), false);
-
-    assert!(
-        punch_entry_tick(&field, &context, keeper_id).is_none(),
-        "he fisted a ball at his waist"
+    let intent = |height: f32| {
+        let claim = AerialClaim {
+            meeting_point: Vector3::new(809.0, 243.0, 0.0),
+            height,
+            ticks: 10.0,
+            traffic: 1.0,
+            standing: true,
+        };
+        as_keeper(&field, &context, keeper_id, |ctx| {
+            KeeperAerialClaim::intent(ctx, &claim)
+        })
+    };
+    assert_eq!(
+        intent(1.0),
+        ClaimIntent::Catch,
+        "he meant to fist a ball at his waist"
     );
-
-    field.ball.position.z = GoalkeeperPunchingState::FLOOR + 0.1;
-    assert!(
-        punch_entry_tick(&field, &context, keeper_id).is_some(),
-        "a ball at his head was left alone"
+    assert_eq!(
+        intent(GoalkeeperPunchingState::FLOOR + 0.1),
+        ClaimIntent::Punch,
+        "a ball at his head in a crowd was not one to punch"
     );
 }
 
-/// **A punch is a clearance, not a lob.** It leaves the fist nearer 40°
-/// than the 58° a 6-10 m apex over 15-25 m gave, which on screen was a
-/// ball popping straight up and dropping.
+/// **A punch clears the heads and is still not a lob.** It goes up at least
+/// 4 m and carries 15-25 m, a launch in the mid-forties, where the 6-10 m
+/// apex over the same ground left the fist at 58° and on screen was a ball
+/// popping straight up and dropping.
 #[test]
-fn a_punch_leaves_the_fist_flatter_than_it_climbs() {
+fn a_punch_clears_the_heads_without_becoming_a_lob() {
     let (mut field, context) = kickoff();
     let (keeper_id, _) = right_keeper_alone_at(&mut field, Vector3::new(811.0, 248.0, 0.0));
     field.ball.position = Vector3::new(809.0, 243.0, 2.0);
     field.ball.velocity = Vector3::new(-1.0, -0.5, -0.05);
     field.ball.current_owner = None;
-    field.ball.previous_owner = Some(110);
-    field
-        .ball
-        .record_touch(110, 1, context.current_tick(), false);
 
-    // The contact is a roll with at least a one-in-five chance; sixty
-    // entries without one would be a broken state, not bad luck.
-    let launch = (0..60)
-        .find_map(|_| {
-            let mut result = punch_entry_tick(&field, &context, keeper_id)?;
-            result.events.drain().find_map(|event| match event {
-                Event::PlayerEvent(PlayerEvent::ClearBall(_, velocity)) => Some(velocity),
-                _ => None,
-            })
+    let mut strike = as_keeper(&field, &context, keeper_id, GoalkeeperPunchingState::strike);
+    let launch = strike
+        .events
+        .drain()
+        .find_map(|event| match event {
+            Event::PlayerEvent(PlayerEvent::ClearBall(_, velocity)) => Some(velocity),
+            _ => None,
         })
-        .expect("sixty punch entries produced no contact");
+        .expect("the punch throws the ball");
 
     // x/y in game units per tick, z in metres per tick: 1u = 0.125 m.
     let across_metres = (launch.x * launch.x + launch.y * launch.y).sqrt() * 0.125;
     let angle = launch.z.atan2(across_metres).to_degrees();
     assert!(
-        (25.0..45.0).contains(&angle),
+        (40.0..50.0).contains(&angle),
         "the punch left the fist at {angle:.0} degrees: {launch:?}"
+    );
+    assert!(
+        Ball::apex_for_launch(launch.z) >= 4.0 - 1e-3,
+        "the punch went up {:.1} m",
+        Ball::apex_for_launch(launch.z)
     );
 }
 
@@ -413,4 +420,282 @@ fn a_howler_is_the_keepers_error() {
         "the goal it becomes is charged to him"
     );
     assert!(context.psychology.get(keeper_id).unwrap().confidence < before);
+}
+
+// ── His posture at contact ──────────────────────────────────────────────
+
+/// Whether the save model takes up a shot passing `beside` units to the side
+/// of the away keeper at `height` metres, with him put in his posture by
+/// `posture`: rolled (held, tipped, spilled or beaten) rather than out of
+/// his reach.
+fn engages(posture: impl Fn(&mut MatchPlayer), beside: f32, height: f32) -> bool {
+    let (mut field, context) = kickoff();
+    let keeper_id = set_up_shot_at_the_right_goal(
+        &mut field,
+        Vector3::new(820.0, 272.0, 0.0),
+        Vector3::new(817.0, 272.0 + beside, height),
+        Vector3::new(2.2, 0.0, 0.0),
+        Vector3::new(700.0, 272.0 + beside, 0.0),
+    );
+    posture(
+        field
+            .players
+            .iter_mut()
+            .find(|p| p.id == keeper_id)
+            .expect("the keeper"),
+    );
+    let players = field.players.clone();
+    let mut events = EventCollection::with_capacity(8);
+    field.ball.try_save_shot(&context, &players, &mut events);
+    field.ball.cached_shot_target.is_none_or(|t| t.save_rolled)
+}
+
+fn in_state(state: GoalkeeperState) -> impl Fn(&mut MatchPlayer) {
+    move |keeper| keeper.transition_to(PlayerState::Goalkeeper(state), TransitionSource::Reset)
+}
+
+#[test]
+fn a_set_keeper_reaches_a_shot_two_metres_wide() {
+    assert!(engages(
+        in_state(GoalkeeperState::PreparingForSave),
+        16.0,
+        0.5
+    ));
+}
+
+#[test]
+fn a_committed_dive_reaches_only_his_spread() {
+    let committed = |keeper: &mut MatchPlayer| {
+        keeper.transition_to(
+            PlayerState::Goalkeeper(GoalkeeperState::Diving),
+            TransitionSource::Reset,
+        );
+        keeper.dive_aim = Some(272.0 - 30.0);
+    };
+    assert!(
+        !engages(committed, 16.0, 0.5),
+        "he dived the other way and still reached it"
+    );
+    assert!(
+        engages(committed, 3.0, 0.5),
+        "a ball at his body was out of his reach"
+    );
+}
+
+#[test]
+fn a_keeper_on_the_floor_reaches_only_a_low_ball_at_his_body() {
+    let grounded = in_state(GoalkeeperState::GettingUp);
+    assert!(
+        engages(&grounded, 3.0, 0.3),
+        "a low ball at a man on the floor was out of reach"
+    );
+    assert!(
+        !engages(&grounded, 3.0, 1.2),
+        "a man lying down reached a ball at his chest"
+    );
+    assert!(
+        !engages(&grounded, 16.0, 0.3),
+        "a man lying down dived for a ball two metres wide"
+    );
+}
+
+/// Saves out of `n` shots passing `beside` units wide of a set keeper at
+/// `height` metres.
+fn saves_at(height: f32, beside: f32, n: usize) -> usize {
+    let (mut field, context) = kickoff();
+    (0..n)
+        .filter(|_| {
+            let keeper_id = set_up_shot_at_the_right_goal(
+                &mut field,
+                Vector3::new(820.0, 272.0, 0.0),
+                Vector3::new(817.0, 272.0 + beside, height),
+                Vector3::new(2.2, 0.0, 0.0),
+                Vector3::new(700.0, 272.0 + beside, 0.0),
+            );
+            field.ball.held_in_hands = false;
+            field.ball.pending_save_credit = None;
+            in_state(GoalkeeperState::PreparingForSave)(
+                field
+                    .players
+                    .iter_mut()
+                    .find(|p| p.id == keeper_id)
+                    .expect("the keeper"),
+            );
+            let players = field.players.clone();
+            let mut events = EventCollection::with_capacity(8);
+            field.ball.try_save_shot(&context, &players, &mut events);
+            field.ball.pending_save_credit.is_some()
+                || field.ball.held_in_hands
+                || field.ball.current_owner == Some(keeper_id)
+        })
+        .count()
+}
+
+/// **Height costs him as width does.** The same metre to his side is a
+/// harder save just under the bar than at his chest, priced by the exchange
+/// rate the dive decision already uses (`SaveModel::climb_gap`).
+#[test]
+fn a_shot_under_the_bar_is_saved_less_often_than_one_at_his_chest() {
+    let chest = saves_at(1.2, 8.0, 400);
+    let bar = saves_at(2.3, 8.0, 400);
+    assert!(
+        chest > 0,
+        "no chest-height save at all, so nothing was tested"
+    );
+    assert!(
+        bar < chest,
+        "under the bar {bar} of 400 saved, at his chest {chest}"
+    );
+}
+
+// ── Where a ball he does not hold comes to rest ─────────────────────────
+
+/// Everybody off to a corner, then the ball run on its own physics until it
+/// stops. `None` when it leaves the pitch instead.
+pub(super) fn rest_point(
+    field: &mut MatchField,
+    context: &mut MatchContext,
+) -> Option<Vector3<f32>> {
+    for player in field.players.iter_mut() {
+        player.position = Vector3::new(30.0, 30.0, 0.0);
+        player.velocity = Vector3::zeros();
+    }
+    let players = field.players.clone();
+    let mut events = EventCollection::with_capacity(8);
+    for _ in 0..4000 {
+        field.ball.update_light(context, &players, &mut events);
+        if field.ball.awaiting_restart.is_some() || field.ball.in_net.is_some() {
+            return None;
+        }
+        let ball = &field.ball;
+        if ball.position.z < 0.2 && ball.velocity.x.hypot(ball.velocity.y) < 0.02 {
+            return Some(ball.position);
+        }
+    }
+    Some(field.ball.position)
+}
+
+/// How a save he did not hold left him, read off the ball the tick after.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum LooseSave {
+    /// Pushed wide on a fixed line: twice as much across him as out.
+    Parried,
+    Spilled,
+}
+
+/// A low shot at the middle of the away goal, saved but not held: how each
+/// one left him and where it came to rest from where he met it, in metres.
+fn rests_of_saves_not_held(n: usize) -> Vec<(LooseSave, Vector3<f32>)> {
+    (0..n)
+        .filter_map(|_| {
+            let (mut field, mut context) = kickoff();
+            let keeper_id = set_up_shot_at_the_right_goal(
+                &mut field,
+                Vector3::new(820.0, 272.0, 0.0),
+                Vector3::new(817.0, 272.0, 0.5),
+                Vector3::new(2.2, 0.0, 0.0),
+                Vector3::new(700.0, 272.0, 0.0),
+            );
+            in_state(GoalkeeperState::PreparingForSave)(
+                field
+                    .players
+                    .iter_mut()
+                    .find(|p| p.id == keeper_id)
+                    .expect("the keeper"),
+            );
+            let players = field.players.clone();
+            let mut events = EventCollection::with_capacity(8);
+            field.ball.try_save_shot(&context, &players, &mut events);
+            if field.ball.pending_save_credit.is_none() || field.ball.current_owner.is_some() {
+                return None;
+            }
+            let v = field.ball.velocity;
+            let kind = if (v.y.abs() - 2.0 * v.x.abs()).abs() <= 1e-5 * v.y.abs() {
+                LooseSave::Parried
+            } else {
+                LooseSave::Spilled
+            };
+            let contact = field.ball.position;
+            rest_point(&mut field, &mut context).map(|rest| (kind, (rest - contact) * 0.125))
+        })
+        .collect()
+}
+
+/// **A spill drops in the box in front of him, and a parry kept in play
+/// goes wide of him.** The spec's two bands, checked where each ball
+/// actually came to rest.
+#[test]
+fn a_save_he_does_not_hold_comes_to_rest_where_its_outcome_says() {
+    let rests = rests_of_saves_not_held(400);
+    let spills: Vec<_> = rests
+        .iter()
+        .filter(|(k, _)| *k == LooseSave::Spilled)
+        .collect();
+    let parries: Vec<_> = rests
+        .iter()
+        .filter(|(k, _)| *k == LooseSave::Parried)
+        .collect();
+    assert!(
+        !spills.is_empty(),
+        "no spill in {} saves not held",
+        rests.len()
+    );
+    assert!(
+        !parries.is_empty(),
+        "no parry kept in play in {} saves not held",
+        rests.len()
+    );
+    for (_, d) in &spills {
+        let metres = d.x.hypot(d.y);
+        assert!(
+            (1.5..=6.0).contains(&metres),
+            "a spill came to rest {metres:.1} m away: {d:?}"
+        );
+        assert!(d.x < 0.0, "a spill went back toward his own goal: {d:?}");
+    }
+    for (_, d) in &parries {
+        let metres = d.x.hypot(d.y);
+        assert!(
+            (5.0..=15.0).contains(&metres),
+            "a parry came to rest {metres:.1} m away: {d:?}"
+        );
+        assert!(
+            d.y.abs() > 2.0 * d.x.abs() - 0.5,
+            "a parry kept in play was not wide: {d:?}"
+        );
+    }
+}
+
+/// **A save he does not hold is his touch.** The own-goal rule reads the
+/// last touch, so a parry or a spill that ricochets in off nobody else has
+/// to be on him.
+#[test]
+fn a_save_he_does_not_hold_books_his_touch() {
+    let mut loose = 0;
+    for _ in 0..200 {
+        let (mut field, context) = kickoff();
+        let keeper_id = set_up_shot_at_the_right_goal(
+            &mut field,
+            Vector3::new(820.0, 272.0, 0.0),
+            Vector3::new(817.0, 272.0, 0.5),
+            Vector3::new(2.2, 0.0, 0.0),
+            Vector3::new(700.0, 272.0, 0.0),
+        );
+        in_state(GoalkeeperState::PreparingForSave)(
+            field
+                .players
+                .iter_mut()
+                .find(|p| p.id == keeper_id)
+                .expect("the keeper"),
+        );
+        let players = field.players.clone();
+        let mut events = EventCollection::with_capacity(8);
+        field.ball.try_save_shot(&context, &players, &mut events);
+        if field.ball.pending_save_credit.is_none() || field.ball.current_owner.is_some() {
+            continue;
+        }
+        loose += 1;
+        assert_eq!(field.ball.last_touch_player_id, Some(keeper_id));
+    }
+    assert!(loose > 0, "no save in 200 was left loose");
 }

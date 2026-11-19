@@ -52,18 +52,19 @@
 //! camera is pointed at.
 
 use crate::PlayerFieldPositionGroup;
-use crate::r#match::engine::ball::ball::Ball;
+#[cfg(feature = "match-logs")]
+use crate::r#match::PlayerSide;
 use crate::r#match::engine::ball::ball::boundary::frame::GoalFrame;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::knock_diag::KnockSource;
-use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
+use crate::r#match::engine::ball::ball::{Ball, BallRoll};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext as EffSkillCtx, effective_skill,
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
-use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart, PlayerSide};
+use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart};
 use nalgebra::Vector3;
 
 /// Where the ball met the man, and which way it has to leave.
@@ -153,6 +154,9 @@ impl KeeperBody {
     /// lying to the man watching.
     const HIP_STANDING: f32 = Self::BELOW_HIP + Self::TRUNK_RADIUS;
     const HIP_LYING: f32 = 0.19;
+    /// The highest a man lying on the turf can get a glove to, in metres:
+    /// what a keeper on the floor reaches, for a save as for a gather.
+    pub const HANDS_LYING: f32 = 0.6;
 
     /// AI ticks a body takes to go from upright to flat out.
     ///
@@ -179,6 +183,9 @@ impl KeeperBody {
     /// the box, which is the picture everybody recognises and the one that
     /// leaves the rebound where the six-yard scramble can happen.
     const RESTITUTION: f32 = 0.30;
+    /// Where a ball coming back off him is sent to rest, in units: 4.5 m,
+    /// inside the 5 m it must stop in by the bounces the solve leaves out.
+    const REBOUND_REST: f32 = 36.0;
 
     /// Speed retained ACROSS the contact normal. A shirt is not slick, and
     /// a ball skidding off a hip loses most of its sideways travel.
@@ -230,13 +237,15 @@ impl KeeperBody {
     /// viewer latches its own `dive` from (`Actors::track_flight` reads the
     /// recorded height for the same statement). `Jumping` is deliberately
     /// NOT here: a keeper going straight up at a corner stays upright, and
-    /// only his hips move.
+    /// only his hips move. A keeper down injured, or still on the floor
+    /// after a dive, is flat out where he lies.
     fn topple(player: &MatchPlayer) -> f32 {
         match player.state {
             PlayerState::Goalkeeper(GoalkeeperState::Diving) => {
                 ((player.in_state_time as f32 + Self::TOPPLE_AT_TAKEOFF) / Self::TOPPLE_TICKS)
                     .clamp(0.0, 1.0)
             }
+            PlayerState::Goalkeeper(GoalkeeperState::GettingUp) | PlayerState::Injured => 1.0,
             _ => 0.0,
         }
     }
@@ -489,6 +498,19 @@ impl KeeperBody {
             + a.z * b.z
     }
 
+    /// The rebound off him, held to the pace that leaves it at rest within
+    /// `REBOUND_REST` of him from `height` up. Restitution alone sent a shot
+    /// struck square at him tens of metres back up the pitch
+    /// (`BallRoll::range`).
+    fn rested(back: Vector3<f32>, height: f32) -> Vector3<f32> {
+        let cap = BallRoll::speed_to_rest_at_from(Self::REBOUND_REST, height, back.z);
+        let flat = back.x.hypot(back.y);
+        if flat <= cap {
+            return back;
+        }
+        Vector3::new(back.x * cap / flat, back.y * cap / flat, back.z)
+    }
+
     /// Put the ball on the surface and turn its velocity, with `cushion`
     /// the share of the ordinary rebound this keeper's hands leave on it.
     fn rebound(ball: &mut Ball, hit: &BodyHit, cushion: f32) {
@@ -500,8 +522,11 @@ impl KeeperBody {
         if approach < 0.0 {
             let normal_part = hit.normal * approach;
             let tangent = ball.velocity - normal_part;
-            ball.velocity =
-                tangent * Self::TANGENTIAL - normal_part * (Self::RESTITUTION * cushion);
+            // What comes back off him rests within 5 m of him; a glancing
+            // touch that carries on along him keeps its pace, as a deflection
+            // does.
+            ball.velocity = tangent * Self::TANGENTIAL
+                + Self::rested(-normal_part * (Self::RESTITUTION * cushion), hit.position.z);
         }
         // Spin: see the note where `SPIN_RETAINED` would have been.
         // The rest of the tick still has to be travelled — same reasoning
@@ -654,19 +679,6 @@ impl Ball {
         let keeper_id = keeper.id;
         let keeper_team = keeper.team_id;
         let keeper_side = keeper.side;
-        // Had he thrown himself at it, or was he simply hit? The two look
-        // completely different and `apply_pending_save_credit` chooses
-        // between them off `pending_save_reach` — above its dive bar he
-        // stays down and gets up, below it he stands there having blocked
-        // one. Reported as full stretch for a man already off his feet so
-        // that site does not stand a diving keeper up mid-dive, and as none
-        // at all for one who was set: a body block is never a stretch.
-        // `is_launched`, NOT `is_airborne`: a keeper on his split-step is a
-        // few centimetres off the turf and has thrown himself at nothing.
-        let already_diving = matches!(
-            keeper.state,
-            PlayerState::Goalkeeper(GoalkeeperState::Diving)
-        ) || keeper.is_launched();
 
         // Was this a shot he was in the way of? Only then is it a SAVE — a
         // cross clipping his hip is a deflection and nothing more, and
@@ -674,15 +686,8 @@ impl Ball {
         // documents on the other side.
         let saved_a_shot = self
             .cached_shot_target
-            .filter(|t| Some(t.defending_side) == keeper_side)
-            .is_some_and(|t| {
-                let goal = match t.defending_side {
-                    PlayerSide::Left => context.goal_positions.left,
-                    PlayerSide::Right => context.goal_positions.right,
-                };
-                let (frame_y, frame_z) = self.projected_crossing(goal.x);
-                (frame_y - goal.y).abs() <= GOAL_WIDTH && frame_z <= GOAL_HEIGHT
-            });
+            .is_some_and(|t| Some(t.defending_side) == keeper_side)
+            && self.shot_on_frame(&context.goal_positions);
 
         // How much pace he takes off it. See `KeeperBody::HANDS_CUSHION`.
         let minute = sc::minute_from_ms(context.total_match_time);
@@ -746,7 +751,7 @@ impl Ball {
         self.claim_cooldown = 0;
         if saved_a_shot && let Some(shooter_id) = self.previous_owner {
             self.pending_save_credit = Some((keeper_id, shooter_id));
-            self.pending_save_reach = if already_diving { 1.0 } else { 0.0 };
+            self.pending_save_on_frame = true;
             #[cfg(feature = "match-logs")]
             crate::save_accounting_stats::PENDING_STAGED
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);

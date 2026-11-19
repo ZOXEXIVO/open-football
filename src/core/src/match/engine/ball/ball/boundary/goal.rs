@@ -1,12 +1,22 @@
-//! Out-of-play resolution: actual goals, over-the-bar goal kicks,
-//! and wide-of-goal corner / goal kick decisions. The wide-of-goal
-//! flow stages the set-piece teleport via `pending_set_piece_teleport`
-//! since the ball can't move other players' positions itself.
+//! Out-of-play resolution: goals, over-the-bar goal kicks, and wide-of-goal
+//! corner / goal kick decisions. The wide-of-goal flow stages the
+//! set-piece teleport via `pending_set_piece_teleport`, since the ball
+//! cannot move other players itself.
+//!
+//! A goal is credited by the last touch, as football credits it. Off the
+//! side that concedes, it is an own goal, unless that touch met an
+//! untouched shot already on frame, which stays the shooter's. Off the
+//! other side it is a goal when a shot is behind it, under the
+//! indirect-free-kick rule.
 
 use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::block_diag::PassBlockCensus;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::delivery_diag::DeliveryCensus;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::knock_diag::KnockEnd;
 use crate::r#match::engine::ball::ball::runoff::ExitAxis;
 use crate::r#match::engine::ball::ball::{AwaitedRestart, Ball, CornerWalk, RestartQuiet, RunOff};
 use crate::r#match::engine::corner_shape::{CornerShape, CornerShapeHold};
@@ -21,6 +31,16 @@ use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
 use crate::mid_run_diag::{EndlineCensus, RestartCensus};
 use nalgebra::Vector3;
 use std::cmp::Ordering;
+
+/// What a ball across the goal line inside the frame is.
+enum GoalCredit {
+    Scored { scorer: u32, own_goal: bool },
+    /// Not a goal: no shot behind it (`no_shot`), an indirect free kick
+    /// nobody else touched, or a scorer no longer on the pitch.
+    Refused { no_shot: bool },
+    /// Nobody has ever touched it.
+    Uncredited,
+}
 
 impl Ball {
     /// Aerial match-up for a delivery into the box, as a 0..1 score where
@@ -97,169 +117,87 @@ impl Ball {
         }
 
         if let Some(goal_side) = context.goal_positions.is_goal(self.position) {
-            // Prefer current_owner (e.g. player carrying ball into goal)
-            // Fall back to previous_owner (e.g. shooter or passer whose ball went in)
-            if let Some(goalscorer) = self.current_owner.or(self.previous_owner) {
-                let Some(player) = context.players.by_id(goalscorer) else {
-                    return;
-                };
-                let is_auto_goal = match player.side {
-                    Some(PlayerSide::Left) => goal_side == GoalSide::Home,
-                    Some(PlayerSide::Right) => goal_side == GoalSide::Away,
-                    _ => false,
-                };
-
-                // Require a recent shot or a live shot-target. Without
-                // this, passes that happen to roll across the goal line
-                // (receiver missed, ball trajectory drifted) credit the
-                // passer with a goal — which was producing 10-15 "goals"
-                // per match per team that never involved a Shoot event.
-                // Real football treats those as out-of-bounds → goal
-                // kick, not a goal. Exception: auto-goal path skips this
-                // check, because an own goal happens via touch, not a
-                // shot by the credited player.
-                if !is_auto_goal {
-                    let current_tick = context.current_tick();
-                    let recent_shot = context
-                        .players
-                        .by_id(goalscorer)
-                        .map(|p| {
-                            p.memory.shots_taken > 0
-                                && current_tick.saturating_sub(p.memory.last_shot_tick) < 300
-                        })
-                        .unwrap_or(false);
-                    let shot_in_flight = self.cached_shot_target.is_some();
-                    // Whether the BALL was struck as a shot recently, no
-                    // matter who has touched it since. The two tests above
-                    // both ask about the player being credited, and that
-                    // is the wrong subject once anyone else intervenes: a
-                    // keeper who gets a hand to a shot becomes the ball's
-                    // `previous_owner`, has taken no shot himself, and
-                    // clears `cached_shot_target` on the way — so a
-                    // parried or deflected effort crossing the line failed
-                    // both and was waved away. Measured at 2604 refused
-                    // goals per 300 matches, 34% of every shot taken.
-                    // 400 ticks (~4 s) comfortably covers a strike, a
-                    // deflection and the ball rolling over the line.
-                    let ball_came_from_a_shot = self.last_shot_struck_tick > 0
-                        && current_tick.saturating_sub(self.last_shot_struck_tick) < 400;
-                    if !recent_shot && !shot_in_flight && !ball_came_from_a_shot {
-                        #[cfg(feature = "match-logs")]
+            let conceding = match goal_side {
+                GoalSide::Home => PlayerSide::Left,
+                GoalSide::Away => PlayerSide::Right,
+            };
+            let credit = if MatchContext::cross_own_goal_off() {
+                self.credit_by_possession(goal_side, context)
+            } else {
+                self.credit_by_the_last_touch(conceding, context)
+            };
+            match credit {
+                GoalCredit::Refused { no_shot } => {
+                    #[cfg(feature = "match-logs")]
+                    if no_shot {
                         crate::r#match::engine::ball::ball::ownership::reception_diag::GOAL_REJECTED
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        #[cfg(feature = "match-logs")]
+                        self.note_goal_line_crossing(conceding, DeliveryCensus::REFUSED, context);
                         crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(
                             "check_goal: crossed the line, REFUSED (no shot behind it)",
                         );
-                        // Not a shot — treat as ball out of play, not a goal.
-                        return;
                     }
-
-                    // Indirect free-kick rule: the kick itself can't
-                    // produce a goal. If the ball came from an
-                    // IndirectFreeKick origin and only the taker has
-                    // touched it since (no second player), the goal
-                    // must not stand. We approximate "no second touch"
-                    // by checking that the taker is the SOLE recent
-                    // passer. If anyone else is in `recent_passers`,
-                    // somebody has taken a touch and a goal is legal.
-                    if self.pass_origin_restart == PassOriginRestart::IndirectFreeKick {
-                        let any_second_touch = self
-                            .recent_passers
-                            .iter()
-                            .any(|e| e.player_id != goalscorer);
-                        if !any_second_touch {
-                            // Reject: ball stays live, but no goal.
-                            return;
-                        }
-                    }
+                    #[cfg(not(feature = "match-logs"))]
+                    let _ = no_shot;
+                    // Not a goal — the ball stays out of play's business.
+                    return;
                 }
-
-                // Deflection fix: if this would be an own goal but the player only just
-                // touched the ball (deflection/failed save), credit the goal to the
-                // previous owner (the attacker who actually shot) instead.
-                // A genuine own goal requires the defender to have had meaningful possession.
-                let (final_scorer, final_is_auto_goal) =
-                    if is_auto_goal && self.ownership_duration < 30 {
-                        // Check if previous_owner is from the opposing team (the attacker)
-                        let attacker = if self.current_owner == Some(goalscorer) {
-                            self.previous_owner
+                GoalCredit::Uncredited => {}
+                GoalCredit::Scored { scorer, own_goal } => {
+                    #[cfg(feature = "match-logs")]
+                    self.note_goal_line_crossing(
+                        conceding,
+                        if own_goal {
+                            DeliveryCensus::OWN_GOAL
                         } else {
-                            // goalscorer came from previous_owner, check recent_passers
-                            self.recent_passers
-                                .iter()
-                                .rev()
-                                .find(|e| e.player_id != goalscorer)
-                                .map(|e| e.player_id)
-                        };
+                            DeliveryCensus::CREDITED_TO_ATTACKER
+                        },
+                        context,
+                    );
 
-                        if let Some(attacker_id) = attacker {
-                            if let Some(attacker_player) = context.players.by_id(attacker_id) {
-                                // Verify attacker is from the other team
-                                let attacker_would_score = match attacker_player.side {
-                                    Some(PlayerSide::Left) => goal_side != GoalSide::Home,
-                                    Some(PlayerSide::Right) => goal_side != GoalSide::Away,
-                                    _ => false,
-                                };
-                                if attacker_would_score {
-                                    // Credit the attacker — this was a deflection, not a real own goal
-                                    (attacker_id, false)
-                                } else {
-                                    (goalscorer, true)
-                                }
-                            } else {
-                                (goalscorer, true)
-                            }
-                        } else {
-                            (goalscorer, true)
-                        }
+                    // Find the assist provider. `assist_for_goal` enforces the
+                    // teammate / same-possession / recency rules — see its doc
+                    // comment. An own goal never carries an assist.
+                    let assist_player_id = if !own_goal {
+                        context.players.by_id(scorer).and_then(|player| {
+                            self.assist_for_goal(scorer, player.team_id, context.current_tick())
+                        })
                     } else {
-                        (goalscorer, is_auto_goal)
+                        None
                     };
 
-                // Find the assist provider. `assist_for_goal` enforces the
-                // teammate / same-possession / recency rules — see its doc
-                // comment. An own goal never carries an assist.
-                let assist_player_id = if !final_is_auto_goal {
-                    context.players.by_id(final_scorer).and_then(|scorer| {
-                        self.assist_for_goal(final_scorer, scorer.team_id, context.current_tick())
-                    })
-                } else {
-                    None
-                };
+                    result.add_ball_event(BallEvent::Goal(BallGoalEventMetadata {
+                        side: goal_side,
+                        goalscorer_player_id: scorer,
+                        assist_player_id,
+                        auto_goal: own_goal,
+                    }));
 
-                let goal_event_metadata = BallGoalEventMetadata {
-                    side: goal_side,
-                    goalscorer_player_id: final_scorer,
-                    assist_player_id,
-                    auto_goal: final_is_auto_goal,
-                };
+                    // …and against the distance mix, which counts the shots
+                    // but cannot say which of them went in. Read off the
+                    // BALL's own strike distance so a goal that arrives via a
+                    // parry or a deflection still lands in the band it was
+                    // hit from. See `GOALS_BY_DIST`.
+                    #[cfg(feature = "match-logs")]
+                    if !own_goal && self.last_shot_struck_dist > 0.0 {
+                        let band =
+                            crate::time_band_diag::band_for_distance(self.last_shot_struck_dist);
+                        crate::time_band_diag::GOALS_BY_DIST[band]
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
 
-                result.add_ball_event(BallEvent::Goal(goal_event_metadata));
-
-                // …and against the distance mix, which counts the shots
-                // but cannot say which of them went in. Read off the
-                // BALL's own strike distance so a goal that arrives via a
-                // parry or a deflection still lands in the band it was
-                // hit from. See `GOALS_BY_DIST`.
-                #[cfg(feature = "match-logs")]
-                if !final_is_auto_goal && self.last_shot_struck_dist > 0.0 {
-                    let band = crate::time_band_diag::band_for_distance(self.last_shot_struck_dist);
-                    crate::time_band_diag::GOALS_BY_DIST[band]
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    // Hand the ball to the netting rather than teleporting it to
+                    // the centre spot. It keeps the pace it crossed the line
+                    // with, stretches the mesh, and settles in the goal — see
+                    // `net.rs` for why the ball used to appear to stop dead on
+                    // the line. The restart puts it back on the centre spot
+                    // once the celebration is over.
+                    #[cfg(feature = "match-logs")]
+                    crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(format!(
+                        "check_goal: GOAL ({goal_side:?}) credited to {scorer} -> enter_net"
+                    ));
+                    self.enter_net(goal_side, scorer, own_goal);
                 }
-
-                // Hand the ball to the netting rather than teleporting it to
-                // the centre spot. It keeps the pace it crossed the line
-                // with, stretches the mesh, and settles in the goal — see
-                // `net.rs` for why the ball used to appear to stop dead on
-                // the line. The restart puts it back on the centre spot
-                // once the celebration is over.
-                #[cfg(feature = "match-logs")]
-                crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(format!(
-                    "check_goal: GOAL ({goal_side:?}) credited to {final_scorer} -> enter_net"
-                ));
-                self.enter_net(goal_side, final_scorer, final_is_auto_goal);
             }
 
             // Determine which side should kick off (the conceding team)
@@ -271,6 +209,11 @@ impl Ball {
             };
 
             self.goal_scored = true;
+            // The celebration drives the ball from here and `update` is not
+            // called again until the kick-off, so a chain left open would
+            // close then, a minute later, as the kicker's clearance.
+            #[cfg(feature = "match-logs")]
+            self.close_keeper_knock(KnockEnd::OutOfPlay);
             #[cfg(feature = "match-logs")]
             if let Some(buckets) = self.shot_timing.take() {
                 crate::r#match::engine::ball::ball::arrival_diag::ShotTiming::note_goal(buckets);
@@ -283,6 +226,124 @@ impl Ball {
                 self.reset();
             }
         }
+    }
+
+    /// **Whose goal it is, by the football rule.** The last man to touch
+    /// the ball decides it. Off the side whose goal it went into, it is an
+    /// own goal against him, unless his touch met a shot by the other side
+    /// that was already heading on frame — that goal is the shooter's. Off
+    /// the other side, it is a goal only with a shot behind it.
+    fn credit_by_the_last_touch(&self, conceding: PlayerSide, context: &MatchContext) -> GoalCredit {
+        let Some(toucher_id) = self.last_touch_player_id.or(self.previous_owner) else {
+            return GoalCredit::Uncredited;
+        };
+        let Some(toucher) = context.players.by_id(toucher_id) else {
+            return GoalCredit::Refused { no_shot: false };
+        };
+        if toucher.side == Some(conceding) {
+            return match self.shot_met {
+                Some(met) if met.on_frame => GoalCredit::Scored {
+                    scorer: met.shooter,
+                    own_goal: false,
+                },
+                _ => GoalCredit::Scored {
+                    scorer: toucher_id,
+                    own_goal: true,
+                },
+            };
+        }
+        if !self.has_a_shot_behind_it(toucher_id, context) {
+            return GoalCredit::Refused { no_shot: true };
+        }
+        if self.indirect_free_kick_untouched(toucher_id) {
+            return GoalCredit::Refused { no_shot: false };
+        }
+        GoalCredit::Scored {
+            scorer: toucher_id,
+            own_goal: false,
+        }
+    }
+
+    /// The crediting before the football rule, kept as the
+    /// `OF_CROSS_OWN_GOAL=off` arm: the ball's owner, or the last one, is
+    /// the scorer, and a defending "owner" of under 0.3 s hands the goal to
+    /// the most recent opposing passer.
+    fn credit_by_possession(&self, goal_side: GoalSide, context: &MatchContext) -> GoalCredit {
+        let Some(goalscorer) = self.current_owner.or(self.previous_owner) else {
+            return GoalCredit::Uncredited;
+        };
+        let Some(player) = context.players.by_id(goalscorer) else {
+            return GoalCredit::Refused { no_shot: false };
+        };
+        let is_auto_goal = match player.side {
+            Some(PlayerSide::Left) => goal_side == GoalSide::Home,
+            Some(PlayerSide::Right) => goal_side == GoalSide::Away,
+            _ => false,
+        };
+        if !is_auto_goal {
+            if !self.has_a_shot_behind_it(goalscorer, context) {
+                return GoalCredit::Refused { no_shot: true };
+            }
+            if self.indirect_free_kick_untouched(goalscorer) {
+                return GoalCredit::Refused { no_shot: false };
+            }
+        }
+        if !(is_auto_goal && self.ownership_duration < 30) {
+            return GoalCredit::Scored {
+                scorer: goalscorer,
+                own_goal: is_auto_goal,
+            };
+        }
+        let attacker = if self.current_owner == Some(goalscorer) {
+            self.previous_owner
+        } else {
+            self.recent_passers
+                .iter()
+                .rev()
+                .find(|e| e.player_id != goalscorer)
+                .map(|e| e.player_id)
+        };
+        let attacker_would_score = attacker
+            .and_then(|id| context.players.by_id(id))
+            .is_some_and(|a| match a.side {
+                Some(PlayerSide::Left) => goal_side != GoalSide::Home,
+                Some(PlayerSide::Right) => goal_side != GoalSide::Away,
+                _ => false,
+            });
+        match attacker {
+            Some(attacker_id) if attacker_would_score => GoalCredit::Scored {
+                scorer: attacker_id,
+                own_goal: false,
+            },
+            _ => GoalCredit::Scored {
+                scorer: goalscorer,
+                own_goal: true,
+            },
+        }
+    }
+
+    /// Was this ball a shot, by the man credited or by anybody since?
+    ///
+    /// A pass that rolls across the goal line is out of play, not a goal.
+    /// The test is the scorer's own recent shot, a shot in flight, or the
+    /// ball having been struck as a shot in the last 4 s, whoever has
+    /// touched it since: a keeper who gets a hand to a shot has taken no
+    /// shot himself, and clears `cached_shot_target` on the way.
+    fn has_a_shot_behind_it(&self, scorer: u32, context: &MatchContext) -> bool {
+        let current_tick = context.current_tick();
+        let recent_shot = context.players.by_id(scorer).is_some_and(|p| {
+            p.memory.shots_taken > 0 && current_tick.saturating_sub(p.memory.last_shot_tick) < 300
+        });
+        let ball_came_from_a_shot = self.last_shot_struck_tick > 0
+            && current_tick.saturating_sub(self.last_shot_struck_tick) < 400;
+        recent_shot || self.cached_shot_target.is_some() || ball_came_from_a_shot
+    }
+
+    /// An indirect free kick cannot score off the kick itself: with the
+    /// taker the only recent passer, nobody else has touched it.
+    fn indirect_free_kick_untouched(&self, scorer: u32) -> bool {
+        self.pass_origin_restart == PassOriginRestart::IndirectFreeKick
+            && !self.recent_passers.iter().any(|e| e.player_id != scorer)
     }
 
     /// Where the defending side restarts from after the ball goes out
@@ -410,6 +471,8 @@ impl Ball {
             .find(|p| p.id == gk_id)
             .map(|p| (p.position - spot).magnitude())
             .unwrap_or(0.0);
+        #[cfg(feature = "match-logs")]
+        self.note_goal_kick_end();
         #[cfg(feature = "match-logs")]
         RestartCensus::note_goal_kick(walk);
 
@@ -619,6 +682,8 @@ impl Ball {
         if let Some(taker) = taker {
             let taker_id = taker.id;
             let taker_team = taker.team_id;
+            #[cfg(feature = "match-logs")]
+            self.note_corner_source(players);
             #[cfg(feature = "match-logs")]
             crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(format!(
                 "award_corner: CORNER, ball ({:.1}, {:.1}, {:.2}) dies there; taker {taker_id} fetches it and carries it to ({corner_x:.1}, {corner_y:.1})",
@@ -942,7 +1007,9 @@ impl Ball {
 
         // Find the goalkeeper on the defending side
         if let Some(gk) = players.iter().find(|p| {
-            p.side == Some(defending_side) && p.tactical_position.current_position.is_goalkeeper()
+            p.side == Some(defending_side)
+                && !p.off_pitch
+                && p.tactical_position.current_position.is_goalkeeper()
         }) {
             // The goal kick is taken from the point on the goal line the
             // ball went over — `goal_kick_spot` insets it by a stride — and
@@ -1161,7 +1228,9 @@ impl Ball {
 
         // Goal kick: give ball to defending goalkeeper
         if let Some(gk) = players.iter().find(|p| {
-            p.side == Some(defending_side) && p.tactical_position.current_position.is_goalkeeper()
+            p.side == Some(defending_side)
+                && !p.off_pitch
+                && p.tactical_position.current_position.is_goalkeeper()
         }) {
             let gk_id = gk.id;
 

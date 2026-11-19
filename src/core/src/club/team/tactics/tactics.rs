@@ -14,7 +14,6 @@ pub struct Tactics {
 pub enum TacticSelectionReason {
     CoachPreference,
     TeamComposition,
-    OpponentCounter,
     GameSituation,
     Default,
 }
@@ -80,6 +79,20 @@ impl Tactics {
             .iter()
             .filter(|pos| pos.is_forward())
             .count()
+    }
+
+    /// How many men the shape commits forward, 0..1: forwards (an
+    /// attacking midfielder counting half) against defenders, 0.5 for a
+    /// back four and two up front.
+    pub fn commitment(&self) -> f32 {
+        let attacking_midfielders = self
+            .positions()
+            .iter()
+            .filter(|p| p.is_attacking_midfielder())
+            .count() as f32;
+        let forwards = self.forward_count() as f32 + 0.5 * attacking_midfielders;
+        (0.5 + 0.12 * (forwards - 2.0) - 0.12 * (self.defender_count() as f32 - 4.0))
+            .clamp(0.0, 1.0)
     }
 
     pub fn formation_description(&self) -> String {
@@ -542,6 +555,39 @@ pub enum MatchTacticType {
     T4222,
 }
 
+/// How familiar a side is with each formation, 0–1, earned from its record
+/// (`MatchHistory::formation_familiarity`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FormationFamiliarity([f32; FormationFamiliarity::SHAPES]);
+
+impl FormationFamiliarity {
+    const SHAPES: usize = 14;
+
+    /// A side that knows `shape` and nothing else.
+    pub fn settled(shape: MatchTacticType) -> Self {
+        let mut table = [0.0; Self::SHAPES];
+        table[shape as usize] = 1.0;
+        FormationFamiliarity(table)
+    }
+
+    pub fn of(&self, shape: MatchTacticType) -> f32 {
+        self.0[shape as usize]
+    }
+
+    /// From a record of `record` matches, of which `starts` are each a
+    /// shape started in and how much that start is worth, 0–1.
+    pub(crate) fn from_starts(
+        starts: impl Iterator<Item = (MatchTacticType, f32)>,
+        record: usize,
+    ) -> Self {
+        let mut table = [0.0f32; Self::SHAPES];
+        for (shape, weight) in starts {
+            table[shape as usize] += weight;
+        }
+        FormationFamiliarity(table.map(|w| w / record as f32))
+    }
+}
+
 impl MatchTacticType {
     pub fn all() -> Vec<MatchTacticType> {
         vec![
@@ -893,164 +939,6 @@ impl TacticsSelector {
         )
     }
 
-    /// Select counter tactic against specific opponent formation.
-    ///
-    /// Every `MatchTacticType` has a real arm so countering 4-4-2 doesn't
-    /// loop back to 4-4-2 (which previously locked every league at 4-4-2
-    /// once both sides persisted T442). Tiebreaks: pick a counter whose
-    /// player demands the current squad can actually meet — if not, fall
-    /// back to the second choice.
-    pub fn select_counter_tactic(
-        opponent_tactic: &MatchTacticType,
-        our_players: &[&Player],
-    ) -> Tactics {
-        let candidates: &[MatchTacticType] = match opponent_tactic {
-            // Open 4-4-2: hit the central third where they only have two CMs.
-            MatchTacticType::T442 => &[
-                MatchTacticType::T4231,
-                MatchTacticType::T433,
-                MatchTacticType::T352,
-            ],
-            // Three-band attacking — control midfield to choke supply.
-            MatchTacticType::T433 | MatchTacticType::T343 => &[
-                MatchTacticType::T451,
-                MatchTacticType::T4141,
-                MatchTacticType::T4231,
-            ],
-            // Defensive shells — break them open with width and a free 10.
-            MatchTacticType::T451 | MatchTacticType::T4141 => &[
-                MatchTacticType::T433,
-                MatchTacticType::T4231,
-                MatchTacticType::T343,
-            ],
-            // Possession / number-10 sides — disrupt the build with a
-            // pressing diamond or a holding double-pivot.
-            MatchTacticType::T4231 | MatchTacticType::T4312 => &[
-                MatchTacticType::T442Diamond,
-                MatchTacticType::T4141,
-                MatchTacticType::T352,
-            ],
-            // Wing-play 3-5-2: clog the half-spaces with a narrow shape.
-            MatchTacticType::T352 => &[
-                MatchTacticType::T442Narrow,
-                MatchTacticType::T4231,
-                MatchTacticType::T4312,
-            ],
-            // Diamond / wide diamond mirror.
-            MatchTacticType::T442Diamond => &[
-                MatchTacticType::T4231,
-                MatchTacticType::T433,
-                MatchTacticType::T352,
-            ],
-            MatchTacticType::T442DiamondWide => &[
-                MatchTacticType::T442Narrow,
-                MatchTacticType::T4312,
-                MatchTacticType::T4231,
-            ],
-            MatchTacticType::T442Narrow => &[
-                MatchTacticType::T442DiamondWide,
-                MatchTacticType::T352,
-                MatchTacticType::T433,
-            ],
-            // 4-4-1-1 second-striker block — match with a busy midfield
-            // band.
-            MatchTacticType::T4411 => &[
-                MatchTacticType::T4231,
-                MatchTacticType::T4141,
-                MatchTacticType::T442Diamond,
-            ],
-            // Brazilian magic-square — break with width and pace.
-            MatchTacticType::T4222 => &[
-                MatchTacticType::T433,
-                MatchTacticType::T352,
-                MatchTacticType::T442DiamondWide,
-            ],
-            // Sweeper-led pyramid — fast direct ball over the back-five.
-            MatchTacticType::T1333 => &[
-                MatchTacticType::T433,
-                MatchTacticType::T4231,
-                MatchTacticType::T343,
-            ],
-        };
-
-        // Pick the highest-fit candidate the squad actually has the
-        // bodies for. Iteration order encodes the coach's *priority* —
-        // ties break to the first listed candidate, not the last (the
-        // default `max_by` behaviour). Reactive penalty (0.9)
-        // preserved.
-        let mut best: Option<(MatchTacticType, f32)> = None;
-        for &t in candidates {
-            let tac = Tactics::new(t);
-            let fit = tac.calculate_formation_fitness(our_players);
-            best = Some(match best {
-                None => (t, fit),
-                Some((cur_t, cur_s)) => {
-                    if fit > cur_s + f32::EPSILON {
-                        (t, fit)
-                    } else {
-                        (cur_t, cur_s)
-                    }
-                }
-            });
-        }
-        let (counter_tactic, fit) = best.unwrap_or((candidates[0], 0.5));
-        Tactics::with_reason(
-            counter_tactic,
-            TacticSelectionReason::OpponentCounter,
-            fit * 0.9,
-        )
-    }
-
-    /// Select tactics based on game situation
-    pub fn select_situational_tactic(
-        current_tactic: &MatchTacticType,
-        is_home: bool,
-        score_difference: i8,
-        minutes_played: u8,
-        players: &[&Player],
-    ) -> Option<Tactics> {
-        let tactic_type =
-            Self::situational_shape(*current_tactic, is_home, score_difference, minutes_played)?;
-        let tactic = Tactics::new(tactic_type);
-        let strength = tactic.calculate_formation_fitness(players) * 0.8; // Penalty for mid-game change
-        Some(Tactics::with_reason(
-            tactic_type,
-            TacticSelectionReason::GameSituation,
-            strength,
-        ))
-    }
-
-    /// Shape-only variant — returns just the tactical shape change
-    /// without computing formation fitness. Used by the match engine,
-    /// which only has `MatchPlayer` (not full `Player`) access at the
-    /// hot tick path; the engine can apply the shape change to its
-    /// per-side `Tactics` field without paying the fitness cost.
-    /// Returns `None` when no situational override is warranted or
-    /// when the new shape matches the current one.
-    pub fn situational_shape(
-        current_tactic: MatchTacticType,
-        _is_home: bool,
-        score_difference: i8,
-        minutes_played: u8,
-    ) -> Option<MatchTacticType> {
-        let new_tactic = match (score_difference, minutes_played) {
-            // Desperately need goals
-            (diff, min) if diff < -1 && min > 75 => Some(MatchTacticType::T343),
-            (diff, min) if diff < 0 && min > 70 => Some(MatchTacticType::T433),
-
-            // Protecting a lead
-            (diff, min) if diff > 1 && min > 80 => Some(MatchTacticType::T451),
-            (diff, min) if diff > 0 && min > 75 => Some(MatchTacticType::T4141),
-
-            // First half adjustments — chasing at home
-            (diff, min) if diff < -1 && min < 30 && _is_home => Some(MatchTacticType::T4231),
-
-            _ => None,
-        };
-
-        new_tactic.filter(|t| *t != current_tactic)
-    }
-
     fn coach_confidence_multiplier(coach: &Staff) -> f32 {
         let base_confidence = match coach.behaviour.state {
             PersonBehaviourState::Poor => 0.7,
@@ -1276,33 +1164,6 @@ mod tests {
     }
 
     #[test]
-    fn test_counter_tactic_selection() {
-        let players = [create_test_player(1, PlayerPositionType::Goalkeeper, 150)];
-        let player_refs: Vec<&Player> = players.iter().collect();
-
-        // The counter to a 4-3-3 is now picked from a priority-ordered
-        // candidate set ([T451, T4141, T4231]); ties resolve to the
-        // first listed candidate. The selection_reason invariant is
-        // what matters externally — anti-T442 distribution test
-        // covers the no-self-loop guarantee.
-        let counter = TacticsSelector::select_counter_tactic(&MatchTacticType::T433, &player_refs);
-        assert_eq!(counter.tactic_type, MatchTacticType::T451);
-        assert_eq!(
-            counter.selected_reason,
-            TacticSelectionReason::OpponentCounter
-        );
-
-        // T442 must NOT counter to T442 (the bug that locked every
-        // league at 4-4-2 once both sides persisted T442).
-        let v_t442 = TacticsSelector::select_counter_tactic(&MatchTacticType::T442, &player_refs);
-        assert_ne!(v_t442.tactic_type, MatchTacticType::T442);
-        assert_eq!(
-            v_t442.selected_reason,
-            TacticSelectionReason::OpponentCounter
-        );
-    }
-
-    #[test]
     fn every_match_tactic_has_a_position_layout() {
         // Without this guarantee `Tactics::positions` silently falls back
         // to T442 — the original bug we set out to fix in Phase 7.
@@ -1327,51 +1188,6 @@ mod tests {
                 tactic
             );
         }
-    }
-
-    #[test]
-    fn situational_tactic_returns_attacking_when_chasing_late() {
-        let players: Vec<Player> = (1..=11)
-            .map(|i| create_test_player(i, PlayerPositionType::ForwardCenter, 150))
-            .collect();
-        let player_refs: Vec<&Player> = players.iter().collect();
-        let new_tactic = TacticsSelector::select_situational_tactic(
-            &MatchTacticType::T442,
-            true, // is_home
-            -2,   // 2-goal deficit
-            80,   // late game
-            &player_refs,
-        );
-        assert!(new_tactic.is_some());
-        let chosen = new_tactic.unwrap();
-        assert!(
-            chosen.is_attacking(),
-            "expected attacking shape, got {:?}",
-            chosen.tactic_type
-        );
-        assert_eq!(chosen.selected_reason, TacticSelectionReason::GameSituation);
-    }
-
-    #[test]
-    fn situational_tactic_returns_defensive_when_protecting_lead() {
-        let players: Vec<Player> = (1..=11)
-            .map(|i| create_test_player(i, PlayerPositionType::DefenderCenter, 150))
-            .collect();
-        let player_refs: Vec<&Player> = players.iter().collect();
-        let new_tactic = TacticsSelector::select_situational_tactic(
-            &MatchTacticType::T442,
-            true, // is_home
-            2,    // 2-goal lead
-            85,   // late game
-            &player_refs,
-        );
-        assert!(new_tactic.is_some());
-        let chosen = new_tactic.unwrap();
-        assert!(
-            chosen.is_defensive() || chosen.tactic_type == MatchTacticType::T451,
-            "expected defensive shape, got {:?}",
-            chosen.tactic_type
-        );
     }
 
     /// Build a uniform set of `n` players at a single position. Useful
@@ -1557,64 +1373,5 @@ mod tests {
             "balanced squad picked unexpected tactic: {:?}",
             result.tactic_type,
         );
-    }
-
-    #[test]
-    fn counter_tactic_never_returns_t442_for_t442() {
-        // The whole point of the diversified counter matrix: T442 must
-        // not loop back to T442 (the bug that locked every league at
-        // 4-4-2 once both sides persisted T442 after their first
-        // simulation tick).
-        let players: Vec<Player> = (1..=11)
-            .map(|i| create_test_player(i, PlayerPositionType::MidfielderCenter, 150))
-            .collect();
-        let player_refs: Vec<&Player> = players.iter().collect();
-        let v = TacticsSelector::select_counter_tactic(&MatchTacticType::T442, &player_refs);
-        assert_ne!(
-            v.tactic_type,
-            MatchTacticType::T442,
-            "T442 must not be a self-counter — broke league shape diversity",
-        );
-    }
-
-    #[test]
-    fn counter_tactic_covers_every_match_tactic() {
-        // Property: every formation has a real counter (no `_ => T442`
-        // default). Combined with the no-self-loop guarantee above, this
-        // means the counter matrix can't collapse to T442 from any
-        // starting point.
-        let players: Vec<Player> = (1..=11)
-            .map(|i| create_test_player(i, PlayerPositionType::MidfielderCenter, 150))
-            .collect();
-        let player_refs: Vec<&Player> = players.iter().collect();
-        for opp in MatchTacticType::all() {
-            let counter = TacticsSelector::select_counter_tactic(&opp, &player_refs);
-            assert_ne!(
-                counter.tactic_type, opp,
-                "{:?} must not counter to itself",
-                opp
-            );
-            assert_eq!(
-                counter.selected_reason,
-                TacticSelectionReason::OpponentCounter
-            );
-        }
-    }
-
-    #[test]
-    fn situational_tactic_returns_none_when_no_change_warranted() {
-        let players: Vec<Player> = (1..=11)
-            .map(|i| create_test_player(i, PlayerPositionType::MidfielderCenter, 150))
-            .collect();
-        let player_refs: Vec<&Player> = players.iter().collect();
-        // Drawing in the first half, no dramatic situation.
-        let new_tactic = TacticsSelector::select_situational_tactic(
-            &MatchTacticType::T442,
-            true,
-            0,
-            40,
-            &player_refs,
-        );
-        assert!(new_tactic.is_none());
     }
 }

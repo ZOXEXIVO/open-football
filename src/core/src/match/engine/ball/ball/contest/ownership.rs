@@ -15,7 +15,10 @@ use crate::r#match::engine::ball::ball::{
 use crate::r#match::engine::psychology::lapse::lapse_diag;
 use crate::r#match::engine::psychology::{ActionLapse, LapseFamily, PsychState};
 use crate::r#match::events::EventCollection;
-use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::common_states::{
+    BlockChallenge, ChallengeKind, ChallengeMoment, TackleDecision, TackleOutcome,
+};
+use crate::r#match::player::events::{FoulCommitted, FoulSource, PlayerEvent};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart};
 use nalgebra::Vector3;
@@ -24,6 +27,10 @@ use std::sync::OnceLock;
 
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::strike_diag::{GrantPath, StrikeCensus};
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::{
+    DefenderCensus, HeaderBooking, HeaderRule, TakeRule,
+};
 
 /// Where the ball actually is when a pass is booked as received, and
 /// how often the delivery is then thrown away.
@@ -1423,6 +1430,9 @@ impl Ball {
 
             let mut claiming_player_id: Option<u32> = None;
             let mut all_players_missing = true;
+            // The bar every other claim path keeps: a man on this list may
+            // be the one who has just thrown or played the ball.
+            let blocked_recollect = self.blocked_recollect_player();
 
             for notified_player_id in &self.take_ball_notified_players {
                 if let Some(player) = players.iter().find(|p| p.id == *notified_player_id) {
@@ -1435,6 +1445,7 @@ impl Ball {
 
                     // Simple distance check - if close enough and ball is slow, claim it
                     if distance_3d < CLAIM_DISTANCE
+                        && blocked_recollect != Some(*notified_player_id)
                         && player.can_play_ball()
                         && self.current_owner.is_none()
                         && can_claim_by_speed
@@ -2056,8 +2067,39 @@ impl Ball {
         // wall-clock minute that the engine's tactical refresh uses.
         let minute = sc::minute_from_ticks(self.current_tick_cached);
 
+        // A carried ball is taken only by a challenge: the man in contact
+        // decides whether to go in, as `TackleDecision` prices it, and the
+        // challenge is decided once on the block tackle's odds — never by an
+        // opponent being close enough. `OF_TAKEOVER_DUEL=off` restores the
+        // comparison below.
+        let duel_winner = if MatchContext::takeover_duel_off() {
+            None
+        } else if let Some(owner) = self
+            .current_owner
+            .and_then(|id| players.iter().find(|p| p.id == id))
+        {
+            let challenger = Self::carried_ball_challenger(owner, nearby_slice, players, minute)
+                .filter(|c| {
+                    let moment = ChallengeMoment::between(c, owner, players, context);
+                    context
+                        .rng
+                        .bernoulli(TackleDecision::commits_this_engine_tick(&moment))
+                });
+            match challenger.filter(|c| Self::challenge_decides(c, owner, context, events)) {
+                Some(winner) => Some(winner),
+                None => {
+                    self.ownership_duration += 1;
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+
         // Determine the best tackler from nearby players (no Vec allocation)
-        let best_tackler = if nearby_count == 1 {
+        let best_tackler = if duel_winner.is_some() {
+            duel_winner
+        } else if nearby_count == 1 {
             players.iter().find(|p| p.id == nearby_ids[0])
         } else {
             let mut best: Option<&MatchPlayer> = None;
@@ -2081,7 +2123,8 @@ impl Ball {
 
             if is_ownership_change {
                 // Prevent rapid ownership changes by requiring significant advantage
-                if self.ownership_duration < min_ownership_duration
+                if duel_winner.is_none()
+                    && self.ownership_duration < min_ownership_duration
                     && let Some(current_owner_id) = self.current_owner
                 {
                     // Check if current owner is among nearby players
@@ -2118,6 +2161,13 @@ impl Ball {
                 }
 
                 // Ownership change approved - reset duration and set cooldown
+                #[cfg(feature = "match-logs")]
+                if self.current_owner.is_some() {
+                    context
+                        .defender_census
+                        .borrow_mut()
+                        .tag_take(TakeRule::ScanTakeover, player.id, self.current_tick_cached);
+                }
                 self.previous_owner = self.current_owner;
                 self.current_owner = Some(player.id);
                 if let Some(loser) = self.previous_owner
@@ -2125,7 +2175,10 @@ impl Ball {
                         .iter()
                         .any(|p| p.id == loser && p.team_id != player.team_id)
                 {
-                    events.add_player_event(PlayerEvent::Dispossessed(loser));
+                    events.add_player_event(PlayerEvent::Dispossessed(loser, player.id));
+                }
+                if duel_winner.is_some() {
+                    events.add_player_event(PlayerEvent::ChallengeSpent(player.id, None));
                 }
                 #[cfg(feature = "match-logs")]
                 {
@@ -2167,6 +2220,15 @@ impl Ball {
                 if leap > 0.0 {
                     events.add_player_event(PlayerEvent::Leap(player.id, leap));
                 }
+                #[cfg(feature = "match-logs")]
+                if self.position.z > AerialReach::VOLLEY {
+                    DefenderCensus::note_header(
+                        HeaderRule::OwnershipClaim,
+                        player,
+                        leap > 0.0,
+                        HeaderBooking::Possession,
+                    );
+                }
 
                 events.add_ball_event(BallEvent::Claimed(player.id));
             } else {
@@ -2196,6 +2258,65 @@ impl Ball {
     /// Output stays in roughly the same scale as the legacy raw-skill
     /// formula (≈0..20) so the `TAKEOVER_ADVANTAGE_THRESHOLD` ratio
     /// continues to behave as before.
+    /// The opponent at the carrier's feet whose decision it is whether to
+    /// challenge him: the best tackler near the ball who may go in, in
+    /// contact, and not already in a state that makes the decision itself.
+    /// `None` when there is nobody.
+    fn carried_ball_challenger<'p>(
+        owner: &MatchPlayer,
+        nearby: &[u32],
+        players: &'p [MatchPlayer],
+        minute: u32,
+    ) -> Option<&'p MatchPlayer> {
+        nearby
+            .iter()
+            .filter_map(|id| players.iter().find(|p| p.id == *id))
+            .filter(|p| {
+                p.team_id != owner.team_id
+                    && p.can_attempt_tackle()
+                    && p.contact_ticks > 0
+                    && !p.state.is_challenging()
+            })
+            .max_by(|a, b| {
+                Self::calculate_tackling_score(a, minute)
+                    .total_cmp(&Self::calculate_tackling_score(b, minute))
+            })
+    }
+
+    /// His challenge, decided once on the block tackle's odds. Won, the ball
+    /// is his; a foul is whistled and a miss puts him down, and either way
+    /// the carrier keeps it.
+    fn challenge_decides(
+        challenger: &MatchPlayer,
+        owner: &MatchPlayer,
+        context: &MatchContext,
+        events: &mut EventCollection,
+    ) -> bool {
+        let outcome = BlockChallenge::between(challenger, owner, context)
+            .resolve(&context.rng, context.psychology.get(challenger.id));
+        match outcome {
+            TackleOutcome::Won => true,
+            TackleOutcome::Foul(severity) => {
+                events.add_player_event(PlayerEvent::CommitFoul(FoulCommitted {
+                    fouler: challenger.id,
+                    fouled: owner.id,
+                    severity,
+                    source: FoulSource::Tackle,
+                    challenge: Some(ChallengeKind::Block),
+                }));
+                events.add_player_event(PlayerEvent::ChallengeSpent(challenger.id, None));
+                false
+            }
+            TackleOutcome::Missed => {
+                events.add_player_event(PlayerEvent::ChallengeSpent(
+                    challenger.id,
+                    Some(ChallengeKind::Block),
+                ));
+                false
+            }
+        }
+    }
+
     fn calculate_tackling_score(player: &MatchPlayer, minute: u32) -> f32 {
         let timing = sc::tackle_timing(player, minute);
         let claim = sc::loose_ball_claim(player, minute);

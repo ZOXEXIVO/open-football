@@ -150,6 +150,15 @@ impl GoalFrame {
         ]
     }
 
+    /// **On frame**: a ball crossing the line `across` units from the
+    /// middle of the goal and `height` metres up is wholly inside the posts
+    /// and under the bar. The one test for a shot on target and a save; a
+    /// ball any nearer an inner face meets the woodwork first.
+    pub fn holds(across: f32, height: f32) -> bool {
+        across.abs() <= GOAL_WIDTH - Self::BALL_RADIUS * Self::U_PER_M
+            && height <= GOAL_HEIGHT - Self::BALL_RADIUS
+    }
+
     /// Distance from the goal centre to a post's AXIS, in game units.
     fn post_offset(&self) -> f32 {
         GOAL_WIDTH + Self::POST_RADIUS * Self::U_PER_M

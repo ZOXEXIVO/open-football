@@ -1,150 +1,30 @@
+use crate::r#match::common_states::ShapeTempo;
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
-use crate::r#match::player::PlayerSide;
-use crate::r#match::player::strategies::common::states::TackleEngagement;
-use crate::r#match::player::strategies::common::team::WideChannel;
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, DefenderRead, DefensiveSlot,
+};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
 use nalgebra::Vector3;
 
-const PRESSING_DISTANCE_THRESHOLD: f32 = 20.0;
-const STAMINA_THRESHOLD: f32 = 30.0;
-const FIELD_THIRD_THRESHOLD: f32 = 0.33;
-const MAX_PUSH_UP_DISTANCE: f32 = 0.7;
-const PUSH_UP_HYSTERESIS: f32 = 0.05; // Hysteresis to prevent rapid state changes
-
+/// **Squeezing up behind the ball in possession.** Each defender on his own
+/// slot, which moves up with the block; the deepest man moves up with the
+/// rest. Winning the ball is the read's first door and losing it its last.
 #[derive(Default, Clone)]
 pub struct DefenderPushingUpState {}
 
 impl StateProcessingHandler for DefenderPushingUpState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Attacking corner: centre-backs attack the delivery rather than
-        // the generic push-up (which would retreat at the box edge).
-        if !ctx.player.has_ball(ctx)
-            && ctx
-                .player
-                .tactical_position
-                .current_position
-                .is_central_defender()
-            && ctx.ball().is_team_attacking_corner()
-        {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::AttackingCorner,
-            ));
-        }
-
-        // The plan has named him for the run beyond the width holder,
-        // which is a specific job with a specific target — and it is
-        // sprinted, not pushed up at the `Moderate` speed cap this state
-        // declares. See `overlapping`.
-        if WideChannel::still_mine(ctx) && ctx.team().is_overlap_runner() {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Overlapping,
-            ));
-        }
-
-        // Retreat when the ball is genuinely DEEP, not merely on our own
-        // half.
-        //
-        // `should_overlap` commits a full-back during `Progression` as
-        // well as `Attack` — and Progression is the MIDDLE THIRD, where
-        // the ball is routinely still a few metres our side of halfway.
-        // So he committed to the run and this branch sent him straight
-        // back on the same tick: measured, **633 overlap commitments a
-        // match and `Defender: Pushing Up` still below 0.25% of ticks**.
-        // He was flickering, not overlapping — the third instance of this
-        // exact entry/give-up disagreement found today, after the keeper's
-        // sweep and the shot gates.
-        //
-        // An overlapping full-back runs BEYOND the ball; the ball being
-        // behind him is the normal condition of the run, not a reason to
-        // abandon it. Losing possession is, and that is the branch below.
-        let side = ctx.player.side.unwrap_or(PlayerSide::Left);
-        let field_width = ctx.context.field_size.width as f32;
-        let ball_progress =
-            side.attacking_progress_x(ctx.tick_context.positions.ball.position.x, field_width);
-        if ball_progress < 1.0 / 3.0 {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::TrackingBack,
-            ));
-        }
-
-        if !ctx.team().is_control_ball() {
-            // Only a man ON the ball can be challenged, and whether he can
-            // be is not conditional on some other opponent happening to be
-            // inside the press scan below.
-            if let Some(carrier) = ctx.players().opponents().with_ball().next()
-                && TackleEngagement::should_commit(ctx, carrier.distance(ctx))
-            {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Tackling,
-                ));
-            }
-
-            // Scan out to press range — the tackle branch re-checks its
-            // own tighter radius. (The old scan used the 2u tackle radius,
-            // so the 20u press branch below could never see a candidate.)
-            if let Some(opponent) = ctx
-                .players()
-                .opponents()
-                .nearby(PRESSING_DISTANCE_THRESHOLD)
-                .next()
-            {
-                let distance_to_opponent = ctx.tick_context.grid.get(opponent.id, ctx.player.id);
-
-                // Condition gate matches the sibling states (0-100 match
-                // fitness, not the static 0-20 stamina skill, which made
-                // this branch unreachable).
-                if distance_to_opponent <= PRESSING_DISTANCE_THRESHOLD
-                    && ctx.player.player_attributes.condition_percentage() as f32
-                        > STAMINA_THRESHOLD
-                {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Pressing,
-                    ));
-                }
-            }
-
-            // Instead of immediately switching to Covering, introduce a transition state
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Covering,
-            ));
-        }
-
-        if self.should_retreat(ctx) {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::TrackingBack,
-            ));
-        }
-
-        None
+        DefenderRead::hold(ctx, DefenderState::PushingUp)
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // OVERLAPPING RUN: If wide defender with teammate on ball on same flank,
-        // sprint ahead of ball carrier along touchline
-        if self.is_overlap_run(ctx) {
-            let target = self.calculate_overlap_target(ctx);
-            let acceleration = ctx.player.skills.physical.acceleration / 20.0;
-            return Some(
-                SteeringBehavior::Pursuit {
-                    target,
-                    target_velocity: Vector3::zeros(),
-                }
-                .calculate(ctx.player)
-                .velocity
-                    * (1.0 + acceleration * 0.3), // Sprint bonus
-            );
-        }
-
-        let optimal_position = self.calculate_optimal_pushing_up_position(ctx);
-
         Some(
             SteeringBehavior::Pursuit {
-                target: optimal_position,
-                target_velocity: Vector3::zeros(), // Static target position
+                target: DefensiveSlot::point(ctx),
+                target_velocity: Vector3::zeros(),
             }
             .calculate(ctx.player)
             .velocity,
@@ -153,143 +33,7 @@ impl StateProcessingHandler for DefenderPushingUpState {
 
     fn process_conditions(&self, ctx: ConditionContext) {
         // Pushing up involves moving forward with the team - moderate intensity
-        DefenderCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
-    }
-}
-
-impl DefenderPushingUpState {
-    /// Check if this push-up is an overlapping run (wide defender, ball on same flank)
-    fn is_overlap_run(&self, ctx: &StateProcessingContext) -> bool {
-        let field_height = ctx.context.field_size.height as f32;
-        let start_y = ctx.player.start_position.y;
-        let is_wide = start_y < field_height * 0.25 || start_y > field_height * 0.75;
-        if !is_wide {
-            return false;
-        }
-
-        // Team must have ball on same flank
-        if !ctx.team().is_control_ball() {
-            return false;
-        }
-        let ball_pos = ctx.tick_context.positions.ball.position;
-        let player_on_left = start_y < field_height * 0.5;
-        let ball_on_left = ball_pos.y < field_height * 0.5;
-
-        player_on_left == ball_on_left
-    }
-
-    /// Calculate overlap target: ahead of ball carrier, wide on touchline
-    fn calculate_overlap_target(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let field_height = ctx.context.field_size.height as f32;
-        let field_width = ctx.context.field_size.width as f32;
-        let ball_pos = ctx.tick_context.positions.ball.position;
-        let is_left = ctx.player.side == Some(PlayerSide::Left);
-
-        // Target is ahead of ball position, on the touchline
-        let wing_y = if ctx.player.start_position.y < field_height * 0.5 {
-            field_height * 0.08 // Left touchline
-        } else {
-            field_height * 0.92 // Right touchline
-        };
-
-        // Push ahead of ball carrier toward opponent goal
-        let ahead_x = if is_left {
-            (ball_pos.x + 60.0).clamp(0.0, field_width * 0.75)
-        } else {
-            (ball_pos.x - 60.0).clamp(field_width * 0.25, field_width)
-        };
-
-        Vector3::new(ahead_x, wing_y, 0.0)
-    }
-
-    fn should_retreat(&self, ctx: &StateProcessingContext) -> bool {
-        let field_width = ctx.context.field_size.width as f32;
-        let is_left = ctx.player.side == Some(PlayerSide::Left);
-
-        if is_left {
-            // Left team pushes right: retreat if past max push-up line
-            let max_push_up_x = field_width * (MAX_PUSH_UP_DISTANCE + PUSH_UP_HYSTERESIS);
-            ctx.player.position.x > max_push_up_x || self.is_last_defender(ctx)
-        } else {
-            // Right team pushes left: retreat if past max push-up line (from right side)
-            let min_push_up_x = field_width * (1.0 - MAX_PUSH_UP_DISTANCE - PUSH_UP_HYSTERESIS);
-            ctx.player.position.x < min_push_up_x || self.is_last_defender(ctx)
-        }
-    }
-
-    fn is_last_defender(&self, ctx: &StateProcessingContext) -> bool {
-        let is_left = ctx.player.side == Some(PlayerSide::Left);
-
-        if is_left {
-            // Left team: last defender is the one furthest back (smallest x)
-            ctx.players()
-                .teammates()
-                .defenders()
-                .all(|d| d.position.x >= ctx.player.position.x)
-        } else {
-            // Right team: last defender is the one furthest back (largest x)
-            ctx.players()
-                .teammates()
-                .defenders()
-                .all(|d| d.position.x <= ctx.player.position.x)
-        }
-    }
-
-    fn calculate_optimal_pushing_up_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let ball_position = ctx.tick_context.positions.ball.position;
-        let player_position = ctx.player.position;
-        let field_width = ctx.context.field_size.width as f32;
-        let field_height = ctx.context.field_size.height as f32;
-        let is_left = ctx.player.side == Some(PlayerSide::Left);
-
-        let (attacking_third_x, mid_x, clamp_min, clamp_max) = if is_left {
-            (
-                field_width * (1.0 - FIELD_THIRD_THRESHOLD / 2.0),
-                field_width * 0.5,
-                field_width * 0.5,
-                field_width * MAX_PUSH_UP_DISTANCE,
-            )
-        } else {
-            (
-                field_width * (FIELD_THIRD_THRESHOLD / 2.0),
-                field_width * 0.5,
-                field_width * (1.0 - MAX_PUSH_UP_DISTANCE),
-                field_width * 0.5,
-            )
-        };
-
-        let attacking_third_center = Vector3::new(attacking_third_x, field_height * 0.5, 0.0);
-
-        let (sum_pos, count) = ctx
-            .players()
-            .teammates()
-            .all()
-            .filter(|p| {
-                if is_left {
-                    p.position.x > mid_x
-                } else {
-                    p.position.x < mid_x
-                }
-            })
-            .fold((Vector3::zeros(), 0u32), |(acc, c), p| {
-                (acc + p.position, c + 1)
-            });
-
-        let avg_attacking_position = if count > 0 {
-            sum_pos / count as f32
-        } else {
-            attacking_third_center
-        };
-
-        let support_position = (ball_position + avg_attacking_position) * 0.5;
-
-        let optimal_position =
-            support_position * 0.5 + attacking_third_center * 0.3 + player_position * 0.2;
-
-        Vector3::new(
-            optimal_position.x.clamp(clamp_min, clamp_max),
-            optimal_position.y.clamp(0.0, field_height),
-            0.0,
-        )
+        DefenderCondition::new(ShapeTempo::declared(&ctx, ActivityIntensity::Moderate))
+            .process(ctx);
     }
 }

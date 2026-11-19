@@ -12,9 +12,9 @@
 use crate::PlayerPositionType;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::engine::*;
-use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::forwarders::states::ForwardFamily;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::MidfielderFamily;
 use crate::r#match::player::state::PlayerState;
 use nalgebra::Vector3;
 
@@ -83,7 +83,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut ys = [0.0f32; 8];
         let mut n = 0usize;
         for p in field.players.iter() {
-            if p.team_id == attacking_team || n == xs.len() {
+            // A man sent off stays in `players`, parked at (-500, -500).
+            if p.team_id == attacking_team || p.off_pitch || n == xs.len() {
                 continue;
             }
             let pos = p.tactical_position.current_position;
@@ -117,6 +118,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 p.state,
                 PlayerState::Defender(
                     DefenderState::Pressing
+                        | DefenderState::Jockeying
                         | DefenderState::Tackling
                         | DefenderState::TakeBall
                         | DefenderState::Intercepting
@@ -223,34 +225,36 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     // Only bucket 4 — and most of 3 — is a duty nobody
                     // is acting on.
                     let bucket = match d.state {
-                        PlayerState::Defender(DefenderState::Marking)
-                        | PlayerState::Midfielder(MidfielderState::Guarding) => 0,
+                        PlayerState::Midfielder(s) => match s.family() {
+                            MidfielderFamily::Mark => 0,
+                            MidfielderFamily::Duel
+                            | MidfielderFamily::Chase
+                            | MidfielderFamily::Intercept
+                            | MidfielderFamily::Aerial
+                            | MidfielderFamily::Play => 1,
+                            MidfielderFamily::Close => 2,
+                            MidfielderFamily::Carry | MidfielderFamily::Recover => 3,
+                            MidfielderFamily::Start
+                            | MidfielderFamily::Shape
+                            | MidfielderFamily::Support => 4,
+                        },
+                        PlayerState::Defender(DefenderState::Marking) => 0,
                         PlayerState::Defender(
-                            DefenderState::Tackling
+                            DefenderState::Jockeying
+                            | DefenderState::Tackling
                             | DefenderState::Intercepting
                             | DefenderState::TakeBall
                             | DefenderState::Clearing
                             | DefenderState::Heading
                             | DefenderState::Passing,
-                        )
-                        | PlayerState::Midfielder(
-                            MidfielderState::Tackling
-                            | MidfielderState::Intercepting
-                            | MidfielderState::TakeBall
-                            | MidfielderState::Heading
-                            | MidfielderState::Passing,
                         ) => 1,
                         PlayerState::Defender(
                             DefenderState::Pressing | DefenderState::Covering,
-                        )
-                        | PlayerState::Midfielder(MidfielderState::Pressing) => 2,
+                        ) => 2,
                         PlayerState::Defender(
                             DefenderState::Running
                             | DefenderState::Returning
                             | DefenderState::TrackingBack,
-                        )
-                        | PlayerState::Midfielder(
-                            MidfielderState::Running | MidfielderState::Returning,
                         ) => 3,
                         _ => 4,
                     };
@@ -360,9 +364,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
             let challenging = matches!(
                 d.state,
-                PlayerState::Defender(DefenderState::Tackling)
-                    | PlayerState::Midfielder(MidfielderState::Tackling)
-                    | PlayerState::Forward(ForwardState::Tackling)
+                PlayerState::Defender(DefenderState::Jockeying | DefenderState::Tackling)
+            ) || matches!(
+                d.state,
+                PlayerState::Midfielder(s) if s.family() == MidfielderFamily::Duel
+            ) || matches!(
+                d.state,
+                PlayerState::Forward(s) if s.family() == ForwardFamily::Duel
             );
             if challenging {
                 // An attempt is only ever rolled inside `CONTACT`. Where the
@@ -458,18 +466,38 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     let deep = (carrier.position.x - own_goal_x).abs()
                         < context.field_size.width as f32 / 3.0;
                     let state = match d.state {
-                        PlayerState::Defender(DefenderState::Tackling)
-                        | PlayerState::Midfielder(MidfielderState::Tackling)
-                        | PlayerState::Forward(ForwardState::Tackling) => 0,
-                        PlayerState::Defender(DefenderState::Pressing)
-                        | PlayerState::Midfielder(MidfielderState::Pressing)
-                        | PlayerState::Forward(ForwardState::Pressing) => 1,
-                        PlayerState::Defender(DefenderState::Marking)
-                        | PlayerState::Midfielder(MidfielderState::Guarding) => 2,
+                        PlayerState::Midfielder(s) => match s.family() {
+                            MidfielderFamily::Duel => 0,
+                            MidfielderFamily::Close => 1,
+                            MidfielderFamily::Mark => 2,
+                            MidfielderFamily::Carry => 4,
+                            MidfielderFamily::Recover => 6,
+                            MidfielderFamily::Start
+                            | MidfielderFamily::Shape
+                            | MidfielderFamily::Support
+                            | MidfielderFamily::Chase
+                            | MidfielderFamily::Intercept
+                            | MidfielderFamily::Aerial
+                            | MidfielderFamily::Play => 7,
+                        },
+                        PlayerState::Forward(s) => match s.family() {
+                            ForwardFamily::Duel => 0,
+                            ForwardFamily::Close => 1,
+                            ForwardFamily::Carry => 4,
+                            ForwardFamily::Recover => 6,
+                            ForwardFamily::Start
+                            | ForwardFamily::Shape
+                            | ForwardFamily::Job
+                            | ForwardFamily::Chase
+                            | ForwardFamily::Intercept
+                            | ForwardFamily::Aerial
+                            | ForwardFamily::Play => 7,
+                        },
+                        PlayerState::Defender(DefenderState::Jockeying | DefenderState::Tackling) => 0,
+                        PlayerState::Defender(DefenderState::Pressing) => 1,
+                        PlayerState::Defender(DefenderState::Marking) => 2,
                         PlayerState::Defender(DefenderState::Covering) => 3,
-                        PlayerState::Defender(DefenderState::Running)
-                        | PlayerState::Midfielder(MidfielderState::Running)
-                        | PlayerState::Forward(ForwardState::Running) => 4,
+                        PlayerState::Defender(DefenderState::Running) => 4,
                         PlayerState::Defender(DefenderState::HoldingLine) => 5,
                         PlayerState::Defender(DefenderState::TrackingBack) => 6,
                         _ => 7,
@@ -516,8 +544,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         for p in field.players.iter() {
             let line = match p.state {
                 PlayerState::Defender(DefenderState::TakeBall) => 0,
-                PlayerState::Midfielder(MidfielderState::TakeBall) => 1,
-                PlayerState::Forward(ForwardState::TakeBall) => 2,
+                PlayerState::Midfielder(s) if s.family() == MidfielderFamily::Chase => 1,
+                PlayerState::Forward(s) if s.family() == ForwardFamily::Chase => 2,
                 PlayerState::Goalkeeper(GoalkeeperState::TakeBall) => 3,
                 _ => continue,
             };
@@ -643,7 +671,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             PlayerState::Defender(DefenderState::Intercepting)
             | PlayerState::Defender(DefenderState::Heading)
             | PlayerState::Defender(DefenderState::Clearing)
-            | PlayerState::Defender(DefenderState::Tackling) => 6,
+            | PlayerState::Defender(DefenderState::Jockeying | DefenderState::Tackling) => 6,
             _ => 7,
         };
         BoxBallDiag::note(
@@ -754,28 +782,46 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         };
 
         let state = match d.state {
-            PlayerState::Defender(DefenderState::Marking)
-            | PlayerState::Midfielder(MidfielderState::Guarding) => 0,
-            PlayerState::Defender(DefenderState::Standing)
-            | PlayerState::Midfielder(MidfielderState::Standing) => 1,
+            PlayerState::Midfielder(s) => match s.family() {
+                MidfielderFamily::Mark => 0,
+                MidfielderFamily::Start => 1,
+                MidfielderFamily::Shape => 2,
+                MidfielderFamily::Close => 4,
+                MidfielderFamily::Carry => 5,
+                MidfielderFamily::Duel
+                | MidfielderFamily::Chase
+                | MidfielderFamily::Intercept
+                | MidfielderFamily::Aerial => 6,
+                MidfielderFamily::Recover
+                | MidfielderFamily::Support
+                | MidfielderFamily::Play => 7,
+            },
+            PlayerState::Forward(s) => match s.family() {
+                ForwardFamily::Start => 1,
+                ForwardFamily::Shape => 2,
+                ForwardFamily::Close => 4,
+                ForwardFamily::Carry => 5,
+                ForwardFamily::Duel
+                | ForwardFamily::Chase
+                | ForwardFamily::Intercept
+                | ForwardFamily::Aerial => 6,
+                ForwardFamily::Recover
+                | ForwardFamily::Job
+                | ForwardFamily::Play => 7,
+            },
+            PlayerState::Defender(DefenderState::Marking) => 0,
+            PlayerState::Defender(DefenderState::Standing) => 1,
             PlayerState::Defender(DefenderState::HoldingLine) => 2,
             PlayerState::Defender(DefenderState::Covering) => 3,
-            PlayerState::Defender(DefenderState::Pressing)
-            | PlayerState::Midfielder(MidfielderState::Pressing) => 4,
-            PlayerState::Defender(DefenderState::Running)
-            | PlayerState::Midfielder(MidfielderState::Running) => 5,
+            PlayerState::Defender(DefenderState::Pressing) => 4,
+            PlayerState::Defender(DefenderState::Running) => 5,
             PlayerState::Defender(
                 DefenderState::Intercepting
+                | DefenderState::Jockeying
                 | DefenderState::Tackling
                 | DefenderState::Heading
                 | DefenderState::Clearing
                 | DefenderState::TakeBall,
-            )
-            | PlayerState::Midfielder(
-                MidfielderState::Intercepting
-                | MidfielderState::Tackling
-                | MidfielderState::Heading
-                | MidfielderState::TakeBall,
             ) => 6,
             _ => 7,
         };
@@ -902,12 +948,16 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         if episode.first_challenge == 0
             && field.players.iter().any(|p| {
                 p.team_id != episode.team
-                    && matches!(
+                    && (matches!(
                         p.state,
-                        PlayerState::Defender(DefenderState::Tackling)
-                            | PlayerState::Midfielder(MidfielderState::Tackling)
-                            | PlayerState::Forward(ForwardState::Tackling)
-                    )
+                        PlayerState::Defender(DefenderState::Jockeying | DefenderState::Tackling)
+                    ) || matches!(
+                        p.state,
+                        PlayerState::Midfielder(s) if s.family() == MidfielderFamily::Duel
+                    ) || matches!(
+                        p.state,
+                        PlayerState::Forward(s) if s.family() == ForwardFamily::Duel
+                    ))
             })
         {
             episode.first_challenge = tick;

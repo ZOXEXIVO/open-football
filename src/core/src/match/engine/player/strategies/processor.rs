@@ -1,5 +1,6 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::common_states::{ChallengeKind, CommonInjuredState, CommonRecoveringState};
+use crate::r#match::defenders::states::common::DefenderRead;
 use crate::r#match::defenders::states::{DefenderState, DefenderStrategies};
 use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::engine::environment::EnvModifiers;
@@ -9,8 +10,16 @@ use crate::r#match::goalkeepers::states::common::{
     KeeperAerialClaim, KeeperDelivery, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::{GoalkeeperState, GoalkeeperStrategies};
+use crate::r#match::forwarders::states::common::ForwardRead;
+use crate::r#match::midfielders::states::common::MidfielderRead;
 use crate::r#match::midfielders::states::{MidfielderState, MidfielderStrategies};
 use crate::r#match::player::memory::PlayerMemory;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::{DefenderCensus, DispatchRedirect};
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::forward_census::ForwardCensus;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::midfielder_census::MidfielderCensus;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::motion_diag::DoorCensus;
 use crate::r#match::player::state::PlayerState;
@@ -22,7 +31,9 @@ use crate::r#match::player::strategies::common::states::{
 };
 use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::team::{ShapeDiscipline, TeamOperationsImpl};
-use crate::r#match::{BallOperationsImpl, GameTickContext, MatchContext, MatchPlayer, PlayerSide};
+use crate::r#match::{
+    BallOperationsImpl, ClaimIntent, GameTickContext, MatchContext, MatchPlayer, PlayerSide,
+};
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::ShapeCensus;
 use log::debug;
@@ -111,6 +122,20 @@ pub mod chase_diag {
     }
 }
 
+/// Why the loose-ball election takes a chase off the man running it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TakeBallYield {
+    /// He released it and may not have it straight back.
+    RecollectBar,
+    /// It is his own side's pass to somebody else.
+    TeammatesPass,
+    /// A team-mate is meaningfully quicker to it.
+    Hysteresis,
+    /// A decided aerial contest has given it to a man on his side, who goes
+    /// up for it himself.
+    AerialAward,
+}
+
 impl PlayerFieldPositionGroup {
     pub fn process(
         &self,
@@ -140,22 +165,25 @@ impl PlayerFieldPositionGroup {
         // its own `in_state_time > 200` give-up guard on tick two and
         // flap straight back to `Standing`.
         #[cfg(feature = "match-logs")]
-        {
+        let (census_before, census_redirect) = {
             use std::sync::atomic::Ordering;
-            if Self::should_yield_takeball(*self, player, tick_context) {
+            let redirect = if let Some(why) = Self::takeball_yield(*self, player, tick_context) {
                 chase_diag::YIELD.fetch_add(1, Ordering::Relaxed);
+                DispatchRedirect::Yield(DefenderCensus::chase_yield(why, tick_context))
             } else if Self::should_force_takeball(*self, player, context, tick_context) {
                 chase_diag::FORCE.fetch_add(1, Ordering::Relaxed);
                 if tick_context.ball.is_in_flight_state > 0 {
                     chase_diag::FORCE_IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
                 }
-            }
-        }
+                DispatchRedirect::Force
+            } else {
+                DispatchRedirect::None
+            };
+            (player.state, redirect)
+        };
         let override_state_time = if Self::should_yield_takeball(*self, player, tick_context) {
-            player.redirect_to_fresh(
-                Self::yield_state_for(*self),
-                TransitionSource::LooseBallOverride,
-            );
+            let destination = Self::yield_state_for(*self, player, context, tick_context);
+            player.redirect_to_fresh(destination, TransitionSource::LooseBallOverride);
             0
         } else if Self::should_force_takeball(*self, player, context, tick_context) {
             player.redirect_to_fresh(
@@ -194,6 +222,34 @@ impl PlayerFieldPositionGroup {
         // position while he carries it, so anything that moves him moves
         // it. See `RestartCarry`.
         RestartCarry::apply(player, tick_context, &mut result);
+        #[cfg(feature = "match-logs")]
+        if *self != PlayerFieldPositionGroup::Goalkeeper {
+            let redirect = if census_redirect == DispatchRedirect::None
+                && census_before.compact_id() != player_state.compact_id()
+            {
+                DispatchRedirect::Dispossessed
+            } else {
+                census_redirect
+            };
+            let ctx = StateProcessingContext {
+                in_state_time: override_state_time,
+                player: &*player,
+                context,
+                tick_context,
+            };
+            match *self {
+                PlayerFieldPositionGroup::Defender => {
+                    DefenderCensus::note_dispatch(&ctx, census_before, redirect, &result)
+                }
+                PlayerFieldPositionGroup::Midfielder => {
+                    MidfielderCensus::note_dispatch(&ctx, census_before, redirect, &result)
+                }
+                PlayerFieldPositionGroup::Forward => {
+                    ForwardCensus::note_dispatch(&ctx, census_before, redirect, &result)
+                }
+                PlayerFieldPositionGroup::Goalkeeper => {}
+            }
+        }
         result
     }
 
@@ -235,21 +291,46 @@ impl PlayerFieldPositionGroup {
         }
     }
 
-    /// Default state to drop into when yielding TakeBall back to the pack.
-    /// Outfield players go to Running — their off-ball velocity reshapes
-    /// the defensive block with the new chaser designated. GK returns to
-    /// Attentive — back to reading the game.
-    #[inline]
-    fn yield_state_for(group: PlayerFieldPositionGroup) -> PlayerState {
+    /// Where a player handed out of `TakeBall` goes: an outfielder reads the
+    /// game as any player of his role without the ball does; a keeper goes
+    /// back to reading the game.
+    fn yield_state_for(
+        group: PlayerFieldPositionGroup,
+        player: &MatchPlayer,
+        context: &MatchContext,
+        tick_context: &GameTickContext,
+    ) -> PlayerState {
         match group {
             PlayerFieldPositionGroup::Goalkeeper => {
                 PlayerState::Goalkeeper(GoalkeeperState::Standing)
             }
-            PlayerFieldPositionGroup::Defender => PlayerState::Defender(DefenderState::Running),
-            PlayerFieldPositionGroup::Midfielder => {
-                PlayerState::Midfielder(MidfielderState::Running)
+            PlayerFieldPositionGroup::Defender => {
+                let ctx = StateProcessingContext {
+                    in_state_time: 0,
+                    player,
+                    context,
+                    tick_context,
+                };
+                PlayerState::Defender(DefenderRead::resolve(&ctx))
             }
-            PlayerFieldPositionGroup::Forward => PlayerState::Forward(ForwardState::Running),
+            PlayerFieldPositionGroup::Midfielder => {
+                let ctx = StateProcessingContext {
+                    in_state_time: 0,
+                    player,
+                    context,
+                    tick_context,
+                };
+                PlayerState::Midfielder(MidfielderRead::resolve(&ctx))
+            }
+            PlayerFieldPositionGroup::Forward => {
+                let ctx = StateProcessingContext {
+                    in_state_time: 0,
+                    player,
+                    context,
+                    tick_context,
+                };
+                PlayerState::Forward(ForwardRead::resolve(&ctx))
+            }
         }
     }
 
@@ -265,14 +346,33 @@ impl PlayerFieldPositionGroup {
         player.state.is_committed_action()
     }
 
+    /// A decided aerial contest is delivering the ball to a man on his side
+    /// who goes up for it himself.
+    fn spoken_for_by_his_side(player: &MatchPlayer, tick_context: &GameTickContext) -> bool {
+        tick_context
+            .ball
+            .aerial_award_for
+            .is_some_and(|id| tick_context.positions.players.side(id) == player.side)
+    }
+
     // `pub(crate)` so `goal_kick_tests` can put the question directly. The
     // election is a pure function of the frozen tick snapshot, and driving
     // it through a whole engine tick would test the dispatcher instead.
     pub(crate) fn should_yield_takeball(
-        _group: PlayerFieldPositionGroup,
+        group: PlayerFieldPositionGroup,
         player: &MatchPlayer,
         tick_context: &GameTickContext,
     ) -> bool {
+        Self::takeball_yield(group, player, tick_context).is_some()
+    }
+
+    /// Why a player in `TakeBall` gives the chase up, or `None` while it is
+    /// still his. See [`Self::should_yield_takeball`].
+    pub(crate) fn takeball_yield(
+        _group: PlayerFieldPositionGroup,
+        player: &MatchPlayer,
+        tick_context: &GameTickContext,
+    ) -> Option<TakeBallYield> {
         if !matches!(
             player.state,
             PlayerState::Goalkeeper(GoalkeeperState::TakeBall)
@@ -280,12 +380,12 @@ impl PlayerFieldPositionGroup {
                 | PlayerState::Midfielder(MidfielderState::TakeBall)
                 | PlayerState::Forward(ForwardState::TakeBall)
         ) {
-            return false;
+            return None;
         }
         // If the ball has been claimed, TakeBall's own `process` will
         // handle the transition to Running. Don't front-run it.
         if tick_context.ball.is_owned {
-            return false;
+            return None;
         }
         // **The taker of a dead ball is not in a race.** See
         // `BallMetadata::restart_taker`: the election below asks whether a
@@ -293,14 +393,17 @@ impl PlayerFieldPositionGroup {
         // the keeper was thrown out of `TakeBall` on the tick after every
         // nudge and never covered a metre.
         if RestartHold::taker(tick_context) == Some(player.id) {
-            return false;
+            return None;
         }
         // …and the mirror of the Law 15 bar in `should_force_takeball`:
         // a thrower who cannot claim his own throw yields the chase, or
         // he stands in `TakeBall` over a ball nothing will ever let him
         // have while the man who should be collecting it stands off.
         if tick_context.ball.recollect_blocked_player == Some(player.id) {
-            return true;
+            return Some(TakeBallYield::RecollectBar);
+        }
+        if Self::spoken_for_by_his_side(player, tick_context) {
+            return Some(TakeBallYield::AerialAward);
         }
         // Mirror of the receiving rule in `should_force_takeball`: the
         // intended receiver holds the chase however close a teammate
@@ -310,17 +413,17 @@ impl PlayerFieldPositionGroup {
             && let Some(target_id) = tick_context.ball.pass_target
         {
             if target_id == player.id {
-                return false;
+                return None;
             }
             if tick_context.positions.players.side(target_id) == player.side {
-                return true;
+                return Some(TakeBallYield::TeammatesPass);
             }
         }
         let Some(my_side) = player.side else {
-            return false;
+            return None;
         };
         let Some(my_cost) = tick_context.chase.cost_of(player.id) else {
-            return false;
+            return None;
         };
         // Hysteresis: only yield if a teammate is MEANINGFULLY quicker
         // to the ball. Otherwise tick-to-tick jitter in movement swaps
@@ -378,7 +481,7 @@ impl PlayerFieldPositionGroup {
             Self::yield_takeball_scan(player, tick_context, yield_threshold, my_side),
             "loose-ball yield chase-table mismatch"
         );
-        result
+        result.then_some(TakeBallYield::Hysteresis)
     }
 
     /// Reference implementation of the yield scan — the pre-table
@@ -411,7 +514,7 @@ impl PlayerFieldPositionGroup {
         tick_context: &GameTickContext,
     ) -> bool {
         // Mid-action — a keeper already committed to a dive, a header
-        // already launched, a defender already sliding. Real footballers
+        // already launched, a clearance being struck. Real footballers
         // cannot abandon these, and the observed transition graph carried
         // exactly those edges (`Goalkeeper: Diving -> Take Ball`,
         // `Forward: Heading -> Take Ball`) before this guard. The player
@@ -470,6 +573,13 @@ impl PlayerFieldPositionGroup {
         // throw, stands over the ball he may not take, and the delivery
         // dies there. See `BallMetadata::recollect_blocked_player`.
         if tick_context.ball.recollect_blocked_player == Some(player.id) {
+            return false;
+        }
+
+        // A high ball a decided contest is delivering to a man who goes up
+        // for it himself is his, as a pass in the air is its target's: he
+        // is not sent chasing it, and his team-mates stand off.
+        if Self::spoken_for_by_his_side(player, tick_context) {
             return false;
         }
 
@@ -707,11 +817,15 @@ impl<'p> StateProcessor<'p> {
         let half_ms = crate::r#match::engine::engine::MATCH_HALF_TIME_MS as f32;
         let full_ms = half_ms * 2.0;
         let match_progress = (self.context.total_match_time as f32 / full_ms).clamp(0.0, 1.0);
+        let side_on_ball = self.tick_context.possession.held_by(self.player.team_id);
+        let ball_dead = RestartHold::taker(self.tick_context).is_some();
         let condition_ctx = ConditionContext {
             in_state_time: self.in_state_time,
             player: self.player,
             conditions: &self.context.conditions,
             match_progress,
+            side_on_ball,
+            ball_dead,
         };
 
         // Process player conditions
@@ -746,9 +860,7 @@ impl<'p> StateProcessor<'p> {
             // each other. See `ShapeDiscipline`.
             let (shaped, pull) = ShapeDiscipline::apply_with_pull(&processing_ctx, velocity);
             result.shape_recall_pull = pull;
-            // Apply coach tempo multiplier to all player movement
-            let tempo = processing_ctx.team().coach_instruction().tempo_multiplier();
-            result.velocity = Some(shaped * tempo);
+            result.velocity = Some(shaped);
         }
 
         // Shape census — one sample per AI tick per player, at the single
@@ -1133,6 +1245,8 @@ pub struct ConditionContext<'sp> {
     /// second-half fatigue-curve: recovery slows and sprint cost rises
     /// as the match progresses, so late-game players genuinely fade.
     pub match_progress: f32,
+    pub side_on_ball: bool,
+    pub ball_dead: bool,
 }
 
 pub struct StateProcessingContext<'sp> {
@@ -1198,6 +1312,8 @@ pub struct StateProcessingResult {
     /// The side a goalkeeper has committed a dive to. See
     /// [`StateChangeResult::dive_aim`].
     pub dive_aim: Option<f32>,
+    /// See [`StateChangeResult::claim_intent`].
+    pub claim_intent: Option<ClaimIntent>,
     /// Tagged reason to attach to the next Shoot event fired by this
     /// player. Matches the pass-reason pattern. Written to
     /// `player.pending_shot_reason` by `state.rs` so the Shooting state
@@ -1230,6 +1346,8 @@ pub struct StateProcessingResult {
     pub effort_floor: f32,
     /// He went in and did not get it. See [`StateChangeResult::missed_challenge`].
     pub missed_challenge: Option<ChallengeKind>,
+    /// See [`StateChangeResult::staged_challenge`].
+    pub staged_challenge: Option<ChallengeKind>,
 }
 
 impl Default for StateProcessingResult {
@@ -1247,10 +1365,12 @@ impl StateProcessingResult {
             start_tackle_cooldown: false,
             start_keeper_cooldown: false,
             dive_aim: None,
+            claim_intent: None,
             shot_reason: None,
             shape_recall_pull: 0.0,
             effort_floor: 0.0,
             missed_challenge: None,
+            staged_challenge: None,
         }
     }
 
@@ -1279,8 +1399,10 @@ impl StateProcessingResult {
         self.start_tackle_cooldown = change.start_tackle_cooldown;
         self.start_keeper_cooldown = change.start_keeper_cooldown;
         self.dive_aim = change.dive_aim;
+        self.claim_intent = change.claim_intent;
         self.shot_reason = change.shot_reason;
         self.missed_challenge = change.missed_challenge;
+        self.staged_challenge = change.staged_challenge;
         if change.state.is_some() {
             self.state = change.state;
             self.events = change.events;
@@ -1321,6 +1443,9 @@ pub struct StateChangeResult {
     /// `PlayerMatchState::process` writes it onto `MatchPlayer::dive_aim`
     /// as he leaves his feet. See `KeeperPenaltyStance`.
     pub dive_aim: Option<f32>,
+    /// How a goalkeeper committing to a high ball means to play it, carried
+    /// onto `MatchPlayer::claim_intent` the same way.
+    pub claim_intent: Option<ClaimIntent>,
     /// Tag the NEXT Shoot event fired by this player with this reason.
     /// Set by transitions to the Shooting state so the resulting
     /// Shoot event carries the decision-path context. Mirrors how
@@ -1331,6 +1456,9 @@ pub struct StateChangeResult {
     /// reason as the cooldown, and `PlayerMatchState::process` hands it to
     /// `MatchPlayer::on_challenge_missed`.
     pub missed_challenge: Option<ChallengeKind>,
+    /// The challenge he is going into: staged on him for the challenging
+    /// state, which rolls it once, on entry, in the same tick.
+    pub staged_challenge: Option<ChallengeKind>,
 }
 
 impl Default for StateChangeResult {
@@ -1347,9 +1475,17 @@ impl StateChangeResult {
             start_tackle_cooldown: false,
             start_keeper_cooldown: false,
             dive_aim: None,
+            claim_intent: None,
             shot_reason: None,
             missed_challenge: None,
+            staged_challenge: None,
         }
+    }
+
+    /// The challenge he goes into: see [`Self::staged_challenge`].
+    pub fn with_staged_challenge(mut self, kind: ChallengeKind) -> Self {
+        self.staged_challenge = Some(kind);
+        self
     }
 
     /// He went in and missed. `MatchPlayer::on_challenge_missed` takes it from

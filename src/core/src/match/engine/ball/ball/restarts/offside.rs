@@ -112,6 +112,29 @@ impl OffsideLine {
         second
     }
 
+    /// The line a run is judged against: the second-last opponent, or the
+    /// halfway line when that is further forward, since nobody is offside
+    /// in his own half.
+    pub fn for_run(
+        xs: impl Iterator<Item = f32>,
+        attacking: PlayerSide,
+        halfway_x: f32,
+    ) -> Option<f32> {
+        Self::second_last(xs, attacking).map(|line| match attacking {
+            PlayerSide::Left => line.max(halfway_x),
+            PlayerSide::Right => line.min(halfway_x),
+        })
+    }
+
+    /// The furthest toward goal a run aimed at `x` can go and stay onside:
+    /// level with the line, or with the ball when that is further forward.
+    pub fn onside_x(attacking: PlayerSide, x: f32, ball_x: f32, line_x: f32) -> f32 {
+        match attacking {
+            PlayerSide::Left => x.min(line_x.max(ball_x)),
+            PlayerSide::Right => x.max(line_x.min(ball_x)),
+        }
+    }
+
     /// Is a receiver at `receiver_x` in an offside position — beyond both
     /// the ball and the line?
     pub fn is_beyond(attacking: PlayerSide, receiver_x: f32, ball_x: f32, line_x: f32) -> bool {

@@ -314,3 +314,42 @@ mod tests {
         assert!(((point - carrier).norm() - ClosingPoint::stand_off()).abs() < 1.0e-3);
     }
 }
+
+/// Holding a position that is itself moving.
+///
+/// # Why this exists
+///
+/// `DefenderCoveringState` and `DefenderGuardingState` both end their
+/// steering with a special case for "I have arrived", and both wrote it
+/// as `opponent_velocity * 0.4` / `* 0.5` — travel the way my man is
+/// travelling, at half his speed.
+///
+/// That is a defender being left behind, by construction. Whatever gap he
+/// had at the moment he arrived grows at half the carrier's speed for as
+/// long as he holds the point, and no amount of arriving correctly
+/// survives it. It is also, exactly, the thing reported from the viewer:
+/// *"they run parallel to the movement and don't try to take the ball"* —
+/// written into two states as their terminal behaviour.
+///
+/// A man holding station on a moving one matches his velocity and
+/// corrects whatever error is left. The correction is a gain on the error
+/// itself, so it vanishes as he settles and there is no distance at which
+/// his velocity changes character; the engine-wide speed clamp is the
+/// only ceiling it needs.
+pub struct StationKeeping;
+
+impl StationKeeping {
+    /// How hard the residual error is corrected, per tick.
+    ///
+    /// The error here is bounded by the states' own 2u arrival radius, so
+    /// this contributes at most 0.3 u/tick — the same order as a
+    /// defender's top speed (0.36-0.63) and therefore able to close the
+    /// last stride, while being negligible once he is on the point.
+    const GAIN: f32 = 0.15;
+
+    /// The velocity that keeps a defender on a point moving with `man`.
+    /// `error` is the vector from the defender to where he wants to be.
+    pub fn hold(man_velocity: Vector3<f32>, error: Vector3<f32>) -> Vector3<f32> {
+        man_velocity + error * Self::GAIN
+    }
+}

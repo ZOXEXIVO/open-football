@@ -1,53 +1,39 @@
-//! **Getting rid of it** — when a defender in his own penalty area stops
-//! trying to play and puts the ball out.
+//! **Getting rid of it** — when a player under pressure stops trying to
+//! play and puts the ball away.
 //!
-//! # The problem this exists to solve
+//! Two places call for it, read the same way:
 //!
-//! `DefenderRunningState::should_clear` asked two questions before
-//! hoofing it: is there an opponent within `14u` — one and three quarter
-//! metres — and does `find_best_pass_option_with_distance(220.0)` come up
-//! empty. The first is a man practically standing on you, the second is
-//! almost never true, so between them a defender in his own six-yard box
-//! with two attackers around him went looking for a twenty-metre pass.
+//! * [`ClearanceCall`]: a defender in his own penalty area clears it.
+//! * [`TouchlineCall`]: anyone pinned against his own touchline in his own
+//!   half, with an opponent within a stride, puts it out up the line.
 //!
-//! Measured over twelve fixtures at level 14: **0.61 clearances per
-//! defender per match against a real ~3.5**, and 59 clearances in the
-//! whole sample, of which 39% came from the emergency-pass branch failing
-//! rather than from anybody deciding to clear.
-//!
-//! The history matters, because the number has been wrong in both
-//! directions. An earlier test — `in_own_penalty_area() && opponents
-//! within 30u` — produced **15.2 clearances per defender per match**,
-//! every centre-half hoofing every ball he received in his own box. The
-//! answer is not a looser threshold, it is a model with the two things
-//! the thresholds were standing in for: how squeezed he actually is, and
-//! whether the alternative is genuinely an alternative.
-//!
-//! # The football
+//! # The readings
 //!
 //! Three continuous readings, and a fourth that is the man himself.
 //!
-//! * **The squeeze.** How close the nearest opponent is. A man six
-//!   metres away is pressure; a man two metres away is a decision made
-//!   for you.
-//! * **The danger.** How near your own goal the ball is. The same
-//!   pressure on the edge of the D and on the six-yard line are not the
-//!   same situation, and every professional treats them differently.
+//! * **The squeeze.** How close the nearest opponent is. A man six metres
+//!   away is pressure; a man two metres away is a decision made for you.
+//! * **The danger.** How near his own goal the ball is. The same pressure
+//!   on the edge of the D and on the six-yard line are not the same
+//!   situation.
 //! * **The out.** Not "is there a pass" — *is there a safe one*. A
-//!   team-mate with a man on him is not an out; playing him in inside
-//!   your own area is how a clearance becomes a chance. Nor is a pass
-//!   that goes closer to your own goal while you are being closed down.
-//! * **The man.** `buildup_profile` is the composite for playing out
-//!   from the back. A ball-playing centre-half rides pressure that makes
-//!   a limited one hoof it, and that difference is most of what the
-//!   attribute means.
+//!   team-mate with a man on him is not an out; playing him in inside your
+//!   own area is how a clearance becomes a chance. At the touchline, room
+//!   to carry up the line is an out too.
+//! * **The man.** `buildup_profile` is the composite for playing out from
+//!   the back. A ball-playing defender rides pressure that makes a limited
+//!   one get rid of it.
 
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::events::Event;
+use crate::r#match::midfielders::states::common::LaneAhead;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::common::team::KeeperVoice;
-use crate::r#match::{MatchPlayerLite, StateChangeResult, StateProcessingContext};
+use crate::r#match::{MatchContext, MatchPlayerLite, StateChangeResult, StateProcessingContext};
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::TouchlineCallDiag;
+use nalgebra::Vector3;
 
 /// What a defender who has the ball in his own area does with it.
 ///
@@ -60,6 +46,8 @@ pub enum DefensiveRelease {
     Clear,
     /// Play the out — this man.
     Outlet(u32),
+    /// Over the touchline, up the line — see [`TouchlineCall`].
+    PutOut,
 }
 
 impl DefensiveRelease {
@@ -84,6 +72,10 @@ impl DefensiveRelease {
                         .with_reason("DEF_CLEARANCE_OUTLET")
                         .build(ctx),
                 )),
+            ),
+            Self::PutOut => StateChangeResult::with_defender_state_and_event(
+                DefenderState::Standing,
+                TouchlineCall::put_out(ctx),
             ),
         }
     }
@@ -214,6 +206,11 @@ impl ClearanceCall {
         if !nearest.is_finite() {
             return 0.0;
         }
+        Self::squeeze_at(nearest)
+    }
+
+    /// The squeeze of an opponent `nearest` away.
+    fn squeeze_at(nearest: f32) -> f32 {
         ((Self::SQUEEZE_FAR - nearest) / (Self::SQUEEZE_FAR - Self::SQUEEZE_NEAR)).clamp(0.0, 1.0)
     }
 
@@ -259,5 +256,151 @@ impl ClearanceCall {
         }
 
         Some(mate)
+    }
+}
+
+/// **Putting it out** — a man pinned against his own touchline in his own
+/// half, with no safe out, plays the ball out of play up the line rather
+/// than into the press or back across his goal. The four readings are the
+/// clearance call's — the squeeze, the danger, the out and the man — and
+/// the rule is the same for every role: a wide midfielder who has tracked
+/// back is pinned exactly as a full-back is.
+pub struct TouchlineCall;
+
+impl TouchlineCall {
+    /// Within this of his own touchline he is pinned against it (4 m)…
+    const PINNED: f32 = 32.0;
+    /// …by an opponent within a stride (2 m).
+    const STRIDE: f32 = 16.0;
+    /// Running room up the line that is an out on its own: the lane ahead
+    /// at least this open (9 m clear).
+    const ROOM: f32 = 0.5;
+    /// The ball over the line: up it and out, ~20 m/s, low.
+    const PUT_OUT_PACE: f32 = 1.6;
+    const PUT_OUT_LIFT: f32 = 0.03;
+
+    /// `Some(PutOut)` when he should put it out; `None` when this is not
+    /// one of those moments and his own ladder applies.
+    pub fn decide(ctx: &StateProcessingContext) -> Option<DefensiveRelease> {
+        if MatchContext::cross_touchline_off() || !ctx.player.has_ball(ctx) {
+            return None;
+        }
+        let side = ctx.player.side?;
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
+        let me = ctx.player.position;
+        let progress = side.attacking_progress_x(me.x, field_width);
+        if progress >= 0.5 || me.y.min(field_height - me.y) > Self::PINNED {
+            return None;
+        }
+        #[cfg(feature = "match-logs")]
+        TouchlineCallDiag::note(TouchlineCallDiag::PINNED);
+        let nearest = ctx
+            .players()
+            .opponents()
+            .all()
+            .map(|o| (o.position - me).magnitude())
+            .fold(f32::MAX, f32::min);
+        if nearest > Self::STRIDE {
+            return None;
+        }
+        let squeeze = ClearanceCall::squeeze_at(nearest);
+        let danger = ((0.5 - progress) / 0.5).clamp(0.0, 1.0);
+        let buildup = DefenderSkillProfile::from_ctx(ctx).buildup_profile;
+        let has_out = Self::has_out(ctx);
+        let puts_out = Self::puts_out(squeeze, danger, has_out, buildup);
+        #[cfg(feature = "match-logs")]
+        {
+            TouchlineCallDiag::note(TouchlineCallDiag::PRESSED);
+            if Self::puts_out(squeeze, danger, false, buildup) {
+                TouchlineCallDiag::note(TouchlineCallDiag::PAST_TOLERANCE);
+            }
+            if has_out {
+                TouchlineCallDiag::note(TouchlineCallDiag::WITH_AN_OUT);
+            }
+            if puts_out {
+                TouchlineCallDiag::note(TouchlineCallDiag::PUT_OUT);
+            }
+        }
+        puts_out.then_some(DefensiveRelease::PutOut)
+    }
+
+    /// The call on its readings: with an out he plays; without one, he puts
+    /// it out once the squeeze — made urgent by the danger — passes what
+    /// his ability to play out under pressure tolerates. The squeeze and
+    /// the tolerance are [`ClearanceCall`]'s own.
+    pub fn puts_out(squeeze: f32, danger: f32, has_out: bool, buildup: f32) -> bool {
+        if has_out {
+            return false;
+        }
+        let situation = squeeze * (0.55 + 0.45 * danger);
+        situation
+            > ClearanceCall::TOLERANCE_BASE
+                + buildup.clamp(0.0, 1.0) * ClearanceCall::TOLERANCE_SKILL
+    }
+
+    /// A safe pass by the lane price every pass decision reads, or room to
+    /// carry it on up the line.
+    fn has_out(ctx: &StateProcessingContext) -> bool {
+        if ctx.player().passing().find_safe_pass_option().is_some() {
+            return true;
+        }
+        let up_the_line =
+            Vector3::new(ctx.player.side.map_or(1.0, |s| s.forward_dir_x()), 0.0, 0.0);
+        LaneAhead::read_along(ctx, up_the_line).openness >= Self::ROOM
+    }
+
+    /// The ball over his own touchline, up the line, so the throw is taken
+    /// further from his goal.
+    pub fn put_out(ctx: &StateProcessingContext) -> Event {
+        let field_height = ctx.context.field_size.height as f32;
+        let forward = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
+        let outward = if ctx.player.position.y < field_height * 0.5 {
+            -1.0
+        } else {
+            1.0
+        };
+        let direction = Vector3::new(forward * 0.8, outward * 0.6, 0.0);
+        Event::PlayerEvent(PlayerEvent::PutOut(
+            ctx.player.id,
+            Vector3::new(
+                direction.x * Self::PUT_OUT_PACE,
+                direction.y * Self::PUT_OUT_PACE,
+                Self::PUT_OUT_LIFT,
+            ),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TouchlineCall;
+
+    /// Closer pressure puts the ball out sooner.
+    #[test]
+    fn closer_pressure_puts_it_out_sooner() {
+        assert!(TouchlineCall::puts_out(1.0, 0.5, false, 0.4));
+        assert!(!TouchlineCall::puts_out(0.6, 0.5, false, 0.4));
+    }
+
+    /// The same pressure nearer his own goal puts it out sooner.
+    #[test]
+    fn a_spot_nearer_his_own_goal_puts_it_out_sooner() {
+        assert!(TouchlineCall::puts_out(0.8, 1.0, false, 0.4));
+        assert!(!TouchlineCall::puts_out(0.8, 0.0, false, 0.4));
+    }
+
+    /// A composed player who plays out from the back rides pressure that
+    /// makes a limited one put it out.
+    #[test]
+    fn a_composed_player_rides_the_pressure_longer() {
+        assert!(TouchlineCall::puts_out(0.9, 0.3, false, 0.2));
+        assert!(!TouchlineCall::puts_out(0.9, 0.3, false, 0.8));
+    }
+
+    /// With an out he never puts it out, however hard he is pressed.
+    #[test]
+    fn with_an_out_he_plays() {
+        assert!(!TouchlineCall::puts_out(1.0, 1.0, true, 0.0));
     }
 }

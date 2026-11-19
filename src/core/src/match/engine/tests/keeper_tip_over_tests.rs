@@ -20,11 +20,12 @@
 
 use super::goal_celebration_tests::squad;
 use crate::r#match::engine::ball::ball::contest::save::SaveModel;
+use crate::r#match::engine::engine::FootballEngine;
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
 use crate::r#match::engine::result::Score;
 use crate::r#match::{
-    MatchContext, MatchField, MatchPlayerCollection, MatchRng, PassOriginRestart, PlayerSide,
-    ShotTarget, events::EventCollection,
+    GameTickContext, MatchContext, MatchField, MatchPlayerCollection, MatchRng, PassOriginRestart,
+    PlayerSide, ResultMatchPositionData, ShotTarget, events::EventCollection,
 };
 use nalgebra::Vector3;
 
@@ -332,4 +333,151 @@ fn a_high_shot_the_keeper_cannot_hold_is_tipped_over_the_bar() {
          the post instead of over the bar"
     );
     assert!(tipped >= 3, "{tipped} tips over the bar");
+}
+
+/// What one tip over the bar left on the stat sheet.
+struct TipOver {
+    saves: u16,
+    shots_faced: u16,
+    shooter_on_target: u32,
+    corner: bool,
+}
+
+/// The right-hand keeper 4 m off his line, under a shot rising at him from
+/// `height` metres 7.5 m out, run through whole engine ticks until the ball
+/// is dead. Every seed on which it came off him and over the bar, as the
+/// stat sheet saw it.
+fn tips_over_the_bar(height: f32) -> Vec<TipOver> {
+    let goal_line = WIDTH as f32;
+    let goal_y = HEIGHT as f32 / 2.0;
+    (0..160u64)
+        .filter_map(|seed| {
+            let (mut field, mut context) = kickoff();
+            context.rng = MatchRng::from_seed(seed);
+            let (keeper, _) = keeper_at(
+                &mut field,
+                PlayerSide::Right,
+                Vector3::new(808.0, goal_y, 0.0),
+            );
+            let (shooter, _) = outfielder(&field, PlayerSide::Left);
+            for player in field.players.iter_mut() {
+                if player.id != keeper {
+                    player.position = Vector3::new(60.0, 40.0, 0.0);
+                }
+            }
+            field.ball.position = Vector3::new(780.0, goal_y, height);
+            field.ball.velocity = Vector3::new(2.4, 0.0, 0.0406);
+            field.ball.current_owner = None;
+            field.ball.previous_owner = Some(shooter);
+            field.ball.flags.in_flight_state = 60;
+            field.ball.cached_shot_target = Some(ShotTarget {
+                goal_line_y: goal_y,
+                goal_line_z: height + 0.7,
+                defending_side: PlayerSide::Right,
+                save_rolled: false,
+                block_rolled: true,
+                blocked_by: None,
+                deflected: false,
+                shooter_threat: 0.5,
+                struck_from: Vector3::new(700.0, goal_y, 0.0),
+                seen_from: Vector3::new(700.0, goal_y, 0.0),
+            });
+
+            let mut crossed_over = false;
+            for _ in 0..300 {
+                let before = field.ball.position;
+                let mut data = ResultMatchPositionData::empty();
+                let mut tick = GameTickContext::new(&field, &context.players);
+                FootballEngine::<WIDTH, HEIGHT>::game_tick(
+                    &mut field,
+                    &mut context,
+                    &mut data,
+                    &mut tick,
+                );
+                context.increment_time();
+                let now = field.ball.position;
+                if before.x < goal_line && now.x >= goal_line {
+                    crossed_over =
+                        before.z.max(now.z) > GOAL_HEIGHT && (before.y - goal_y).abs() < GOAL_WIDTH;
+                }
+                if field.ball.awaiting_restart.is_some() || field.ball.in_net.is_some() {
+                    break;
+                }
+            }
+            if !crossed_over || field.ball.last_touch_player_id != Some(keeper) {
+                return None;
+            }
+            let gk = field.players.iter().find(|p| p.id == keeper)?;
+            let striker = field.players.iter().find(|p| p.id == shooter)?;
+            Some(TipOver {
+                saves: gk.statistics.saves,
+                shots_faced: gk.statistics.shots_faced,
+                shooter_on_target: striker.memory.shots_on_target,
+                corner: field
+                    .ball
+                    .awaiting_restart
+                    .is_some_and(|r| r.origin == PassOriginRestart::Corner),
+            })
+        })
+        .collect()
+}
+
+/// **A tip over a ball that was going over is no save.** The same tip over
+/// the bar is a save only when the shot would have gone in; going over, it
+/// is a touch, the shot is off target, and the restart is still a corner.
+#[test]
+fn a_tip_over_a_ball_going_over_is_off_target_a_corner_and_no_save() {
+    let (mut field, _) = kickoff();
+    let goal_y = HEIGHT as f32 / 2.0;
+    let mut untouched = |height: f32| {
+        let from = Vector3::new(780.0, goal_y, height);
+        crossing_height(
+            &mut field,
+            from,
+            Vector3::new(2.4, 0.0, 0.0406),
+            WIDTH as f32,
+            120,
+        )
+        .expect("the shot reaches the line")
+    };
+    let over = untouched(1.89);
+    assert!(
+        over > GOAL_HEIGHT,
+        "the shot going over crosses at {over:.2} m"
+    );
+    let under = untouched(1.45);
+    assert!(
+        under < GOAL_HEIGHT - 0.2,
+        "the shot going in crosses at {under:.2} m"
+    );
+
+    // Met at about 2.3 m, its centre would have crossed at about 2.6 m.
+    let going_over = tips_over_the_bar(1.89);
+    assert!(
+        going_over.len() >= 3,
+        "only {} tips over the bar of a shot going over in 160 seeds",
+        going_over.len()
+    );
+    for tip in &going_over {
+        assert_eq!(
+            tip.saves, 0,
+            "a tip over a ball going over was booked as a save"
+        );
+        assert_eq!(tip.shots_faced, 0, "and as a shot he faced");
+        assert_eq!(tip.shooter_on_target, 0, "and as a shot on target");
+        assert!(tip.corner, "off his fingers and over the bar is a corner");
+    }
+
+    // Met at about 1.9 m, it would have gone in at about 2.2 m.
+    let going_in = tips_over_the_bar(1.45);
+    assert!(
+        going_in.len() >= 3,
+        "only {} tips over the bar of a shot going in in 160 seeds",
+        going_in.len()
+    );
+    for tip in &going_in {
+        assert_eq!(tip.saves, 1, "a tip over a ball going in is a save");
+        assert_eq!(tip.shooter_on_target, 1, "of a shot on target");
+        assert!(tip.corner);
+    }
 }

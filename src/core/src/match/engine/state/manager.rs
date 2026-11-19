@@ -72,6 +72,7 @@ impl StateManager {
     pub fn handle_state_finish(context: &mut MatchContext, field: &mut MatchField) {
         if context.state.match_state.need_swap_squads() {
             field.swap_squads();
+            context.players.change_ends();
             context.tactics = TeamsTactics::from_field(field);
             // Side swap rebinds positional roles per side, so the
             // cached per-team composites must be recomputed before

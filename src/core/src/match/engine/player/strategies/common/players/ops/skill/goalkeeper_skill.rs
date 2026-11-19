@@ -553,43 +553,6 @@ impl GoalkeeperSkillProfile {
         sigmoid((self.handling_profile - catch_difficulty) * 1.40).clamp(0.10, 0.78)
     }
 
-    /// Probability of a safely-directed parry given a catch_difficulty.
-    pub fn parry_safe_probability(&self, catch_difficulty: f32) -> f32 {
-        let catch_difficulty = catch_difficulty.clamp(0.0, 1.0);
-        sigmoid((self.parry_control - catch_difficulty * 0.85) * 2.70).clamp(0.06, 0.70)
-    }
-
-    /// Probability the parry / spill leaves a dangerous central rebound.
-    pub fn dangerous_rebound_probability(&self, pressure_factor: f32) -> f32 {
-        (0.36 - self.parry_control * 0.24
-            + pressure_factor.clamp(0.0, 1.0) * 0.12
-            + self.poor_skill_penalty * 0.12)
-            .clamp(0.08, 0.52)
-    }
-
-    /// Whether the keeper should commit to a dive given threat / window.
-    pub fn should_dive(
-        &self,
-        shot_threat: f32,
-        ball_distance: f32,
-        reaction_window: f32,
-        required_reaction_window: f32,
-        shot_difficulty: f32,
-    ) -> bool {
-        shot_threat > 0.35
-            && self.effective_dive_distance >= ball_distance
-            && reaction_window >= required_reaction_window
-            && (self.shot_stopping - shot_difficulty) > -0.28
-    }
-
-    /// Whether the keeper prefers to catch (vs. parry/punch) under given
-    /// crowd pressure.
-    pub fn should_catch(&self, catch_prob: f32, pressure_factor: f32) -> bool {
-        catch_prob > 0.42
-            && self.handling_profile > self.aerial_command * 0.5 + 0.08
-            && pressure_factor < 0.65
-    }
-
     /// Whether the keeper should punch instead of catch.
     pub fn should_punch(&self, catch_prob: f32, crowd_factor: f32, shot_power_factor: f32) -> bool {
         self.aerial_command > 0.30
@@ -734,18 +697,6 @@ mod tests {
         let elite_save = elite.save_probability(0.85);
         assert!(weak_save < 0.20);
         assert!(elite_save > weak_save + 0.15);
-    }
-
-    #[test]
-    fn weak_keeper_creates_more_dangerous_rebounds() {
-        let weak = GoalkeeperSkillProfile::from_player(&build_keeper(5.0, 9000), &default_inputs());
-        let elite =
-            GoalkeeperSkillProfile::from_player(&build_keeper(17.0, 9000), &default_inputs());
-        let pressure = 0.4;
-        assert!(
-            weak.dangerous_rebound_probability(pressure)
-                > elite.dangerous_rebound_probability(pressure) + 0.10
-        );
     }
 
     #[test]

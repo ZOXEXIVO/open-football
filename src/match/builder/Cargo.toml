@@ -16,8 +16,8 @@ publish = false
 # the viewer crate links against.
 
 [dependencies]
-flate2 = "1.1.10"
-wasm-bindgen-cli-support = "=0.2.129"
+flate2 = "1.1.11"
+wasm-bindgen-cli-support = "=0.2.130"
 wasm-opt = { version = "0.116.1", default-features = false }
 
 [lints]

@@ -166,6 +166,15 @@ impl PlayerPositionType {
         )
     }
 
+    /// True for the full-backs of a back four.
+    #[inline]
+    pub fn is_full_back(&self) -> bool {
+        matches!(
+            self,
+            PlayerPositionType::DefenderLeft | PlayerPositionType::DefenderRight
+        )
+    }
+
     /// True for the central midfield band (CM / AMC) — the players who
     /// make the late central run into the box and arrive for cutbacks.
     /// Deliberately excludes wide mids (ML/MR), wingbacks and wide AMs,
@@ -240,6 +249,39 @@ const REQUIRED_POSITION_LEVEL: u8 = 5;
 /// familiarity level rather than a natural / not-natural switch: a 17 is
 /// very nearly a natural, a 5 is a body in the right shirt.
 pub struct RoleFamiliarity;
+
+/// A player's level in every role, as his listed positions convert into
+/// each ([`RoleFamiliarity::level_for_slot`]), in tenths of a level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoleLevels([u8; PlayerPositionType::ALL.len()]);
+
+impl RoleLevels {
+    pub fn of(positions: &PlayerPositions) -> Self {
+        RoleLevels(PlayerPositionType::ALL.map(|role| {
+            (RoleFamiliarity::level_for_slot(positions, role) * 10.0).round() as u8
+        }))
+    }
+
+    /// A player listed at `role` alone, as a natural there.
+    pub fn natural(role: PlayerPositionType) -> Self {
+        Self::of(&PlayerPositions {
+            positions: vec![PlayerPosition {
+                position: role,
+                level: 20,
+            }],
+        })
+    }
+
+    /// His level in `role`, 0–20.
+    pub fn level(&self, role: PlayerPositionType) -> f32 {
+        self.0[role as usize] as f32 / 10.0
+    }
+
+    /// Whether he can fill `role` at all.
+    pub fn can_play(&self, role: PlayerPositionType) -> bool {
+        self.level(role) >= REQUIRED_POSITION_LEVEL as f32
+    }
+}
 
 impl RoleFamiliarity {
     /// Share of current ability a player carries into a role he holds at

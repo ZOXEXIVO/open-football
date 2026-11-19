@@ -10,9 +10,10 @@
 //! of an opponent, this many were completed anyway". `match-logs` only.
 
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::engine::ball::ball::CONTROL_DISTANCE;
+use crate::r#match::forwarders::states::ForwardFamily;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::MidfielderFamily;
 use crate::r#match::player::state::PlayerState;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -62,9 +63,19 @@ static STRIKE_KNOWN: [AtomicU64; AGES] = [const { AtomicU64::new(0) }; AGES];
 static STRIKE_FROM_OUTSIDE: [AtomicU64; AGES] = [const { AtomicU64::new(0) }; AGES];
 /// What the man rolled for was DOING — which behaviour carried him to
 /// the lane. Indexed by [`LaneDiag::STATES`].
-const STATES: usize = 8;
+const STATES: usize = 9;
 static ROLL_STATE: [[AtomicU64; STATES]; AGES] =
     [const { [const { AtomicU64::new(0) }; STATES] }; AGES];
+
+/// Where along a flight the nearest man stood: within the charge-down's
+/// reaction window of the strike, in mid-flight, or over the last stride
+/// and a half before the man it was played to — the stretch the striker's
+/// block price leaves out.
+const ZONES: usize = 3;
+/// Passes whose nearest man came within half a metre, by the zone he
+/// stood in, and the ones an opponent then won.
+static ZONE_PASSES: [AtomicU64; ZONES] = [const { AtomicU64::new(0) }; ZONES];
+static ZONE_WON: [AtomicU64; ZONES] = [const { AtomicU64::new(0) }; ZONES];
 
 /// The open book on one pass: the side that played it and the nearest
 /// any opponent has come to the ball so far. Lives on the ball from the
@@ -78,6 +89,8 @@ pub struct LaneCensus {
     /// Every opponent's distance off the lane at the strike, by id.
     pub at_strike: [(u32, f32); 16],
     pub at_strike_len: usize,
+    /// The nearest any opponent came in each zone, from the first tick.
+    pub zone_min: [f32; ZONES],
 }
 
 impl LaneCensus {
@@ -88,6 +101,27 @@ impl LaneCensus {
             predicted,
             at_strike: [(0, f32::MAX); 16],
             at_strike_len: 0,
+            zone_min: [f32::MAX; ZONES],
+        }
+    }
+
+    /// The charge-down's reaction window, in ticks.
+    const STRIKE_ZONE_TICKS: f32 = 25.0;
+
+    /// One opponent drawing level with the ball, `since_strike` ticks into
+    /// the flight with the ball `receiver_gap` from the man it was played
+    /// to.
+    #[inline]
+    pub fn note_zone_gap(&mut self, gap: f32, since_strike: f32, receiver_gap: f32) {
+        let zone = if receiver_gap <= CONTROL_DISTANCE {
+            2
+        } else if since_strike < Self::STRIKE_ZONE_TICKS {
+            0
+        } else {
+            1
+        };
+        if gap < self.zone_min[zone] {
+            self.zone_min[zone] = gap;
         }
     }
 
@@ -118,6 +152,19 @@ impl LaneCensus {
     /// The next touch. A touch by the passer's own side means the ball
     /// got through whoever it passed; anything else and it did not.
     pub fn close(self, toucher_team: u32) {
+        let (zone, nearest) = self
+            .zone_min
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(z, gap)| (z, *gap))
+            .unwrap_or((0, f32::MAX));
+        if nearest <= EDGES[0] {
+            ZONE_PASSES[zone].fetch_add(1, Ordering::Relaxed);
+            if toucher_team != self.passer_team {
+                ZONE_WON[zone].fetch_add(1, Ordering::Relaxed);
+            }
+        }
         let band = EDGES
             .iter()
             .position(|&e| self.min_gap < e)
@@ -153,31 +200,38 @@ impl LaneDiag {
         "Covering/HoldingLine",
         "Running/Returning",
         "Standing/Walking",
+        "attack job/on the ball",
         "other",
     ];
 
-    fn state_slot(state: &PlayerState) -> usize {
+    pub(crate) fn state_slot(state: &PlayerState) -> usize {
         match state {
+            PlayerState::Midfielder(s) => match s.family() {
+                MidfielderFamily::Chase => 0,
+                MidfielderFamily::Intercept => 1,
+                MidfielderFamily::Close | MidfielderFamily::Duel => 2,
+                MidfielderFamily::Mark => 3,
+                MidfielderFamily::Carry | MidfielderFamily::Recover => 5,
+                MidfielderFamily::Start | MidfielderFamily::Shape => 6,
+                MidfielderFamily::Support | MidfielderFamily::Aerial | MidfielderFamily::Play => 7,
+            },
+            PlayerState::Forward(s) => match s.family() {
+                ForwardFamily::Chase => 0,
+                ForwardFamily::Intercept => 1,
+                ForwardFamily::Close | ForwardFamily::Duel => 2,
+                ForwardFamily::Carry | ForwardFamily::Recover => 5,
+                ForwardFamily::Start | ForwardFamily::Shape => 6,
+                ForwardFamily::Job | ForwardFamily::Aerial | ForwardFamily::Play => 7,
+            },
             PlayerState::Defender(DefenderState::TakeBall)
-            | PlayerState::Midfielder(MidfielderState::TakeBall)
-            | PlayerState::Forward(ForwardState::TakeBall)
             | PlayerState::Goalkeeper(GoalkeeperState::TakeBall) => 0,
-            PlayerState::Defender(DefenderState::Intercepting)
-            | PlayerState::Midfielder(MidfielderState::Intercepting)
-            | PlayerState::Forward(ForwardState::Intercepting) => 1,
-            PlayerState::Defender(DefenderState::Pressing)
-            | PlayerState::Midfielder(MidfielderState::Pressing)
-            | PlayerState::Forward(ForwardState::Pressing) => 2,
-            PlayerState::Defender(DefenderState::Marking)
-            | PlayerState::Midfielder(MidfielderState::Guarding) => 3,
+            PlayerState::Defender(DefenderState::Intercepting) => 1,
+            PlayerState::Defender(DefenderState::Pressing | DefenderState::Jockeying) => 2,
+            PlayerState::Defender(DefenderState::Marking) => 3,
             PlayerState::Defender(DefenderState::Covering | DefenderState::HoldingLine) => 4,
-            PlayerState::Defender(DefenderState::Running | DefenderState::Returning)
-            | PlayerState::Midfielder(MidfielderState::Running | MidfielderState::Returning)
-            | PlayerState::Forward(ForwardState::Running | ForwardState::Returning) => 5,
-            PlayerState::Defender(DefenderState::Standing | DefenderState::Walking)
-            | PlayerState::Midfielder(MidfielderState::Standing | MidfielderState::Walking)
-            | PlayerState::Forward(ForwardState::Standing | ForwardState::Walking) => 6,
-            _ => 7,
+            PlayerState::Defender(DefenderState::Running | DefenderState::Returning) => 5,
+            PlayerState::Defender(DefenderState::Standing | DefenderState::Walking) => 6,
+            _ => 8,
         }
     }
 
@@ -234,6 +288,26 @@ impl LaneDiag {
     }
 
     pub const PRED_LABELS: [&'static str; PREDS] = ["<10%", "<30%", "<60%", "60%+"];
+
+    pub const ZONE_LABELS: [&'static str; ZONES] = [
+        "a stride from the striker",
+        "mid-flight",
+        "at the receiver's end",
+    ];
+
+    /// `(label, passes with a man within 0.5 m there, won by an opponent)`
+    /// per zone, counted from the first tick of the flight.
+    pub fn by_zone() -> Vec<(&'static str, u64, u64)> {
+        (0..ZONES)
+            .map(|z| {
+                (
+                    Self::ZONE_LABELS[z],
+                    ZONE_PASSES[z].load(Ordering::Relaxed),
+                    ZONE_WON[z].load(Ordering::Relaxed),
+                )
+            })
+            .collect()
+    }
 
     /// `(label, passes, won, mean predicted)` per predicted-risk band.
     pub fn by_prediction() -> Vec<(&'static str, u64, u64, f32)> {
@@ -324,6 +398,8 @@ impl LaneDiag {
             .chain(STRIKE_PERP_X100.iter())
             .chain(STRIKE_KNOWN.iter())
             .chain(STRIKE_FROM_OUTSIDE.iter())
+            .chain(ZONE_PASSES.iter())
+            .chain(ZONE_WON.iter())
             .chain(ROLL_STATE.iter().flatten())
         {
             c.store(0, Ordering::Relaxed);

@@ -40,8 +40,9 @@
 //! is standing, in `DefenderRunningState`'s wide-area ladder — not here,
 //! and not by his position on the team sheet.
 
-use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, DefenderRead, ReadLevel,
+};
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -58,40 +59,18 @@ pub struct DefenderOverlappingState {}
 
 impl StateProcessingHandler for DefenderOverlappingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        if ctx.player.has_ball(ctx) {
-            // `Running` carries the wide-area ladder — release, deliver,
-            // or drive on — and it decides on position rather than on
-            // the fact that a defender is holding the ball.
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Running,
-            ));
+        // The ball his to play goes to `Running`, which carries the
+        // wide-area ladder; a ball rolled into the channel ahead of him is
+        // the election's, as for any defender.
+        if let Some(change) = DefenderRead::change_above(ctx, ReadLevel::Engage) {
+            return Some(change);
         }
 
         // The run is over when the plan says so, and the plan says so
         // the moment we lose the ball. Reading it from one place is what
-        // stops this state and the one that sent him here disagreeing —
-        // the failure that had `PushingUp` bouncing a committed
-        // full-back back to `TrackingBack` on the same tick he set off.
+        // stops this state and the one that sent him here disagreeing.
         if !WideChannel::still_mine(ctx) {
-            return Some(StateChangeResult::with_defender_state(
-                if ctx.team().is_control_ball() {
-                    DefenderState::PushingUp
-                } else {
-                    DefenderState::TrackingBack
-                },
-            ));
-        }
-
-        // A ball rolled into the channel ahead of him is what the run was
-        // for.
-        if ctx.ball().is_towards_player()
-            && ctx.ball().distance() < 120.0
-            && !ctx.ball().is_owned()
-            && ctx.team().is_best_player_to_chase_ball()
-        {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::TakeBall,
-            ));
+            return Some(DefenderRead::change(ctx));
         }
 
         None

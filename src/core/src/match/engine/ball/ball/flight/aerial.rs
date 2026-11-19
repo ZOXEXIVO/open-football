@@ -1,8 +1,15 @@
-use crate::r#match::MatchContext;
-use crate::r#match::MatchPlayer;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::diagnostics::delivery_diag::TouchKind;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::teleport::TeleportCensus;
 use crate::r#match::engine::ball::ball::{Ball, PlayerReach};
 use crate::r#match::engine::ball::events::BallEvent;
 use crate::r#match::engine::events::EventCollection;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::{
+    DefenderCensus, HeaderBooking, HeaderRule,
+};
+use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart};
 use nalgebra::Vector3;
 
 /// How high a footballer can play the ball, and what it costs him to do
@@ -180,6 +187,13 @@ pub enum AerialOutcome {
         /// clean one.
         turn: f32,
     },
+    /// The defending side's man won the aerial duel for a pass and heads it
+    /// back the way it came, at the velocity the duel drew. `receiver` is
+    /// the man the pass was meant for, who last had a claim on it.
+    HeadedAway {
+        velocity: Vector3<f32>,
+        receiver: u32,
+    },
 }
 
 /// **What the man who won an aerial contest is going to do with the ball**
@@ -339,7 +353,7 @@ impl Ball {
         if self.current_tick_cached >= delivery.deadline_tick {
             self.aerial_delivery = None;
             #[cfg(feature = "match-logs")]
-            crate::r#match::engine::ball::ball::teleport::TeleportCensus::note_delivery_lost();
+            TeleportCensus::note_delivery_lost();
             // The grant goes with it: a contest whose ball never arrived
             // did not award anybody anything, and leaving the flag up
             // would let the winner head a ball he had to chase down.
@@ -351,11 +365,21 @@ impl Ball {
             self.aerial_delivery = None;
             self.aerial_contest_winner = None;
             #[cfg(feature = "match-logs")]
-            crate::r#match::engine::ball::ball::teleport::TeleportCensus::note_delivery_lost();
+            TeleportCensus::note_delivery_lost();
             return;
         }
         // Still climbing, or still above head height: not there yet.
         if self.velocity.z > 0.0 || self.position.z > delivery.arrival_height {
+            return;
+        }
+        // A header is played above the boot. A ball that has come down to
+        // boot height without reaching its winner's head is nobody's award:
+        // it is a loose ball he may still get a foot or a chest to.
+        if !MatchContext::cross_head_arrival_off() && self.position.z <= AerialReach::VOLLEY {
+            self.aerial_delivery = None;
+            self.aerial_contest_winner = None;
+            #[cfg(feature = "match-logs")]
+            TeleportCensus::note_delivery_lost();
             return;
         }
         /// How far off its aim point a delivery may be and still count as
@@ -409,17 +433,31 @@ impl Ball {
         // ticks and this is asked again on the next one; the deadline is
         // what ends it if he never arrives, exactly as before.
         //
-        // `PlayerReach::can_strike(.., aerial = true)` and nothing of this
-        // module's own: it is `KICKABLE_DISTANCE` across the grass and the
-        // man's own jumping ceiling up it, which is the engine's single
-        // answer to "may he play this ball", and a second opinion here is
-        // how the two would drift.
+        // `PlayerReach::can_head` and nothing of this module's own: the
+        // award is a header, and a head reaches 0.75 m across the grass where
+        // a boot reaches 1.9 — one reach rule for every header, whoever
+        // plays it. `OF_CROSS_HEAD_ARRIVAL=off` measures it against the
+        // boot's reach, as before.
         let winner = players.iter().find(|p| p.id == delivery.winner_id);
         #[cfg(feature = "match-logs")]
         let to_winner = winner
             .map(|p| (p.position.x - self.position.x).hypot(p.position.y - self.position.y))
             .unwrap_or(f32::MAX);
-        let in_reach = winner.is_some_and(|p| PlayerReach::can_strike(self, p, true));
+        let in_reach = winner.is_some_and(|p| {
+            if MatchContext::cross_head_arrival_off() {
+                PlayerReach::can_strike(self, p, true)
+            } else {
+                PlayerReach::can_head(self.position, p)
+            }
+        });
+        // A man who plays his own header is up for it before the ball comes
+        // off his head: the delivery waits for his heading state.
+        let played_by_the_ball = !matches!(delivery.outcome, AerialOutcome::Header { .. });
+        if played_by_the_ball
+            && winner.is_some_and(|p| p.plays_his_own_header() && !p.is_up_for_header())
+        {
+            return;
+        }
         if !in_reach && !MatchContext::aerial_arrival_flat() {
             // He is not there yet. The hold keeps the ball in the heading
             // band and this is asked again next tick; the deadline is what
@@ -454,8 +492,18 @@ impl Ball {
                 // nobody now — this is a clearance, not a chance, and it is
                 // booked as one: see [`BallEvent::HeadedClear`].
                 #[cfg(feature = "match-logs")]
-                crate::mid_run_diag::HEADED_BEHIND_FIRED
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                {
+                    crate::mid_run_diag::HEADED_BEHIND_FIRED
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if let Some(p) = winner {
+                        DefenderCensus::note_header(
+                            HeaderRule::CrossContest,
+                            p,
+                            p.is_airborne(),
+                            HeaderBooking::Clearance,
+                        );
+                    }
+                }
                 self.aerial_contest_winner = None;
                 self.pass_target_player_id = None;
                 self.clear_pending_pass_metadata();
@@ -472,6 +520,15 @@ impl Ball {
                 // hooked branch does, and for the same reason: this is a
                 // clearance, so nothing here is anybody's chance, and the
                 // man who made it gets the credit for it.
+                #[cfg(feature = "match-logs")]
+                if let Some(p) = winner {
+                    DefenderCensus::note_header(
+                        HeaderRule::CrossContest,
+                        p,
+                        p.is_airborne(),
+                        HeaderBooking::Clearance,
+                    );
+                }
                 self.aerial_contest_winner = None;
                 self.pass_target_player_id = None;
                 self.clear_pending_pass_metadata();
@@ -480,6 +537,31 @@ impl Ball {
                     Self::headed_clear_velocity(self.position, attacked_goal, range, apex),
                     turn,
                 )
+            }
+            AerialOutcome::HeadedAway { velocity, receiver } => {
+                #[cfg(feature = "match-logs")]
+                if let Some(p) = winner {
+                    DefenderCensus::note_header(
+                        HeaderRule::AerialDuel,
+                        p,
+                        p.is_airborne(),
+                        HeaderBooking::Nothing,
+                    );
+                }
+                self.previous_owner = Some(receiver);
+                self.pass_target_player_id = None;
+                self.claim_cooldown = 0;
+                self.offside_snapshot = None;
+                self.pass_origin_restart = PassOriginRestart::OpenPlay;
+                if let Some(p) = winner {
+                    #[cfg(feature = "match-logs")]
+                    {
+                        self.touch_kind_hint = Some(TouchKind::Head);
+                    }
+                    self.record_touch(p.id, p.team_id, self.current_tick_cached, false);
+                }
+                self.flags.in_flight_state = Self::HEADED_SEPARATION;
+                velocity
             }
         };
         self.aerial_delivery = None;

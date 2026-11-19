@@ -244,15 +244,11 @@ impl EuropaLeague {
                     commitments,
                 );
 
-                let home_baseline = home_team.tactics.as_ref().map(|t| t.tactic_type);
-                let away_baseline = away_team.tactics.as_ref().map(|t| t.tactic_type);
-
                 let mut home_ctx = SelectionContext {
                     is_friendly: false,
                     date,
                     match_importance: 0.9,
                     philosophy: None,
-                    opponent_tactic: away_baseline,
                     competition: SelectionCompetition::ContinentalCup,
                     game_model: None,
                     ..SelectionContext::default()
@@ -262,7 +258,6 @@ impl EuropaLeague {
                     date,
                     match_importance: 0.9,
                     philosophy: None,
-                    opponent_tactic: home_baseline,
                     competition: SelectionCompetition::ContinentalCup,
                     game_model: None,
                     ..SelectionContext::default()

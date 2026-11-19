@@ -1,10 +1,10 @@
 use crate::r#match::goalkeepers::states::{
     GoalkeeperCatchingState, GoalkeeperClearingState, GoalkeeperComingOutState,
-    GoalkeeperDistributingState, GoalkeeperDivingState, GoalkeeperHoldingState,
-    GoalkeeperJumpingState, GoalkeeperKickingState, GoalkeeperPickingUpState,
-    GoalkeeperPreparingForSaveState, GoalkeeperPunchingState, GoalkeeperReturningGoalState,
-    GoalkeeperStandingState, GoalkeeperTakeBallState, GoalkeeperThrowingState,
-    GoalkeeperWalkingState,
+    GoalkeeperDistributingState, GoalkeeperDivingState, GoalkeeperGettingUpState,
+    GoalkeeperHoldingState, GoalkeeperJumpingState, GoalkeeperKickingState,
+    GoalkeeperOneOnOneState, GoalkeeperPickingUpState, GoalkeeperPreparingForSaveState,
+    GoalkeeperPunchingState, GoalkeeperReturningGoalState, GoalkeeperStandingState,
+    GoalkeeperTakeBallState, GoalkeeperThrowingState, GoalkeeperWalkingState,
 };
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::Result;
@@ -14,15 +14,17 @@ use std::fmt::{Display, Formatter};
 // for the full rationale). New variants take the next FREE number and
 // append to `ALL`.
 //
-// The gaps (1, 15, 16, 20) are retired states — `Resting`, `Tackling`,
+// The gaps (1, 13, 15, 16, 20) are retired states. `Resting`, `Tackling`,
 // `Shooting` and `Running` were fully implemented but had no inbound
-// transition in the engine and were never observed in a real match. They
-// were removed rather than wired: `Standing` already carries the
+// transition in the engine and were never observed in a real match: they
+// were removed rather than wired, because `Standing` already carries the
 // `Recovery` intensity `Resting` existed for, `ComingOut` covers rushing
 // off the line, and a keeper shooting at the other goal is not modelled
-// anywhere. The numbers are deliberately NOT reused — `compact_id` is
-// embedded in replay records, so leaving holes keeps every existing
-// recording readable.
+// anywhere. `Passing` (13) went in 2026-11, its release owned by
+// `Distributing`. The numbers are deliberately NOT reused. A replay stores
+// a state's display NAME (`PlayerStateEntry`), so the id is an in-process
+// key, but every keeper census table is indexed by it, and a reused number
+// would mean two different states in two builds' tables.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GoalkeeperState {
     Standing = 0,          // Standing
@@ -41,12 +43,14 @@ pub enum GoalkeeperState {
     PreparingForSave = 17, // Preparing to make a save
     Walking = 18,          // Walking
     TakeBall = 19,         // Take the ball,
+    OneOnOne = 21,         // Closing down a man through on goal
+    GettingUp = 22,        // On the ground after going down
 }
 
 impl GoalkeeperState {
     /// Every variant in declared order — single source of truth for the
     /// state universe (transition-graph audit + id-stability snapshot).
-    pub const ALL: [GoalkeeperState; 16] = [
+    pub const ALL: [GoalkeeperState; 18] = [
         GoalkeeperState::Standing,
         GoalkeeperState::Jumping,
         GoalkeeperState::Diving,
@@ -63,7 +67,30 @@ impl GoalkeeperState {
         GoalkeeperState::PreparingForSave,
         GoalkeeperState::Walking,
         GoalkeeperState::TakeBall,
+        GoalkeeperState::OneOnOne,
+        GoalkeeperState::GettingUp,
     ];
+
+    /// Length of any table indexed by `state as usize`: one past the last
+    /// discriminant, which retired ids keep above `ALL.len()`. `ALL` is in
+    /// ascending order (`role_discriminants_are_strictly_increasing_and_unique`).
+    pub const SLOTS: usize = Self::ALL[Self::ALL.len() - 1] as usize + 1;
+
+    pub fn from_slot(slot: usize) -> Option<GoalkeeperState> {
+        Self::ALL.into_iter().find(|s| *s as usize == slot)
+    }
+
+    /// The states a claim of a high ball is made in, from coming for it to
+    /// carrying out the contest's decision.
+    pub fn is_claim(self) -> bool {
+        matches!(
+            self,
+            GoalkeeperState::ComingOut
+                | GoalkeeperState::Catching
+                | GoalkeeperState::Jumping
+                | GoalkeeperState::Punching
+        )
+    }
 }
 
 pub struct GoalkeeperStrategies {}
@@ -114,6 +141,12 @@ impl GoalkeeperStrategies {
             GoalkeeperState::TakeBall => {
                 state_processor.process(GoalkeeperTakeBallState::default())
             }
+            GoalkeeperState::OneOnOne => {
+                state_processor.process(GoalkeeperOneOnOneState::default())
+            }
+            GoalkeeperState::GettingUp => {
+                state_processor.process(GoalkeeperGettingUpState::default())
+            }
         }
     }
 }
@@ -137,6 +170,8 @@ impl Display for GoalkeeperState {
             GoalkeeperState::PreparingForSave => write!(f, "Preparing for Save"),
             GoalkeeperState::Walking => write!(f, "Walking"),
             GoalkeeperState::TakeBall => write!(f, "Take Ball"),
+            GoalkeeperState::OneOnOne => write!(f, "One on One"),
+            GoalkeeperState::GettingUp => write!(f, "Getting Up"),
         }
     }
 }

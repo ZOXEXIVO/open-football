@@ -227,11 +227,6 @@ impl ChampionsLeague {
             .collect();
 
         // Build Match objects (same pattern as League::build_match).
-        // Each side gets a `selection_ctx` carrying the OTHER side's
-        // baseline tactic so a tactically-aware coach can flip to a
-        // counter shape — without this every continental fixture
-        // resolved the counter branch with `opponent_tactic = None`
-        // and stayed on the persistent shape regardless of opponent.
         let engine_matches: Vec<Match> = todays_matches
             .iter()
             .filter_map(|cm| {
@@ -262,15 +257,11 @@ impl ChampionsLeague {
                     commitments,
                 );
 
-                let home_baseline = home_team.tactics.as_ref().map(|t| t.tactic_type);
-                let away_baseline = away_team.tactics.as_ref().map(|t| t.tactic_type);
-
                 let mut home_ctx = SelectionContext {
                     is_friendly: false,
                     date,
                     match_importance: 1.0,
                     philosophy: None,
-                    opponent_tactic: away_baseline,
                     competition: SelectionCompetition::ContinentalCup,
                     game_model: None,
                     ..SelectionContext::default()
@@ -280,7 +271,6 @@ impl ChampionsLeague {
                     date,
                     match_importance: 1.0,
                     philosophy: None,
-                    opponent_tactic: home_baseline,
                     competition: SelectionCompetition::ContinentalCup,
                     game_model: None,
                     ..SelectionContext::default()

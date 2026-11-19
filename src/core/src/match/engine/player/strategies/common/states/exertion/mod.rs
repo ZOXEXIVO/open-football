@@ -1,7 +1,7 @@
 //! **How hard a player is working, what it costs him, and what it lets
 //! him do.**
 //!
-//! One loop with two directions, which is why these four live together:
+//! One loop with two directions, which is why these live together:
 //!
 //! * [`activity_intensity`] — [`ActivityIntensity`] is the tier a state
 //!   declares each tick (`VeryHigh` … `Recovery`), plus the per-role
@@ -13,6 +13,8 @@
 //! * [`movement_effort`] — the up direction. [`MovementEffort`] turns
 //!   the same tier into a **hard speed ceiling**, shaded down by
 //!   tiredness for self-pacing.
+//! * [`tempo`] — the pace a man holding the shape needs: [`ShapeTempo`]
+//!   prices it in the time the play gives him.
 //!
 //! ⚠ Because the tier is a speed cap and not a cost alone, a state that
 //! declares the wrong tier does not merely mis-bill fatigue — it loses
@@ -22,8 +24,10 @@ pub mod activity_intensity;
 pub mod condition;
 pub mod constants;
 pub mod movement_effort;
+pub mod tempo;
 
 pub use activity_intensity::*;
 pub use condition::*;
 pub use constants::*;
 pub use movement_effort::*;
+pub use tempo::*;

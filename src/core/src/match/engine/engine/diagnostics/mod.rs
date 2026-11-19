@@ -13,12 +13,14 @@
 //!   sides folded into one frame and split by possession phase.
 //! * `teleport_probe` — the per-tick ball relocation probe the driver
 //!   threads through its phases.
+//! * [`state_counters`] — the tackle-flow, shot-gate and stuck-exit
+//!   counters the role states bump.
 //!
-//! All but the profiler are compiled only under `match-logs`; it is
-//! always compiled, which is why it is the only one re-exported to the
-//! engine root.
+//! The profiler and the state counters are always compiled (the counters'
+//! call sites are in the states); the rest only under `match-logs`.
 
 pub mod phase_prof;
+pub mod state_counters;
 
 #[cfg(feature = "match-logs")]
 pub mod census;

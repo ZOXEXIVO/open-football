@@ -27,7 +27,7 @@ pub use positions::{closure, objects};
 
 // Re-export strategies items except conflicting ones
 pub use strategies::{
-    BallOperationsImpl, common_states, decision, defender_states, defenders, forwarders,
+    BallOperationsImpl, common_states, defender_states, defenders, forwarders,
     goalkeepers, midfielders, passing, processor, team,
 };
 // Note: strategies re-exports players and ball from common, which conflicts with positions

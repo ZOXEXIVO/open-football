@@ -32,7 +32,9 @@ use serde::{Deserialize, Serialize};
 /// the standard of football it was played at, its in-play penalty saves and
 /// its tally of time spent waiting on each kind of restart.
 /// v8: every result names the takers of its in-play penalties that missed.
-pub const PROTOCOL_VERSION: u32 = 8;
+/// v9: every squad carries its head coach's card, and every result records
+/// how each side was managed.
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// What the coordinator wants recorded, sent once per connection.
 ///

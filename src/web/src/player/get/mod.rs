@@ -18,7 +18,7 @@ use core::utils::FormattingUtils;
 use core::PlayerStatistics as SeasonStatistics;
 use core::{
     DomesticCupOverride, InternationalStatistics, LiveCupSlice, Person, Player,
-    PlayerLiveStatsInput, PlayerPositionType, PlayerSquadStatus, PlayerStatCompetitionKind,
+    PlayerLiveStatsInput, PlayerPositionType, PlayerStatCompetitionKind,
     PlayerStatisticsProjection, PlayerStatusType, SimulatorData, Team, TeamType,
 };
 use serde::Deserialize;
@@ -358,7 +358,7 @@ pub async fn player_get_action(
         let contract = player.contract.as_ref().map(|c| PlayerContractDto {
             salary: format_salary(c.salary),
             expiration: c.expiration.format("%d.%m.%Y").to_string(),
-            squad_status: format_squad_status(&c.squad_status),
+            squad_status: c.squad_status.i18n_key().to_string(),
         });
 
         let title = format!(
@@ -1113,22 +1113,6 @@ fn format_salary(salary: u32) -> String {
     } else {
         format!("{}", salary)
     }
-}
-
-fn format_squad_status(status: &PlayerSquadStatus) -> String {
-    match status {
-        PlayerSquadStatus::KeyPlayer => "squad_key_player",
-        PlayerSquadStatus::FirstTeamRegular => "squad_first_team_regular",
-        PlayerSquadStatus::FirstTeamSquadRotation => "squad_rotation",
-        PlayerSquadStatus::MainBackupPlayer => "squad_backup_player",
-        PlayerSquadStatus::HotProspectForTheFuture => "squad_hot_prospect",
-        PlayerSquadStatus::DecentYoungster => "squad_decent_youngster",
-        PlayerSquadStatus::NotNeeded => "squad_not_needed",
-        PlayerSquadStatus::NotYetSet
-        | PlayerSquadStatus::Invalid
-        | PlayerSquadStatus::SquadStatusCount => "",
-    }
-    .to_string()
 }
 
 fn get_loan_status(player: &Player, team: &Team, data: &SimulatorData) -> Option<PlayerLoanDto> {

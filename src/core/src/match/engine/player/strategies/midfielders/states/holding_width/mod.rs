@@ -25,7 +25,9 @@
 //! [`ForwardHoldingWidthState`]: crate::r#match::forwarders::states::ForwardHoldingWidthState
 
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, MidfielderCondition, MidfielderRead,
+};
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -42,42 +44,12 @@ const SETTLE: f32 = 40.0;
 pub struct MidfielderHoldingWidthState {}
 
 impl StateProcessingHandler for MidfielderHoldingWidthState {
+    /// The read answers the touchline only while his side has the ball and
+    /// `WideChannel::still_mine`, so entry and exit are one question and a
+    /// lost ball moves him on the tick it is lost, not at the tactical
+    /// refresh that `still_mine`'s flag waits for.
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        if ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
-        }
-
-        // Every exit is the same question read from the other side —
-        // "is this still my job?" — so entry and exit can never both be
-        // true and the state cannot two-cycle with the one that sent him
-        // here. See `WideChannel::still_mine`.
-        if !WideChannel::still_mine(ctx) {
-            return Some(StateChangeResult::with_midfielder_state(
-                if ctx.team().is_control_ball() {
-                    MidfielderState::AttackSupporting
-                } else {
-                    MidfielderState::Returning
-                },
-            ));
-        }
-
-        // The ball is coming to him. Claiming it is the dispatcher's job
-        // — it force-elects a chaser across the whole side — but a ball
-        // played INTO the channel for him is not loose, and nothing else
-        // would pick it up.
-        if ctx.ball().is_towards_player()
-            && ctx.ball().distance() < 120.0
-            && !ctx.ball().is_owned()
-            && ctx.team().is_best_player_to_chase_ball()
-        {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::TakeBall,
-            ));
-        }
-
-        None
+        MidfielderRead::hold(ctx, MidfielderState::HoldingWidth)
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {

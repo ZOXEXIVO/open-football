@@ -1,13 +1,13 @@
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
-    ActivityIntensity, MidfielderCondition, Opportunity, U_PER_M,
+    ActivityIntensity, MidfielderCondition, MidfielderRead, Opportunity, U_PER_M,
 };
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior,
+    StateProcessingHandler,
 };
 use nalgebra::Vector3;
 
@@ -23,12 +23,8 @@ pub struct MidfielderDistanceShootingState {}
 
 impl StateProcessingHandler for MidfielderDistanceShootingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Check if the midfielder still has the ball
         if !ctx.player.has_ball(ctx) {
-            // Lost possession, transition to Pressing
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
+            return Some(MidfielderRead::change(ctx));
         }
 
         // Per-player cooldown — same reasoning as forwards. A long
@@ -114,15 +110,9 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
         None
     }
 
-    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        Some(
-            SteeringBehavior::Arrive {
-                target: ctx.player().opponent_goal_position(),
-                slowing_distance: 150.0,
-            }
-            .calculate(ctx.player)
-            .velocity,
-        )
+    /// He stands over the ball to strike it.
+    fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        Some(Vector3::zeros())
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

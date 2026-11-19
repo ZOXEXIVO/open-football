@@ -18,7 +18,7 @@ use crate::club::staff::{
 };
 use crate::club::{ClubPhilosophy, PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
-use crate::{MatchTacticType, Person, Player, Tactics, Team, TeamType};
+use crate::{Person, Player, Tactics, Team, TeamType};
 use chrono::NaiveDate;
 use log::debug;
 use rustc_hash::FxHashSet;
@@ -61,10 +61,6 @@ pub struct SelectionContext {
     /// the match-day caller so a DevelopAndSell side actually puts the
     /// kids on the pitch in league games.
     pub philosophy: Option<ClubPhilosophy>,
-    /// Opponent's expected baseline tactic. When present and the coach is
-    /// tactically astute, `get_enhanced_match_squad` flips to a counter
-    /// formation instead of the pre-selected one.
-    pub opponent_tactic: Option<MatchTacticType>,
     /// Which competition the match belongs to. Lets the selector apply a
     /// domestic-cup opportunity bias (rotate hard in early rounds, field a
     /// strong XI in semis/finals) instead of inferring everything from a
@@ -234,7 +230,6 @@ impl Default for SelectionContext {
             date: Utc::now().date_naive(),
             match_importance: 0.7,
             philosophy: None,
-            opponent_tactic: None,
             competition: SelectionCompetition::League,
             game_model: None,
             development_guest_ids: Vec::new(),

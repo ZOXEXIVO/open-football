@@ -13,6 +13,7 @@ use crate::club::staff::{
 };
 use crate::club::{PersonBehaviour, StaffClubContract, StaffPosition, StaffStatus};
 use crate::context::GlobalContext;
+use serde::{Deserialize, Serialize};
 use crate::shared::RosterRevision;
 use crate::shared::fullname::FullName;
 use crate::utils::IntegerUtils;
@@ -653,7 +654,7 @@ pub struct StaffPerformance {
     pub last_evaluation_date: Option<NaiveDate>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CoachingStyle {
     Authoritarian, // Strict discipline, high demands
     #[default]

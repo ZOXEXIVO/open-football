@@ -3,6 +3,8 @@
 //! [`plans`](super::plans) and [`tactical`](super::tactical) that is
 //! recomputed every tick.
 //!
+//! * [`adherence`] — how far each man follows the plan, refreshed with the
+//!   skill aggregates and read by the shape pull, the press and the jobs.
 //! * [`chemistry`] — how well these particular players know each other:
 //!   pair chemistry seeded from the roster, plus the team-level
 //!   [`TacticalFamiliarity`](chemistry::TacticalFamiliarity). Consulted
@@ -16,5 +18,6 @@
 //! against — neither is refreshed from the ball, and neither belongs to
 //! a single side's plan.
 
+pub mod adherence;
 pub mod chemistry;
 pub mod standard;

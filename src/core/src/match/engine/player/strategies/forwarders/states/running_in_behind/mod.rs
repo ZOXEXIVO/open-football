@@ -1,23 +1,16 @@
-use crate::r#match::engine::ball::ball::OffsideLine;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{
-    ActivityIntensity, ForwardCondition, RunInBehind,
+    ActivityIntensity, ForwardCondition, ForwardRead, RunLine,
 };
-use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
-    ShotDecision, evaluate_forward_shot_decision,
-};
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::forward_census::ForwardCensus;
+use crate::r#match::common_states::StationKeeping;
 use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
 use crate::r#match::{
-    ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext,
+    ConditionContext, MatchContext, PlayerSide, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
-
-/// Inside this range a struck ball is a finish rather than a shot from
-/// distance — hands off to `ForwardState::Finishing`, which carries no
-/// range-based abort gates. Kept in step with `FINISHING_RANGE` in the
-/// finishing state and `POINT_BLANK_DISTANCE` in the running state.
-const FINISHING_HANDOFF_RANGE: f32 = 48.0;
 
 impl ForwardRunningInBehindState {
     /// How far past the last defender a forward with no sense of timing
@@ -31,236 +24,160 @@ impl ForwardRunningInBehindState {
     /// most dangerous standing position in football; a yard behind him is
     /// where a runner actually waits.
     const LINE_MARGIN: f32 = 8.0;
+    /// How far ahead on the run he aims, 7.5 m.
+    const RUN_LOOKAHEAD: f32 = 60.0;
+    /// Within this (0.25 m) of his station he is on it, and keeps it as the
+    /// line moves; further off he arrives at it, easing in over `ARRIVE`.
+    const ON_STATION: f32 = 2.0;
+    const ARRIVE: f32 = 24.0;
+
+    /// The run the plan gave him: at the goal, across his marker by
+    /// `MarkerEvasion`. Until the ball is played to him — he is its intended
+    /// receiver — he keeps station on the hold line, moving as the line
+    /// moves, so a runner already there walks with it; then he goes at full
+    /// effort.
+    fn given_run(ctx: &StateProcessingContext) -> Vector3<f32> {
+        let here = ctx.player.position;
+        let to_goal = (ctx.ball().direction_to_opponent_goal() - here).normalize();
+        let aim = MarkerEvasion::evade(ctx, here + to_goal * Self::RUN_LOOKAHEAD);
+        let played_to_him = ctx.tick_context.ball.pass_target == Some(ctx.player.id);
+        if MatchContext::forward_run_pace_off() {
+            let aim = if played_to_him {
+                aim
+            } else {
+                Self::held(ctx, aim)
+            };
+            let acceleration = ctx.player.skills.physical.acceleration / 20.0;
+            return SteeringBehavior::Seek { target: aim }
+                .calculate(ctx.player)
+                .velocity
+                * (1.0 + acceleration * 0.15)
+                * MarkerEvasion::burst(ctx);
+        }
+        if played_to_him {
+            return SteeringBehavior::Seek { target: aim }
+                .calculate(ctx.player)
+                .velocity;
+        }
+        let Some(station) = Self::station(ctx) else {
+            return SteeringBehavior::Seek { target: aim }
+                .calculate(ctx.player)
+                .velocity;
+        };
+        #[cfg(feature = "match-logs")]
+        ForwardCensus::note_run_held(ctx);
+        let gap = station - here;
+        let line = Self::line_velocity(ctx);
+        if gap.xy().norm() > Self::ON_STATION {
+            // The line goes on moving while he closes on his station: off
+            // it, he runs with the line as well as at the point.
+            return line
+                + SteeringBehavior::Arrive {
+                    target: station,
+                    slowing_distance: Self::ARRIVE,
+                }
+                .calculate(ctx.player)
+                .velocity;
+        }
+        StationKeeping::hold(line, gap)
+    }
+
+    /// Where a waiting runner stands: on his hold line, in the lane of his
+    /// place, across his marker by `MarkerEvasion`.
+    pub(crate) fn station(ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        let hold = Self::hold_x(ctx)?;
+        let lane = ctx.team().my_anchor().y;
+        let point = MarkerEvasion::evade(ctx, Vector3::new(hold, lane, 0.0));
+        Some(Vector3::new(hold, point.y, 0.0))
+    }
+
+    /// How fast their last line moves up or down the pitch: the run of the
+    /// opponent who makes it, and none when the halfway line is the line.
+    fn line_velocity(ctx: &StateProcessingContext) -> Vector3<f32> {
+        let Some(line) = RunLine::of(ctx) else {
+            return Vector3::zeros();
+        };
+        ctx.players()
+            .opponents()
+            .all()
+            .filter(|o| (o.position.x - line).abs() < 1.0)
+            .map(|o| ctx.tick_context.positions.players.velocity(o.id).x)
+            .next()
+            .map_or_else(Vector3::zeros, |x| Vector3::new(x, 0.0, 0.0))
+    }
+
+    /// **HOLD THE LINE UNTIL THE BALL IS PLAYED.** The run's aim, kept
+    /// inside the line the referee reads.
+    ///
+    /// The run was always meant to stay level with the last defender and go
+    /// past him when the ball is played, and for a long time none of the
+    /// code did it: a forward simply ran beyond the last man and stayed
+    /// there, and every ball played to him was offside by definition —
+    /// measured at **25.4 offsides a match against a real 4-6**, which no
+    /// amount of restraint on the PASSER can fix, because he still has to
+    /// pass to somebody.
+    ///
+    /// Reading the line through [`RunLine`] is the point: a forward holding
+    /// a line one unit away from the one the referee uses is still offside,
+    /// and would look like he was holding nothing. In his own half there is
+    /// no line to hold.
+    pub(crate) fn held(ctx: &StateProcessingContext, mut aim: Vector3<f32>) -> Vector3<f32> {
+        let (Some(side), Some(hold)) = (ctx.player.side, Self::hold_x(ctx)) else {
+            return aim;
+        };
+        let beyond = match side {
+            PlayerSide::Left => aim.x > hold,
+            PlayerSide::Right => aim.x < hold,
+        };
+        if beyond {
+            aim.x = hold;
+            #[cfg(feature = "match-logs")]
+            ForwardCensus::note_run_held(ctx);
+        }
+        aim
+    }
+
+    /// The line he holds: inside the referee's line by a stride, or past it
+    /// by as much as his timing lets him stray.
+    fn hold_x(ctx: &StateProcessingContext) -> Option<f32> {
+        let side = ctx.player.side?;
+        let line = RunLine::of(ctx)?;
+        // …but he is not a laser. Timing a run is `off_the_ball` and
+        // `anticipation`, and a forward who holds the last line PERFECTLY is
+        // both unrealistic and the most dangerous position on the pitch:
+        // clamped exactly, offsides fell to 9 a match and goals rose
+        // 5.1 → 6.0, because every flagged run became a clean one instead.
+        // A good runner sits on the shoulder; a poor one strays past it and
+        // gets flagged, which is where the real four-to-six a match come
+        // from.
+        let timing = ((ctx.player.skills.mental.off_the_ball
+            + ctx.player.skills.mental.anticipation)
+            / 40.0)
+            .clamp(0.0, 1.0);
+        let stray = Self::STRAY * (1.0 - timing);
+        // Held a stride BEHIND the line rather than level with it, for the
+        // same reason: a man permanently on the shoulder is played in every
+        // time the ball is worked wide.
+        Some(line + side.forward_dir_x() * (stray - Self::LINE_MARGIN))
+    }
 }
 
 #[derive(Default, Clone)]
 pub struct ForwardRunningInBehindState {}
 
 impl StateProcessingHandler for ForwardRunningInBehindState {
+    /// The run is the plan's: it ends when the read says it does — the ball
+    /// is his, his side has lost it, or the run is somebody else's.
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        let ball_ops = ctx.ball();
-        if ctx.player.has_ball(ctx) {
-            // Centralised shot decision — applies cooldown / xG / clear-shot
-            // / sprint-balance / 1v1 / pass-EV gates. Was previously a raw
-            // distance check that auto-transitioned to Shooting, which let
-            // a sprinting Finishing-10 striker fire any time they reached
-            // the ball under 80u — the dominant unrealistic-conversion
-            // path. The Shooting state has minimal gating of its own, so
-            // every gate decision must be made BEFORE the transition.
-            let distance = ball_ops.distance_to_opponent_goal();
-            if distance >= 80.0 {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Dribbling,
-                ));
-            }
-            return Some(match evaluate_forward_shot_decision(ctx, "FWD_RIB_SHOT") {
-                ShotDecision::Shoot { reason } => {
-                    // A runner who has broken through and reached the box
-                    // is finishing, not shooting from range.
-                    let state = if distance <= FINISHING_HANDOFF_RANGE {
-                        ForwardState::Finishing
-                    } else {
-                        ForwardState::Shooting
-                    };
-                    StateChangeResult::with_forward_state(state).with_shot_reason(reason)
-                }
-                ShotDecision::Pass => StateChangeResult::with_forward_state(ForwardState::Passing),
-                ShotDecision::Hold => {
-                    // Carry through into a controlled dribble — the
-                    // forward isn't ready to strike (xG too low,
-                    // sprinting off-balance, or pass-better-than-shot).
-                    StateChangeResult::with_forward_state(ForwardState::Dribbling)
-                }
-            });
-        }
-
-        // SMART RUN TIMING: Only continue run if passer has stable possession
-        // Delay run if teammate is under heavy pressure (they can't deliver the pass)
-        if let Some(owner_id) = ctx.ball().owner_id()
-            && let Some(owner) = ctx.context.players.by_id(owner_id)
-            && owner.team_id == ctx.player.team_id
-        {
-            // Passer under heavy pressure — abort run, they can't deliver
-            let opponents_near_passer = ctx.tick_context.grid.opponents(owner_id, 10.0).count();
-            if opponents_near_passer >= 3 {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::CreatingSpace,
-                ));
-            }
-        }
-
-        // Check if the run is still viable
-        if !RunInBehind::stays_viable(ctx) {
-            // If the run is no longer viable, transition to Creating Space
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::CreatingSpace,
-            ));
-        }
-
-        // OffsideTrapBreaking used to be a separate state here but it
-        // duplicated RunningInBehind's movement logic exactly. The
-        // offside-trap detection now stays inside this state; we just
-        // keep running in behind as the single "beat the line" behaviour.
-        None
+        ForwardRead::hold(ctx, ForwardState::RunningInBehind)
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Forward should sprint toward goal, behind the defensive line
-        let opponent_goal = ctx.ball().direction_to_opponent_goal();
-        let current_position = ctx.player.position;
-
-        // Calculate target position: run toward goal, slightly angled to stay in passing lane
-        let to_goal = (opponent_goal - current_position).normalize();
-
-        // CURVED RUN: Stay level with last defender, then accelerate past when ball is played
-        let ball_coming = ctx.ball().is_towards_player();
-        let ownership_duration = ctx.tick_context.ball.ownership_duration;
-        let is_counter = ownership_duration < 15;
-
-        let lateral_offset = if ball_coming {
-            // Ball is being played — sprint straight toward goal
-            Vector3::new(0.0, 0.0, 0.0)
-        } else {
-            // Ball not played yet — curve run to stay onside
-            // Use sinusoidal curve to drift laterally while maintaining forward momentum
-            let phase = (ctx.in_state_time as f32) * std::f32::consts::TAU / 80.0;
-            let lateral_sway = phase.sin() * 0.3;
-            if current_position.y > ctx.context.field_size.height as f32 / 2.0 {
-                Vector3::new(0.0, -0.2 + lateral_sway, 0.0) // Drift inward with curve
-            } else {
-                Vector3::new(0.0, 0.2 - lateral_sway, 0.0)
-            }
-        };
-
-        let direction = (to_goal + lateral_offset).normalize();
-
-        // Sprint at maximum pace with acceleration bonus
-        let acceleration = ctx.player.skills.physical.acceleration / 20.0;
-        // Counter-attack: extra burst of speed
-        let counter_bonus = if is_counter { 0.3 } else { 0.0 };
-
-        // Steer toward a point out ahead on the run rather than assigning
-        // the velocity outright.
-        //
-        // `direction * (pace * 1.5..)` produced an absolute velocity of up
-        // to ~40 u/tick against a ~0.63 u/tick top speed, with no
-        // reference to the velocity the forward already had. The
-        // engine-wide clamp scaled it back to a full sprint along
-        // whichever way `direction` happened to point that tick — and
-        // `direction` swings, because the curved-run term above sways on a
-        // sine wave and `to_goal` rotates as the player moves. So the
-        // forward could invert his heading between consecutive ticks at
-        // full pace. `Seek` takes the same direction and integrates it
-        // from the current velocity under a force limit, which cut this
-        // state from 9.8 reversals per second held to 5.3.
-        const RUN_LOOKAHEAD: f32 = 60.0;
-        // Run ACROSS the marker, not just at the goal. A run in behind is
-        // beaten by a defender who simply runs the same line goal-side of
-        // you; what beats HIM is going across his body onto his blind
-        // side, so he has to turn and you do not. `MarkerEvasion` supplies
-        // that offset and the separation burst, both scaled by this
-        // forward's timing and pace against his marker's reading of it.
-        let mut aim = MarkerEvasion::evade(ctx, current_position + direction * RUN_LOOKAHEAD);
-
-        // **HOLD THE LINE UNTIL THE BALL IS PLAYED.**
-        //
-        // The comment above this block has always said the run stays level
-        // with the last defender and goes past him when the ball is played,
-        // and none of the code did it: the aim was the opposing goal and
-        // the "curve" was a sine wave with no reference to the defence at
-        // all. So a forward simply ran beyond the last man and stayed
-        // there, and every ball played to him was offside by definition —
-        // measured at **25.4 offsides a match against a real 4-6**, which
-        // no amount of restraint on the PASSER can fix, because he still
-        // has to pass to somebody.
-        //
-        // Reading the line through [`OffsideLine`] is the point: a forward
-        // holding a line one unit away from the one the referee uses is
-        // still offside, and would look like he was holding nothing.
-        if !ball_coming && let Some(side) = ctx.player.side {
-            let line = OffsideLine::second_last(
-                ctx.players().opponents().all().map(|o| o.position.x),
-                side,
-            );
-            if let Some(line) = line {
-                // …but he is not a laser. Timing a run is
-                // `off_the_ball` and `anticipation`, and a forward who
-                // holds the last line PERFECTLY is both unrealistic and
-                // the most dangerous position on the pitch: clamped
-                // exactly, offsides fell to 9 a match and goals rose
-                // 5.1 → 6.0, because every flagged run became a clean
-                // one instead. A good runner sits on the shoulder; a
-                // poor one strays past it and gets flagged, which is
-                // where the real four-to-six a match come from.
-                let timing = ((ctx.player.skills.mental.off_the_ball
-                    + ctx.player.skills.mental.anticipation)
-                    / 40.0)
-                    .clamp(0.0, 1.0);
-                let stray = Self::STRAY * (1.0 - timing);
-                // Held a stride BEHIND the line rather than level with
-                // it, for the same reason: a man permanently on the
-                // shoulder is played in every time the ball is worked
-                // wide.
-                let hold = line + side.forward_dir_x() * (stray - Self::LINE_MARGIN);
-                let beyond = match side {
-                    PlayerSide::Left => aim.x > hold,
-                    PlayerSide::Right => aim.x < hold,
-                };
-                if beyond {
-                    aim.x = hold;
-                }
-            }
-        }
-        Some(
-            SteeringBehavior::Seek { target: aim }
-                .calculate(ctx.player)
-                .velocity
-                * (1.0 + acceleration * 0.15 + counter_bonus)
-                * MarkerEvasion::burst(ctx),
-        )
+        Some(Self::given_run(ctx))
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
         // Running in behind is very high intensity - explosive sprinting
-        ForwardCondition::with_velocity(ActivityIntensity::VeryHigh).process(ctx);
-    }
-}
-
-#[cfg(test)]
-mod regression_tests {
-    //! Regression: RunningInBehind used to auto-transition to Shooting
-    //! whenever `distance_to_opponent_goal() < 80.0` while holding the
-    //! ball. That bypassed every gate (cooldowns, xG, clear-shot,
-    //! sprint balance, pass EV) and was the dominant unrealistic-
-    //! conversion path for mediocre finishers.
-    //!
-    //! These checks pin the TEXT of the new branch so a future refactor
-    //! that re-adds an unconditional Shooting transition fails the
-    //! check before the calibration regression slips back in.
-    const SOURCE: &str = include_str!("mod.rs");
-
-    #[test]
-    fn auto_shoot_under_80u_branch_is_gone() {
-        // The legacy auto-shoot branch literally said
-        //     "ball_ops.distance_to_opponent_goal() < 80.0" → Shooting
-        // immediately after `has_ball`. We allow the distance check,
-        // but it MUST be paired with a call into the centralised
-        // `evaluate_forward_shot_decision`.
-        assert!(
-            SOURCE.contains("evaluate_forward_shot_decision"),
-            "RunningInBehind must defer to centralised shot decision helper"
-        );
-    }
-
-    #[test]
-    fn shot_decision_handles_pass_alternative() {
-        // The new code must route to Passing when the helper picks a
-        // better cutback over a low-xG strike. Without this, a
-        // sprinting forward at the post simply cycles between
-        // Shooting and Dribbling forever, losing the realism win.
-        assert!(
-            SOURCE.contains("ShotDecision::Pass") && SOURCE.contains("ForwardState::Passing"),
-            "Pass alternative must be wired in"
-        );
+        ForwardCondition::new(ActivityIntensity::VeryHigh).process(ctx);
     }
 }

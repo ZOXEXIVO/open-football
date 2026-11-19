@@ -19,6 +19,8 @@
 //!
 //! * [`body`] — the keeper's own volume: not a contest at all, but the
 //!   statement that a ball arriving where he already is comes off him.
+//! * [`claim`] — what the aerial contest's decision on a keeper's claim
+//!   does to the ball.
 //! * [`ownership`] — somebody claims it instead: pass-target claims, the
 //!   reception and first-touch flow, deadlock resolution and the
 //!   unowned-too-long safety nets.
@@ -35,6 +37,7 @@
 pub mod aerial_duel;
 pub mod block;
 pub mod body;
+pub mod claim;
 pub mod interception;
 pub mod ownership;
 pub mod pass_block;

@@ -400,6 +400,13 @@ impl ShapeBuilder<'_> {
             }
         }
 
+        // A move further than a refresh allows is a restart, not movement.
+        let moved = ((rear - shape.rear_progress) * field_width).hypot(centre_y - shape.centre_y);
+        shape.pace = if shape.active && moved <= self.max_step {
+            moved * BLOCK_SPEED / self.max_step
+        } else {
+            0.0
+        };
         shape.len = len;
         shape.rear_progress = rear;
         shape.length = length;

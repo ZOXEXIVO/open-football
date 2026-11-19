@@ -1,5 +1,7 @@
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::forwarders::states::common::{
+    ActivityIntensity, ForwardCondition, ForwardRead,
+};
 use crate::r#match::player::strategies::common::states::LooseBallChase;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -18,15 +20,13 @@ impl StateProcessingHandler for ForwardTakeBallState {
         if ctx.ball().mine_to_play() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
-        // Somebody else has it. Running handles that — for teammates:
-        // off-ball movement; for opponents: engage via Pressing.
+        // Somebody else has it: the read's.
         if ctx.ball().is_owned() && !ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+            return Some(ForwardRead::change(ctx));
         }
 
         // Ball is loose: commit. No distance cap, no teammate yield, no
-        // "opponent is closer" bailout. The Running state's
-        // `is_best_player_to_chase_ball` already committed this player;
+        // "opponent is closer" bailout. The election committed this player;
         // second-guessing here created stalemates where two players each
         // deferred to the other and a stationary ball sat untouched.
         None

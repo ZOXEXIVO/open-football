@@ -1,23 +1,21 @@
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
-    ActivityIntensity, LaneAhead, MidfielderCondition, Opportunity, TakeOn, U_PER_M,
+    ActivityIntensity, LaneAhead, MidfielderCondition, MidfielderRead, Opportunity, TakeOn, U_PER_M,
 };
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
+use crate::r#match::player::strategies::common::states::EngagementClock;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 use std::cmp::Ordering;
 
 /// Range at which a shot is point blank rather than a chance — 6 m.
 const POINT_BLANK: f32 = 6.0 * U_PER_M;
-
-/// AI ticks in a second (`MATCH_TIME_INCREMENT_MS` is 10).
-const TICKS_PER_SECOND: f32 = 100.0;
 
 /// Per-call-site salt for `Opportunity`.
 const POINT_BLANK_SALT: u64 = 0x6A09_E667_F3BC_C909;
@@ -28,9 +26,7 @@ pub struct MidfielderDribblingState {}
 impl StateProcessingHandler for MidfielderDribblingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if !ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
+            return Some(MidfielderRead::change(ctx));
         }
 
         let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
@@ -113,13 +109,7 @@ impl StateProcessingHandler for MidfielderDribblingState {
             ));
         }
 
-        // How long the take-on gets. A dribble is a second or two of
-        // football; the old budget was 0.25-0.80 s, over before the
-        // duel it models could resolve. Scaled by carry quality so a
-        // Zidane keeps it under his foot longer than a holding player.
-        let max_dribble_ticks =
-            ((0.9 + mid_profile.carry_selection * 1.6) * TICKS_PER_SECOND) as u64;
-        if ctx.in_state_time > max_dribble_ticks {
+        if ctx.in_state_time > Self::allowance(mid_profile.carry_selection) {
             if PassEvaluator::find_best_pass_option(ctx, 200.0).is_some() {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Passing,
@@ -149,9 +139,14 @@ impl StateProcessingHandler for MidfielderDribblingState {
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         if !ctx.player.has_ball(ctx) {
-            let ball_pos = ctx.tick_context.positions.ball.position;
-            let direction = (ball_pos - ctx.player.position).normalize();
-            return Some(direction * ctx.player.skills.physical.pace * 0.3);
+            return Some(
+                SteeringBehavior::Pursuit {
+                    target: ctx.tick_context.positions.ball.position,
+                    target_velocity: ctx.tick_context.positions.ball.velocity,
+                }
+                .calculate(ctx.player)
+                .velocity,
+            );
         }
 
         let goal_pos = ctx.player().opponent_goal_position();
@@ -159,11 +154,6 @@ impl StateProcessingHandler for MidfielderDribblingState {
         let to_goal = (goal_pos - player_pos).normalize();
 
         let dribble_skill = ctx.player.skills.technical.dribbling / 20.0;
-        let pace = ctx.player.skills.physical.pace / 20.0;
-        let agility = ctx.player.skills.physical.agility / 20.0;
-
-        // Base dribble speed — faster than walking, slower than sprinting
-        let base_speed = 3.5 * (0.5 * dribble_skill + 0.3 * pace + 0.2 * agility);
 
         // Find nearest opponent to dribble around
         let nearest_opponent = ctx.players().opponents().nearby(30.0).min_by(|a, b| {
@@ -199,16 +189,34 @@ impl StateProcessingHandler for MidfielderDribblingState {
             to_goal
         };
 
-        Some(direction * base_speed + ctx.player().separation_velocity())
+        Some(
+            SteeringBehavior::Seek {
+                target: player_pos + direction * Self::LOOKAHEAD,
+            }
+            .calculate(ctx.player)
+            .velocity
+                + ctx.player().separation_velocity(),
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
         // Dribbling is moderate intensity
-        MidfielderCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+        MidfielderCondition::new(ActivityIntensity::Moderate).process(ctx);
     }
 }
 
 impl MidfielderDribblingState {
+    /// How far ahead along his chosen line he steers (5 m).
+    const LOOKAHEAD: f32 = 40.0;
+
+    /// How long the take-on gets, in AI ticks — the clock `in_state_time`
+    /// runs on. A dribble is a second or two of football: 0.9 s for the
+    /// poorest carrier to 2.5 s for the best, so a Zidane keeps it under
+    /// his foot longer than a holding player.
+    pub(crate) fn allowance(carry_selection: f32) -> u64 {
+        ((0.9 + carry_selection * 1.6) / EngagementClock::TICK_SECONDS).round() as u64
+    }
+
     #[allow(dead_code)]
     fn find_open_teammate<'a>(&self, ctx: &StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
         // Use the proper pass evaluator instead of a random nearby pick

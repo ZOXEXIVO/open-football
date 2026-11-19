@@ -184,14 +184,16 @@ pub fn score_keeper_save(
         + n(concentration_0_20) * 0.08
 }
 
-/// Wall size for a direct free kick. Increases close-in, drops at wide
-/// angles (caller passes `is_wide_angle=true` if y-offset/distance is high).
+/// Wall size for a direct free kick, by [`FreeKickBand`]. Increases
+/// close-in, drops by one at a wide angle (callers pass `is_wide_angle`
+/// when the ball is more than 18% of the pitch's height off its middle),
+/// and is never fewer than two.
 ///
-/// Banded sizing per spec:
-///   close (65–90u):  5–6  (centred), 4–5 wide
-///   mid   (90–130u): 4–5,  3–4 wide
-///   long  (130–180u): 3–4, 2–3 wide
-///   far   (>180u):    2 (token wall)
+///   close (up to 160u, 20 m):     6, 5 wide
+///   mid   (160–200u, 20–25 m):    5, 4 wide
+///   long  (200–256u, 25–32 m):    4, 3 wide
+///   far   (beyond 256u, 32 m):    2, a token wall the restart shape
+///                                 does not line up
 pub fn wall_size_for(band: FreeKickBand, is_wide_angle: bool) -> u8 {
     let base: u8 = match band {
         FreeKickBand::Close => 6,

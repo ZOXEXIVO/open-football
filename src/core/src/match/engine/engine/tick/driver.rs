@@ -69,6 +69,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         #[cfg(feature = "match-logs")]
         Self::note_corner_setup_box_if_taken(field);
         Self::apply_pending_save_credit(field, context);
+        Self::credit_completed_cross(field);
         #[cfg(feature = "match-logs")]
         relocation.at(field, tc::STAGE_L_SAVE_CREDIT);
 
@@ -160,10 +161,52 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             #[cfg(feature = "match-logs")]
             relocation.at(field, tc::STAGE_L_SET_PIECE2);
         }
+        #[cfg(feature = "match-logs")]
+        Self::sample_censuses(field, context);
 
         if let Some(t) = prof_t {
             PhaseProf::add(PhaseProf::P_LIGHT, t.elapsed().as_nanos() as u64);
         }
+    }
+
+    /// One keeper-, defender-, midfielder- and forward-census sample a tick,
+    /// after everybody has moved and every event has landed. See
+    /// `KeeperCensus`, `DefenderCensus`, `MidfielderCensus` and
+    /// `ForwardCensus`.
+    #[cfg(feature = "match-logs")]
+    fn sample_censuses(field: &MatchField, context: &mut MatchContext) {
+        let tick = context.current_tick();
+        context.keeper_census.get_mut().sample(field, tick);
+        let plans = [
+            (
+                context.field_home_team_id,
+                *context.defence_plan_for_team(context.field_home_team_id),
+            ),
+            (
+                context.field_away_team_id,
+                *context.defence_plan_for_team(context.field_away_team_id),
+            ),
+        ];
+        let areas = [context.penalty_area(true), context.penalty_area(false)];
+        context
+            .defender_census
+            .get_mut()
+            .sample(field, plans, areas, tick);
+        let attacks = [
+            (
+                context.field_home_team_id,
+                *context.attack_plan_for_team(context.field_home_team_id),
+            ),
+            (
+                context.field_away_team_id,
+                *context.attack_plan_for_team(context.field_away_team_id),
+            ),
+        ];
+        context
+            .midfielder_census
+            .get_mut()
+            .sample(field, attacks, areas, tick);
+        context.forward_census.get_mut().sample(field, attacks, tick);
     }
 
     pub(in crate::r#match::engine::engine) fn game_tick_inner(
@@ -227,6 +270,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         Self::resolve_cross_contest(field, context, events);
         #[cfg(feature = "match-logs")]
         relocation.at(field, tc::STAGE_CROSS_CONTEST);
+        Self::resolve_keeper_claim(field, context);
 
         let t = prof_on.then(Instant::now);
         Self::play_ball(field, context, tick_ctx, events);
@@ -238,6 +282,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         #[cfg(feature = "match-logs")]
         Self::note_corner_setup_box_if_taken(field);
         Self::apply_pending_save_credit(field, context);
+        Self::credit_completed_cross(field);
         #[cfg(feature = "match-logs")]
         relocation.at(field, tc::STAGE_SAVE_CREDIT);
         // Resolve any deferred-foul / advantage state. Cheap (one
@@ -314,6 +359,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         Self::apply_pending_set_piece_teleport(field);
         #[cfg(feature = "match-logs")]
         relocation.at(field, tc::STAGE_SET_PIECE_POST);
+        #[cfg(feature = "match-logs")]
+        Self::sample_censuses(field, context);
         if let Some(t) = t {
             PhaseProf::add(PhaseProf::P_DISPATCH, t.elapsed().as_nanos() as u64);
         }

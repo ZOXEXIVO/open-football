@@ -1,4 +1,4 @@
-use crate::r#match::engine::ball::ball::GROUND_FRICTION;
+use crate::r#match::engine::ball::ball::{GRAVITY_PER_TICK, GROUND_FRICTION};
 
 /// How far a ball rolling on the ground will still travel.
 ///
@@ -45,6 +45,17 @@ impl BallRoll {
     #[inline]
     pub fn speed_to_rest_at(distance: f32) -> f32 {
         distance.max(0.0) * (1.0 - Self::KEPT) / Self::KEPT + Self::STOPPED
+    }
+
+    /// …for a ball that leaves `height` metres up, rising at `rise` m/tick,
+    /// and flies before it rolls: the flight carries it at the same pace,
+    /// so the roll is that much shorter. At `height` and `rise` 0 it is
+    /// [`speed_to_rest_at`](Self::speed_to_rest_at).
+    pub fn speed_to_rest_at_from(distance: f32, height: f32, rise: f32) -> f32 {
+        let fall = 2.0 * GRAVITY_PER_TICK * height.max(0.0);
+        let air = ((rise + (rise * rise + fall).sqrt()) / GRAVITY_PER_TICK).max(0.0);
+        let run = Self::KEPT / (1.0 - Self::KEPT);
+        (distance.max(0.0) + Self::STOPPED * run) / (air + run)
     }
 
     /// Ticks until a ball rolling at `speed` decays to

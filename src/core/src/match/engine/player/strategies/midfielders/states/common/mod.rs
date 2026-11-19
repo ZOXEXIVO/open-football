@@ -1,156 +1,17 @@
 pub mod carry;
+pub mod read;
 pub mod role;
 
 use crate::r#match::StateProcessingContext;
-use crate::r#match::common_states::{LooseBallChase, TackleEngagement};
+use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::engine::player::strategies::common::{
     ActivityIntensityConfig, ConditionProcessor, FIELD_PLAYER_JADEDNESS_INTERVAL,
     JADEDNESS_INCREMENT, LOW_CONDITION_THRESHOLD,
 };
-use crate::r#match::midfielders::states::MidfielderState;
 
 pub use carry::{CarryHeading, LaneAhead, TakeOn, U_PER_M};
+pub use read::{MidfielderRead, ReadLevel};
 pub use role::{Archetype, MidfieldPlay, MidfieldRole, MidfieldSkillView};
-
-/// Where a midfielder's shape position is, and whether he is far enough
-/// off it to be worth a recovery run.
-pub struct ShapeStation;
-
-impl ShapeStation {
-    /// Recovery run is complete inside this radius. Same value
-    /// `MidfielderReturningState` has always used to hand back to
-    /// `Running`, so "arrived" means exactly what it did before.
-    pub const HOME: f32 = 80.0;
-    /// A midfielder already home is only sent back out once he has
-    /// drifted past this. The gap to `HOME` is the commitment that stops
-    /// the two states contradicting each other.
-    pub const DISPLACED: f32 = 110.0;
-
-    /// Distance from the player's shape position.
-    pub fn drift(ctx: &StateProcessingContext) -> f32 {
-        (ctx.player.position - ctx.team().my_anchor()).magnitude()
-    }
-
-    /// Is there a recovery run left to make?
-    ///
-    /// Hysteretic on the current state: a player already in `Returning`
-    /// keeps going until he is inside `HOME`, while one who is not has to
-    /// have drifted past `DISPLACED` before a fresh recovery is worth
-    /// starting. Both sides of the hand-off read this, so neither can
-    /// contradict the other.
-    pub fn should_recover(ctx: &StateProcessingContext) -> bool {
-        let returning = matches!(
-            ctx.player.state,
-            crate::r#match::player::state::PlayerState::Midfielder(MidfielderState::Returning)
-        );
-        let band = if returning {
-            Self::HOME
-        } else {
-            Self::DISPLACED
-        };
-        Self::drift(ctx) > band
-    }
-}
-
-/// Where a midfielder goes to support when his side has the ball. `Running`
-/// sends him there, and the two states it sends him to ask before handing him
-/// back: their timeouts used to bounce off this every tick once they fired.
-pub struct MidfieldSupport;
-
-impl MidfieldSupport {
-    /// With nothing to run for, he walks. The one gate, whichever off-ball
-    /// state he is deciding from.
-    pub fn walks(ctx: &StateProcessingContext) -> bool {
-        const WALK_BALL_DISTANCE: f32 = 250.0;
-        const IN_POSITION_DISTANCE: f32 = 40.0;
-        const THREAT_RADIUS: f32 = 100.0;
-
-        let no_immediate_threat = ctx
-            .players()
-            .opponents()
-            .nearby(THREAT_RADIUS)
-            .next()
-            .is_none();
-        if !no_immediate_threat {
-            return false;
-        }
-
-        let ball_far = ctx.ball().distance() > WALK_BALL_DISTANCE;
-        // Against the live anchor, not the kickoff dot. The block slides
-        // all match, so `distance_from_position` was asking whether
-        // he is standing where he was DRAWN before the whistle — which a
-        // midfielder almost never is, so the fresh-player branch below
-        // (`ball_far && in_position`) essentially never fired and
-        // `Midfielder: Walking` measured **zero velocity evaluations
-        // across three matches** (`dev_match waypoints`). Same correction
-        // the walking state itself already made when it stopped steering
-        // at `start_position`.
-        let in_position = ctx.team().distance_from_anchor() < IN_POSITION_DISTANCE;
-
-        // Tired players take any excuse to walk; fresh ones only walk when
-        // there is genuinely nothing to run toward.
-        if ctx.player().is_tired() {
-            ball_far || in_position
-        } else {
-            ball_far && in_position
-        }
-    }
-
-    pub fn wanted(ctx: &StateProcessingContext) -> Option<MidfielderState> {
-        if Self::walks(ctx) {
-            return Some(MidfielderState::Walking);
-        }
-        let ball_distance = ctx.ball().distance();
-        // Too many team-mates nearby: go and find space.
-        if ctx.players().teammates().nearby(25.0).count() >= 2 && ball_distance > 30.0 {
-            return Some(MidfielderState::CreatingSpace);
-        }
-        // Ball in the attacking third and him nearby: make attacking runs.
-        let field_width = ctx.context.field_size.width as f32;
-        if ctx.ball().distance_to_opponent_goal() < field_width * 0.4 && ball_distance < 300.0 {
-            return Some(MidfielderState::AttackSupporting);
-        }
-        // Far from the ball: create space to offer a passing option.
-        if ball_distance > 200.0 {
-            return Some(MidfielderState::CreatingSpace);
-        }
-        None
-    }
-
-    /// `Running` would send him straight back to `state`.
-    pub fn keeps_him_in(ctx: &StateProcessingContext, state: MidfielderState) -> bool {
-        Self::wanted(ctx) == Some(state)
-    }
-}
-
-/// Whose press this is. `Pressing` hands over on this and the doors into it
-/// ask it first, so a midfielder is not sent to a press he would give straight
-/// back.
-///
-/// The plan nominates one engager and a nominated presser defers to nobody.
-/// Everyone else hands over only when a team-mate is clearly on it: the margin
-/// is a hand-over distance, not a tie-break. It used to be 10u, which is true
-/// of everybody but the closest man on almost every tick, so `Pressing` emptied
-/// itself and one player chased while the rest dropped back into `Running`.
-pub struct PressOwnership;
-
-impl PressOwnership {
-    const HANDOVER_MARGIN: f32 = 60.0;
-
-    pub fn belongs_to_a_team_mate(ctx: &StateProcessingContext) -> bool {
-        if TackleEngagement::is_nominated_presser(ctx) {
-            return false;
-        }
-        let ball_position = ctx.tick_context.positions.ball.position;
-        ctx.players()
-            .teammates()
-            .all()
-            .filter(|t| t.id != ctx.player.id)
-            .map(|t| (t.position - ball_position).magnitude())
-            .fold(f32::MAX, f32::min)
-            < ctx.ball().distance() - Self::HANDOVER_MARGIN
-    }
-}
 
 /// Is there a ball here that could actually be intercepted?
 ///
@@ -252,26 +113,24 @@ pub mod onball_diag {
         ShootLayoff = 4,
         TempoHold = 5,
         PatientRecycle = 6,
-        PatientHold = 7,
-        CongestionPass = 8,
-        Carry = 9,
-        Dribble = 10,
-        CounterPass = 11,
-        OneTwo = 12,
-        DrawRelease = 13,
-        Cutback = 14,
-        Cross = 15,
-        Switch = 16,
-        TempoBackPass = 17,
-        ShouldPass = 18,
-        AntiOscillation = 19,
-        NoDecision = 20,
-        ForcedTakeOn = 21,
-        FlankRelease = 22,
-        ThroughBall = 23,
+        CongestionPass = 7,
+        Carry = 8,
+        Dribble = 9,
+        CounterPass = 10,
+        OneTwo = 11,
+        DrawRelease = 12,
+        Cutback = 13,
+        Cross = 14,
+        Switch = 15,
+        TempoBackPass = 16,
+        ShouldPass = 17,
+        AntiOscillation = 18,
+        NoDecision = 19,
+        FlankRelease = 20,
+        ThroughBall = 21,
     }
 
-    pub const EXITS: usize = 24;
+    pub const EXITS: usize = 22;
     pub const NAMES: [&str; EXITS] = [
         "snapshot-shot",
         "emergency-clear",
@@ -280,7 +139,6 @@ pub mod onball_diag {
         "shoot:layoff-pass",
         "hold:coach-tempo",
         "pass:patient-recycle",
-        "hold:patient",
         "pass:congestion",
         "CARRY",
         "DRIBBLE",
@@ -294,7 +152,6 @@ pub mod onball_diag {
         "pass:should_pass",
         "anti-oscillation",
         "no-decision (hold)",
-        "DRIBBLE (forced)",
         "pass:flank-release",
         "pass:THROUGH-BALL",
     ];
@@ -368,7 +225,6 @@ pub mod onball_diag {
         ShootLayoff,
         TempoHold,
         PatientRecycle,
-        PatientHold,
         CongestionPass,
         Carry,
         Dribble,
@@ -382,7 +238,6 @@ pub mod onball_diag {
         ShouldPass,
         AntiOscillation,
         NoDecision,
-        ForcedTakeOn,
         FlankRelease,
         ThroughBall,
     }

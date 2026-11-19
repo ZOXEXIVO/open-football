@@ -1,5 +1,7 @@
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, MidfielderCondition, MidfielderRead,
+};
 use crate::r#match::player::strategies::common::states::LooseBallChase;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -20,19 +22,16 @@ impl StateProcessingHandler for MidfielderTakeBallState {
                 MidfielderState::Running,
             ));
         }
-        // Somebody else has it. Running handles teammate/opponent
-        // ownership — hand off there instead of duplicating the dispatch.
+        // Somebody else has it: the read.
         if ctx.ball().is_owned() && !ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
+            return Some(MidfielderRead::change(ctx));
         }
 
         // Ball is loose: commit. No distance cap, no teammate yield, no
-        // "opponent is closer" bailout. The Running state's
-        // `is_best_player_to_chase_ball` already committed this player.
-        // Spatial-proximity checks against stationary rivals created
-        // stalemates where nobody actually went for the ball.
+        // "opponent is closer" bailout: the election committed him, and
+        // the dispatcher yields him when it no longer does. Spatial-
+        // proximity checks against stationary rivals created stalemates
+        // where nobody actually went for the ball.
         None
     }
 

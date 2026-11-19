@@ -574,6 +574,19 @@ fn main() {
         return;
     }
 
+    // `dev_simulate formations [days]` — the club's system census: how often
+    // each club's first team changes its formation over a season, and how
+    // many changes of head coach brought a new one with them.
+    if args.first().map(|a| a == "formations").unwrap_or(false) {
+        let mut census = FormationCensus::new(&harness.data);
+        for _ in 0..days {
+            harness.tick();
+            census.record(&harness.data);
+        }
+        census.print(days);
+        return;
+    }
+
     // `dev_simulate clash [days]` — the fixture-calendar census: players
     // named twice on one day, teams playing twice on one day, first teams
     // inside the rest gap, and when the day's domestic fixtures kick off.
@@ -780,6 +793,98 @@ impl InjuryCensus {
             new as f64 * 1000.0 / (self.players.max(1) as f64 * days.max(1) as f64),
             self.injured_now,
             before.injured_now,
+        );
+    }
+}
+
+/// How often each club's first team changes its formation, and how many
+/// changes of head coach are followed within a week by a new one.
+struct FormationCensus {
+    /// Each first team as last seen: its formation, its head coach, and the
+    /// day a new coach arrived if no new formation has followed yet.
+    sides: HashMap<u32, (Option<core::MatchTacticType>, u32, Option<u32>)>,
+    day: u32,
+    changes: u64,
+    coach_changes: u64,
+    coach_changes_with_a_new_system: u64,
+}
+
+impl FormationCensus {
+    /// A new formation this soon after a new coach is his.
+    const COACH_WEEK: u32 = 7;
+
+    fn first_teams(data: &SimulatorData) -> impl Iterator<Item = &core::Team> {
+        data.continents
+            .iter()
+            .flat_map(|c| &c.countries)
+            .flat_map(|c| &c.clubs)
+            .flat_map(|club| &club.teams.teams)
+            .filter(|team| team.team_type == TeamType::Main)
+    }
+
+    fn seen(team: &core::Team) -> (Option<core::MatchTacticType>, u32) {
+        (
+            team.tactics.as_ref().map(|t| t.tactic_type),
+            team.staffs.head_coach().id,
+        )
+    }
+
+    fn new(data: &SimulatorData) -> Self {
+        FormationCensus {
+            sides: Self::first_teams(data)
+                .map(|t| {
+                    let (shape, coach) = Self::seen(t);
+                    (t.id, (shape, coach, None))
+                })
+                .collect(),
+            day: 0,
+            changes: 0,
+            coach_changes: 0,
+            coach_changes_with_a_new_system: 0,
+        }
+    }
+
+    fn record(&mut self, data: &SimulatorData) {
+        self.day += 1;
+        for team in Self::first_teams(data) {
+            let (shape, coach) = Self::seen(team);
+            let Some(side) = self.sides.get_mut(&team.id) else {
+                self.sides.insert(team.id, (shape, coach, None));
+                continue;
+            };
+            if coach != side.1 {
+                self.coach_changes += 1;
+                side.2 = Some(self.day);
+            }
+            if side.0.is_some() && shape != side.0 {
+                self.changes += 1;
+                if side.2.is_some_and(|day| self.day - day <= Self::COACH_WEEK) {
+                    self.coach_changes_with_a_new_system += 1;
+                    side.2 = None;
+                }
+            }
+            side.0 = shape;
+            side.1 = coach;
+        }
+    }
+
+    fn print(&self, days: u32) {
+        let clubs = self.sides.len().max(1) as f64;
+        let seasons = (days as f64 / 365.0).max(1.0 / 365.0);
+        println!(
+            "--- FORMATION CENSUS ({} first teams, {days} days) ---",
+            self.sides.len()
+        );
+        println!(
+            "  formation changes: {} ({:.2} per club per season)",
+            self.changes,
+            self.changes as f64 / clubs / seasons
+        );
+        println!(
+            "  head-coach changes: {}, followed by a new formation within a week: {} ({:.0}%)",
+            self.coach_changes,
+            self.coach_changes_with_a_new_system,
+            self.coach_changes_with_a_new_system as f64 / self.coach_changes.max(1) as f64 * 100.0
         );
     }
 }

@@ -4,15 +4,15 @@
 //! same [`WideChannel`] so the two can never drift apart. See that
 //! module for why a state exists for standing still on a touchline.
 //!
-//! The difference is where he goes when the job ends. A wide midfielder
-//! drops back into support; a wide forward's next thought is the box —
-//! either the far post, if the plan has given him a slot, or the space
-//! behind the last defender.
+//! When the job ends the read sends him on, to whatever the attack gives
+//! him next or to his place.
 //!
 //! [`MidfielderHoldingWidthState`]: crate::r#match::midfielders::states::MidfielderHoldingWidthState
 
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::forwarders::states::common::{
+    ActivityIntensity, ForwardCondition, ForwardRead,
+};
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -29,37 +29,7 @@ pub struct ForwardHoldingWidthState {}
 
 impl StateProcessingHandler for ForwardHoldingWidthState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        if ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
-        }
-
-        if !WideChannel::still_mine(ctx) {
-            return Some(StateChangeResult::with_forward_state(
-                if ctx.team().is_control_ball() {
-                    // He has been given the box — which for a wide
-                    // forward is the far post, and `CreatingSpace` is
-                    // the state that steers at an assigned slot.
-                    ForwardState::CreatingSpace
-                } else {
-                    ForwardState::Returning
-                },
-            ));
-        }
-
-        // A ball played into his channel is his, and nothing else would
-        // pick it up — the loose-ball election in the dispatcher only
-        // covers a ball nobody is receiving.
-        if ctx.ball().is_towards_player()
-            && ctx.ball().distance() < 120.0
-            && !ctx.ball().is_owned()
-            && ctx.team().is_best_player_to_chase_ball()
-        {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::TakeBall,
-            ));
-        }
-
-        None
+        ForwardRead::hold(ctx, ForwardState::HoldingWidth)
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {

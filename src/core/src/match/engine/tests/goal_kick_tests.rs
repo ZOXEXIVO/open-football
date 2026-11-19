@@ -30,7 +30,6 @@ use super::goal_celebration_tests::squad;
 use crate::r#match::engine::ball::ball::{
     AwaitedRestart, HandlingVerdict, PassOriginRestart, RestartQuiet, RunOff, RunUpPhase,
 };
-use crate::r#match::engine::coach::CoachInstruction;
 use crate::r#match::engine::engine::FootballEngine;
 use crate::r#match::engine::officiating::restart_shape::RestartShape;
 use crate::r#match::engine::result::{DeadTime, Score};
@@ -975,7 +974,7 @@ fn a_wasted_goal_kick_is_delayed_once() {
     let (mut field, mut context) = kickoff();
     context.score.increment_home_goals();
     context.total_match_time = 85 * 60_000;
-    context.coach_home.instruction = CoachInstruction::WasteTime;
+    context.tactical_home.stance = -1.0;
     context.rng = MatchRng::from_seed(0x60A1);
     let gk = keeper_at(&mut field, Vector3::new(20.0, 272.0, 0.0));
     assert_eq!(

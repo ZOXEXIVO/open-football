@@ -20,6 +20,7 @@
 //! value: every entry point takes copies and the store is touched once a
 //! tick.
 
+use crate::r#match::player::state::PlayerState;
 use nalgebra::Vector3;
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -385,30 +386,12 @@ impl FrameTrace {
     /// how far it actually travelled since the previous sample. The two agree
     /// on every tick of honest physics; a row marked `*` moved further than
     /// its own velocity can explain, which is a relocation somebody applied.
-    /// Short name for a [`PlayerState::compact_id`] belonging to a
-    /// goalkeeper. Only his states are named, because he is the only player
-    /// the sample carries; anything else prints its raw id.
-    fn keeper_state_name(id: u16) -> &'static str {
-        match id {
-            100 => "stand",
-            102 => "jump",
-            103 => "DIVE",
-            104 => "catch",
-            105 => "punch",
-            106 => "kick",
-            107 => "clear",
-            108 => "hold",
-            109 => "throw",
-            110 => "pickup",
-            111 => "distrib",
-            112 => "comeout",
-            113 => "pass",
-            114 => "return",
-            117 => "prep",
-            118 => "walk",
-            119 => "takeball",
-            _ => "?",
-        }
+    /// The name of the [`PlayerState::compact_id`] the sample carries.
+    fn keeper_state_name(id: u16) -> String {
+        PlayerState::all()
+            .into_iter()
+            .find(|s| s.compact_id() == id)
+            .map_or_else(|| format!("state#{id}"), |s| s.to_string())
     }
 
     fn render(capture: &Capture) -> String {
@@ -443,12 +426,12 @@ impl FrameTrace {
             };
             let gk = match sample.gk {
                 Some((gap, height, state)) => format!(
-                    "{:>7.1} {:>5.2}  {:<8}",
+                    "{:>7.1} {:>5.2}  {:<18}",
                     gap,
                     height,
                     Self::keeper_state_name(state)
                 ),
-                None => format!("{:>7} {:>5}  {:<8}", "-", "-", "-"),
+                None => format!("{:>7} {:>5}  {:<18}", "-", "-", "-"),
             };
             out.push_str(&format!(
                 "{mark} {:>8} {:>8.2} {:>7.2} {:>6.2}  {:>7.2} {:>7.2} {:>7.2} {:>7.2} {:>6.2}  {:<6} {gk}{}{}{}\n",

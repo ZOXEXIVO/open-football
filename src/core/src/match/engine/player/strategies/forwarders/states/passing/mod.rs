@@ -1,7 +1,12 @@
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::forwarders::states::common::{
+    ActivityIntensity, ForwardCondition, ForwardRead,
+};
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::forward_census::{ForwardCensus, FwdRequest};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::common::players::ops::clearance::TouchlineCall;
 use crate::r#match::player::strategies::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
@@ -24,7 +29,16 @@ impl StateProcessingHandler for ForwardPassingState {
         // Check if the forward still has the ball
         if !ctx.player.has_ball(ctx) {
             // Lost possession, transition to Running state
-            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+            return Some(StateChangeResult::with_forward_state(ForwardRead::released(ctx)));
+        }
+
+        // Pinned at his own touchline with no safe out: over the line, up
+        // it — the rule every role plays by (`TouchlineCall`).
+        if TouchlineCall::decide(ctx).is_some() {
+            return Some(StateChangeResult::with_forward_state_and_event(
+                ForwardRead::released(ctx),
+                TouchlineCall::put_out(ctx),
+            ));
         }
 
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
@@ -83,9 +97,11 @@ impl StateProcessingHandler for ForwardPassingState {
         if ctx.in_state_time >= min_scan_time
             && let Some((target_teammate, _)) = ctx.player().passing().find_best_pass_option()
         {
+            #[cfg(feature = "match-logs")]
+            ForwardCensus::note_pass_site(ctx, FwdRequest::PassingPass);
             // Execute the pass
             return Some(StateChangeResult::with_forward_state_and_event(
-                ForwardState::Running,
+                ForwardRead::released(ctx),
                 Event::PlayerEvent(PlayerEvent::PassTo(
                     PassingEventContext::builder()
                         .with_from_player_id(ctx.player.id)
@@ -103,6 +119,8 @@ impl StateProcessingHandler for ForwardPassingState {
         // need dribbling" — keep running with the ball. The old 20u
         // trigger flickered against Dribbling's 15u "no space" rule.
         if distance_to_goal < 200.0 {
+            #[cfg(feature = "match-logs")]
+            ForwardCensus::note_pass_site(ctx, FwdRequest::PassingBounce);
             let very_close_defender = ctx.players().opponents().exists(8.0);
             return if very_close_defender && ctx.in_state_time >= 15 {
                 Some(StateChangeResult::with_forward_state(

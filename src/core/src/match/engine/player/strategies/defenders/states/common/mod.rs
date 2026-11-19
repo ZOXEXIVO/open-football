@@ -1,60 +1,24 @@
 use crate::r#match::DefensiveDuty;
 use crate::r#match::MatchContext;
 use crate::r#match::StateProcessingContext;
-use crate::r#match::common_states::LooseBallChase;
+use crate::r#match::common_states::{LooseBallChase, ShapeTempo};
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::engine::player::strategies::common::{
     ActivityIntensityConfig, ConditionProcessor, FIELD_PLAYER_JADEDNESS_INTERVAL,
     JADEDNESS_INCREMENT, LOW_CONDITION_THRESHOLD,
 };
+use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::RestartHold;
-use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::common::team::ShapeDiscipline;
-use crate::r#match::player::strategies::players::DefensiveRole;
 use nalgebra::Vector3;
 
 mod line_step;
+mod read;
+mod slot;
 pub use line_step::LineStep;
-
-/// Holding a position that is itself moving.
-///
-/// # Why this exists
-///
-/// `DefenderCoveringState` and `DefenderGuardingState` both end their
-/// steering with a special case for "I have arrived", and both wrote it
-/// as `opponent_velocity * 0.4` / `* 0.5` — travel the way my man is
-/// travelling, at half his speed.
-///
-/// That is a defender being left behind, by construction. Whatever gap he
-/// had at the moment he arrived grows at half the carrier's speed for as
-/// long as he holds the point, and no amount of arriving correctly
-/// survives it. It is also, exactly, the thing reported from the viewer:
-/// *"they run parallel to the movement and don't try to take the ball"* —
-/// written into two states as their terminal behaviour.
-///
-/// A man holding station on a moving one matches his velocity and
-/// corrects whatever error is left. The correction is a gain on the error
-/// itself, so it vanishes as he settles and there is no distance at which
-/// his velocity changes character; the engine-wide speed clamp is the
-/// only ceiling it needs.
-pub struct StationKeeping;
-
-impl StationKeeping {
-    /// How hard the residual error is corrected, per tick.
-    ///
-    /// The error here is bounded by the states' own 2u arrival radius, so
-    /// this contributes at most 0.3 u/tick — the same order as a
-    /// defender's top speed (0.28-0.63) and therefore able to close the
-    /// last stride, while being negligible once he is on the point.
-    const GAIN: f32 = 0.15;
-
-    /// The velocity that keeps a defender on a point moving with `man`.
-    /// `error` is the vector from the defender to where he wants to be.
-    pub fn hold(man_velocity: Vector3<f32>, error: Vector3<f32>) -> Vector3<f32> {
-        man_velocity + error * Self::GAIN
-    }
-}
+pub use read::{DefenderRead, ReadLevel};
+pub use slot::DefensiveSlot;
 
 /// The one rule every defender obeys regardless of which state he is in:
 /// **do not let the ball sit behind you.**
@@ -124,68 +88,6 @@ impl Interception {
     }
 }
 
-/// When a tired defender may stand down, and when he has to come back. The
-/// midfielder's and forward's terms: genuinely tired, after a sustained run,
-/// with the ball far enough away. Entry sits inside the exit, so a man who is
-/// sent to rest is not sent straight back.
-pub struct DefensiveRest;
-
-impl DefensiveRest {
-    /// A fitness below which he eases off. Below the 65% he rests back up to,
-    /// and inside the range a match reaches: the old doors asked for 15-25%,
-    /// and players finish around 65-70%.
-    const STAMINA: u32 = 60;
-    const MIN_RUN_TICKS: u64 = 60;
-    /// 25 m: he stands down only with the ball well away.
-    const BALL_DISTANCE: f32 = 200.0;
-    /// 20 m: a play that comes this close wants him whatever his legs say.
-    const DEMAND_RANGE: f32 = 160.0;
-    /// A man inside this is a threat he cannot leave alone.
-    const THREAT_RADIUS: f32 = 100.0;
-
-    pub fn may_stand_down(ctx: &StateProcessingContext) -> bool {
-        ctx.player.player_attributes.condition_percentage() < Self::STAMINA
-            && ctx.in_state_time > Self::MIN_RUN_TICKS
-            && ctx.ball().distance() > Self::BALL_DISTANCE
-            && !ctx.players().opponents().exists(Self::THREAT_RADIUS)
-    }
-
-    /// The ball or a man has come close enough to want him back.
-    pub fn is_wanted(ctx: &StateProcessingContext) -> bool {
-        ctx.ball().distance() < Self::DEMAND_RANGE
-            || ctx.players().opponents().exists(Self::THREAT_RADIUS)
-    }
-}
-
-/// **A carrier in our own penalty area.** The two bodies
-/// `is_box_emergency_for_me` elects go to him; everybody else holds
-/// shape so the box is not emptied.
-///
-/// One copy, because it was five — `Standing`, `HoldingLine`, `Marking`,
-/// `Covering` and `Guarding` each carried the same thirteen lines with
-/// their own literal 25u threshold, which sits OUTSIDE
-/// [`TackleEngagement::DISENGAGE`]: every one of them could hand a
-/// defender into a `Tackling` state whose first act is to hand him back.
-pub struct BoxEmergency;
-
-impl BoxEmergency {
-    /// Where an elected body goes, or `None` when this is not his
-    /// emergency.
-    pub fn response(ctx: &StateProcessingContext) -> Option<DefenderState> {
-        if !ctx.player().defensive().is_box_emergency_for_me() {
-            return None;
-        }
-        let carrier = ctx.players().opponents().with_ball().next()?;
-        Some(
-            if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
-                DefenderState::Tackling
-            } else {
-                DefenderState::Pressing
-            },
-        )
-    }
-}
-
 impl DefensiveRecovery {
     /// Base recovery speed, before the pace and recovery multipliers.
     /// See the note at the call site for why this is the line-holding
@@ -223,8 +125,8 @@ impl DefensiveRecovery {
     ///
     /// # Why there is a weight and not just a velocity
     ///
-    /// The recovery speed is ~2-4 u/tick against state velocities of
-    /// ~0.2-0.4 and a top speed of ~0.28-0.63 — an order of magnitude
+    /// The recovery speed is 3 u/tick before its multipliers, against
+    /// state velocities of ~0.2-0.4 and a top speed of 0.36-0.63 — an order of magnitude
     /// larger, deliberately (see the note on `RECOVERY_SPEED`). That is
     /// fine while the rule is ON: the engine-wide clamp scales the result
     /// back to a sprint. What is not fine is that it used to switch on
@@ -252,9 +154,10 @@ impl DefensiveRecovery {
     /// while one hovering near the cover point keeps his own steering and
     /// merely leans goal-ward. There is no longer any position at which
     /// his velocity can jump.
-    pub fn depth_override(ctx: &StateProcessingContext) -> Option<(f32, f32)> {
-        // The man on the ball is not defending a line.
-        if ctx.player.has_ball(ctx) {
+    pub fn depth_override(ctx: &StateProcessingContext) -> Option<(f32, f32, f32)> {
+        // The man on the ball is not defending a line, and a man stepping
+        // with the line's call is leaving it on purpose.
+        if ctx.player.has_ball(ctx) || LineStep::is_read(ctx) {
             return None;
         }
         let own_goal_x = ctx.ball().direction_to_own_goal().x;
@@ -326,10 +229,8 @@ impl DefensiveRecovery {
         // either end of the band.
         let t = (behind / Self::COVER_MARGIN).clamp(0.0, 1.0);
         let weight = t * t * (3.0 - 2.0 * t);
-        // Somebody has to go to the ball. The plan's designated presser
-        // is that man; the legacy geometric `Primary` stays as the
-        // fallback for the ticks where no plan is live (a loose ball with
-        // no carrier, the first refresh of a possession).
+        // Somebody has to go to the ball: the man for the carrier, which
+        // covers the ticks where no plan is live as well.
         //
         // ⚠ …AND UNTIL NOW THAT SENTENCE WAS ONLY TRUE OF A BALL SOMEBODY
         // WAS CARRYING.
@@ -364,12 +265,8 @@ impl DefensiveRecovery {
         // ball. For a man who is going to win it, "three metres past it
         // toward my own goal" is not a cover point, it is the wrong side
         // of the ball.
-        if (ctx.ball().is_owned() && TackleEngagement::may_engage_carrier(ctx))
+        if (ctx.ball().is_owned() && DefenderRead::is_man_for_carrier(ctx))
             || matches!(ctx.team().my_duty(), DefensiveDuty::Press)
-            || matches!(
-                ctx.player().defensive().defensive_role_for_ball_carrier(),
-                DefensiveRole::Primary
-            )
             // His own side's pass is on its way to him.
             || ctx.tick_context.ball.pass_target == Some(ctx.player.id)
             || Self::is_going_for_a_loose_ball(ctx)
@@ -387,11 +284,17 @@ impl DefensiveRecovery {
         // 0.90 per shot. Matching the line-holding base keeps him on the
         // same scale as the players around him. `recovery_run_mult` and
         // the pace term still make a quick defender genuinely quicker.
+        if ShapeTempo::applies(ctx) {
+            let cover = Vector3::new(cover_x, ctx.player.position.y, 0.0);
+            let tempo = ShapeTempo::to(ctx, cover);
+            return Some((to_goal * tempo.pace(), weight, tempo.effort()));
+        }
         let profile = DefenderSkillProfile::from_ctx(ctx);
         let pace = (ctx.player.skills.physical.pace / 20.0).clamp(0.6, 1.2);
         Some((
             to_goal * Self::RECOVERY_SPEED * pace * profile.recovery_run_mult,
             weight,
+            0.0,
         ))
     }
 
@@ -660,9 +563,6 @@ impl DefensiveLine {
     }
 
     /// How far this defender is off the line, along the goal-to-goal axis.
-    pub fn deviation(ctx: &StateProcessingContext) -> f32 {
-        (ctx.player.position.x - Self::position_x(ctx)).abs()
-    }
 
     /// How far a defender may stray LATERALLY from his compact slot while
     /// doing an individual job. 60u = 7.5 m — enough to track a man
@@ -946,12 +846,7 @@ impl DefensiveLine {
         // Squeezing up with the ball is what a back four is FOR in
         // possession — it is the half of a compact block the attacking
         // phase depends on. The defending allowance is untouched.
-        let base_step_up = if ctx.team().tactical().in_possession && !MatchContext::shape_fix_off()
-        {
-            Self::DEPTH_STEP_UP_ATTACKING
-        } else {
-            Self::DEPTH_STEP_UP
-        };
+        let base_step_up = Self::step_up_allowance(ctx);
         let step_up = man.map_or(base_step_up, |m| {
             base_step_up
                 .max((m.x - line_x) * forward)
@@ -989,7 +884,20 @@ impl DefensiveLine {
         shaped
     }
 
-    /// Is this defender part of the line right now?
+    /// How far ahead of the line [`Self::hold_shape`] lets a man without a
+    /// mark stand: the attacking allowance with his side on the ball, the
+    /// offside one without.
+    fn step_up_allowance(ctx: &StateProcessingContext) -> f32 {
+        if ctx.team().tactical().in_possession && !MatchContext::shape_fix_off() {
+            Self::DEPTH_STEP_UP_ATTACKING
+        } else {
+            Self::DEPTH_STEP_UP
+        }
+    }
+
+    /// Is this defender part of the line right now — inside the depth band
+    /// [`Self::hold_shape`] holds the shape to, by the hysteresis? A man on
+    /// his own slot is in it whatever his job drops or pushes him to.
     ///
     /// Hysteretic on the defender's CURRENT state, which is what makes
     /// this safe to call from both sides of the hand-off: a defender
@@ -999,14 +907,20 @@ impl DefensiveLine {
     pub fn is_in_line(ctx: &StateProcessingContext) -> bool {
         let holding = matches!(
             ctx.player.state,
-            crate::r#match::player::state::PlayerState::Defender(DefenderState::HoldingLine)
+            PlayerState::Defender(
+                DefenderState::HoldingLine | DefenderState::Walking | DefenderState::PushingUp
+            )
         );
-        let band = if holding {
+        let margin = if holding {
             Self::EXIT_BAND
         } else {
             Self::ENTER_BAND
         };
-        Self::deviation(ctx) <= band
+        let forward = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
+        let ahead = (ctx.player.position.x - Self::position_x(ctx)) * forward;
+        let band = ShapeDiscipline::line_band(ctx);
+        (-(Self::DEPTH_DROP * band + margin)..=Self::step_up_allowance(ctx) * band + margin)
+            .contains(&ahead)
     }
 }
 

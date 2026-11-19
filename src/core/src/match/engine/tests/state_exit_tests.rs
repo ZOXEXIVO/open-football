@@ -1,5 +1,4 @@
-//! States leave on a football reason rather than a tick count: a resting
-//! forward when his legs are back or the play wants him, a closed-down
+//! States leave on a football reason rather than a tick count: a closed-down
 //! carrier when the pressure says release it.
 
 #![cfg(test)]
@@ -7,7 +6,6 @@
 use super::substitution_break_tests::kickoff;
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::events::Event;
-use crate::r#match::forwarders::states::{ForwardRestingState, ForwardState};
 use crate::r#match::midfielders::states::{MidfielderRunningState, MidfielderState};
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::state::PlayerState;
@@ -47,85 +45,6 @@ fn place(field: &mut MatchField, id: u32, at: Vector3<f32>) {
     p.velocity = Vector3::zeros();
 }
 
-/// The away keeper on the ball at his own goal, the home forward resting
-/// deep in his own half, far from it.
-fn resting_forward(field: &mut MatchField) -> u32 {
-    let forward = first_of(field, 1, PlayerFieldPositionGroup::Forward);
-    let keeper = first_of(field, 2, PlayerFieldPositionGroup::Goalkeeper);
-    let (own_x, their_goal_x) = match field.side_of(1) {
-        PlayerSide::Left => (150.0, 800.0),
-        PlayerSide::Right => (690.0, 40.0),
-    };
-    place(field, forward, Vector3::new(own_x, 272.0, 0.0));
-    place(field, keeper, Vector3::new(their_goal_x, 272.0, 0.0));
-    field.ball.position = Vector3::new(their_goal_x, 272.0, 0.0);
-    field.ball.current_owner = Some(keeper);
-    field.get_player_mut(forward).unwrap().redirect_to_fresh(
-        PlayerState::Forward(ForwardState::Resting),
-        TransitionSource::Reset,
-    );
-    forward
-}
-
-#[test]
-fn a_resting_forward_gets_up_when_his_legs_are_back_and_not_on_a_timer() {
-    let (mut field, context) = kickoff();
-    let forward = resting_forward(&mut field);
-
-    field
-        .get_player_mut(forward)
-        .unwrap()
-        .player_attributes
-        .condition = 5_900;
-    let still = decide(
-        &mut field,
-        &context,
-        forward,
-        600,
-        ForwardRestingState::default(),
-    );
-    assert_eq!(still.state, None, "the old 500-tick timeout is gone");
-
-    field
-        .get_player_mut(forward)
-        .unwrap()
-        .player_attributes
-        .condition = 6_000;
-    let up = decide(
-        &mut field,
-        &context,
-        forward,
-        10,
-        ForwardRestingState::default(),
-    );
-    assert_eq!(up.state, Some(PlayerState::Forward(ForwardState::Walking)));
-}
-
-#[test]
-fn a_resting_forward_answers_a_play_that_comes_to_him() {
-    let (mut field, context) = kickoff();
-    let forward = resting_forward(&mut field);
-    field
-        .get_player_mut(forward)
-        .unwrap()
-        .player_attributes
-        .condition = 4_000;
-    let at = field.get_player(forward).unwrap().position;
-    field.ball.position = at + Vector3::new(0.0, 120.0, 0.0);
-
-    let result = decide(
-        &mut field,
-        &context,
-        forward,
-        10,
-        ForwardRestingState::default(),
-    );
-    assert_eq!(
-        result.state,
-        Some(PlayerState::Forward(ForwardState::Walking))
-    );
-}
-
 /// A home midfielder on the ball in the centre circle, every away player
 /// well away — unless `presser` puts one at his shoulder.
 fn carrier(field: &mut MatchField, presser: bool) -> u32 {
@@ -156,6 +75,9 @@ fn carrier(field: &mut MatchField, presser: bool) -> u32 {
     );
     field.ball.position = centre;
     field.ball.current_owner = Some(mid);
+    // 1.4 s on the ball: past what a middling composure shields for, well
+    // inside the old 3 s timer.
+    field.ball.ownership_duration = 140;
     mid
 }
 
@@ -173,8 +95,6 @@ fn forced_release(mut result: StateProcessingResult) -> bool {
 fn a_closed_down_carrier_releases_it_because_of_the_pressure() {
     let (mut field, context) = kickoff();
     let mid = carrier(&mut field, true);
-    // 1.4 s on the ball: past what a middling composure shields for, well
-    // inside the old 3 s timer.
     let result = decide(
         &mut field,
         &context,

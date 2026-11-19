@@ -10,6 +10,7 @@
 //!  - duplicate pressing penalty -8..-15%
 //!  - poor chemistry: 6..10% chance both target same attacking space
 
+use crate::r#match::MatchPlayer;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
@@ -244,46 +245,51 @@ impl ChemistryMap {
         v
     }
 
-    /// Seed every same-team pair from a player roster. Roles and lanes
-    /// are derived from each player's tactical position group + spawn
-    /// y-coordinate. Teamwork inputs come from the player's mental
-    /// attribute. Called once at kickoff — subsequent live events can
-    /// adjust pair scores, but the initial baseline matches the squad
-    /// as it took the pitch.
-    pub fn seed_from_roster(
-        &mut self,
-        players: &[(u32, u32, crate::PlayerFieldPositionGroup, f32, f32)],
-        field_height: f32,
-    ) {
-        // Tuple layout: (player_id, team_id, position_group, y, teamwork_0_20).
-        for i in 0..players.len() {
-            for j in (i + 1)..players.len() {
-                let (id_a, team_a, pos_a, y_a, tw_a) = players[i];
-                let (id_b, team_b, pos_b, y_b, tw_b) = players[j];
-                if team_a != team_b {
-                    continue;
-                }
-                let role_a = role_from_position(pos_a);
-                let role_b = role_from_position(pos_b);
-                let lane_a = lane_from_y(y_a, field_height);
-                let lane_b = lane_from_y(y_b, field_height);
-                let score = initial_chemistry(ChemistryInputs {
-                    role_a,
-                    lane_a,
-                    role_b,
-                    lane_b,
-                    teamwork_a_0_20: tw_a,
-                    teamwork_b_0_20: tw_b,
-                    either_is_new: false,
-                });
-                self.set(id_a, id_b, score);
+    /// Seed every same-team pair among the men who kick off. A pair is new
+    /// when either has not started alongside the other in the club's
+    /// recent record.
+    pub fn seed(&mut self, players: &[&MatchPlayer], field_height: f32) {
+        for (i, a) in players.iter().enumerate() {
+            for b in players[i + 1..].iter().filter(|b| b.team_id == a.team_id) {
+                self.set(a.id, b.id, Self::initial(a, b, field_height));
             }
         }
     }
+
+    /// A substitute comes on: his pairs with the team-mates on the pitch,
+    /// by the same rule.
+    pub fn join(&mut self, newcomer: &MatchPlayer, on_pitch: &[&MatchPlayer], field_height: f32) {
+        for mate in on_pitch
+            .iter()
+            .filter(|m| m.team_id == newcomer.team_id && m.id != newcomer.id)
+        {
+            self.set(
+                newcomer.id,
+                mate.id,
+                Self::initial(newcomer, mate, field_height),
+            );
+        }
+    }
+
+    fn initial(a: &MatchPlayer, b: &MatchPlayer, field_height: f32) -> f32 {
+        let role = |p: &MatchPlayer| {
+            role_from_position(p.tactical_position.current_position.position_group())
+        };
+        initial_chemistry(ChemistryInputs {
+            role_a: role(a),
+            lane_a: lane_from_y(a.start_position.y, field_height),
+            role_b: role(b),
+            lane_b: lane_from_y(b.start_position.y, field_height),
+            teamwork_a_0_20: a.skills.mental.teamwork,
+            teamwork_b_0_20: b.skills.mental.teamwork,
+            either_is_new: !a.has_started_with(b.id) || !b.has_started_with(a.id),
+        })
+    }
 }
 
-/// Tactical familiarity for a team (0..1). Default 0.65 — recent tactic
-/// changes / new players drop it; long-stable XI raises it slightly.
+/// How used a side is to the shape it is playing (0..1), from its record:
+/// set with the skill aggregates, and read by the line step and the
+/// offside trap.
 #[derive(Debug, Clone, Copy)]
 pub struct TacticalFamiliarity {
     pub score: f32,

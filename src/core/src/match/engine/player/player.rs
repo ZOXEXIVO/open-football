@@ -9,12 +9,17 @@ use crate::r#match::player::diagnostics::motion_diag::{self, M_PER_UNIT};
 use crate::r#match::MovementEffort;
 use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::common_states::{
-    ChallengeKind, CounterPress, CounterPressCall, FatigueLoad, RecoveryChallenge, TackleEngagement,
+    ChallengeKind, CounterPress, CounterPressCall, FatigueLoad, LostBall, RecoveryChallenge,
+    TackleEngagement,
 };
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::DefenderCondition;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::stall::dead_ball_diag::MotionCensus;
+use crate::r#match::engine::adherence::Adherence;
+use crate::r#match::engine::zones::MatchZone;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::BackLine;
 use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK, RunOff};
 use crate::r#match::engine::engine::MATCH_HALF_TIME_MS;
 use crate::r#match::engine::flow::touchline::TouchlineStand;
@@ -43,7 +48,7 @@ use crate::r#match::{
 use crate::utils::DateUtils;
 use crate::{
     PersonAttributes, Player, PlayerAttributes, PlayerFieldPositionGroup, PlayerPositionType,
-    PlayerSkills,
+    PlayerSkills, RoleLevels,
 };
 use chrono::NaiveDate;
 use nalgebra::Vector3;
@@ -135,10 +140,10 @@ pub struct MatchPlayer {
     /// full ticks run the state machine, so this counter advances once
     /// per AI decision. Every per-state timeout (`in_state_time > N`) and
     /// the fatigue curve are calibrated in these units. Reset to 0 by
-    /// [`MatchPlayer::transition_to`] (a true state-machine transition);
-    /// [`MatchPlayer::redirect_to`] (the out-of-band loose-ball / reset
-    /// overrides) deliberately PRESERVES it. See `game_tick_light` for why
-    /// light ticks leave it alone.
+    /// [`MatchPlayer::transition_to`] (a true state-machine transition) and
+    /// by [`MatchPlayer::redirect_to_fresh`] (the out-of-band loose-ball /
+    /// reset overrides). See `game_tick_light` for why light ticks leave it
+    /// alone.
     pub in_state_time: u64,
     /// The state occupied immediately BEFORE the current one, ignoring
     /// self-transitions. Read by the decision-commitment guard in
@@ -333,6 +338,17 @@ pub struct MatchPlayer {
     /// Seeds his match psychology once the standard of the match is known;
     /// the match never reads his career. See `KickoffMind`.
     pub kickoff_mind: KickoffMind,
+    /// His level in every role, so a re-lay or a substitution reads how well
+    /// he knows the place he is put in.
+    pub role_levels: RoleLevels,
+    /// How much he believes in the head coach's plan, 0–1
+    /// (`CoachPlayerBond::tactical_buy_in`); 0.5 with no coach to believe in.
+    pub buy_in: f32,
+    /// How closely he follows the plan, as last read.
+    pub adherence: Adherence,
+    /// The team-mates he has started alongside in the club's recent
+    /// record; `None` with no record, when he counts as settled with all.
+    pub started_with: Option<Vec<u32>>,
 
     /// The worst injury he has picked up in this match, if any. Read by
     /// the treatment, the medical pass, his effective skill and, after the
@@ -340,8 +356,27 @@ pub struct MatchPlayer {
     pub injury: Option<InjuryGrade>,
     /// Match time at which his treatment is over.
     pub treated_by_ms: u64,
-    /// Tick the ball was taken off him, until he has reacted to it.
-    pub lost_ball_at: Option<u64>,
+    /// A ball his side lost, by him or near him, until he has reacted to it.
+    pub lost_ball: Option<LostBall>,
+    /// A save he made on his feet, waiting for his next decision to carry
+    /// it out — see [`MatchPlayer::on_save_outcome`]. Spent by that decision.
+    pub pending_save: Option<SaveOutcome>,
+    /// What a goalkeeper coming for a high ball means to do with it, chosen
+    /// as he commits and kept while he is on the claim.
+    pub claim_intent: Option<ClaimIntent>,
+    /// The challenge his last decision went into, for the challenging state
+    /// to roll on the same tick. Cleared at the start of every AI tick.
+    pub staged_challenge: Option<ChallengeKind>,
+    /// A high ball a contest has given him to head — see
+    /// [`MatchPlayer::on_aerial_award`]. Spent once no header is coming to
+    /// him.
+    pub aerial_award: bool,
+    /// The aerial contest's decision on that claim, for the claim states to
+    /// carry out — see [`MatchPlayer::on_claim_outcome`].
+    pub pending_claim: Option<ClaimOutcome>,
+    /// A goalkeeper's ground speed as the last shot at his goal was struck, in
+    /// u/tick — see [`MatchPlayer::on_strike_seen`].
+    pub strike_speed: f32,
 
     /// Memo for `skills.max_speed_with_condition(condition)` keyed on
     /// the condition value it was computed for. Skills are static
@@ -380,6 +415,33 @@ pub struct MatchPlayer {
     /// see [`MatchPlayer::refresh_skill_reads`]. `None` until the first
     /// refresh.
     skill_reads: Option<SkillReads>,
+}
+
+/// What a save left a keeper with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveOutcome {
+    /// The ball is in his hands.
+    Held,
+    /// It came off him and is loose: tipped, parried, spilled or beaten.
+    Loose,
+}
+
+/// How a goalkeeper means to play a high ball he comes for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimIntent {
+    Catch,
+    Punch,
+}
+
+/// How the aerial contest decided a goalkeeper's claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimOutcome {
+    /// In his gloves.
+    Caught,
+    /// His fist met it: the punch is his to throw.
+    Punched,
+    /// He got to it and lost it, and it is loose near him.
+    Flapped,
 }
 
 /// Everything a player's skill reads depend on that can move in a match.
@@ -703,9 +765,19 @@ impl MatchPlayer {
             settledness: player.match_performance_settledness(now),
             matchday_form: player.matchday_form(now),
             kickoff_mind: player.kickoff_mind(now),
+            role_levels: RoleLevels::of(&player.positions),
+            buy_in: 0.5,
+            adherence: Adherence::NEUTRAL,
+            started_with: None,
             injury: None,
             treated_by_ms: 0,
-            lost_ball_at: None,
+            lost_ball: None,
+            pending_save: None,
+            claim_intent: None,
+            staged_challenge: None,
+            aerial_award: false,
+            pending_claim: None,
+            strike_speed: 0.0,
             max_speed_memo: MaxSpeedMemo::new(),
             velocity_fatigue_memo: (0, 0, 0.0),
             fatigue_load: None,
@@ -741,6 +813,8 @@ impl MatchPlayer {
         settledness: f32,
         matchday_form: f32,
         kickoff_mind: KickoffMind,
+        role_levels: RoleLevels,
+        buy_in: f32,
         use_extended_state_logging: bool,
     ) -> Self {
         MatchPlayer {
@@ -798,9 +872,19 @@ impl MatchPlayer {
             // which only the club side has.
             matchday_form,
             kickoff_mind,
+            role_levels,
+            buy_in,
+            adherence: Adherence::NEUTRAL,
+            started_with: None,
             injury: None,
             treated_by_ms: 0,
-            lost_ball_at: None,
+            lost_ball: None,
+            pending_save: None,
+            claim_intent: None,
+            staged_challenge: None,
+            aerial_award: false,
+            pending_claim: None,
+            strike_speed: 0.0,
             max_speed_memo: MaxSpeedMemo::new(),
             velocity_fatigue_memo: (0, 0, 0.0),
             fatigue_load: None,
@@ -881,10 +965,36 @@ impl MatchPlayer {
         self.transition_to(PlayerState::Injured, TransitionSource::EventHandler);
     }
 
+    /// Whether he has started alongside `team_mate` in the club's recent
+    /// record, or there is no record to say otherwise.
+    pub fn has_started_with(&self, team_mate: u32) -> bool {
+        self.started_with
+            .as_ref()
+            .is_none_or(|ids| ids.contains(&team_mate))
+    }
+
+    /// Read how closely he follows the plan, in a side whose familiarity
+    /// with its formation is `side_familiarity`.
+    pub fn read_adherence(&mut self, side_familiarity: f32) {
+        self.adherence = Adherence::of(self, side_familiarity);
+    }
+
     /// The ball has just been taken off him. What he does about it is
     /// his next decision.
     pub fn on_dispossessed(&mut self, tick: u64) {
-        self.lost_ball_at = Some(tick);
+        self.lost_ball = Some(LostBall {
+            at: tick,
+            himself: true,
+        });
+    }
+
+    /// The ball has just been taken off a team-mate near him: whether he
+    /// joins the press on it is his next decision.
+    pub fn on_side_dispossessed(&mut self, tick: u64) {
+        self.lost_ball.get_or_insert(LostBall {
+            at: tick,
+            himself: false,
+        });
     }
 
     /// Acts on a lost ball still waiting for his reaction; true when he
@@ -894,17 +1004,17 @@ impl MatchPlayer {
         context: &MatchContext,
         tick_context: &GameTickContext,
     ) -> bool {
-        let Some(lost_at) = self.lost_ball_at else {
+        let Some(lost) = self.lost_ball else {
             return false;
         };
-        match CounterPress::call(self, lost_at, context, tick_context) {
+        match CounterPress::call(self, lost, context, tick_context) {
             CounterPressCall::Wait => false,
             CounterPressCall::LetGo => {
-                self.lost_ball_at = None;
+                self.lost_ball = None;
                 false
             }
             CounterPressCall::Press(state) => {
-                self.lost_ball_at = None;
+                self.lost_ball = None;
                 self.redirect_to_fresh(state, TransitionSource::EventHandler);
                 true
             }
@@ -1245,6 +1355,8 @@ impl MatchPlayer {
             player: self,
             conditions: &context.conditions,
             match_progress,
+            side_on_ball: false,
+            ball_dead: false,
         };
         match group {
             PlayerFieldPositionGroup::Defender => {
@@ -1356,9 +1468,8 @@ impl MatchPlayer {
     /// `in_state_time` to 0 so the destination's timers count from entry.
     ///
     /// Use this for the normal handler hand-off (`change_state`) and the
-    /// set-piece teleport — the sites that reset the timer in the
-    /// pre-refactor engine. For the out-of-band overrides that left the
-    /// timer running, use [`redirect_to`](Self::redirect_to) instead.
+    /// set-piece teleport. The out-of-band overrides use
+    /// [`redirect_to_fresh`](Self::redirect_to_fresh).
     ///
     /// `source` records WHY the transition happened for the
     /// transition-graph audit (see [`TransitionSource`]); in production
@@ -1377,18 +1488,6 @@ impl MatchPlayer {
         self.in_state_time = 0;
     }
 
-    /// Out-of-band state override that PRESERVES the running `in_state_time`.
-    ///
-    /// Use only where the destination state genuinely does not read the
-    /// timer, or where a continuing timer is the intended semantics. If
-    /// the destination has ANY `in_state_time > N` guard, use
-    /// [`redirect_to_fresh`](Self::redirect_to_fresh) — a preserved timer
-    /// there trips the destination's timeout on its first real tick.
-    #[inline]
-    pub fn redirect_to(&mut self, state: PlayerState, source: TransitionSource) {
-        self.set_state_internal(state, source);
-    }
-
     /// Out-of-band override that RESETS `in_state_time`, so the
     /// destination's timers count from the moment the player was yanked
     /// into it.
@@ -1402,10 +1501,6 @@ impl MatchPlayer {
     /// and abandoned the chase immediately; the same stale timer made
     /// every defender leave `Standing` for `HoldingLine`, and every
     /// midfielder for `Running`, on the first tick after a goal reset.
-    ///
-    /// Timer-preserving `redirect_to` remains available for destinations
-    /// that don't read the timer, but every entry into a timeout-driven
-    /// state now routes through here.
     #[inline]
     pub fn redirect_to_fresh(&mut self, state: PlayerState, source: TransitionSource) {
         self.set_state_internal(state, source);
@@ -1413,7 +1508,7 @@ impl MatchPlayer {
     }
 
     /// The one place `self.state` is written. Both `transition_to` and
-    /// `redirect_to` route through here, so the transition-graph audit sees
+    /// `redirect_to_fresh` route through here, so the transition-graph audit sees
     /// every state change and the "no raw `.state =`" invariant has a
     /// single sanctioned site.
     #[inline]
@@ -1459,6 +1554,16 @@ impl MatchPlayer {
         // them on the first tick after the whistle.
         self.redirect_to_fresh(default, source);
         self.rebuild_waypoint_cache();
+    }
+
+    /// He plays `position` for the rest of the match: its role, its route
+    /// and the state the role starts from. A set-piece station belonged to
+    /// the role he has left.
+    pub fn take_position(&mut self, position: PlayerPositionType) {
+        self.tactical_position.current_position = position;
+        self.tactical_position.regenerate_waypoints(self.side);
+        self.set_piece_station = None;
+        self.set_default_state(TransitionSource::Substitution);
     }
 
     fn default_state(position: PlayerPositionType) -> PlayerState {
@@ -1694,6 +1799,7 @@ impl MatchPlayer {
                 self.last_activity_intensity,
                 self.tactical_position.current_position.position_group()
                     == PlayerFieldPositionGroup::Goalkeeper,
+                BackLine::of(self.tactical_position.current_position),
             );
         }
 
@@ -1897,6 +2003,92 @@ impl MatchPlayer {
         !matches!(self.state, PlayerState::Injured | PlayerState::Recovering)
     }
 
+    /// The save model has settled a shot on him. In the air or on the floor
+    /// the dive carries it out — it lands him, with the ball or without it.
+    /// On his feet it waits for his next decision (`KeeperRead`), which
+    /// takes a held ball into his body before he does anything with it.
+    pub fn on_save_outcome(&mut self, outcome: SaveOutcome) {
+        let down = matches!(
+            self.state,
+            PlayerState::Goalkeeper(GoalkeeperState::Diving | GoalkeeperState::GettingUp)
+        );
+        if !down {
+            self.pending_save = Some(outcome);
+        }
+    }
+
+    /// The aerial contest has decided the claim he came for. The claim is
+    /// over; what is left is carrying it out.
+    pub fn on_claim_outcome(&mut self, outcome: ClaimOutcome) {
+        self.claim_intent = None;
+        self.pending_claim = Some(outcome);
+    }
+
+    /// …or decided he never gets to it: somebody else plays the ball.
+    pub fn on_claim_lost(&mut self) {
+        self.claim_intent = None;
+    }
+
+    /// A shot at his goal has just been struck: how fast he was going is how
+    /// set he was for it.
+    pub fn on_strike_seen(&mut self) {
+        self.strike_speed = self.velocity.xy().norm();
+    }
+
+    /// The referee let play go on after his foul. A challenge that fouled
+    /// failed as a miss does, and costs him the same recovery.
+    pub fn on_foul_played_on(&mut self, challenge: Option<ChallengeKind>) {
+        if let Some(kind) = challenge {
+            self.on_challenge_missed(kind);
+        }
+    }
+
+    /// He has taken the ball off an opponent: a tackle won, booked where on
+    /// the pitch it happened.
+    pub fn on_tackle_won(&mut self, zone: Option<MatchZone>) {
+        self.statistics.tackles += 1;
+        if let Some(zone) = zone {
+            self.statistics.note_tackle_zone(zone);
+        }
+    }
+
+    /// A contest has given him a high ball to head: his own read takes him
+    /// up for it at his next decision.
+    pub fn on_aerial_award(&mut self) {
+        self.aerial_award = true;
+    }
+
+    /// A high ball a contest gives him is played by his own heading state,
+    /// which the ball waits for (`Ball::tick_aerial_delivery`).
+    pub fn plays_his_own_header(&self) -> bool {
+        matches!(
+            self.tactical_position.current_position.position_group(),
+            PlayerFieldPositionGroup::Defender
+                | PlayerFieldPositionGroup::Midfielder
+                | PlayerFieldPositionGroup::Forward
+        )
+    }
+
+    /// He is up for a header: in his own heading state, off the ground.
+    pub fn is_up_for_header(&self) -> bool {
+        self.is_airborne()
+            && matches!(
+                self.state,
+                PlayerState::Defender(DefenderState::Heading)
+                    | PlayerState::Midfielder(MidfielderState::Heading)
+                    | PlayerState::Forward(ForwardState::Heading)
+            )
+    }
+
+    /// His challenge is made: he may not go in again at once, and a miss
+    /// costs him the getting back up.
+    pub fn on_challenge_spent(&mut self, missed: Option<ChallengeKind>) {
+        self.start_tackle_cooldown();
+        if let Some(kind) = missed {
+            self.on_challenge_missed(kind);
+        }
+    }
+
     /// He went in and did not get it: he loses the time it takes to get back
     /// up, and no more. A man who wins the ball never comes here.
     pub fn on_challenge_missed(&mut self, kind: ChallengeKind) {
@@ -1947,10 +2139,22 @@ impl MatchPlayer {
             return;
         }
         let trace = &self.motion_trace;
+        let path_mm = (trace.total_path_u * M_PER_UNIT as f64 * 1000.0) as u64;
         let motion = &mut tally.outfield_motion;
         motion.state_changes += trace.total_state_changes;
-        motion.path_mm += (trace.total_path_u * M_PER_UNIT as f64 * 1000.0) as u64;
+        motion.path_mm += path_mm;
         motion.ticks += trace.total_ticks;
+        let role = match self.tactical_position.current_position.position_group() {
+            PlayerFieldPositionGroup::Defender => Some(&mut tally.defender_motion),
+            PlayerFieldPositionGroup::Midfielder => Some(&mut tally.midfielder_motion),
+            PlayerFieldPositionGroup::Forward => Some(&mut tally.forward_motion),
+            PlayerFieldPositionGroup::Goalkeeper => None,
+        };
+        if let Some(role) = role {
+            role.state_changes += trace.total_state_changes;
+            role.path_mm += path_mm;
+            role.ticks += trace.total_ticks;
+        }
     }
 
     pub fn heading(&self) -> f32 {
@@ -2173,20 +2377,6 @@ mod tests {
     }
 
     #[test]
-    fn redirect_to_sets_state_but_preserves_timer() {
-        // The timer-preserving primitive is still available for
-        // destinations that don't read `in_state_time`.
-        let mut p = build_player(PlayerPositionType::DefenderCenter);
-        p.in_state_time = 137;
-        p.redirect_to(
-            PlayerState::Defender(DefenderState::Marking),
-            TransitionSource::LooseBallOverride,
-        );
-        assert_eq!(p.state, PlayerState::Defender(DefenderState::Marking));
-        assert_eq!(p.in_state_time, 137, "redirect_to must preserve the timer");
-    }
-
-    #[test]
     fn redirect_to_fresh_resets_timer() {
         // Every entry into a timeout-driven state uses the fresh variant,
         // so the destination's guards count from the redirect.
@@ -2236,7 +2426,7 @@ mod tests {
         // so its timers start at the whistle — otherwise every defender
         // left Standing for HoldingLine on the first tick after a goal.
         let mut p = build_player(PlayerPositionType::DefenderCenter);
-        p.redirect_to(
+        p.transition_to(
             PlayerState::Defender(DefenderState::Marking),
             TransitionSource::Handler,
         );

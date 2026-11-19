@@ -1,9 +1,8 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperDelivery, KeeperFeetDecision,
-    KeeperGoalKick, KeeperSmother, KeeperSweepLimit,
+    ActivityIntensity, GoalkeeperCondition, KeeperDelivery, KeeperGoalKick, KeeperRead,
+    KeeperSweepLimit, ReadLevel, Reading,
 };
-use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::common::states::LooseBallChase;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
@@ -19,87 +18,45 @@ pub struct GoalkeeperTakeBallState {}
 
 impl StateProcessingHandler for GoalkeeperTakeBallState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // He has won the race. What happens to the ball is decided here,
-        // not by jogging home with it at his feet — `ReturningToGoal` used
-        // to be handed a keeper in possession and pass him on to
-        // `Distributing` a tick later, which is two states of dithering
-        // over a ball he could simply have picked up. See
-        // [`KeeperFeetDecision`]. His but beyond his feet is still the
-        // chase: nothing draws it to him (`Ball::move_to`).
-        if ctx.ball().mine_to_play() {
-            return Some(StateChangeResult::with_goalkeeper_state(
-                KeeperFeetDecision::state_for(ctx),
-            ));
-        }
-
-        // **A shot has been struck at his goal — stop chasing and go and
-        // defend it.**
-        //
-        // Every sibling state that can leave him off his line carries this
-        // branch — `Standing`, `Walking`, `ComingOut`, `ReturningToGoal` —
-        // and this one did not, so a keeper who had committed to a loose
-        // ball kept sprinting at the ball's current position for the whole
-        // flight: no set, no read, no dive. Measured on recordings,
+        // He has won the race, or something bigger than the race has come
+        // up: the read above the loose ball. What happens to a ball he has
+        // won is decided there, not by jogging home with it at his feet —
+        // and his but beyond his feet is still the chase, so that door
+        // leaves him here. A shot struck at his goal stops the chase: every
+        // sibling state that can leave him off his line read it and this
+        // one did not, so a keeper who had committed to a loose ball kept
+        // sprinting at it for the whole flight — measured on recordings,
         // long-range goals whose entire keeper state track reads
         // `Take Ball`.
-        //
-        // He got here far more often than the state name suggests, too. The
-        // universal loose-ball override in
-        // `PlayerFieldPositionGroup::process` forced a keeper into `TakeBall`
-        // for any unowned ball inside 60 u, and a struck shot is unowned —
-        // so this branch on its own used to be a two-cycle against it, in
-        // and straight back out. That override now declines live shots at his
-        // own goal, which is what makes the hand-off here stick.
-        //
-        // `PreparingForSave` rather than `Catching` or `Diving`: he may be a
-        // long way from his line, and that state owns the whole question —
-        // the smother, `KeeperShotDive`, the aerial claim, and the hand-off
-        // to `Catching` once he is inside the space he defends. One owner.
-        if let Some(target) = &ctx.tick_context.ball.cached_shot_target
-            && Some(target.defending_side) == ctx.player.side
-        {
-            Self::note_exit(ctx, 4);
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::PreparingForSave,
-            ));
-        }
-
-        // He has chased it down and a man has got there first, with the
-        // ball inside his own spread: that is a smother, not a lost race.
-        // See [`KeeperSmother`] — the gates are all in `assess`.
-        if let Some(attempt) = KeeperSmother::assess(ctx) {
-            return Some(KeeperSmother::commit(ctx, &attempt));
+        match KeeperRead::above(ctx, ReadLevel::LooseBall) {
+            Reading::Go(change) => {
+                Self::note_exit(ctx, 4);
+                return Some(change);
+            }
+            Reading::Mine => return None,
+            Reading::Clear => {}
         }
 
         // Close enough to gather — if it is his to gather, the question
         // every other door into a claim asks. A dead ball is nobody's, so
         // the man waiting over his own goal kick stays here instead of
         // catching it and then catching it again when it is handed to him.
-        if ctx.ball().distance() < 3.0
-            && !ctx.ball().is_owned()
-            && KeeperBallClaim::is_favourite(ctx)
-        {
+        if let Some(gather) = KeeperRead::gather(ctx) {
             Self::note_exit(ctx, 5);
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Catching,
-            ));
+            return Some(gather);
         }
 
         // Somebody has it — or he has just played it himself, which is the
         // same statement about whose ball it is. See [`KeeperDelivery`];
         // the restart taker is exempt inside the predicate, so a keeper
         // walking to his own goal kick is untouched by this.
-        if ctx.ball().is_owned() && !ctx.player.has_ball(ctx) {
+        if ctx.ball().is_owned() {
             Self::note_exit(ctx, 1);
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::ReturningToGoal,
-            ));
+            return KeeperRead::from(ctx, ReadLevel::Threat).go();
         }
         if KeeperDelivery::is_his(ctx) {
             Self::note_exit(ctx, 2);
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::ReturningToGoal,
-            ));
+            return KeeperRead::from(ctx, ReadLevel::Threat).go();
         }
 
         // **THE BALL HAS LEFT THE GROUND HE DEFENDS — it is somebody
@@ -148,9 +105,7 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
                 KeeperSweepLimit::axes(&prof),
             ) {
                 Self::note_exit(ctx, 3);
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::ReturningToGoal,
-                ));
+                return KeeperRead::from(ctx, ReadLevel::Threat).go();
             }
         }
 
@@ -176,17 +131,13 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
             // If ball is close, keep trying instead of giving up
             if ctx.in_state_time > 120 && ctx.ball().distance() > 10.0 {
                 Self::note_exit(ctx, 6);
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::Standing,
-                ));
+                return KeeperRead::from(ctx, ReadLevel::Threat).go();
             }
 
             // Hard timeout after 200 ticks regardless
             if ctx.in_state_time > 200 {
                 Self::note_exit(ctx, 6);
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::Standing,
-                ));
+                return KeeperRead::from(ctx, ReadLevel::Threat).go();
             }
         }
 

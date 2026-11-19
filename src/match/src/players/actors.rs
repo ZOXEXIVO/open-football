@@ -298,6 +298,9 @@ pub struct PlayerActor {
     parry: f32,
     /// Only the recorded Punching action closes a fist; a parry uses a palm.
     punching: bool,
+    /// The recording has him on the floor getting up: the sprawl holds
+    /// until it says he is on his feet.
+    getting_up: bool,
     punch: f32,
     /// **He is standing in the pre-match line, turned this way**, in radians
     /// about the world Y axis — see [`crate::broadcast::lineup`].
@@ -448,8 +451,9 @@ impl Attitude {
         match state {
             Some("Resting") => Attitude::Resting,
             Some(
-                "Standing" | "Holding Line" | "Guarding" | "Marking" | "Covering" | "Pressing"
-                | "Tracking Back" | "Tackling" | "Intercepting",
+                "Standing" | "One on One" | "Holding Line" | "Holding Shape" | "Guarding"
+                | "Marking" | "Covering" | "Pressing" | "Jockeying" | "Tracking Back"
+                | "Tackling" | "Intercepting",
             ) => Attitude::Alert,
             Some(
                 "Supporting Attack" | "Creating Space" | "Running In Behind" | "Cross Receiving",
@@ -1653,6 +1657,12 @@ impl Actors {
     /// already as fast as gravity says. Landing is where a keeper takes his
     /// time.
     const SPRAWL_RECOVERY: f32 = 0.42;
+    /// Seconds of match time the engine keeps its least nimble keeper down
+    /// after a dive (`ChallengeKind::Dive`): how long a recorded "Getting
+    /// Up" holds the sprawl at most. Past it the state is frozen in the dead
+    /// time after a goal, when no decision runs, and the beaten keeper's own
+    /// hold has him.
+    const LONGEST_GET_UP: f32 = 1.1;
     /// …and how much of that a keeper the recording already has RUNNING
     /// gives up, as a share.
     ///
@@ -2403,6 +2413,7 @@ impl Actors {
                     if actor.is_goalkeeper {
                         actor.declared = Self::declared(named, world.y, actor.declared);
                         actor.punching = named == Some("Punching");
+                        actor.getting_up = named == Some("Getting Up");
                     }
                     // A man with no body yet stays off the pitch, whatever the
                     // recording says about where he is standing. Everything
@@ -4803,6 +4814,7 @@ impl PlayerActor {
             aim: Vec2::ZERO,
             parry: 0.0,
             punching: false,
+            getting_up: false,
             punch: 0.0,
             at_attention: None,
             clock: 0.0,
@@ -5495,6 +5507,11 @@ impl PlayerActor {
                 * (1.0 + Actors::BEATEN_SPREAD * Complexion::carriage(self.id))
                 * (Actors::BEATEN_HOLD - 1.0);
             let hold = Actors::SPRAWL_HOLD * (1.0 - hurry) * (1.0 + beaten);
+            let hold = if self.getting_up {
+                hold.max(Actors::LONGEST_GET_UP)
+            } else {
+                hold
+            };
             if self.down > hold {
                 // …and quicker the more ground the recording has him
                 // covering: a man who is running is not still getting up.
@@ -7129,6 +7146,47 @@ mod flight {
                 (tail - FULL_LENGTH.len()) as f32 * 0.03
             );
         }
+    }
+
+    /// **"Getting Up" holds the sprawl, for as long as a get-up lasts.** The
+    /// engine keeps a keeper down for his get-up's own time, so a keeper who
+    /// saved it is still on the floor while the recording says so, where the
+    /// fixed hold alone has him on the way up. A "Getting Up" still recorded
+    /// past the longest get-up there is, is frozen in the dead time after a
+    /// goal, and it does not pin him to the grass.
+    #[test]
+    fn getting_up_holds_the_sprawl_for_a_get_up() {
+        let hips = |tail: usize, getting_up: bool| {
+            let mut actor = PlayerActor::new(1, true, true);
+            for height in FULL_LENGTH.iter().chain(std::iter::repeat_n(&0.0, tail)) {
+                actor.height = *height;
+                let airborne = *height > Actors::AIRBORNE_FEET;
+                actor.getting_up = getting_up && !airborne;
+                actor.speed = if airborne { 9.0 } else { 0.0 };
+                let ground = if airborne { 9.0 } else { 0.0 };
+                if actor.track_flight(0.03, 9.0, ground, false) {
+                    actor.tip = Vec2::X * actor.flat;
+                }
+            }
+            let (pitch, roll) = actor.topple();
+            Carriage::placed(pitch, roll, actor.lift())
+                .transform_point(Vec3::new(0.0, Physique::HIP, 0.0))
+                .y
+        };
+        let (held, free) = (hips(30, true), hips(30, false));
+        assert!(
+            held < 0.30,
+            "up while the recording has him getting up: {held:.2}"
+        );
+        assert!(
+            free > held + 0.20,
+            "the get-up held nothing: {free:.2} against {held:.2}"
+        );
+        assert!(
+            hips(90, true) > 0.85,
+            "pinned to the grass by a frozen state: {:.2}",
+            hips(90, true)
+        );
     }
 
     /// …but a keeper who leapt at a cross and landed on his feet never
@@ -9482,12 +9540,14 @@ pub(crate) mod replayed {
         ///    twenty metres where the maximum separates them by nothing.
         pub fn keepers(tracks: &mut ReplayTracks, start: f64) -> Vec<u32> {
             /// States only a goalkeeper is ever in.
-            const HIS_ALONE: [&str; 5] = [
+            const HIS_ALONE: [&str; 7] = [
                 "Preparing for Save",
                 "Coming Out",
                 "Returning to Goal",
                 "Distributing",
                 "Holding Ball",
+                "One on One",
+                "Getting Up",
             ];
             let ids: Vec<u32> = tracks.players.keys().copied().collect();
             let named: Vec<u32> = ids
@@ -9929,6 +9989,10 @@ mod keeper {
         let mut samples = 0u64;
         // Airborne episodes: how high, and how long.
         let mut flights: Vec<(f32, f32)> = Vec::new();
+        // Frames the engine has him `Getting Up` after a dive drawn as one,
+        // inside the longest get-up there is (past it the state is frozen in
+        // dead time), and of those the ones he is still drawn on the floor.
+        let (mut getting_up, mut held_down) = (0u64, 0u64);
         // And the pose at the top of each of them.
         let mut apex_gait: Vec<Gait> = Vec::new();
 
@@ -10046,7 +10110,18 @@ mod keeper {
                 actor.travel =
                     was + (travelling - was) * (1.0 - (-frame / Actors::TRAVEL_RESPONSE).exp());
                 actor.height = position.y;
+                // …and what the engine says he is doing, read the way
+                // `animate` reads it.
+                let named = tracks.states.get_mut(&id).and_then(|t| t.name_at(now));
+                actor.declared = Actors::declared(named, position.y, actor.declared);
+                actor.getting_up = named == Some("Getting Up");
                 actor.track_flight(frame, actor.speed.max(observed), step.length(), false);
+                if actor.getting_up && actor.dive > 1e-3 && actor.down <= Actors::LONGEST_GET_UP {
+                    getting_up += 1;
+                    if actor.dive > 0.5 {
+                        held_down += 1;
+                    }
+                }
 
                 let mut state = BallState::default();
                 if let Some(b) = ball {
@@ -10260,6 +10335,10 @@ mod keeper {
         let share = |n: u64, of: u64| 100.0 * n as f64 / of.max(1) as f64;
         let mean = |sum: f64, n: u64| sum / n.max(1) as f64;
         println!("KEEPER CENSUS over {samples} frames");
+        println!(
+            "  GETTING UP after a drawn dive: {getting_up} frames, on the floor in {:.1}%",
+            share(held_down, getting_up)
+        );
         println!(
             "  {:<8} {:>7} {:>9} {:>8} {:>9} {:>10} {:>7} {:>8} {:>9}",
             "band",
@@ -11190,6 +11269,11 @@ mod arrival {
         outfielder.attitude = Attitude::Calling;
         assert_eq!(outfielder.readiness(), 0.0);
         assert_eq!(Attitude::of(Some("Holding Line")), Attitude::Alert);
+        assert_eq!(Attitude::of(Some("One on One")), Attitude::Alert);
+        assert_eq!(Attitude::of(Some("Jockeying")), Attitude::Alert);
+        assert_eq!(Attitude::of(Some("Holding Shape")), Attitude::Alert);
+        assert_eq!(Attitude::of(Some("Tracking Back")), Attitude::Alert);
+        assert_eq!(Attitude::of(Some("Walking")), Attitude::Neutral);
         assert_eq!(Attitude::of(Some("Resting")), Attitude::Resting);
         assert_eq!(Attitude::of(Some("Supporting Attack")), Attitude::Calling);
         assert_eq!(Attitude::of(Some("Running")), Attitude::Neutral);

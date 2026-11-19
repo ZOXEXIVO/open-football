@@ -1,13 +1,14 @@
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, MidfielderCondition, MidfielderRead,
+};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::passing::CrossModel;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior,
+    StateProcessingHandler,
 };
-use nalgebra::Vector3;
 
 #[derive(Default, Clone)]
 pub struct MidfielderSwitchingPlayState {}
@@ -15,15 +16,13 @@ pub struct MidfielderSwitchingPlayState {}
 impl StateProcessingHandler for MidfielderSwitchingPlayState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if !ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Returning,
-            ));
+            return Some(MidfielderRead::change(ctx));
         }
 
         // Check if there's a good opportunity to switch play
-        if let Some((teammate_id, _)) = self.find_switch_play_target(ctx) {
+        if let Some(teammate_id) = self.find_switch_play_target(ctx) {
             return Some(StateChangeResult::with_midfielder_state_and_event(
-                MidfielderState::Passing,
+                MidfielderRead::released(ctx),
                 Event::PlayerEvent(PlayerEvent::PassTo(
                     PassingEventContext::builder()
                         .with_from_player_id(ctx.player.id)
@@ -34,29 +33,10 @@ impl StateProcessingHandler for MidfielderSwitchingPlayState {
             ));
         }
 
-        // No switch target found — bail to Passing to find any option
-        if ctx.in_state_time > 10 {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Passing,
-            ));
-        }
-
-        None
-    }
-
-    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Move towards the best position to switch play
-        if let Some((_, teammate_position)) = self.find_switch_play_target(ctx) {
-            let steering = SteeringBehavior::Seek {
-                target: teammate_position,
-            }
-            .calculate(ctx.player);
-
-            Some(steering.velocity)
-        } else {
-            // If no suitable target position is found, stay in the current position
-            Some(Vector3::new(0.0, 0.0, 0.0))
-        }
+        // No switch on: any pass, decided now.
+        Some(StateChangeResult::with_midfielder_state(
+            MidfielderState::Passing,
+        ))
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
@@ -66,7 +46,7 @@ impl StateProcessingHandler for MidfielderSwitchingPlayState {
 }
 
 impl MidfielderSwitchingPlayState {
-    fn find_switch_play_target(&self, ctx: &StateProcessingContext) -> Option<(u32, Vector3<f32>)> {
+    fn find_switch_play_target(&self, ctx: &StateProcessingContext) -> Option<u32> {
         // Find the best position to switch play to
         let player_position = ctx.player.position;
         let field_height = ctx.context.field_size.height as f32;
@@ -128,14 +108,17 @@ impl MidfielderSwitchingPlayState {
             .all()
             .filter(|teammate| {
                 (teammate.position.y - player_position.y).abs() > field_height * 0.3
-                    && ctx.player().has_clear_pass(teammate.id)
                     // From the wing a man in the box is a cross, not a switch.
                     && !ctx.player.side.is_some_and(|side| {
                         CrossModel::is_cross(player_position, teammate.position, side, ctx.context)
                     })
             })
-            .max_by(|a, b| score(a).total_cmp(&score(b)))
-            .map(|teammate| (teammate.id, teammate.position))
+            .filter_map(|teammate| {
+                let odds = ctx.player().clear_pass(teammate.id)?;
+                Some((teammate.id, odds.price(score(&teammate))))
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(id, _)| id)
     }
 
     fn calculate_space_around_player(

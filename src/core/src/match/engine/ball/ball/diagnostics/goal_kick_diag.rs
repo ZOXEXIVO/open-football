@@ -14,8 +14,7 @@
 
 use crate::r#match::engine::ball::ball::{AwaitedRestart, ShotTarget};
 use crate::r#match::engine::corner_shape::CornerShape;
-use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::state::PlayerState;
+use crate::r#match::player::diagnostics::keeper_census::KeeperCensus;
 use crate::r#match::{MatchPlayer, PlayerSide};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -124,8 +123,8 @@ pub struct GoalKickSnapshot {
     pub quiet_ticks: [u64; GoalKickCensus::QUIET_COUNT],
     pub lost: u64,
     pub shot: u64,
-    pub wait_state: [u64; GoalKickCensus::STATE_SLOTS],
-    pub handover_state: [u64; GoalKickCensus::STATE_SLOTS],
+    pub wait_state: [u64; KeeperCensus::SLOTS],
+    pub handover_state: [u64; KeeperCensus::SLOTS],
     pub at_spot_ticks: u64,
     pub opponent_in_area_ticks: u64,
     pub opponents_in_area: u64,
@@ -153,9 +152,8 @@ static QUIET_REACHED: [AtomicU64; GoalKickCensus::QUIET_COUNT] =
 static QUIET_TICKS: [AtomicU64; GoalKickCensus::QUIET_COUNT] = [ZERO; GoalKickCensus::QUIET_COUNT];
 static LOST: AtomicU64 = ZERO;
 static SHOT: AtomicU64 = ZERO;
-static WAIT_STATE: [AtomicU64; GoalKickCensus::STATE_SLOTS] = [ZERO; GoalKickCensus::STATE_SLOTS];
-static HANDOVER_STATE: [AtomicU64; GoalKickCensus::STATE_SLOTS] =
-    [ZERO; GoalKickCensus::STATE_SLOTS];
+static WAIT_STATE: [AtomicU64; KeeperCensus::SLOTS] = [ZERO; KeeperCensus::SLOTS];
+static HANDOVER_STATE: [AtomicU64; KeeperCensus::SLOTS] = [ZERO; KeeperCensus::SLOTS];
 static AT_SPOT_TICKS: AtomicU64 = ZERO;
 static OPPONENT_IN_AREA_TICKS: AtomicU64 = ZERO;
 static OPPONENTS_IN_AREA: AtomicU64 = ZERO;
@@ -238,24 +236,6 @@ impl GoalKickCensus {
     /// `PlayerState::compact_id` space.
     const STATE_IDS: usize = 500;
 
-    /// `GoalkeeperState` discriminants, and one slot for a taker who is
-    /// not in a goalkeeper state.
-    pub const STATE_SLOTS: usize = 21;
-
-    fn state_slot(state: PlayerState) -> usize {
-        match state {
-            PlayerState::Goalkeeper(s) => s as usize,
-            _ => Self::STATE_SLOTS - 1,
-        }
-    }
-
-    pub fn slot_name(slot: usize) -> String {
-        GoalkeeperState::ALL
-            .iter()
-            .find(|s| **s as usize == slot)
-            .map_or_else(|| "not a keeper state".to_string(), |s| s.to_string())
-    }
-
     fn speed_bin(speed: f32) -> usize {
         let mps = speed * Self::MPS;
         Self::SPEED_EDGES
@@ -321,7 +301,7 @@ impl GoalKickCensus {
         t.settled_at = Some(settled_at);
 
         AT_SPOT_TICKS.fetch_add(1, Ordering::Relaxed);
-        WAIT_STATE[Self::state_slot(taker.state)].fetch_add(1, Ordering::Relaxed);
+        WAIT_STATE[KeeperCensus::slot(taker.state)].fetch_add(1, Ordering::Relaxed);
         let mut in_area = 0u64;
         let mut deep = 0u64;
         for p in players.iter().filter(|p| {
@@ -394,7 +374,7 @@ impl GoalKickCensus {
         t.setup_ticks = t.settled_at.map_or(0, |at| {
             now.saturating_sub(at).saturating_sub(t.phases[Self::HELD])
         });
-        HANDOVER_STATE[Self::state_slot(taker.state)].fetch_add(1, Ordering::Relaxed);
+        HANDOVER_STATE[KeeperCensus::slot(taker.state)].fetch_add(1, Ordering::Relaxed);
     }
 
     /// What the taker asked to do with the ball, ahead of the release that

@@ -4,23 +4,29 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
 #[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::diagnostics::delivery_diag::TouchKind;
+#[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::block_diag::{
     BEHIND_BALL, BEYOND_LOOKAHEAD, BlockDiag, CANDIDATES, FIRED, IN_WINDOW, OPP_SEEN,
     OUTSIDE_CORRIDOR, PERP_SUM_X100, SHOTS_SEEN, TOO_HIGH,
 };
 use crate::r#match::engine::ball::ball::flight::motion::Carrier;
+use crate::r#match::engine::ball::ball::flight::roll::BallRoll;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::strike_diag::{GrantPath, StrikeCensus};
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::{DeflectionKind, TakeRule};
 use crate::r#match::engine::ball::ball::{
     AerialReach, Ball, BlockContact, CONTROL_DISTANCE, GRAVITY_PER_TICK, PlayerReach,
 };
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
 use crate::r#match::events::EventCollection;
+use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext as EffSkillCtx, effective_skill,
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
-use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart, PlayerSide};
+use crate::r#match::{MatchContext, MatchPlayer, MatchRng, PassOriginRestart, PlayerSide};
 use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
@@ -202,7 +208,7 @@ impl Ball {
             // Only opposing outfielders block (GK save pipeline handles
             // shots that reach the line; a GK blocking a shot at 5u
             // out is already Catching/Diving).
-            if player.team_id == shooter_team {
+            if player.team_id == shooter_team || !player.can_play_ball() {
                 continue;
             }
             if player.tactical_position.current_position.position_group()
@@ -413,7 +419,19 @@ impl Ball {
         (if at_arm_height { 0.06 } else { 0.01 }) * (1.4 - 0.8 * decisions)
     }
 
-    fn resolve_block(
+    /// Where a blocked shot that drops loose comes to rest from the block
+    /// (3–8 m), and one turned sideways (8–20 m), in units.
+    pub(crate) const LOOSE_REST: (f32, f32) = (24.0, 64.0);
+    pub(crate) const SIDEWAYS_REST: (f32, f32) = (64.0, 160.0);
+
+    /// The pace that leaves a deflected ball at rest somewhere in `band`
+    /// from where it was struck, and never faster than it arrived.
+    pub(crate) fn rest_speed(band: (f32, f32), arrived: f32, rng: &MatchRng) -> f32 {
+        let rest = band.0 + (band.1 - band.0) * rng.unit_f32();
+        BallRoll::speed_to_rest_at(rest).min(arrived)
+    }
+
+    pub(crate) fn resolve_block(
         &mut self,
         blocker_id: u32,
         outcome_roll: f32,
@@ -512,9 +530,11 @@ impl Ball {
         // block-fed corners from 0.74 a match to near zero.
         let roll = outcome_roll;
         let p_controlled = controlled_block_prob;
-        let p_corner = p_controlled + 0.23;
+        // A loose block is a second ball in front of goal; the share was
+        // re-fitted 0.40 → 0.20 toward the corner against goals and shots.
+        let p_corner = p_controlled + 0.43;
         let p_safe = p_corner + 0.23;
-        let p_loose = p_safe + 0.40; // ~40% loose central rebound
+        let p_loose = p_safe + 0.20;
         // remainder ~14% → unlucky deflection toward goal (slows but stays live)
 
         // A block happens where the BALL is, not where the defender is.
@@ -548,6 +568,10 @@ impl Ball {
         self.previous_owner = self.current_owner.or(self.previous_owner);
         self.pass_target_player_id = None;
         self.cached_shot_target = None;
+        #[cfg(feature = "match-logs")]
+        {
+            self.touch_kind_hint = Some(TouchKind::ShotBlock);
+        }
         self.record_touch(blocker_id, blocker_team, tick, false);
         self.pass_origin_restart = PassOriginRestart::OpenPlay;
         // Dedicated Blocked event so the block credit can't leak into a
@@ -564,15 +588,24 @@ impl Ball {
                 StrikeCensus::note_grant(GrantPath::CONTEST, self.position.z);
                 self.open_arrival(GrantPath::CONTEST, blocker_pos);
             }
+            #[cfg(feature = "match-logs")]
+            context
+                .defender_census
+                .borrow_mut()
+                .tag_take(TakeRule::ShotBlock, blocker_id, tick);
             self.current_owner = Some(blocker_id);
             self.touch(blocker_id, blocker_carrier);
             self.flags.in_flight_state = 0;
             self.claim_cooldown = 25;
-            events.add_ball_event(BallEvent::Intercepted(
-                blocker_id,
-                self.previous_owner,
-                false,
-            ));
+            #[cfg(feature = "match-logs")]
+            context.defender_census.borrow_mut().note_deflection(
+                DeflectionKind::BlockKept,
+                self.position,
+                self.velocity,
+                blocker_pos,
+                tick,
+            );
+            events.add_player_event(PlayerEvent::ClaimBall(blocker_id));
             return;
         }
 
@@ -622,7 +655,10 @@ impl Ball {
             let dx = endline_x - self.position.x;
             let dy = wide_y - self.position.y;
             let dist = (dx * dx + dy * dy).sqrt().max(1.0);
-            let speed = (ball_velocity_2d * 0.6).clamp(3.0, 6.0);
+            // Solved to the line alone it would leave at a walking pace and
+            // be collected by the men around the block: it goes out because
+            // it leaves them, never faster than it came.
+            let speed = (ball_velocity_2d * 0.6).clamp(3.0, 6.0).min(ball_velocity_2d);
             self.velocity.x = (dx / dist) * speed;
             self.velocity.y = (dy / dist) * speed;
             self.sink_to_ground();
@@ -632,13 +668,21 @@ impl Ball {
             // a covering defender grabs it back (else it never becomes a
             // corner — the whole point of this branch).
             self.claim_cooldown = 16;
+            #[cfg(feature = "match-logs")]
+            context.defender_census.borrow_mut().note_deflection(
+                DeflectionKind::BlockBehind,
+                self.position,
+                self.velocity,
+                blocker_pos,
+                tick,
+            );
             return;
         }
 
         if roll < p_safe {
             // Safe sideways deflection — perpendicular skip away from
             // both goals. Loose ball; either team can recover.
-            let safe_speed = (ball_velocity_2d * 0.35).clamp(1.5, 3.5);
+            let safe_speed = Self::rest_speed(Self::SIDEWAYS_REST, ball_velocity_2d, &context.rng);
             // Rotate shot direction 90° (sign chosen by random) to skip sideways.
             let sign = if context.rng.unit_f32() < 0.5 {
                 -1.0
@@ -651,6 +695,14 @@ impl Ball {
             self.current_owner = None;
             self.flags.in_flight_state = 25;
             self.claim_cooldown = 0;
+            #[cfg(feature = "match-logs")]
+            context.defender_census.borrow_mut().note_deflection(
+                DeflectionKind::BlockSideways,
+                self.position,
+                self.velocity,
+                blocker_pos,
+                tick,
+            );
             return;
         }
 
@@ -666,13 +718,21 @@ impl Ball {
             // second-ball race.
             self.last_rebound_tick = tick;
             self.previous_owner = Some(blocker_id);
-            let loose_speed = (ball_velocity_2d * 0.30).clamp(1.0, 2.8);
+            let loose_speed = Self::rest_speed(Self::LOOSE_REST, ball_velocity_2d, &context.rng);
             self.velocity.x = rev_x * loose_speed;
             self.velocity.y = rev_y * loose_speed;
             self.sink_to_ground();
             self.current_owner = None;
             self.flags.in_flight_state = 20;
             self.claim_cooldown = 0;
+            #[cfg(feature = "match-logs")]
+            context.defender_census.borrow_mut().note_deflection(
+                DeflectionKind::BlockLoose,
+                self.position,
+                self.velocity,
+                blocker_pos,
+                tick,
+            );
             return;
         }
 
@@ -683,12 +743,20 @@ impl Ball {
         // blocker booked as previous owner (see the loose branch above).
         self.last_rebound_tick = tick;
         self.previous_owner = Some(blocker_id);
-        let unlucky_speed = (ball_velocity_2d * 0.50).clamp(1.5, 3.5);
+        let unlucky_speed = (ball_velocity_2d * 0.50).clamp(1.5, 3.5).min(ball_velocity_2d);
         self.velocity.x = shot_dir_x * unlucky_speed * 0.7;
         self.velocity.y = shot_dir_y * unlucky_speed * 0.7;
         self.sink_to_ground();
         self.current_owner = None;
         self.flags.in_flight_state = 25;
         self.claim_cooldown = 0;
+        #[cfg(feature = "match-logs")]
+        context.defender_census.borrow_mut().note_deflection(
+            DeflectionKind::BlockOn,
+            self.position,
+            self.velocity,
+            blocker_pos,
+            tick,
+        );
     }
 }

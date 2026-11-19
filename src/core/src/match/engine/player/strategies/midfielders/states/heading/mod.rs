@@ -1,35 +1,31 @@
-use crate::r#match::engine::ball::ball::{Ball, KICKABLE_DISTANCE};
+use crate::r#match::engine::ball::ball::{AerialReach, Ball, PlayerReach};
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, MidfielderCondition, MidfielderRead,
+};
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::{HeaderBooking, HeaderRule};
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::midfielder_census::{HeadingExit, MidfielderCensus};
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
-use crate::r#match::player::strategies::players::ShotType;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::player::strategies::players::{ShotType, WonHeader};
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
+    ConditionContext, MatchContext, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
-/// Ball must be at least this high to be a header rather than a foot
-/// contact. Matches the defender / forward heading bands so the same
-/// aerial ball reads identically whichever role reaches it first.
-const HEADING_HEIGHT_THRESHOLD: f32 = 1.5;
-/// Contact reach. Slightly wider than the defender's 1.5 because a
-/// midfield aerial duel is a running jump into the flight path rather
-/// than a set position in the six-yard box.
-const HEADING_DISTANCE_THRESHOLD: f32 = 2.0;
 /// Inside this distance of the opponent goal an aerial contact is an
 /// attempt on goal (a late-arriving eight meeting a cross), not a
 /// knock-down.
 const ATTACKING_HEADER_RANGE: f32 = 90.0;
 /// A won aerial only becomes an attempt ON GOAL when the position makes
-/// it a genuine chance — same "true big chance" philosophy as the
-/// deterministic Tier-1 shot in `midfielders/running` (bar 0.240 there;
-/// headers carry less power/placement than a set foot shot, so the bar
-/// here stays at the earlier 0.180 rung). Below the bar the won header
-/// is still won — it becomes the knock-down, which is what a real
-/// midfielder does with an aerial ball they can't attack the goal with.
+/// it a genuine chance: an expected-goal value of at least 0.260 from
+/// where he heads it. Below the bar the won header is still won — it
+/// becomes the knock-down, which is what a real midfielder does with an
+/// aerial ball they can't attack the goal with.
 const HEADER_ON_GOAL_XG_BAR: f32 = 0.260;
 /// Anti-monopoly parity with the Tier-1 foot-shot path: past this many
 /// attempts the aerial win is recycled as a knock-down instead of yet
@@ -56,146 +52,66 @@ const KNOCK_DOWN_APEX_M: (f32, f32) = (2.8, 1.0);
 /// which is what a knock-down is for.
 const KNOCK_DOWN_RANGE_U: (f32, f32) = (80.0, 144.0);
 
+/// How far a clearing header carries, in game units, worst header first:
+/// 16 m to 27 m.
+const CLEAR_RANGE_U: (f32, f32) = (130.0, 218.0);
+
+/// How high a clearing header loops, in metres.
+const CLEAR_APEX_M: f32 = 6.0;
+
 /// Sideways scatter on the nod, as a fraction of the forward component.
 /// 0.25 is about fourteen degrees either way — a header is aimed with the
 /// forehead, not passed with the laces.
 const KNOCK_DOWN_SCATTER: f32 = 0.25;
 
-/// Midfield aerial duel — the knock-down, the flick-on, the headed
-/// clearance from a goal kick dropping on the halfway line.
-///
-/// Midfielders were the one outfield role with no `Heading` state: every
-/// lofted ball into the middle third was resolved by whoever could get a
-/// foot to it after the bounce, so second balls in midfield never
-/// existed. This closes that gap using the same skill composite the
-/// corner contest reads (`aerial_outfield_*`), so a tall destroyer wins
-/// midfield headers against a small playmaker for the same reasons they
-/// win them in the box.
+/// **Up for a high ball a contest has given him.** He goes to meet it and
+/// takes off as it comes down to him. A ball the contest holds in the
+/// heading band for him is his to strike, by where he is: at goal from a
+/// genuine chance, clear from his own third, and down into the space ahead
+/// otherwise. A ball the contest carries an outcome for comes off his head
+/// through the delivery that brings it (`Ball::tick_aerial_delivery`).
+/// Nothing here rolls for the ball again.
 #[derive(Default, Clone)]
 pub struct MidfielderHeadingState {}
 
 impl StateProcessingHandler for MidfielderHeadingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Someone else got there first (or we did, with our feet).
-        if ctx.ball().is_owned() {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
+        let me = ctx.player.id;
+        let ball = &ctx.tick_context.ball;
+        if ctx.ball().is_owned() || !ctx.player.aerial_award || !ball.awaits_header_from(me) {
+            #[cfg(feature = "match-logs")]
+            MidfielderCensus::note_heading_exit(if ctx.ball().is_owned() {
+                HeadingExit::Owned
+            } else {
+                HeadingExit::AwardGone
+            });
+            return Some(MidfielderRead::change(ctx));
+        }
+        let position = ctx.tick_context.positions.ball.position;
+        let falling = ctx.tick_context.positions.ball.velocity.z <= 0.0;
+        if falling && !ctx.player.is_airborne() && ctx.ball().distance() <= Self::TAKE_OFF {
+            let apex = AerialReach::header_leap_for(position.z, ctx.player.skills.physical.jumping)
+                .max(Self::HOP);
+            return Some(StateChangeResult::with_midfielder_state_and_event(
+                MidfielderState::Heading,
+                Event::PlayerEvent(PlayerEvent::Leap(me, apex)),
             ));
         }
-
-        // A ball an engine-level contest awarded to somebody else is not
-        // ours to challenge — same double-jeopardy rule as the defender
-        // heading state; touching it wiped the grant and vanished the
-        // won header.
-        if ctx
-            .tick_context
-            .ball
-            .aerial_contest_winner
-            .is_some_and(|w| w != ctx.player.id)
-        {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
-        }
-
-        let ball_position = ctx.tick_context.positions.ball.position;
-        // A ball the contest awarded him is his within the reach the engine
-        // granted it at (`PlayerReach::can_strike`): the delivery is applied
-        // there, and a tighter reach of this state's own left it hanging
-        // beside him unstruck.
-        let awarded = ctx.tick_context.ball.aerial_contest_winner == Some(ctx.player.id);
-        let reach = if awarded {
-            KICKABLE_DISTANCE
+        let reached = if MatchContext::cross_head_arrival_off() {
+            PlayerReach::can_strike_at(position, ctx.player, true)
         } else {
-            HEADING_DISTANCE_THRESHOLD
+            PlayerReach::can_head(position, ctx.player)
         };
-
-        // Ball dropped out of the heading band or drifted out of reach —
-        // go back to reading the play. Running re-evaluates the chase.
-        if ball_position.z < HEADING_HEIGHT_THRESHOLD || ctx.ball().distance() > reach {
-            // …unless a contest AWARDED him this delivery and it is
-            // still hanging in the band on its way to him — an awarded
-            // ball is attacked, not abandoned (the same leak the
-            // forward state's awarded block closes; a bail here
-            // vanished the won header and left the granted ball
-            // unclaimable until the grant lapsed).
-            if ball_position.z >= HEADING_HEIGHT_THRESHOLD && awarded {
-                return None;
-            }
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
+        if ball.aerial_contest_winner != Some(me) || !reached {
+            return None;
         }
-
-        // When an engine-level aerial contest (`resolve_cross_contest` /
-        // `resolve_corner_contest`) has already awarded this player the
-        // ball, the duel is settled — rolling `wins_duel` on top of it is
-        // double jeopardy, the same bug the forward heading state and the
-        // CB `AttackingCorner` state both carve out.
-        let contest_awarded = awarded;
-        if !contest_awarded && !self.wins_duel(ctx) {
-            // Lost the header — the ball goes on and we react to it.
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
-        }
-
-        // Won it. Where the contact goes depends on where on the pitch it
-        // happened — attacking the box is a shot, deep in our own third
-        // is a clearance, and everything between is a knock-down forward.
-        // A contest-AWARDED header is exempt from the TEAM shot window —
-        // same rule and same measured reason as the forward state: the
-        // window is warm during every corner/cross sequence, and it was
-        // silently converting won set-piece headers into knock-downs.
-        if ctx.ball().distance_to_opponent_goal() < ATTACKING_HEADER_RANGE
-            && self.is_genuine_header_chance(ctx)
-            && ctx.player().can_shoot()
-            && (contest_awarded || ctx.team().can_shoot())
-        {
-            return Some(StateChangeResult::with_midfielder_state_and_event(
-                MidfielderState::Running,
-                Event::PlayerEvent(PlayerEvent::Shoot(
-                    ShootingEventContext::builder()
-                        .with_player_id(ctx.player.id)
-                        .with_target(ctx.player().shooting_direction())
-                        .with_reason("MID_HEADER_ON_GOAL")
-                        .with_shot_type(ShotType::Header)
-                        .build(ctx),
-                )),
-            ));
-        }
-
-        if ctx.ball().distance_to_own_goal() < DEFENSIVE_CLEARANCE_RANGE {
-            return Some(StateChangeResult::with_midfielder_state_and_event(
-                MidfielderState::Running,
-                Event::PlayerEvent(PlayerEvent::Shoot(
-                    ShootingEventContext::builder()
-                        .with_player_id(ctx.player.id)
-                        .with_target(ctx.player().clearing_direction())
-                        .with_reason("MID_HEADED_CLEARANCE")
-                        .build(ctx),
-                )),
-            ));
-        }
-
-        // Midfield third: a knock-down. Head it into the space ahead so a
-        // teammate can run onto it rather than booting it clear — this is
-        // the second-ball mechanic the state exists for.
-        Some(StateChangeResult::with_midfielder_state_and_event(
-            MidfielderState::Running,
-            Event::PlayerEvent(PlayerEvent::ClearBall(
-                ctx.player.id,
-                self.knock_down_velocity(ctx),
-            )),
-        ))
+        Some(self.strike(ctx))
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Attack the flight path — arrive at the ball, not where it was.
-        let target = ctx.tick_context.positions.ball.position;
         Some(
             SteeringBehavior::Arrive {
-                target,
+                target: WonHeader::meeting_point(ctx),
                 slowing_distance: 3.0,
             }
             .calculate(ctx.player)
@@ -210,6 +126,12 @@ impl StateProcessingHandler for MidfielderHeadingState {
 }
 
 impl MidfielderHeadingState {
+    /// He takes off as the ball comes within 2 m of him on its way down.
+    const TAKE_OFF: f32 = 16.0;
+    /// He attacks a header on the jump even when it comes at his head: a
+    /// hop of 0.2 m.
+    const HOP: f32 = 0.2;
+
     /// Is this won aerial a genuine attempt-on-goal position, or a ball
     /// to cushion for a teammate? Reads the same skill-and-position xG
     /// the Tier-1 foot-shot gate reads, so "what counts as a chance"
@@ -241,36 +163,95 @@ impl MidfielderHeadingState {
         profile.expected_xg(distance, true) >= HEADER_ON_GOAL_XG_BAR
     }
 
-    /// Aerial duel against the nearest contesting opponent.
-    ///
-    /// Uses the shared `aerial_outfield_*` composites (heading, jumping,
-    /// strength, balance, bravery, fatigue-aware) so midfield duels are
-    /// scored on the same axis as the corner contest. An uncontested
-    /// ball still needs a clean contact — elite headers effectively
-    /// never miss, poor ones can glance it.
-    fn wins_duel(&self, ctx: &StateProcessingContext) -> bool {
-        let minute = sc::minute_from_ms(ctx.context.total_match_time);
-        let mine = sc::aerial_outfield_attacker(ctx.player, minute);
-
-        // Only an opponent close enough to actually jump with us counts.
-        let contest = ctx
-            .players()
-            .opponents()
-            .nearby(HEADING_DISTANCE_THRESHOLD * 2.0)
-            .filter_map(|opponent| ctx.context.players.by_id(opponent.id))
-            .map(|opponent| sc::aerial_outfield_defender(opponent, minute))
-            .fold(0.0_f32, f32::max);
-
-        // Uncontested: a clean contact is the strong default, scaled by
-        // how good a header of the ball this player is. Contested: the
-        // skill gap moves the odds continuously around an even duel.
-        let win_prob = if contest <= 0.0 {
-            (0.72 + mine * 0.26).clamp(0.60, 0.97)
+    /// The header the contest left him, played by where he meets it: at
+    /// goal by [`WonHeader`], the rule every role plays a won header by.
+    /// `OF_CROSS_HEAD_ARRIVAL=off` restores the midfielder's own bar.
+    fn strike(&self, ctx: &StateProcessingContext) -> StateChangeResult {
+        let at_goal = if MatchContext::cross_head_arrival_off() {
+            ctx.ball().distance_to_opponent_goal() < ATTACKING_HEADER_RANGE
+                && self.is_genuine_header_chance(ctx)
+                && ctx.player().can_shoot()
         } else {
-            (0.50 + (mine - contest) * 0.60).clamp(0.12, 0.88)
+            WonHeader::at_goal(ctx)
         };
+        if at_goal {
+            #[cfg(feature = "match-logs")]
+            {
+                MidfielderCensus::note_heading_exit(HeadingExit::Shot);
+                MidfielderCensus::note_header(
+                    HeaderRule::HeadingShot,
+                    ctx.player,
+                    ctx.player.is_airborne(),
+                    HeaderBooking::Shot,
+                );
+            }
+            return StateChangeResult::with_midfielder_state_and_event(
+                MidfielderRead::released(ctx),
+                Event::PlayerEvent(PlayerEvent::Shoot(
+                    ShootingEventContext::builder()
+                        .with_player_id(ctx.player.id)
+                        .with_target(ctx.player().shooting_direction())
+                        .with_reason("MID_HEADER_ON_GOAL")
+                        .with_shot_type(ShotType::Header)
+                        .build(ctx),
+                )),
+            );
+        }
 
-        ctx.context.rng.bernoulli(win_prob)
+        if ctx.ball().distance_to_own_goal() < DEFENSIVE_CLEARANCE_RANGE {
+            #[cfg(feature = "match-logs")]
+            {
+                MidfielderCensus::note_heading_exit(HeadingExit::Clearance);
+                MidfielderCensus::note_header(
+                    HeaderRule::HeadingShot,
+                    ctx.player,
+                    ctx.player.is_airborne(),
+                    HeaderBooking::Clearance,
+                );
+            }
+            return StateChangeResult::with_midfielder_state_and_event(
+                MidfielderRead::released(ctx),
+                Event::PlayerEvent(PlayerEvent::ClearBall(
+                    ctx.player.id,
+                    self.clearing_velocity(ctx),
+                )),
+            );
+        }
+
+        // Midfield third: a knock-down into the space ahead, so a team-mate
+        // can run onto it — the second ball the header exists for.
+        #[cfg(feature = "match-logs")]
+        {
+            MidfielderCensus::note_heading_exit(HeadingExit::KnockDown);
+            MidfielderCensus::note_header(
+                HeaderRule::HeadingShot,
+                ctx.player,
+                ctx.player.is_airborne(),
+                HeaderBooking::Nothing,
+            );
+        }
+        StateChangeResult::with_midfielder_state_and_event(
+            MidfielderRead::released(ctx),
+            Event::PlayerEvent(PlayerEvent::KnockDown(
+                ctx.player.id,
+                self.knock_down_velocity(ctx),
+            )),
+        )
+    }
+
+    /// A clearing header: away from his own goal and toward the touchline,
+    /// 16-27 m and 6 m high, further the better he heads it — the headed
+    /// clear the cross contest plays.
+    fn clearing_velocity(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        let control = sc::aerial_outfield_attacker(ctx.player, minute).clamp(0.0, 1.0);
+        let (short, long) = CLEAR_RANGE_U;
+        Ball::headed_clear_velocity(
+            ctx.tick_context.positions.ball.position,
+            ctx.ball().direction_to_own_goal(),
+            short + (long - short) * control,
+            CLEAR_APEX_M,
+        )
     }
 
     /// Knock-down into the space ahead: forward along the attacking
@@ -328,8 +309,8 @@ impl MidfielderHeadingState {
 
         // …and reaches further, because he has got over it. Solved
         // against the height it is actually headed from — the drop is
-        // most of a knock-down's carry, and `HEADING_HEIGHT_THRESHOLD`
-        // alone is a metre and a half of it.
+        // most of a knock-down's carry, and the boot's ceiling
+        // (`AerialReach::VOLLEY`) alone is a metre and a half of it.
         let (short, long) = KNOCK_DOWN_RANGE_U;
         let range = short + (long - short) * control;
         let struck_from = ctx.tick_context.positions.ball.position.z.max(0.0);

@@ -1,6 +1,8 @@
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, MidfielderCondition, MidfielderRead,
+};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::passing::CrossModel;
 #[cfg(feature = "match-logs")]
@@ -19,9 +21,7 @@ impl StateProcessingHandler for MidfielderCrossingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if !ctx.player.has_ball(ctx) {
             // Lost possession, transition to Running
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
+            return Some(MidfielderRead::change(ctx));
         }
 
         // After windup time, deliver the cross
@@ -43,7 +43,7 @@ impl StateProcessingHandler for MidfielderCrossingState {
                     }
                 }
                 return Some(StateChangeResult::with_midfielder_state_and_event(
-                    MidfielderState::Running,
+                    MidfielderRead::released(ctx),
                     Event::PlayerEvent(PlayerEvent::PassTo(
                         PassingEventContext::builder()
                             .with_from_player_id(ctx.player.id)

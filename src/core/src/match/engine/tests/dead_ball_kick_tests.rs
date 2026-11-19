@@ -23,6 +23,7 @@ use crate::r#match::{
 };
 use crate::{PlayerFieldPositionGroup, PlayerSkills};
 use nalgebra::Vector3;
+use std::thread;
 
 const WIDTH: f32 = 840.0;
 const HEIGHT: f32 = 545.0;
@@ -160,14 +161,14 @@ fn pitch(level: f32, seed: u64) -> (MatchField, MatchContext) {
     let home = levelled(1, 100, level);
     let away = levelled(2, 300, level);
     let players = MatchPlayerCollection::from_squads(&home, &away);
-    let field = MatchField::new(840, 545, home, away);
+    let mut field = MatchField::new(840, 545, home, away);
     let mut context = MatchContext::new(&field, players, Score::new(1, 2), false, false);
     context.total_match_time = 60 * 60_000;
     context.rng = MatchRng::from_seed(seed);
     // The kickoff reading a match takes, so skills are read against the
     // standard of these two sides.
     let possession = TeamPossession::read(&field);
-    FootballEngine::<840, 545>::refresh_tactical_states(&field, &mut context, possession, 1);
+    FootballEngine::<840, 545>::refresh_tactical_states(&mut field, &mut context, possession, 1);
     (field, context)
 }
 
@@ -233,6 +234,11 @@ fn take_penalty(level: f32, seed: u64) -> Kick {
             if touched_at.is_none() && field.ball.last_touch_player_id == Some(keeper) {
                 touched_at = Some(t);
             }
+            // Off the woodwork and collected in play: the frame kept it out,
+            // not the keeper.
+            if touched_at.is_none() && field.ball.current_owner.is_some() {
+                break 'kick Outcome::Missed;
+            }
             let dead = field
                 .ball
                 .awaiting_restart
@@ -276,15 +282,36 @@ struct Census {
     saved_wrong_way: u32,
     central: u32,
     central_scored: u32,
+    /// Kicks the keeper stayed in the middle for, wherever the ball went.
+    stayed: u32,
 }
 
 impl Census {
+    /// Every kick is its own match, so they are played four at a time.
     fn of(level: f32, seeds: std::ops::Range<u64>) -> Self {
+        let seeds: Vec<u64> = seeds.collect();
+        let kicks: Vec<Kick> = thread::scope(|scope| {
+            let workers: Vec<_> = seeds
+                .chunks(seeds.len().div_ceil(4))
+                .map(|chunk| {
+                    scope.spawn(move || {
+                        chunk
+                            .iter()
+                            .map(|seed| take_penalty(level, 0x9E4A_0000 + seed))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .flat_map(|worker| worker.join().unwrap())
+                .collect()
+        });
         let mut c = Census::default();
-        for seed in seeds {
-            let kick = take_penalty(level, 0x9E4A_0000 + seed);
+        for kick in kicks {
             let scored = kick.outcome == Outcome::Goal;
             c.kicks += 1;
+            c.stayed += (kick.dive_side == Some(0)) as u32;
             match kick.outcome {
                 Outcome::Goal => c.goals += 1,
                 Outcome::Saved => c.saved += 1,
@@ -359,7 +386,7 @@ fn nobody_but_the_taker_and_the_keeper_is_in_the_area_at_the_kick() {
 
 #[test]
 fn penalties_go_in_about_four_times_in_five() {
-    let c = Census::of(14.0, 0..40);
+    let c = Census::of(14.0, 0..80);
     assert_eq!(c.unresolved, 0, "{c:#?}");
     // The woodwork may still keep one out; the keeper may not.
     assert_eq!(
@@ -383,11 +410,12 @@ fn penalty_census() {
     let c = Census::of(level, 0..300);
     println!("{c:#?}");
     println!(
-        "conversion {:.1}%  saved {:.1}%  missed {:.1}%  on frame {:.1}%",
+        "conversion {:.1}%  saved {:.1}%  missed {:.1}%  on frame {:.1}%  stayed central {:.1}%",
         c.conversion() * 100.0,
         c.saved as f32 * 100.0 / c.kicks as f32,
         c.missed as f32 * 100.0 / c.kicks as f32,
         c.on_frame as f32 * 100.0 / c.kicks as f32,
+        c.stayed as f32 * 100.0 / c.kicks as f32,
     );
 }
 

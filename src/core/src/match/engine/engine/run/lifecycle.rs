@@ -2,6 +2,7 @@
 //! they build, plus `play_inner`, the per-state loop that runs the ticks
 //! for one `MatchState` and hands back its stoppage time.
 
+use crate::FormationFamiliarity;
 use crate::r#match::CompetitionKind;
 use crate::r#match::engine::context::MatchEngineConfig;
 use crate::r#match::engine::engine::phase_prof::PhaseProf;
@@ -96,8 +97,21 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // team on the left side, so left == home / right == away here.
         let starting_home_tactic = Some(left_squad.tactics.tactic_type);
         let starting_away_tactic = Some(right_squad.tactics.tactic_type);
+        let squad_cards = [left_squad.coach_card, right_squad.coach_card];
+        let familiarity = [&left_squad, &right_squad].map(|squad| {
+            squad
+                .familiarity
+                .unwrap_or_else(|| FormationFamiliarity::settled(squad.tactics.tactic_type))
+        });
 
         let standard = MatchStandard::measure(&mut left_squad, &mut right_squad);
+        let strengths = [&left_squad, &right_squad].map(|squad| {
+            MatchStandard::of_side(&TeamSkillAggregates::at_kickoff(squad.main_squad.iter()))
+        });
+        let fits = [
+            SquadFit::of_squads(&left_squad, &right_squad),
+            SquadFit::of_squads(&right_squad, &left_squad),
+        ];
         let players = MatchPlayerCollection::from_squads(&left_squad, &right_squad);
 
         let mut match_position_data = if !config.match_recordings {
@@ -116,6 +130,32 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // through the state machine.
         context.starting_home_tactic = starting_home_tactic;
         context.starting_away_tactic = starting_away_tactic;
+        [context.familiarity_home, context.familiarity_away] = familiarity;
+        let seed = context.rng.seed();
+        let pins = TeamPins::current();
+        let [home_outlook, away_outlook] = Outlook::for_fixture(
+            strengths,
+            &context.environment,
+            context.is_knockout,
+            context.is_friendly,
+        );
+        context.coach_home.on_kickoff(
+            CoachCard::in_charge(pins.coach(true), squad_cards[0], seed, field.home_team_id),
+            home_outlook,
+            &fits[0],
+            pins.plan,
+        );
+        context.coach_away.on_kickoff(
+            CoachCard::in_charge(
+                pins.coach(false),
+                squad_cards[1],
+                seed,
+                context.field_away_team_id,
+            ),
+            away_outlook,
+            &fits[1],
+            pins.plan,
+        );
         context.standard = Some(standard);
         for p in &field.players {
             context.seed_psychology(p);
@@ -125,23 +165,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // Pair scores stay constant for the match — live events could
         // adjust them, but the initial baseline is what feeds the pass
         // evaluator's one-touch bonus from the first whistle.
-        let chemistry_roster: Vec<(u32, u32, PlayerFieldPositionGroup, f32, f32)> = field
-            .players
-            .iter()
-            .map(|p| {
-                (
-                    p.id,
-                    p.team_id,
-                    p.tactical_position.current_position.position_group(),
-                    p.position.y,
-                    p.skills.mental.teamwork,
-                )
-            })
-            .collect();
-        let field_h = field.size.height as f32;
+        let kickoff_eleven: Vec<&MatchPlayer> = field.players.iter().collect();
         context
             .chemistry
-            .seed_from_roster(&chemistry_roster, field_h);
+            .seed(&kickoff_eleven, field.size.height as f32);
 
         // Home-crowd arousal — the play-quality half of home advantage.
         // Stamped once on every match player (starters AND bench, so
@@ -329,7 +356,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut tactical_eval_counter: u32 = 0;
         // Tactical refresh uses an adaptive cadence: BASE during stable
         // play, TRANSITION right after possession swings / set-piece
-        // restarts / goals / coach-instruction changes / ball entering
+        // restarts / goals / ball entering
         // or leaving the attacking third. Each "transition trigger"
         // opens a TRANSITION_WINDOW_TICKS window during which the
         // cheaper TRANSITION interval is used.
@@ -344,8 +371,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             .and_then(|id| field.players.iter().find(|p| p.id == id).map(|p| p.team_id));
         let mut last_home_score: u8 = context.score.home_team.get();
         let mut last_away_score: u8 = context.score.away_team.get();
-        let mut last_home_instruction = context.coach_home.instruction;
-        let mut last_away_instruction = context.coach_away.instruction;
         let mut last_home_zone = context.tactical_home.ball_zone;
         let mut last_away_zone = context.tactical_away.ball_zone;
         // Position recording cursor — replaces the per-tick
@@ -371,9 +396,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // It is not MADE here, though. There is no play here to show it in,
         // so the whistle only opens the interval and the look below spends it
         // at the first stoppage of the second half, walked on and clipped like
-        // any other change — see [`SubstitutionWindows::open_interval`].
+        // any other change — see [`SubstitutionWindows::open_interval`]. The
+        // coaches reconsider their plans here, so a change of plan is in
+        // force from the second-half kickoff.
         if context.state.match_state.is_interval() {
             context.substitution_windows.open_interval();
+            context.give_half_time_talks(field);
+            Self::decide_plans(field, context);
             return;
         }
 
@@ -441,12 +470,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 coach_eval_counter = 0;
                 let prof_t = prof_on.then(Instant::now);
                 Self::evaluate_coaches(field, context);
-                // Once every coach-eval slice, also probe for situational
-                // formation overrides — the manager swap to a chasing /
-                // protecting shape based on score and minute. Cheap: a
-                // single match arm and an equality check against the
-                // current type per side.
-                Self::evaluate_situational_shape(field, &mut *context);
+                Self::decide_plans(field, &mut *context);
                 if let Some(t) = prof_t {
                     PhaseProf::add(PhaseProf::P_COACH, t.elapsed().as_nanos() as u64);
                 }
@@ -487,7 +511,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // Triggers (each cheap, no per-tick player walks):
             //   • possession owner team changed
             //   • score changed (goal scored — handled via reset path)
-            //   • coach instruction changed for either side
             //   • ball zone moved into / out of attacking third for
             //     either side
             //
@@ -513,10 +536,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             let away_score_now = context.score.away_team.get();
             let score_changed =
                 home_score_now != last_home_score || away_score_now != last_away_score;
-            let home_instr_now = context.coach_home.instruction;
-            let away_instr_now = context.coach_away.instruction;
-            let instr_changed =
-                home_instr_now != last_home_instruction || away_instr_now != last_away_instruction;
             let home_zone_now = context.tactical_home.ball_zone;
             let away_zone_now = context.tactical_away.ball_zone;
             // Attacking-third entry/exit on either side.
@@ -525,7 +544,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 != matches!(last_home_zone, BallZone::AttackingThird)
                 || matches!(away_zone_now, BallZone::AttackingThird)
                     != matches!(last_away_zone, BallZone::AttackingThird);
-            if possession_changed || score_changed || instr_changed || zone_changed {
+            if possession_changed || score_changed || zone_changed {
                 transition_window_remaining = TRANSITION_WINDOW_TICKS;
                 if possession_changed {
                     last_possession_team = current_owner_team;
@@ -533,10 +552,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 if score_changed {
                     last_home_score = home_score_now;
                     last_away_score = away_score_now;
-                }
-                if instr_changed {
-                    last_home_instruction = home_instr_now;
-                    last_away_instruction = away_instr_now;
                 }
                 if zone_changed {
                     last_home_zone = home_zone_now;
@@ -565,6 +580,21 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
 
             context.note_tick(field.ball.playing_time(context.current_tick()));
+            #[cfg(feature = "match-logs")]
+            {
+                let tick = context.current_tick();
+                context.team_census.sample(&TeamCensusInputs {
+                    field,
+                    holder: tick_ctx.possession.holder(),
+                    home_team_id: context.field_home_team_id,
+                    away_team_id: context.field_away_team_id,
+                    home_goals: context.score.home_team.get(),
+                    away_goals: context.score.away_team.get(),
+                    tick,
+                    period: context.state.match_state,
+                    playing_time: field.ball.playing_time(tick),
+                });
+            }
             if let Some((origin, _)) = field.ball.restart_in_progress() {
                 context.note_restart_wait(origin);
             }

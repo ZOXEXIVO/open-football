@@ -7,7 +7,7 @@
 //! [`TeamTacticalState::refresh`](super::team_state::TeamTacticalState::refresh),
 //! which is the only reader.
 
-use crate::Tactics;
+use crate::r#match::engine::teamplay::coach::plan::GamePlan;
 use crate::r#match::{MatchField, PlayerSide};
 
 /// Inputs to `TeamTacticalState::refresh` — bundled so the call site
@@ -109,16 +109,15 @@ pub struct TacticalRefreshInputs<'a> {
     /// while under siege.
     pub home_side: PlayerSide,
     pub tick_interval: u32,
-    pub coach_wants_high_press_home: bool,
-    pub coach_wants_high_press_away: bool,
-    pub home_score_diff: i8,
-    pub match_time_ms: u64,
-    pub home_avg_ability: u16,
-    pub away_avg_ability: u16,
+    /// Each coach's stance as it reaches the levers — see
+    /// [`TeamTacticalState::stance`](super::team_state::TeamTacticalState::stance).
+    pub home_stance: f32,
+    pub away_stance: f32,
     pub home_avg_condition: f32,
     pub away_avg_condition: f32,
-    pub home_tactics: &'a Tactics,
-    pub away_tactics: &'a Tactics,
+    /// The plan each coach has the side playing.
+    pub home_plan: GamePlan,
+    pub away_plan: GamePlan,
     /// Per-team skill composite aggregates. `engine.rs` walks the
     /// active players once and fills these so `refresh()` can tune
     /// line height, press sustainability, and build-up patience using

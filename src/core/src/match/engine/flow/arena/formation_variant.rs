@@ -1,17 +1,17 @@
-//! **A side short of men**: which line gives up a man, who moves across to
-//! fill the role that was left, and how the short line spreads itself.
+//! **Who stands where**: a side laid out on a formation, the role a side
+//! short of men gives up, and how the short line spreads itself.
 //!
 //! Every slot in a formation is a role, and the live shape is drawn from
-//! the slots the players stand in. Losing a man leaves one empty. The coach
-//! names the line he can spare — the attack when the side is protecting or
-//! level, the midfield when it has to chase — and every line between the
-//! gap and that one hands its nearest man across, so the role that matters
-//! is filled and the one left empty is the one he chose. The line left
-//! short then spreads its remaining men across its whole width instead of
-//! leaving a hole where the man was.
+//! the slots the players stand in. A change of formation and a man lost are
+//! one operation: the men on the pitch take the roles that move the side
+//! least, and a side with fewer men than roles leaves empty the ones from
+//! the line the coach can spare — the attack when the side is protecting or
+//! level, the midfield when it has to chase. The line left short then
+//! spreads its remaining men across its whole width instead of leaving a
+//! hole where the man was.
 
 use crate::r#match::{
-    MatchField, MatchPlayer, POSITION_POSITIONING, PlayerSide, PositionType, TransitionSource,
+    MatchField, POSITION_POSITIONING, PlayerSide, PositionType, TransitionSource,
 };
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 use nalgebra::Vector3;
@@ -31,24 +31,6 @@ impl FormationLine {
             PlayerFieldPositionGroup::Defender => Some(Self::Defence),
             PlayerFieldPositionGroup::Midfielder => Some(Self::Midfield),
             PlayerFieldPositionGroup::Forward => Some(Self::Attack),
-        }
-    }
-
-    fn depth(self) -> i8 {
-        match self {
-            Self::Defence => 0,
-            Self::Midfield => 1,
-            Self::Attack => 2,
-        }
-    }
-
-    /// The next line from this one toward `target`.
-    fn toward(self, target: Self) -> Self {
-        let step = (target.depth() - self.depth()).signum();
-        match self.depth() + step {
-            0 => Self::Defence,
-            1 => Self::Midfield,
-            _ => Self::Attack,
         }
     }
 }
@@ -77,8 +59,8 @@ impl FormationVariant {
             })
     }
 
-    /// `departed` has just left `team_id` a man short: move men across
-    /// from the lines between the gap and the one the coach can `spare`.
+    /// `departed` has just left `team_id` a man short: the side re-lays its
+    /// men onto the roles it had, leaving empty the one it can best afford.
     /// Returns the role left empty.
     pub fn reshape(
         field: &mut MatchField,
@@ -86,66 +68,208 @@ impl FormationVariant {
         departed: PlayerPositionType,
         spare: FormationLine,
     ) -> PlayerPositionType {
-        let Some(mut gap_line) = FormationLine::of(departed) else {
+        if FormationLine::of(departed).is_none() {
             return departed;
-        };
-        let side = field.side_of(team_id);
-        let target = Self::affordable(field, team_id, gap_line, spare);
-        let mut gap = departed;
-        while gap_line != target {
-            let donor_line = gap_line.toward(target);
-            let Some(gap_spot) = Self::slot(gap, side) else {
-                break;
-            };
-            let Some(donor) = field
-                .players
-                .iter_mut()
-                .filter(|p| {
-                    p.team_id == team_id
-                        && !p.off_pitch
-                        && FormationLine::of(p.tactical_position.current_position)
-                            == Some(donor_line)
-                })
-                .min_by(|a, b| {
-                    let near = |p: &MatchPlayer| {
-                        Self::slot(p.tactical_position.current_position, side)
-                            .map_or(f32::MAX, |spot| (spot - gap_spot).norm())
-                    };
-                    near(a).total_cmp(&near(b))
-                })
-            else {
-                break;
-            };
-            let left = donor.tactical_position.current_position;
-            donor.tactical_position.current_position = gap;
-            donor.tactical_position.regenerate_waypoints(Some(side));
-            donor.start_position = gap_spot;
-            donor.set_default_state(TransitionSource::Reset);
-            gap = left;
-            gap_line = donor_line;
         }
-        gap
+        let mut roles: Vec<PlayerPositionType> = field
+            .players
+            .iter()
+            .filter(|p| p.team_id == team_id && !p.off_pitch)
+            .map(|p| p.tactical_position.current_position)
+            .collect();
+        roles.push(departed);
+        Self::lay_out(field, team_id, &roles, spare)
+            .first()
+            .copied()
+            .unwrap_or(departed)
     }
 
-    /// The line that gives up the man: the one the coach would spare if
-    /// it has a man to give, otherwise the midfield, the attack, the
-    /// defence in that order. A line with one man left gives up nobody.
-    fn affordable(
+    /// Lay `team_id`'s outfielders on the pitch onto the outfield `roles`.
+    /// Each takes the role that moves the side least — the smallest sum of
+    /// squared steps from the slot he holds — so a gap is filled by a chain
+    /// of short steps rather than one long one. A side with fewer men than
+    /// roles leaves empty the ones it can best afford, from the line the
+    /// coach can `spare` while it has two to give. Returns the roles left
+    /// empty.
+    pub fn lay_out(
+        field: &mut MatchField,
+        team_id: u32,
+        roles: &[PlayerPositionType],
+        spare: FormationLine,
+    ) -> Vec<PlayerPositionType> {
+        let side = field.side_of(team_id);
+        let (taken, empty) = Self::assignment(field, team_id, roles, spare);
+        for (index, role) in taken {
+            let Some(spot) = Self::slot(role, side) else {
+                continue;
+            };
+            let player = &mut field.players[index];
+            if player.tactical_position.current_position == role {
+                continue;
+            }
+            player.tactical_position.current_position = role;
+            player.tactical_position.regenerate_waypoints(Some(side));
+            player.rebuild_waypoint_cache();
+            player.start_position = spot;
+            player.set_default_state(TransitionSource::Reset);
+        }
+        empty
+    }
+
+    /// Whether every man `team_id` has on the pitch can play the role he
+    /// would take if the side laid out on `roles`.
+    pub fn can_fill(
         field: &MatchField,
         team_id: u32,
-        gap_line: FormationLine,
+        roles: &[PlayerPositionType],
+        spare: FormationLine,
+    ) -> bool {
+        Self::assignment(field, team_id, roles, spare)
+            .0
+            .iter()
+            .all(|&(index, role)| field.players[index].role_levels.can_play(role))
+    }
+
+    /// Who takes which outfield role if `team_id` lays out on `roles`: each
+    /// man's index in `field.players` with his role, and the roles left
+    /// empty.
+    fn assignment(
+        field: &MatchField,
+        team_id: u32,
+        roles: &[PlayerPositionType],
+        spare: FormationLine,
+    ) -> (Vec<(usize, PlayerPositionType)>, Vec<PlayerPositionType>) {
+        const NEVER: f32 = 1.0e9;
+        let side = field.side_of(team_id);
+        let roles: Vec<PlayerPositionType> =
+            roles.iter().copied().filter(|r| !r.is_goalkeeper()).collect();
+        let men: Vec<usize> = field
+            .players
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| {
+                p.team_id == team_id
+                    && !p.off_pitch
+                    && !p.tactical_position.current_position.is_goalkeeper()
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let mut short: Vec<FormationLine> = Vec::new();
+        for _ in men.len()..roles.len() {
+            short.push(Self::affordable(&roles, &short, spare));
+        }
+        let mut costs: Vec<Vec<f32>> = men
+            .iter()
+            .map(|&i| {
+                let from = Self::slot(field.players[i].tactical_position.current_position, side);
+                roles
+                    .iter()
+                    .map(|&role| match (from, Self::slot(role, side)) {
+                        (Some(a), Some(b)) => (a - b).norm_squared(),
+                        _ => NEVER,
+                    })
+                    .collect()
+            })
+            .collect();
+        costs.extend(short.iter().map(|&line| {
+            roles
+                .iter()
+                .map(|&role| {
+                    if FormationLine::of(role) == Some(line) {
+                        0.0
+                    } else {
+                        NEVER
+                    }
+                })
+                .collect()
+        }));
+        if costs.len() != roles.len() || roles.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+        let column = Self::hungarian(&costs);
+        let taken = men
+            .iter()
+            .zip(&column)
+            .map(|(&index, &c)| (index, roles[c]))
+            .collect();
+        let empty = column[men.len()..].iter().map(|&c| roles[c]).collect();
+        (taken, empty)
+    }
+
+    /// Kuhn–Munkres on a square cost matrix: the column for each row.
+    fn hungarian(costs: &[Vec<f32>]) -> Vec<usize> {
+        let n = costs.len();
+        let (mut u, mut v) = (vec![0.0f64; n + 1], vec![0.0f64; n + 1]);
+        let (mut p, mut way) = (vec![0usize; n + 1], vec![0usize; n + 1]);
+        for i in 1..=n {
+            p[0] = i;
+            let mut j0 = 0;
+            let mut min = vec![f64::INFINITY; n + 1];
+            let mut used = vec![false; n + 1];
+            loop {
+                used[j0] = true;
+                let i0 = p[j0];
+                let mut delta = f64::INFINITY;
+                let mut j1 = 0;
+                for j in 1..=n {
+                    if used[j] {
+                        continue;
+                    }
+                    let cur = costs[i0 - 1][j - 1] as f64 - u[i0] - v[j];
+                    if cur < min[j] {
+                        min[j] = cur;
+                        way[j] = j0;
+                    }
+                    if min[j] < delta {
+                        delta = min[j];
+                        j1 = j;
+                    }
+                }
+                for j in 0..=n {
+                    if used[j] {
+                        u[p[j]] += delta;
+                        v[j] -= delta;
+                    } else {
+                        min[j] -= delta;
+                    }
+                }
+                j0 = j1;
+                if p[j0] == 0 {
+                    break;
+                }
+            }
+            loop {
+                let j1 = way[j0];
+                p[j0] = p[j1];
+                j0 = j1;
+                if j0 == 0 {
+                    break;
+                }
+            }
+        }
+        let mut column = vec![0usize; n];
+        for j in 1..=n {
+            if p[j] > 0 {
+                column[p[j] - 1] = j - 1;
+            }
+        }
+        column
+    }
+
+    /// The line that gives up a role: the one the coach would spare while
+    /// it has two left, otherwise the midfield, the attack, the defence in
+    /// that order. `taken` are the lines already giving one up.
+    fn affordable(
+        roles: &[PlayerPositionType],
+        taken: &[FormationLine],
         spare: FormationLine,
     ) -> FormationLine {
-        let count = |line: FormationLine| {
-            field
-                .players
+        let left = |line: FormationLine| {
+            roles
                 .iter()
-                .filter(|p| {
-                    p.team_id == team_id
-                        && !p.off_pitch
-                        && FormationLine::of(p.tactical_position.current_position) == Some(line)
-                })
+                .filter(|r| FormationLine::of(**r) == Some(line))
                 .count()
+                .saturating_sub(taken.iter().filter(|&&t| t == line).count())
         };
         [
             spare,
@@ -154,8 +278,8 @@ impl FormationVariant {
             FormationLine::Defence,
         ]
         .into_iter()
-        .find(|&line| line == gap_line || count(line) >= 2)
-        .unwrap_or(gap_line)
+        .find(|&line| left(line) >= 2)
+        .unwrap_or(spare)
     }
 
     /// Spread every line a man short across the width it had when it was

@@ -6,6 +6,8 @@ use crate::r#match::engine::ball::ball::PassOriginRestart;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::goal_kick_diag;
 use crate::r#match::events::EventCollection;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::keeper_census::ShotEnd;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer};
 
 impl Ball {
@@ -721,12 +723,14 @@ impl Ball {
             }
         };
 
-        if self.goal_scored {
+        let end = if self.goal_scored {
             resolve(&d::FATE_GOAL, true);
+            ShotEnd::Goal
         } else if self.pass_origin_restart != PassOriginRestart::OpenPlay {
             // A restart was staged this tick — corner, goal kick or
             // throw. The shot went out of play.
             resolve(&d::FATE_OUT, false);
+            ShotEnd::OutOfPlay
         } else if let Some(owner) = self.current_owner {
             let owner_p = players.iter().find(|p| p.id == owner);
             let is_gk = owner_p
@@ -735,22 +739,28 @@ impl Ball {
             let same_side = owner_p.and_then(|p| p.side) == self.census_shot_side;
             if is_gk && !same_side {
                 resolve(&d::FATE_GK, true);
+                ShotEnd::Keeper
             } else if same_side {
                 resolve(&d::FATE_CLAIMED_ATT, false);
+                ShotEnd::Attack
             } else {
                 resolve(&d::FATE_CLAIMED_DEF, false);
+                ShotEnd::Defence
             }
         } else if self.is_delivery_spent() {
             resolve(&d::FATE_STOPPED, false);
+            ShotEnd::Stopped
         } else if context
             .current_tick()
             .saturating_sub(self.last_shot_struck_tick)
             > 400
         {
             resolve(&d::FATE_TIMEOUT, false);
+            ShotEnd::TimedOut
         } else {
             return; // still in the air
-        }
+        };
+        context.keeper_census.borrow_mut().close_shot(end);
         self.census_shot_live = false;
     }
 

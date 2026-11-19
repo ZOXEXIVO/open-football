@@ -1,8 +1,11 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, DefenderRead, ReadLevel,
+};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
-use crate::r#match::player::strategies::common::states::{ClosingPoint, TackleEngagement};
-use crate::r#match::player::strategies::players::DefensiveRole;
+use crate::r#match::player::strategies::common::states::{
+    BlockChallenge, ChallengeKind, ClosingPoint, RecoveryChallenge, TackleEngagement,
+};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchContext, StateChangeResult, StateProcessingContext,
@@ -10,197 +13,50 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-// Commit distance moved to `TackleEngagement::COMMIT` — same value,
-// now shared with `DefenderTacklingState` so the hand-off is ordered.
-const BASE_PRESSING_DISTANCE: f32 = 45.0;
-const MAX_PRESSING_BONUS: f32 = 35.0; // effective range: 45-80
-const BASE_PRESSING_DISTANCE_DEFENSIVE_THIRD: f32 = 40.0;
-const MAX_PRESSING_BONUS_DEFENSIVE_THIRD: f32 = 30.0; // effective range: 40-70
 const CLOSE_PRESSING_DISTANCE: f32 = 25.0; // Wider close pressing zone for tight approach
-const STAMINA_THRESHOLD: f32 = 25.0; // Press until truly exhausted. Lowered
-// from 30% to match hysteresis with Resting's 45% crisis re-entry
-// gate (see `defenders/resting/mod.rs`) — the 25%–45% band is a
-// "stay put, slow walk" zone that prevents Pressing↔Resting flicker
-// when a crisis stays active while the defender is exhausted.
-const FIELD_THIRD_THRESHOLD: f32 = 0.33;
 
 #[derive(Default, Clone)]
 pub struct DefenderPressingState {}
 
 impl StateProcessingHandler for DefenderPressingState {
+    /// The run to the man on the ball. Inside challenge range and goal-side
+    /// of him he contains (`Jockeying`), whatever his tackle cooldown says;
+    /// a man the carrier has gone past has the stretched challenge left to
+    /// him and nothing else. A presser going with a pass stays on it while
+    /// the plan names him.
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // A player who has won the ball is not doing this any more.
-        //
-        // Nothing here asked whether HE had it, so a defender who
-        // intercepted or was simply the nearest body when it arrived
-        // carried on with an off-ball job while holding it — the same
-        // fixed point `Defender: Marking` was measured freezing on
-        // (99% of its stuck ticks with the owner 250-plus AI ticks into
-        // the state). `Running` is where a defender's on-ball decisions
-        // live, and this is the hand-off `DefenderStandingState` has
-        // always made.
-        if ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Running,
-            ));
+        if let Some(change) = DefenderRead::change_above(ctx, ReadLevel::Engage) {
+            return Some(change);
         }
-
-        // 1. Skill-aware fatigue gate. Stop pressing when the defender's
-        // condition multiplier (stamina/natural_fitness/match_readiness/
-        // determination blend with the fatigue curve) drops below the
-        // sustainable-press floor. Floors map roughly to 25% raw
-        // condition for a baseline-fitness CB and lower for elite-fit
-        // ones — preserving the previous hysteresis with Resting's
-        // crisis re-entry but skill-graded.
-        let def_profile = DefenderSkillProfile::from_ctx(ctx);
-        let stamina = ctx.player.player_attributes.condition_percentage() as f32;
-        if stamina < STAMINA_THRESHOLD || def_profile.def_condition_mult < 0.55 {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Resting,
-            ));
-        }
-
-        // 2. Back off during foul protection — don't crowd the free kick
-        if ctx.ball().is_in_flight() && ctx.ball().is_owned() {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::HoldingLine,
-            ));
-        }
-
-        // 3. Identify the opponent player with the ball
-        if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-            let distance_to_opponent = opponent.distance(ctx);
-
-            // If close enough to tackle, transition to Tackling state.
-            // Repeat-tackle prevention lives on the player via
-            // `tackle_cooldown` — a single-state cooldown here wouldn't
-            // cover the Standing/Running/Covering re-entry paths — and
-            // `should_commit` reads it here too, so a defender who has
-            // just lunged and missed contains the carrier instead of
-            // being handed into a `Tackling` state whose first act is to
-            // send him straight back.
-            if TackleEngagement::should_commit(ctx, distance_to_opponent) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Tackling,
-                ));
-            }
-
-            // Pressing distance scales with team intensity AND the
-            // defender's own press_profile — work-rate/anticipation/
-            // stamina/positioning blend with condition fatigue baked in.
-            // Poor pressers run a smaller bubble; elite pressers commit
-            // a bit further. Replaces the static base + intensity formula.
-            let intensity = ctx.team().press_intensity();
-            // Reuse `def_profile` from the top of process() — `from_ctx` is
-            // pure over the frozen tick snapshot, so rebuilding here would
-            // return the identical value.
-            let profile_bonus = def_profile.press_profile * 18.0;
-            let pressing_threshold = if ctx.ball().on_own_side()
-                && ctx.ball().distance_to_own_goal()
-                    < ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD
-            {
-                BASE_PRESSING_DISTANCE_DEFENSIVE_THIRD
-                    + MAX_PRESSING_BONUS_DEFENSIVE_THIRD * intensity
-                    + profile_bonus
-            } else {
-                BASE_PRESSING_DISTANCE + MAX_PRESSING_BONUS * intensity + profile_bonus
-            };
-
-            // …AND NEITHER HE NOR THE BOX-ELECTED MAN GETS DISTANCE-EXITED
-            // OR RE-RANKED OUT OF IT. The second body the box election
-            // sends is handed here by `BoxEmergency::response` whenever
-            // the contract refuses the challenge, and the role dispatch
-            // below returns the rank-1 man to `Covering`, whose own
-            // `BoxEmergency::response` sends him straight back.
-            //
-            // This exit ran FIRST, so a man the plan had nominated from
-            // the point of attack at `PRESS_REACH` (200u) was told to
-            // press and then, on the same tick, told to hold the line
-            // because the local bubble is only `40 + 30*intensity +
-            // 18*press_profile`. The nomination refreshes on the plan's
-            // own 250 ms cadence with an incumbency discount, which IS
-            // the hysteresis; the local bubble is for a defender acting
-            // on his own initiative.
-            if TackleEngagement::is_nominated_presser(ctx)
-                || ctx.player().defensive().is_box_emergency_for_me()
-            {
+        let Some(carrier) = ctx.players().opponents().with_ball().next() else {
+            if TackleEngagement::is_nominated_presser(ctx) && !ctx.team().is_control_ball() {
                 return None;
             }
-
-            // If the opponent is too far away, stop pressing
-            if distance_to_opponent > pressing_threshold {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::HoldingLine,
-                ));
-            }
-
-            // Role-based coordination: a defender only stays in Pressing
-            // while they're still the Primary for the current carrier.
-            // When the carrier dribbles past (or another defender gets
-            // closer), role flips to Cover/Help/Hold and we drop back —
-            // Standing's role block will reassign us to the right state
-            // on the next tick.
-            match ctx.player().defensive().defensive_role_for_ball_carrier() {
-                DefensiveRole::Primary => {
-                    // Stay on the carrier — aggressive press continues.
-                    None
-                }
-                DefensiveRole::Cover => Some(StateChangeResult::with_defender_state(
-                    DefenderState::Covering,
-                )),
-                DefensiveRole::Help => Some(StateChangeResult::with_defender_state(
-                    DefenderState::Marking,
-                )),
-                DefensiveRole::Hold => Some(StateChangeResult::with_defender_state(
-                    DefenderState::HoldingLine,
-                )),
-            }
-        } else {
-            // No opponent with the ball - ball might be loose
-            // Check if we should intercept
-            if !ctx.ball().is_owned()
-                && ctx.ball().distance() < 50.0
-                && ctx.ball().speed() < 3.0
-                && ctx.team().is_best_player_to_chase_ball()
-            {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::TakeBall,
-                ));
-            }
-            if ctx.ball().distance() < 60.0 && !ctx.ball().is_owned() {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Intercepting,
-                ));
-            }
-            // …AND A NOMINATED PRESSER IS NOT "NOTHING TO DO".
-            //
-            // Nobody owns the ball for well over half a match — ~1 700
-            // passes at ~1.5 s of flight each — and `DutyAssigner`
-            // deliberately nominates a presser onto a TRAVELLING ball for
-            // exactly that reason: you go WITH the pass, not after it
-            // lands. That change took press duties per refresh 0.25 →
-            // 0.61.
-            //
-            // This branch then threw all of it away. A presser whose
-            // carrier had just released the ball fell straight through to
-            // `HoldingLine`, which declares `ActivityIntensity::Recovery`
-            // — a hard **0.12 of top speed**, a slow walk — for as long as
-            // he held it. So the man the plan had sent to the ball was
-            // capped at walking pace on the half of the match the press is
-            // FOR, and `Defender: Pressing` measured 0.5% of all AI ticks
-            // against `Marking`'s 13.3%.
-            //
-            // `velocity()` already knows where to take him: `my_duty_anchor`
-            // resolves a `Press` duty to the point of attack, and its own
-            // doc says it was extended to cover the in-flight case for
-            // precisely this reason.
-            if TackleEngagement::is_nominated_presser(ctx) {
-                return None;
-            }
-            Some(StateChangeResult::with_defender_state(
-                DefenderState::HoldingLine,
-            ))
+            return Some(DefenderRead::change(ctx));
+        };
+        if !DefenderRead::is_man_for_carrier(ctx) {
+            return Some(DefenderRead::change(ctx));
         }
+        if DefenderRead::duel_rung(ctx, &carrier) == DefenderState::Jockeying {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Jockeying,
+            ));
+        }
+        let distance = carrier.distance(ctx);
+        let lead = RecoveryChallenge::lead(ctx, carrier.position);
+        if RecoveryChallenge::is_available(ctx, distance, lead)
+            && RecoveryChallenge::is_eligible(ctx)
+            && ctx
+                .context
+                .rng
+                .bernoulli(RecoveryChallenge::commits_now(ctx, distance, lead))
+        {
+            return Some(
+                StateChangeResult::with_defender_state(DefenderState::Tackling)
+                    .with_staged_challenge(ChallengeKind::Slide),
+            );
+        }
+        None
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
@@ -229,7 +85,11 @@ impl StateProcessingHandler for DefenderPressingState {
             let def_profile = DefenderSkillProfile::from_ctx(ctx);
             let mobility = sc::mobility(ctx.player, minute);
             let press_composite = 0.65 * def_profile.press_profile + 0.35 * mobility;
-            let press_boost = (1.40 + (press_composite - 0.50) * 0.50).clamp(1.15, 1.65);
+            let press_boost = if BlockChallenge::duel_off() {
+                (1.40 + (press_composite - 0.50) * 0.50).clamp(1.15, 1.65)
+            } else {
+                1.0
+            };
             // A stride off the carrier, across his line to our box
             // (`ClosingPoint`). Through the middle that is the line to goal
             // at the old shot-zone step's size, so the shot corridor is
@@ -328,7 +188,7 @@ impl StateProcessingHandler for DefenderPressingState {
         // note there. The tier is a CEILING, so this does not make
         // defenders sprint all match: a presser shepherding a carrier who
         // is walking still walks.
-        DefenderCondition::with_velocity(ActivityIntensity::chase()).process(ctx);
+        DefenderCondition::new(ActivityIntensity::chase()).process(ctx);
     }
 }
 

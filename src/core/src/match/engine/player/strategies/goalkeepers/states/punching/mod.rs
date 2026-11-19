@@ -1,6 +1,6 @@
 use crate::r#match::engine::ball::ball::AerialReach;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperSweepLimit,
+    ActivityIntensity, GoalkeeperCondition, KeeperRead, ReadLevel,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
@@ -29,168 +29,63 @@ impl GoalkeeperPunchingState {
     /// at the shins is kicked or dived on; the punch is the contact for a
     /// ball at his head or above, where the hands are behind it.
     pub const FLOOR: f32 = AerialReach::HEAD;
+    /// The lowest a punch goes up: 4 m, over the heads it was punched away
+    /// from.
+    const MIN_APEX: f32 = 4.0;
+    /// Off the goal's own axis toward the nearer touchline, before the
+    /// spray: 45°.
+    const WIDE: f32 = std::f32::consts::FRAC_PI_4;
+    /// A punch is a deflection under pressure, not an aimed pass: ±20°.
+    const SPRAY: f32 = 0.35;
+
+    /// Out from his goal, turned toward the touchline nearer the ball. A
+    /// ball dead in the middle goes to the side the spray falls on.
+    fn punch_direction(ctx: &StateProcessingContext) -> Vector3<f32> {
+        let out = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
+        let spray = ctx.context.rng.random_range(-Self::SPRAY..Self::SPRAY);
+        let off_centre =
+            ctx.tick_context.positions.ball.position.y - ctx.ball().direction_to_own_goal().y;
+        let wide = if off_centre.abs() > f32::EPSILON {
+            off_centre.signum()
+        } else {
+            spray.signum()
+        };
+        let angle = Self::WIDE + spray;
+        Vector3::new(out * angle.cos(), wide * angle.sin(), 0.0)
+    }
+
+    /// **The punch**, thrown on the aerial contest's word that his fist is
+    /// on the ball (`ClaimOutcome::Punched`); the state he goes into is the
+    /// follow-through. Out and wide, so a punch from the middle of his goal
+    /// does not drop on the penalty spot for the next man in; flatter and
+    /// shorter than a kicked clearance, up 4–6 m and 15–25 m long, solved
+    /// from an apex like every other kick in the engine.
+    pub fn strike(ctx: &StateProcessingContext) -> StateChangeResult {
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::KeeperActionDiag::note(6);
+        let direction = Self::punch_direction(ctx);
+        let rise = Ball::launch_speed_for_apex(Self::MIN_APEX + prof.aerial_command * 2.0);
+        let range = 120.0 + prof.aerial_command * 80.0;
+        let power = (range / Ball::hang_ticks(rise).max(1.0)).clamp(0.30, 2.2);
+        let mut result = StateChangeResult::with_goalkeeper_state(GoalkeeperState::Punching);
+        result.events.add_player_event(PlayerEvent::ClearBall(
+            ctx.player.id,
+            Vector3::new(direction.x * power, direction.y * power, rise),
+        ));
+        result
+    }
 }
 
 impl StateProcessingHandler for GoalkeeperPunchingState {
+    /// The punch was thrown on the way in ([`Self::strike`]); this is the
+    /// follow-through. He is landing, not winding up again, and the read
+    /// has him once he is down.
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
-        // How far he can put a fist on it. `effective_punch_distance` is
-        // the engine's own number for that (8-28u, i.e. 1-3.5 m) and it is
-        // what the rest of the goalkeeping model uses.
-        //
-        // The local formula this replaces was `2.0 * (0.85 + …)` — **21 to
-        // 39 CENTIMETRES**, written when units were being read as metres.
-        // A ball that close is in his chest, not at the end of a fist, so
-        // the branch below fired on essentially every punch and sent him
-        // to `Jumping` instead: a standing vertical leap, on the spot,
-        // right after he had already made contact. That is the keeper
-        // hopping in the air for no reason after a parry.
-        // ONE PUNCH PER ENTRY. The contact resolves on the tick he arrives
-        // and the rest of the state is the follow-through: he is landing
-        // and getting up, not winding up again. Without this the roll below
-        // re-ran every tick the ball stayed in reach and could strike it
-        // repeatedly, and the state's exit put him back on his feet inside
-        // 20 ms — invisible, and free to re-enter on the next tick.
-        if ctx.in_state_time > 0 {
-            if ctx.in_state_time < MIN_PUNCH_TICKS {
-                return None;
-            }
-            return Some(StateChangeResult::with_goalkeeper_state(
-                // Out of the space he defends → jog back; otherwise he is
-                // already where he wants to be. See [`KeeperSweepLimit`].
-                if KeeperSweepLimit::is_within(ctx, &prof) {
-                    GoalkeeperState::Standing
-                } else {
-                    GoalkeeperState::ReturningToGoal
-                },
-            ));
-        }
-
-        // The physics save has already made this contact. It resolves the
-        // shot, sends the spill / tip / rebound on its way at a metre or
-        // two a second and THEN puts him in this state to show the parry —
-        // so on his entry tick the ball is still within a fist's reach,
-        // and rolling again struck it a second time: a ground shot spilled
-        // at 0.12 m went 7 m up and 14 m back up the pitch off the same
-        // keeper. A ball that came off him is his follow-through, and so
-        // is one already beyond his reach.
-        if ctx.ball().came_off_me() || ctx.ball().distance() > prof.effective_punch_distance {
+        if ctx.in_state_time < MIN_PUNCH_TICKS {
             return None;
         }
-
-        // A fist connects with what a fist can REACH. `distance()` is
-        // horizontal, so a delivery arcing five or six metres overhead
-        // passed the check and the punch resolved against a ball no
-        // keeper could touch — the delivery trace showed corner-won
-        // crosses being "punched" out of their flight at z 5.4-6.5 m.
-        // The leap ceiling is the honest vertical bar — and [`Self::FLOOR`]
-        // the other one, or a crowded six-yard box had him fisting a ball
-        // off the turf.
-        let ball_z = ctx.tick_context.positions.ball.position.z;
-        if ball_z < Self::FLOOR
-            || ball_z
-                > crate::r#match::goalkeepers::states::common::KeeperAerialClaim::leap_ceiling(
-                    ctx.player.skills.physical.jumping,
-                )
-        {
-            return None;
-        }
-
-        // …and a delivery an engine-level aerial contest awarded to an
-        // opponent is not his to punch: his claim chance was priced into
-        // that contest. Double-jeopardy rule, same as the claim assess.
-        if ctx
-            .tick_context
-            .ball
-            .aerial_contest_winner
-            .is_some_and(|w| w != ctx.player.id)
-        {
-            return None;
-        }
-
-        // Crowd / pressure from nearby opponents — high crowd punishes
-        // weak claim quality more.
-        let crowd = (ctx.players().opponents().nearby(8.0).count() as f32 / 4.0).clamp(0.0, 1.0);
-        let claim_quality = (prof.aerial_command * 0.46
-            + prof.positioning * 0.18
-            + prof.rushing_out_profile * 0.12
-            + prof.communication * 0.10
-            + prof.condition_mult * 0.06)
-            .clamp(0.0, 1.0);
-        let claim_difficulty =
-            (crowd * 0.32 + (1.0 - prof.parry_control) * 0.20 + prof.poor_skill_penalty * 0.18)
-                .clamp(0.0, 1.0);
-        // Punch success rolls between ~0.40 (weak in heavy traffic) and
-        // ~0.92 (elite in space).
-        let punch_success_prob =
-            (claim_quality * 0.85 - claim_difficulty * 0.30 + prof.elite_lift).clamp(0.20, 0.95);
-        let punch_success = ctx.context.rng.unit_f32() < punch_success_prob;
-
-        if punch_success {
-            // Contact made. He STAYS in the punch — returning his own
-            // state is a no-op transition for the processor, so the event
-            // fires and the duration branch at the top of `process` owns
-            // getting him back on his feet. Exiting to `Standing` here put
-            // him upright on the same tick his fist met the ball.
-            #[cfg(feature = "match-logs")]
-            crate::mid_run_diag::KeeperActionDiag::note(6);
-            let mut state_change =
-                StateChangeResult::with_goalkeeper_state(GoalkeeperState::Punching);
-
-            // Punch AWAY from the own goal, through the ball, with real
-            // loft. `direction_to_own_goal()` returns the own-goal
-            // POSITION (not a direction), so the outward line is
-            // ball-minus-goal. A punch is a shorter, flatter contact than
-            // the Clearing hoof: strong aerial keepers push it toward
-            // midfield, weak ones only shift the danger a few metres.
-            //
-            // Both components were pre-metric, calibrated against the
-            // Clearing hoof this comment used to quote — and that hoof
-            // was itself a 10 km rocket (see `GoalkeeperClearingState`).
-            // A `z` of 2.6 is 260 m/s, an apex of ~3.4 km. Solved from an
-            // apex now, like every other kick in the engine.
-            let ball_pos = ctx.tick_context.positions.ball.position;
-            let own_goal = ctx.ball().direction_to_own_goal();
-            let fallback_x = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
-            let outward = Vector3::new(ball_pos.x - own_goal.x, ball_pos.y - own_goal.y, 0.0);
-            let outward_dir = outward
-                .try_normalize(1e-4)
-                .unwrap_or_else(|| Vector3::new(fallback_x, 0.0, 0.0));
-            // Lateral spray — a punch is a deflection under pressure,
-            // not an aimed pass.
-            let y_jitter: f32 = ctx.context.rng.random_range(-0.35..0.35);
-            let punch_dir = Vector3::new(outward_dir.x, outward_dir.y + y_jitter, 0.0)
-                .try_normalize(1e-4)
-                .unwrap_or(outward_dir);
-            // Flatter and shorter than the kicked clearance: a punch is
-            // struck off the fist under pressure, so it goes up 3-5 m and
-            // travels 15-25 m rather than clearing the halfway line. That
-            // is a launch near 40°; the 6-10 m apex it replaces left the
-            // fist at 58° over the same ground, which on screen was a ball
-            // popping straight up and dropping.
-            let punch_apex = 3.0 + prof.aerial_command * 2.0;
-            let punch_vz = Ball::launch_speed_for_apex(punch_apex);
-            let punch_range = 120.0 + prof.aerial_command * 80.0; // 15 - 25 m
-            let hang = Ball::hang_ticks(punch_vz).max(1.0);
-            let punch_power = (punch_range / hang).clamp(0.30, 2.2);
-            let punch_velocity = Vector3::new(
-                punch_dir.x * punch_power,
-                punch_dir.y * punch_power,
-                punch_vz,
-            );
-
-            // Generate a punch event
-            state_change
-                .events
-                .add_player_event(PlayerEvent::ClearBall(ctx.player.id, punch_velocity));
-
-            Some(state_change)
-        } else {
-            // Punch failed, transition to appropriate state (e.g., Diving)
-            Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Diving,
-            ))
-        }
+        KeeperRead::from(ctx, ReadLevel::Possession).go()
     }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {

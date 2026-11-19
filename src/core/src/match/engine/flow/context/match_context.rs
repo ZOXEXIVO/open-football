@@ -5,6 +5,7 @@
 
 use super::config::MatchEngineConfig;
 use super::substitution_record::{SubstitutionRecord, SubstitutionWindows};
+use crate::FormationFamiliarity;
 use crate::MatchTacticType;
 use crate::r#match::engine::chemistry::{ChemistryMap, TacticalFamiliarity};
 #[cfg(feature = "match-logs")]
@@ -19,13 +20,23 @@ use crate::r#match::engine::officiating::management::{
     TimeWasting, TimeWastingLedger, TimeWastingRestart,
 };
 use crate::r#match::engine::referee::RefereeProfile;
-use crate::r#match::engine::teamplay::coach::instruction::CoachInstruction;
 use crate::r#match::engine::result::{
     ChanceDetail, MatchTally, PenaltyShootoutKick, PlayerMatchEndStats,
     PlayerMatchPhysicalSnapshot,
 };
 use crate::r#match::engine::set_pieces::SetPieceHistory;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::teamplay::census::TeamCensus;
+use crate::r#match::engine::teamplay::history::PlanHistory;
 use crate::r#match::engine::teamplay::standard::StandardReading;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::DefenderCensus;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::forward_census::ForwardCensus;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::keeper_census::KeeperCensus;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::midfielder_census::MidfielderCensus;
 use crate::r#match::rules::MatchRules;
 use crate::r#match::CompetitionKind;
 use crate::r#match::{
@@ -34,6 +45,8 @@ use crate::r#match::{
     TeamSkillAggregates, TeamTacticalState, TeamsTactics,
 };
 use chrono::{NaiveDate, Utc};
+#[cfg(feature = "match-logs")]
+use std::cell::RefCell;
 
 pub struct MatchContext {
     pub state: GameState,
@@ -93,6 +106,31 @@ pub struct MatchContext {
     #[cfg(feature = "match-logs")]
     pub box_episode: BoxEpisode,
 
+    /// The keeper action census's open episodes. In a cell because claims
+    /// are rolled inside state handlers, which see the context shared.
+    #[cfg(feature = "match-logs")]
+    pub keeper_census: RefCell<KeeperCensus>,
+
+    /// The defender action census's open episodes. In a cell for the same
+    /// reason: challenges and the door census are noted inside state
+    /// handlers.
+    #[cfg(feature = "match-logs")]
+    pub defender_census: RefCell<DefenderCensus>,
+
+    /// The midfielder action census's open episodes, in a cell for the same
+    /// reason.
+    #[cfg(feature = "match-logs")]
+    pub midfielder_census: RefCell<MidfielderCensus>,
+
+    /// …and the forward action census's.
+    #[cfg(feature = "match-logs")]
+    pub forward_census: RefCell<ForwardCensus>,
+
+    /// The team census: each side's play by game state, its style and its
+    /// possessions. Fed from the match loop only, so it needs no cell.
+    #[cfg(feature = "match-logs")]
+    pub team_census: TeamCensus,
+
     // Global goal cooldown: tick when last goal was scored
     // Prevents immediate scoring after kickoff restart
     pub last_goal_tick: u64,
@@ -150,6 +188,9 @@ pub struct MatchContext {
     /// [`DefensivePlan`](crate::r#match::DefensivePlan).
     pub defence_home: DefensivePlan,
     pub defence_away: DefensivePlan,
+    /// Each side's last few plans, for a man who takes a new job in late.
+    pub plan_history_home: PlanHistory,
+    pub plan_history_away: PlanHistory,
 
     /// The live positional block for each side, and every player's anchor
     /// inside it. The three plans above only ever name the handful of
@@ -162,6 +203,9 @@ pub struct MatchContext {
     /// Knockout-format match — enables extra time + penalty shootout when
     /// the score is level at the end of regulation.
     pub is_knockout: bool,
+
+    /// A friendly: the coaches play for smaller stakes.
+    pub is_friendly: bool,
 
     /// Weather + pitch + crowd + importance. Defaults to a neutral
     /// fixture; harnesses can override before kickoff.
@@ -187,17 +231,15 @@ pub struct MatchContext {
     /// callers that compute one-touch passing / handoff success.
     pub chemistry: ChemistryMap,
 
+    /// How familiar each side is with every formation, from its record.
+    pub familiarity_home: FormationFamiliarity,
+    pub familiarity_away: FormationFamiliarity,
+
     /// Tactical familiarity per side (0..1) — drives press timing /
     /// offside trap synchronisation.
     pub tactical_familiarity_home: TacticalFamiliarity,
     pub tactical_familiarity_away: TacticalFamiliarity,
 
-    /// Sim-tick at which the last shape change fired for either side.
-    /// Used by `evaluate_situational_shape` to enforce a hysteresis
-    /// window so coaches don't flip shape every 5-second eval slice
-    /// after a single goal. Initialised to `u64::MAX` so the first
-    /// change is always allowed.
-    pub last_shape_change_tick: u64,
     /// Match-clock timestamp (ms) until which play is DEAD after a
     /// goal — celebration, walk-back, reorganisation, the referee's
     /// restart. While `total_match_time` is below this, the engine
@@ -225,11 +267,6 @@ pub struct MatchContext {
     /// inside either window. See
     /// [`SubstitutionBreak`](super::super::touchline::SubstitutionBreak).
     pub substitution_break: Option<SubstitutionBreak>,
-    /// Sim-minute at which the FIRST shape change fired in this match
-    /// (any side). Stamped once and never overwritten so the result
-    /// summary can show the moment the manager pivoted. `None` while
-    /// no shape change has happened yet.
-    pub first_shape_change_minute: Option<u8>,
     /// Tactics each team started the match with. Captured by
     /// `FootballEngine::play` from the kickoff `MatchSquad` so the
     /// result can show "started 4-4-2 → finished 4-3-3" without the
@@ -410,7 +447,7 @@ impl MatchContext {
         field: &MatchField,
         players: MatchPlayerCollection,
         score: Score,
-        _is_friendly: bool,
+        is_friendly: bool,
         is_knockout: bool,
         rules: MatchRules,
     ) -> Self {
@@ -445,6 +482,16 @@ impl MatchContext {
             chances: Vec::new(),
             #[cfg(feature = "match-logs")]
             box_episode: Default::default(),
+            #[cfg(feature = "match-logs")]
+            keeper_census: Default::default(),
+            #[cfg(feature = "match-logs")]
+            defender_census: Default::default(),
+            #[cfg(feature = "match-logs")]
+            midfielder_census: Default::default(),
+            #[cfg(feature = "match-logs")]
+            forward_census: Default::default(),
+            #[cfg(feature = "match-logs")]
+            team_census: Default::default(),
             last_goal_tick: 0,
             last_conceded_tick: [u64::MAX, u64::MAX],
             substituted_out_stats: Vec::new(),
@@ -457,22 +504,25 @@ impl MatchContext {
             attack_away: AttackPlan::idle(),
             defence_home: DefensivePlan::idle(),
             defence_away: DefensivePlan::idle(),
+            plan_history_home: PlanHistory::new(),
+            plan_history_away: PlanHistory::new(),
             shape_home: TeamShape::idle(),
             shape_away: TeamShape::idle(),
             is_knockout,
+            is_friendly,
             environment: MatchEnvironment::default(),
             conditions: EnvModifiers::default(),
             referee: RefereeProfile::default(),
             set_piece_history: SetPieceHistory::default(),
             psychology: PsychologyState::default(),
             chemistry: ChemistryMap::default(),
+            familiarity_home: FormationFamiliarity::settled(field.left_team_tactics.tactic_type),
+            familiarity_away: FormationFamiliarity::settled(field.right_team_tactics.tactic_type),
             tactical_familiarity_home: TacticalFamiliarity::default(),
             tactical_familiarity_away: TacticalFamiliarity::default(),
-            last_shape_change_tick: u64::MAX,
             dead_ball_until_ms: 0,
             goal_celebration: None,
             substitution_break: None,
-            first_shape_change_minute: None,
             starting_home_tactic: None,
             starting_away_tactic: None,
             home_skill_aggregates: TeamSkillAggregates::neutral(),
@@ -548,6 +598,58 @@ impl MatchContext {
         }
     }
 
+    /// An occasion this heavy is a big match to the dressing room: a derby,
+    /// a continental night, a tie decided on the day.
+    const BIG_MATCH: f32 = 0.5;
+
+    /// The interval: each coach gives his talk, and his whole matchday
+    /// squad hears it — the bench as well — unless `OF_TEAM_TALK=off`.
+    pub fn give_half_time_talks(&mut self, field: &MatchField) {
+        let big_match = Psychology::occasion(&self.environment, self.is_knockout) >= Self::BIG_MATCH;
+        for team_id in [self.field_home_team_id, self.field_away_team_id] {
+            let coach = self.coach_for_team_mut(team_id);
+            let tone = coach.on_half_time();
+            let temperament = coach.card.temperament;
+            if Self::team_talk_off() {
+                continue;
+            }
+            let squad = field
+                .players
+                .iter()
+                .filter(|p| p.team_id == team_id && !p.off_pitch)
+                .chain(field.substitutes.iter().filter(|p| p.team_id == team_id));
+            self.psychology
+                .on_half_time_talk(tone, &temperament, big_match, squad);
+        }
+    }
+
+    /// Keep both sides' plans as just refreshed.
+    pub fn record_plans(&mut self) {
+        let tick = self.current_tick();
+        self.plan_history_home
+            .record(tick, &self.attack_home, &self.defence_home);
+        self.plan_history_away
+            .record(tick, &self.attack_away, &self.defence_away);
+    }
+
+    /// `team_id`'s attack and defence plans as a man whose new jobs reach
+    /// him `latency` ticks late reads them: the live plans when they reach
+    /// him at once.
+    pub fn plans_as_read(&self, team_id: u32, latency: u64) -> (&AttackPlan, &DefensivePlan) {
+        if latency == 0 {
+            return (
+                self.attack_plan_for_team(team_id),
+                self.defence_plan_for_team(team_id),
+            );
+        }
+        let history = if team_id == self.field_home_team_id {
+            &self.plan_history_home
+        } else {
+            &self.plan_history_away
+        };
+        history.at(self.current_tick().saturating_sub(latency))
+    }
+
     /// This team's live positional block.
     pub fn shape_for_team(&self, team_id: u32) -> &TeamShape {
         if team_id == self.field_home_team_id {
@@ -605,6 +707,33 @@ impl MatchContext {
         }
     }
 
+    /// A goal counted for the home side when `home_scored`. Each coach reacts
+    /// to it once he can see the score.
+    pub fn on_goal(&mut self, home_scored: bool) {
+        if !self.behavioral_score_visible() {
+            return;
+        }
+        let minute = self.total_match_time as f32 / 60_000.0;
+        self.coach_home.on_goal(home_scored, minute);
+        self.coach_away.on_goal(!home_scored, minute);
+    }
+
+    /// A player of `team_id` sent off.
+    pub fn on_sending_off(&mut self, team_id: u32) {
+        let minute = self.total_match_time as f32 / 60_000.0;
+        let home = team_id == self.field_home_team_id;
+        self.coach_home.on_sending_off(home, minute);
+        self.coach_away.on_sending_off(!home, minute);
+    }
+
+    pub fn formation_familiarity(&self, team_id: u32) -> &FormationFamiliarity {
+        if team_id == self.field_home_team_id {
+            &self.familiarity_home
+        } else {
+            &self.familiarity_away
+        }
+    }
+
     pub fn coach_for_team(&self, team_id: u32) -> &MatchCoach {
         if team_id == self.field_home_team_id {
             &self.coach_home
@@ -613,21 +742,16 @@ impl MatchContext {
         }
     }
 
-    /// How long `team_id` drags out a restart of this kind: nothing unless
-    /// it is ahead late and its manager has told it to slow the game.
+    /// How long `team_id` drags out a restart of this kind: as long as its
+    /// stance has turned toward protecting what it has.
     pub fn time_wasting_delay_ms(
         &self,
         team_id: u32,
         aggression: f32,
         kind: TimeWastingRestart,
     ) -> u64 {
-        let share = match self.coach_for_team(team_id).instruction {
-            CoachInstruction::WasteTime => 1.0,
-            CoachInstruction::SlowDown => 0.5,
-            _ => return 0,
-        };
-        let minute = (self.total_match_time / 60_000) as u32;
-        (TimeWasting::delay_ms(self.lead(team_id), minute, kind, aggression) as f32 * share) as u64
+        let protecting = (-self.tactical_for_team(team_id).stance).max(0.0);
+        TimeWasting::delay_ms(protecting, kind, aggression)
     }
 
     /// How far the clock is against `team_id` getting a restart taken,

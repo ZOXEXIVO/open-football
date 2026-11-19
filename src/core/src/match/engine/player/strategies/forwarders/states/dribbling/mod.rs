@@ -1,8 +1,8 @@
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
-use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
-    BallCarry, ShotDecision, evaluate_forward_shot_decision,
+use crate::r#match::forwarders::states::common::{
+    ActivityIntensity, ForwardCondition, ForwardRead, ForwardShot,
 };
+use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::BallCarry;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -15,7 +15,7 @@ pub struct ForwardDribblingState {}
 impl StateProcessingHandler for ForwardDribblingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if !ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+            return Some(StateChangeResult::with_forward_state(ForwardRead::released(ctx)));
         }
 
         // No opponents nearby — just run, dribbling is for beating defenders
@@ -24,25 +24,22 @@ impl StateProcessingHandler for ForwardDribblingState {
         }
 
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        let can_shoot = ctx.team().can_shoot() && ctx.player().can_shoot();
 
         // PRIORITY 0: Near opponent goalkeeper.
         if let Some(gk) = ctx.players().opponents().goalkeeper().next() {
             let distance_to_gk = (ctx.player.position - gk.position).magnitude();
             if distance_to_gk < 25.0
                 && distance_to_goal < 120.0
-                && can_shoot
-                && let Some(result) = dispatch_shot(ctx, "FWD_DRIB_NEAR_GK")
+                && let Some(result) = ForwardShot::dispatch(ctx, "FWD_DRIB_NEAR_GK")
             {
                 return Some(result);
             }
         }
 
         // PRIORITY 1: In shooting range with a clear lane.
-        if can_shoot
-            && ctx.player().shooting().in_shooting_range()
+        if ctx.player().shooting().in_shooting_range()
             && ctx.player().has_clear_shot()
-            && let Some(result) = dispatch_shot(ctx, "FWD_DRIB_CLEAR")
+            && let Some(result) = ForwardShot::dispatch(ctx, "FWD_DRIB_CLEAR")
         {
             return Some(result);
         }
@@ -54,10 +51,9 @@ impl StateProcessingHandler for ForwardDribblingState {
 
         // Prevent infinite dribbling - timeout after 40 ticks to reassess.
         if ctx.in_state_time > 40 {
-            if can_shoot
-                && distance_to_goal < 60.0
+            if distance_to_goal < 60.0
                 && ctx.player().has_clear_shot()
-                && let Some(result) = dispatch_shot(ctx, "FWD_DRIB_TIMEOUT")
+                && let Some(result) = ForwardShot::dispatch(ctx, "FWD_DRIB_TIMEOUT")
             {
                 return Some(result);
             }
@@ -110,7 +106,7 @@ impl StateProcessingHandler for ForwardDribblingState {
 
     fn process_conditions(&self, ctx: ConditionContext) {
         // Dribbling is high intensity - sustained movement with ball
-        ForwardCondition::with_velocity(ActivityIntensity::High).process(ctx);
+        ForwardCondition::new(ActivityIntensity::High).process(ctx);
     }
 }
 
@@ -137,22 +133,5 @@ impl ForwardDribblingState {
 
         let crossing = ctx.player.skills.technical.crossing / 20.0;
         teammates_in_box >= 1 && crossing > 0.4
-    }
-}
-
-/// Funnel a candidate shot through the centralised gate stack. Returns
-/// `Some(Shooting)` when the helper greenlights the strike, `Some(Passing)`
-/// when a teammate has the better look, and `None` to let the caller fall
-/// through to its next priority. Without this, the legacy direct
-/// `with_shot_reason` paths bypassed xG / sprint-balance / 1v1 / pass-EV
-/// gating because `ForwardShootingState` skips its own helper roll once a
-/// `pending_shot_reason` is set.
-fn dispatch_shot(ctx: &StateProcessingContext, tag: &'static str) -> Option<StateChangeResult> {
-    match evaluate_forward_shot_decision(ctx, tag) {
-        ShotDecision::Shoot { reason } => Some(
-            StateChangeResult::with_forward_state(ForwardState::Shooting).with_shot_reason(reason),
-        ),
-        ShotDecision::Pass => Some(StateChangeResult::with_forward_state(ForwardState::Passing)),
-        ShotDecision::Hold => None,
     }
 }

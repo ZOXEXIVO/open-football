@@ -9,6 +9,8 @@ use crate::r#match::engine::ball::ball::flight_diag::FlightDiag;
 use crate::r#match::engine::ball::ball::lane_diag;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::strike_diag::{GrantPath, StrikeCensus};
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::TakeRule;
 use crate::r#match::engine::ball::ball::{
     AerialReach, Ball, CONTROL_DISTANCE, LOOSE_CLAIM_DISTANCE,
 };
@@ -368,7 +370,9 @@ impl Ball {
             .saturating_sub(self.last_release_tick) as f32;
 
         for (slot, player) in players.iter().enumerate() {
-            if player.team_id == passer_team {
+            // A man down injured, or getting up from a challenge he
+            // missed, cuts nothing out.
+            if player.team_id == passer_team || !player.can_play_ball() {
                 continue;
             }
             let bit = 1u64 << slot;
@@ -392,8 +396,9 @@ impl Ball {
             // pure sampling error into the reach term.
             let miss = (dx * dir_y - dy * dir_x).abs();
             #[cfg(feature = "match-logs")]
-            if since_strike >= 20.0 {
-                if let Some(census) = self.lane_census.as_mut() {
+            if let Some(census) = self.lane_census.as_mut() {
+                census.note_zone_gap(miss, since_strike, receiver_gap);
+                if since_strike >= 20.0 {
                     census.note_gap(miss);
                 }
             }
@@ -462,6 +467,10 @@ impl Ball {
                     let in_box = context.penalty_area(true).contains(&self.position)
                         || context.penalty_area(false).contains(&self.position);
                     crate::mid_run_diag::BoxPassDiag::note_cut_out(in_box);
+                    context
+                        .defender_census
+                        .borrow_mut()
+                        .tag_take(TakeRule::Interception, player.id, self.current_tick_cached);
                 }
                 self.take_intercepted(player, events);
                 return;

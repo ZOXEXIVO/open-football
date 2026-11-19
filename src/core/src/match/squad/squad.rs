@@ -1,5 +1,7 @@
+use crate::FormationFamiliarity;
 use crate::Tactics;
 use crate::club::staff::CoachMatchSnapshot;
+use crate::r#match::CoachCard;
 use crate::r#match::MatchPlayer;
 use crate::r#match::squad::OmittedPlayer;
 
@@ -31,6 +33,14 @@ pub struct MatchSquad {
     /// stand up a real club — the substitution path falls back to
     /// the legacy (memory-less) scoring in that case.
     pub coach_snapshot: Option<CoachMatchSnapshot>,
+    /// The head coach's card — temperament and preferred football — for
+    /// the match's coach. `None` when the side has no head coach; the match
+    /// then draws one from the population.
+    pub coach_card: Option<CoachCard>,
+    /// How familiar the side is with each formation, from its record.
+    /// `None` for a side with no record, which counts as settled in the
+    /// formation it plays.
+    pub familiarity: Option<FormationFamiliarity>,
 }
 
 impl MatchSquad {

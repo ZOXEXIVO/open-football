@@ -28,6 +28,8 @@ use crate::r#match::engine::set_pieces::{
     penalty_conversion_prob, score_keeper_save, score_penalty_taker,
 };
 use crate::r#match::engine::substitutions::Substitutions;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::teamplay::census::TeamCensusInputs;
 use crate::r#match::engine::teamplay::possession::TeamPossession;
 use crate::r#match::engine::touchline::changeover::{
     advance_substitution_break, finish_substitution_break,
@@ -39,10 +41,10 @@ use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::result::ResultMatchPositionData;
 use crate::r#match::{
-    AttackPlan, AttackRefreshInputs, CoachInstruction, DefenceRefreshInputs, DefensivePlan,
+    AttackPlan, AttackRefreshInputs, CoachCard, DefenceRefreshInputs, DefensivePlan,
     GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState,
-    PenaltyShootoutKick, Score, ShapeRefreshInputs, StateManager, SubstitutionInfo,
-    TacticalRefreshInputs, TeamShape, TeamTacticalState,
+    Outlook, PenaltyShootoutKick, Score, ShapeRefreshInputs, Situation, SquadFit, StateManager,
+    SubstitutionInfo, TacticalRefreshInputs, TeamPins, TeamShape, TeamTacticalState,
 };
 use crate::{MatchRuntime, PlayerFieldPositionGroup};
 use std::time::Instant;
@@ -291,22 +293,6 @@ impl SkillAccumulator {
     }
 }
 
-/// Cumulative-metric snapshot fed into `FootballEngine::build_rolling_metrics`.
-/// Bundling the seven inputs into a struct keeps the call signature
-/// stable as we add more counters and makes the `evaluate_coaches`
-/// site less error-prone (no positional confusion between xg_for /
-/// xg_against and the like).
-#[derive(Debug, Clone, Copy, Default)]
-pub(in crate::r#match::engine::engine) struct RollingMetricsInput {
-    pub cum_xg_for: f32,
-    pub cum_xg_against: f32,
-    pub cum_shots_for: u32,
-    pub cum_pressures: u32,
-    pub cum_successful_pressures: u32,
-    pub cum_deep_entries: u32,
-    pub cum_dangerous_turnovers: u32,
-}
-
 pub struct FootballEngine<const W: usize, const H: usize> {}
 
 impl<const W: usize, const H: usize> Default for FootballEngine<W, H> {
@@ -325,6 +311,9 @@ mod types;
 // the engine root re-exports this module with a glob, so it has to stay
 // reachable as `crate::r#match::phase_prof`.
 pub use diagnostics::phase_prof;
+pub use diagnostics::state_counters::{shot_gate_stats, stuck_exit_stats};
+#[cfg(feature = "match-logs")]
+pub use diagnostics::state_counters::tackle_stats;
 
 // …and the spacing census the harness reads, on the same footing as the
 // other `match-logs` diagnostics re-exported from the crate root.

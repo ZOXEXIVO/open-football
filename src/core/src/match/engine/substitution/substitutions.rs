@@ -13,7 +13,7 @@ use crate::r#match::engine::flow::context::MATCH_TIME_INCREMENT_MS;
 use crate::r#match::engine::officiating::management::TimeWastingRestart;
 use crate::r#match::engine::player::injury::MatchInjury;
 use crate::r#match::engine::result::DeadTime;
-use crate::r#match::{Bench, MATCH_TIME_MS, MatchContext, MatchPlayer};
+use crate::r#match::{Bench, MatchContext, MatchPlayer};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 
 /// In-match youth-protection thresholds and the candidate predicate.
@@ -290,9 +290,9 @@ impl Substitutions {
         }
     }
 
-    /// Repoint an on-pitch player to the goalkeeper slot: tactical
-    /// position, waypoints, and physical placement at the goal. The
-    /// player keeps his own (usually terrible) goalkeeping skills —
+    /// Put an on-pitch player in goal: the goalkeeper's position, route
+    /// and state (`MatchPlayer::take_position`), and his place at the goal.
+    /// The player keeps his own (usually terrible) goalkeeping skills —
     /// that IS the emergency-keeper experience.
     fn station_in_goal(
         field: &mut MatchField,
@@ -301,13 +301,7 @@ impl Substitutions {
         goal_start: Option<Vector3<f32>>,
     ) {
         if let Some(p) = field.get_player_mut(player_id) {
-            let side = p.side;
-            p.tactical_position.current_position = PlayerPositionType::Goalkeeper;
-            p.tactical_position.regenerate_waypoints(side);
-            // Same reason as `MatchField::substitute_player`: the cache
-            // is only rebuilt lazily on an empty one, so without this he
-            // keeps running the outfield route he walked on with.
-            p.rebuild_waypoint_cache();
+            p.take_position(PlayerPositionType::Goalkeeper);
             if let Some(gs) = goal_start {
                 // An outfielder going in goal after the keeper is sent off
                 // or injured with no substitutions left. Legitimate — but
@@ -478,15 +472,7 @@ impl Substitutions {
             }
             let is_home = team_id == field.home_team_id;
 
-            // Score-reactivity respects a visibility gate, but the BENCH's
-            // gate, not the eleven's — see
-            // [`MatchContext::BENCH_SCORE_FROM_MINUTE`]. A manager may know
-            // he is losing from the half-hour, which is what lets a deficit
-            // reach the interval and bring a change forward; how his team
-            // plays is still held to the later gate, which is where the
-            // draw-correlation budget is actually spent.
-            //
-            // [`MatchContext::BENCH_SCORE_FROM_MINUTE`]: super::super::flow::context::MatchContext::BENCH_SCORE_FROM_MINUTE
+            // The bench sees the score from the goal, as the pitch does.
             let (own_goals, opp_goals) = if !context.bench_score_visible() {
                 (0, 0)
             } else if team_id == context.field_home_team_id {
@@ -554,10 +540,9 @@ impl Substitutions {
             // How badly this bench wants using, right now — the whole of the
             // timing decision, and the only thing that decides it. See
             // [`urgency`](super::urgency).
-            let pressure = Self::bench_pressure(field, context, team_id, goal_diff, coach);
+            let pressure = Self::bench_pressure(field, context, team_id, goal_diff);
 
             let need = if match_minutes >= 45 {
-                let progress = (context.total_match_time as f32 / MATCH_TIME_MS as f32).min(1.0);
                 let match_coach = context.coach_for_team(team_id);
                 let condition_avg = field
                     .players
@@ -571,17 +556,9 @@ impl Substitutions {
                         .filter(|p| p.team_id == team_id)
                         .count()
                         .max(1) as f32;
-                // Seed the need with the mentality engine's current
-                // instruction so the two coach brains agree — an
-                // all-out-attack bench sends on an attacker, a
-                // game-killing bench sends on a defender.
-                TacticalNeed::from_state_with_instruction(
-                    match_coach.instruction,
-                    goal_diff as i8,
-                    progress,
-                    condition_avg,
-                    match_coach.metrics,
-                )
+                // The bench answers to the same coach as the pitch: his
+                // stance and his read decide what it is asked for.
+                TacticalNeed::from_coach(match_coach.stance(), match_coach.metrics, condition_avg)
             } else {
                 TacticalNeed::Fatigue
             };
@@ -723,7 +700,6 @@ impl Substitutions {
         context: &MatchContext,
         team_id: u32,
         goal_diff: i32,
-        coach: Option<&CoachDecisionEngine<'_>>,
     ) -> BenchPressure {
         let starters: Vec<&MatchPlayer> = field
             .players
@@ -747,7 +723,7 @@ impl Substitutions {
             goal_diff,
             &starters,
             &live,
-            coach.map(|c| c.profile),
+            &context.coach_for_team(team_id).card,
             context.rng.seed(),
             team_id,
         )
@@ -836,12 +812,7 @@ impl Substitutions {
             // Planned subs were warming the touchline before the board
             // went up; a forced medical / emergency replacement walks
             // on cold and pays a larger settling penalty.
-            player_in.entered_cold = matches!(
-                reason,
-                SubstitutionReason::CriticalInjury
-                    | SubstitutionReason::Exhaustion
-                    | SubstitutionReason::GoalkeeperEmergency
-            );
+            player_in.entered_cold = reason.is_forced();
         }
         if let Some(player_in) = field.get_player(player_in_id) {
             context.seed_psychology(player_in);
@@ -870,6 +841,9 @@ impl Substitutions {
             context.total_match_time,
             reason,
         );
+        if reason.is_forced() {
+            context.coach_for_team_mut(team_id).on_forced_change();
+        }
         // A side ahead late takes its time coming off, and the restart
         // waits for it.
         if dawdle > 0
@@ -893,6 +867,11 @@ impl Substitutions {
             context
                 .players
                 .update_player(player_in_id, field_player.clone());
+            let on_pitch: Vec<&MatchPlayer> =
+                field.players.iter().filter(|p| !p.off_pitch).collect();
+            context
+                .chemistry
+                .join(field_player, &on_pitch, field.size.height as f32);
         }
 
         let left_squad = field.left_side_players.as_mut();
@@ -1357,7 +1336,7 @@ impl CoachLiveAdapter {
 mod tests {
     use super::*;
     use crate::club::player::builder::PlayerBuilder;
-    use crate::r#match::MatchRng;
+    use crate::r#match::{CoachCard, MatchRng};
     use crate::r#match::engine::environment::EnvModifiers;
     use crate::shared::fullname::FullName;
     use crate::{
@@ -1506,6 +1485,8 @@ mod tests {
                 player: &mut fresh,
                 conditions: &EnvModifiers::default(),
                 match_progress: 0.5,
+                side_on_ball: false,
+                ball_dead: false,
             };
             DefenderCondition::new(ActivityIntensity::High).process(fresh_ctx);
 
@@ -1514,6 +1495,8 @@ mod tests {
                 player: &mut heavy_legs,
                 conditions: &EnvModifiers::default(),
                 match_progress: 0.5,
+                side_on_ball: false,
+                ball_dead: false,
             };
             DefenderCondition::new(ActivityIntensity::High).process(heavy_ctx);
         }
@@ -1721,6 +1704,8 @@ mod tests {
             selection_omissions: vec![],
             overlooked: vec![],
             coach_snapshot: None,
+            coach_card: None,
+            familiarity: None,
         }
     }
 
@@ -2248,7 +2233,7 @@ mod tests {
         // An average manager: the seeded temperament is neutralised so the
         // test measures the match, not the man.
         let quiet = |m: u32, gd: i32| {
-            let mut p = SubstitutionUrgency::read(m, gd, &[], &[], None, 0, 0);
+            let mut p = SubstitutionUrgency::read(m, gd, &[], &[], &CoachCard::neutral(), 0, 0);
             p.total -= p.temperament;
             p
         };
@@ -2288,7 +2273,7 @@ mod tests {
     #[test]
     fn a_side_with_a_reason_changes_at_the_interval() {
         let pressure = |gd: i32| {
-            let mut p = SubstitutionUrgency::read(45, gd, &[], &[], None, 0, 0);
+            let mut p = SubstitutionUrgency::read(45, gd, &[], &[], &CoachCard::neutral(), 0, 0);
             p.total -= p.temperament;
             p
         };
@@ -2311,7 +2296,7 @@ mod tests {
     /// unload its whole bench on one stoppage.
     #[test]
     fn each_change_costs_more_than_the_last() {
-        let mut late = SubstitutionUrgency::read(85, -1, &[], &[], None, 0, 0);
+        let mut late = SubstitutionUrgency::read(85, -1, &[], &[], &CoachCard::neutral(), 0, 0);
         late.total -= late.temperament;
         let highest_slot = (0..5u8)
             .filter(|&s| late.clears_at(s, &ChangeOpportunity::new(85, false, false, 0, 5)))

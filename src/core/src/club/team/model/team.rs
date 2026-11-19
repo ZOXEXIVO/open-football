@@ -154,6 +154,23 @@ impl Team {
         }
     }
 
+    /// A new head coach has taken charge: he chooses the side's system.
+    pub fn on_head_coach_appointed(&mut self) {
+        self.choose_system();
+    }
+
+    /// A transfer window has closed: the system is chosen again for the
+    /// squad as it now stands.
+    pub fn on_window_closed(&mut self) {
+        self.choose_system();
+    }
+
+    /// The head coach's choice of formation, from his preferences and the
+    /// players fit to play it.
+    fn choose_system(&mut self) {
+        self.tactics = Some(TacticsSelector::select(self, self.staffs.head_coach()));
+    }
+
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> TeamResult {
         if ctx.simulation.is_month_beginning() {
             self.run_monthly_pass(ctx.simulation.date.date());

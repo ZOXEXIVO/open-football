@@ -8,6 +8,9 @@
 //! whoever gets there, or a throw-in when the challenge is on the line.
 
 use crate::r#match::common_states::TackleEngagement;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::diagnostics::delivery_diag::TouchKind;
+use crate::r#match::engine::ball::ball::flight::roll::BallRoll;
 use crate::r#match::engine::ball::ball::{Ball, MAX_OWNER_TRACK_DISTANCE};
 use crate::r#match::engine::flow::rng::MatchRng;
 use crate::r#match::{MatchPlayer, PassOriginRestart};
@@ -21,9 +24,8 @@ impl Ball {
     /// …and at the furthest he can reach for it: the poke and the slide,
     /// which take the ball off the man rather than giving it to anybody.
     const KEPT_AT_STRETCH: f32 = 0.20;
-    /// Pace of the knock, u/tick: 0.40 = 5 m/s, give or take 2.
-    const KNOCK_SPEED: f32 = 0.40;
-    const KNOCK_SPEED_SPREAD: f32 = 0.15;
+    /// Where the knocked ball comes to rest from the challenge, 2–8 m.
+    const KNOCK_REST: (f32, f32) = (16.0, 64.0);
     /// How far off the line of the challenge the ball squirts, radians.
     const KNOCK_SPREAD: f32 = 0.6;
     /// Share of the carrier's own run the ball keeps through the contact.
@@ -70,14 +72,21 @@ impl Ball {
             line.x * sin + line.y * cos,
             0.0,
         );
-        self.velocity = knocked * rng.jitter(Self::KNOCK_SPEED, Self::KNOCK_SPEED_SPREAD)
-            + carried * Self::CARRIED;
+        let line = (knocked + carried * Self::CARRIED)
+            .try_normalize(1.0e-4)
+            .unwrap_or(knocked);
+        let rest = Self::KNOCK_REST.0 + (Self::KNOCK_REST.1 - Self::KNOCK_REST.0) * rng.unit_f32();
+        self.velocity = line * BallRoll::speed_to_rest_at(rest);
         self.previous_owner = self.current_owner;
         self.current_owner = None;
         self.pass_target_player_id = None;
         self.flags.in_flight_state = Self::KNOCK_SEPARATION;
         self.claim_cooldown = 0;
         let tick = self.current_tick_cached;
+        #[cfg(feature = "match-logs")]
+        {
+            self.touch_kind_hint = Some(TouchKind::Tackle);
+        }
         self.record_touch(tackler.id, tackler.team_id, tick, false);
         self.offside_snapshot = None;
         self.pass_origin_restart = PassOriginRestart::OpenPlay;

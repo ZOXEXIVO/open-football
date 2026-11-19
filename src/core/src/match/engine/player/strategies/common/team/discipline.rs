@@ -50,17 +50,17 @@
 //! not the shape, is the player's job this instant.
 
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::common_states::ShapeTempo;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::teamplay::tactical::inputs::TeamSkillAggregates;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::state::PlayerState;
-use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, StateProcessingContext};
 use nalgebra::Vector3;
 
 /// How far a player may stray from his anchor before the shape says
-/// anything at all. 64u = 8 m — a real positional zone: a player covers
+/// anything at all. 48u = 6 m — a real positional zone: a player covers
 /// roughly that radius on his own before a team-mate is expected to
 /// shuffle across for him.
 ///
@@ -134,17 +134,19 @@ const LATERAL_URGENCY: f32 = 1.6;
 pub struct ShapeDiscipline;
 
 impl ShapeDiscipline {
-    /// Blend the state's own velocity with a pull toward the team anchor,
-    /// according to how far outside his zone the player has drifted.
-    /// Returns the velocity unchanged whenever the ball is this player's
-    /// job.
-    pub fn apply(ctx: &StateProcessingContext, velocity: Vector3<f32>) -> Vector3<f32> {
-        Self::apply_with_pull(ctx, velocity).0
+    /// How hard the recall pulls a man `felt` out of his zone. Organisation
+    /// scales it, and `MAX_PULL` bounds it: above it the blend would take a
+    /// negative share of his own velocity.
+    pub(crate) fn pull(felt: f32, organisation: f32) -> f32 {
+        ((((felt - SLACK) / RANGE).clamp(0.0, 1.0)) * MAX_PULL * organisation).min(MAX_PULL)
     }
 
-    /// As [`Self::apply`], but also reports how hard the recall is pulling
-    /// so the caller can stop the movement-effort cap from throttling a
-    /// recovery run — see `StateProcessingResult::shape_recall_pull`.
+    /// Blend the state's velocity with a recall toward the player's anchor,
+    /// according to how far outside his zone he has drifted, and report how
+    /// hard the recall is pulling so the caller can stop the movement-effort
+    /// cap from throttling a recovery run — see
+    /// `StateProcessingResult::shape_recall_pull`. The velocity comes back
+    /// unchanged whenever the ball is this player's job.
     pub fn apply_with_pull(
         ctx: &StateProcessingContext,
         velocity: Vector3<f32>,
@@ -172,7 +174,7 @@ impl ShapeDiscipline {
             return (velocity, 0.0);
         }
 
-        let pull = (((felt - SLACK) / RANGE).clamp(0.0, 1.0)) * MAX_PULL * Self::organisation(ctx);
+        let pull = Self::pull(felt, Self::organisation(ctx));
 
         // The recall runs at the player's own top speed, so a man 30 m out
         // of shape actually recovers rather than ambling back — the
@@ -188,7 +190,12 @@ impl ShapeDiscipline {
         // Reporting `pull` lets the cap floor itself at the recall's own
         // demand, which is the honest reading: being this far out of
         // position IS the effort, whatever the state was calling itself.
-        let recall = (to_anchor / lag) * ctx.player.max_speed_with_condition_cached();
+        //
+        // A midfielder's recall runs at his own pace for the situation
+        // (`ShapeTempo`), which is flat out only when the play needs it.
+        let speed = ShapeTempo::recall_pace(ctx, anchor)
+            .unwrap_or_else(|| ctx.player.max_speed_with_condition_cached());
+        let recall = (to_anchor / lag) * speed;
 
         (velocity * (1.0 - pull) + recall * pull, pull)
     }
@@ -227,10 +234,8 @@ impl ShapeDiscipline {
     ///
     /// Two inputs, both continuous:
     ///
-    /// * **His own discipline** — concentration, teamwork, work_rate and
-    ///   positioning are what keep a player in his slot when the ball is
-    ///   elsewhere. `decision_quality` is the existing composite for
-    ///   reading the game off the ball.
+    /// * **How closely he follows the plan** — his adherence place reading
+    ///   (`Adherence::place`), centred on 1.0 for the level-14 population.
     /// * **Who is organising the side** — `TeamSkillAggregates::top_leadership`,
     ///   the best organiser on the pitch rather than an average, because
     ///   organisation comes from the one man doing it. Lifted from the
@@ -243,22 +248,12 @@ impl ShapeDiscipline {
     /// band is narrow (±15%) because this is organisation, not a
     /// different sport.
     fn organisation(ctx: &StateProcessingContext) -> f32 {
-        /// Population mean of the `own`/`organiser` blend below. Both
-        /// composites sit near it for a mid-table squad, so a mid-table
-        /// squad multiplies its recall by ~1.0.
-        const REFERENCE: f32 = 0.50;
-
-        let minute = sc::minute_from_ms(ctx.context.total_match_time);
-        let own = sc::decision_quality(ctx.player, minute);
         let aggregates = if ctx.player.team_id == ctx.context.field_home_team_id {
             &ctx.context.home_skill_aggregates
         } else {
             &ctx.context.away_skill_aggregates
         };
-        let organiser = aggregates.top_leadership;
-
-        let shortfall = (own * 0.60 + organiser * 0.40) - REFERENCE;
-        let held = (1.0 + shortfall * 0.30).clamp(0.85, 1.15);
+        let held = Self::held(ctx.player.adherence.place, aggregates.top_leadership);
 
         // **…AND THE MAN BEHIND THEM.**
         //
@@ -293,6 +288,17 @@ impl ShapeDiscipline {
         let voice =
             (aggregates.keeper_voice - TeamSkillAggregates::KEEPER_VOICE_REFERENCE) * voice_gain;
         (held * (1.0 + voice)).clamp(0.80, 1.22)
+    }
+
+    /// The recall multiplier from a man's adherence `place` and the side's
+    /// best `organiser`, before the keeper's voice.
+    pub(crate) fn held(place: f32, organiser: f32) -> f32 {
+        /// Population mean of the blend: a man at the mean reading counts
+        /// as the half the organiser composite sits near.
+        const REFERENCE: f32 = 0.50;
+        let own = REFERENCE * place;
+        let shortfall = (own * 0.60 + organiser * 0.40) - REFERENCE;
+        (1.0 + shortfall * 0.30).clamp(0.85, 1.15)
     }
 
     /// **How tightly the back line is allowed to spread, by the voice

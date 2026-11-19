@@ -99,6 +99,25 @@ impl KeeperSplitStep {
         *ON.get_or_init(|| std::env::var("OF_KEEPER_HOP").as_deref() != Ok("off"))
     }
 
+    /// Is a shot at his goal in the first `STRIKE_WINDOW` ticks of its
+    /// flight: the strike, as he sees it?
+    pub fn in_strike_window(player: &MatchPlayer, tick_context: &GameTickContext) -> bool {
+        let Some(target) = tick_context
+            .ball
+            .cached_shot_target
+            .as_ref()
+            .filter(|t| Some(t.defending_side) == player.side)
+        else {
+            return false;
+        };
+        let flight = &tick_context.positions.ball;
+        let speed = flight.velocity.norm();
+        // Same clock `KeeperShotReaction::since_strike` reads: the ground
+        // already flown, over the pace it is flying at.
+        speed >= 1e-3
+            && (flight.position - target.struck_from).magnitude() / speed < Self::STRIKE_WINDOW
+    }
+
     /// The apex to hop to, if this is the tick to hop on; `None` on every
     /// other tick of the match.
     pub fn apex(player: &MatchPlayer, tick_context: &GameTickContext) -> Option<f32> {
@@ -113,22 +132,11 @@ impl KeeperSplitStep {
         if ball.is_owned || ball.held_in_hands {
             return None;
         }
-        let target = ball
-            .cached_shot_target
-            .as_ref()
-            .filter(|t| Some(t.defending_side) == player.side)?;
-
+        if !Self::in_strike_window(player, tick_context) {
+            return None;
+        }
         let flight = &tick_context.positions.ball;
         let speed = flight.velocity.norm();
-        if speed < 1e-3 {
-            return None;
-        }
-        // Same clock `KeeperShotReaction::since_strike` reads: the ground
-        // already flown, over the pace it is flying at.
-        let since_strike = (flight.position - target.struck_from).magnitude() / speed;
-        if since_strike >= Self::STRIKE_WINDOW {
-            return None;
-        }
         // …and how much of the flight is left to his depth. Along the
         // goal axis when the shot has one; a ball squared across the face
         // of goal is measured on its whole path instead, because dividing

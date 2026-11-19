@@ -22,6 +22,7 @@
 //! can move it without touching the velocity. "The ball jumped" is not
 //! actionable; "the ball jumped 91u inside `try_block_shot`" is.
 
+use crate::r#match::player::state::PlayerState;
 use nalgebra::Vector3;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -41,9 +42,9 @@ pub static APEX_MAX_MM: AtomicU64 = AtomicU64::new(0);
 /// Launches seen.
 pub static LAUNCHES: AtomicU64 = AtomicU64::new(0);
 /// Launches above 30 m — impossible for a human — split by the state
-/// the striker was in. Sized past the state machine's 78 variants so
-/// a newly added state cannot silently fall off the end.
-pub static ABSURD_BY_STATE: [AtomicU64; 96] = [const { AtomicU64::new(0) }; 96];
+/// the striker was in, indexed by `PlayerState::compact_id`.
+pub static ABSURD_BY_STATE: [AtomicU64; PlayerState::COMPACT_SLOTS] =
+    [const { AtomicU64::new(0) }; PlayerState::COMPACT_SLOTS];
 
 /// Highest the ball's own `position.z` ever actually reached, in mm.
 /// Read against `APEX_MAX_MM`: a launch apex that never materialises
@@ -190,7 +191,7 @@ impl FlightDiag {
 
     /// Per-state count of launches above 30 m, indexed by
     /// `PlayerState::compact_id`.
-    pub fn absurd_by_state() -> [u64; 96] {
+    pub fn absurd_by_state() -> [u64; PlayerState::COMPACT_SLOTS] {
         std::array::from_fn(|i| ABSURD_BY_STATE[i].load(Ordering::Relaxed))
     }
 

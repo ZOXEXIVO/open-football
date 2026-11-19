@@ -7,8 +7,26 @@ use core::club::team::tactics::{MatchTacticType, Tactics};
 use core::frame_trace::FrameTrace;
 use core::heatmap_diag as heat;
 use core::heatmap_diag::HeatMapCensus;
+use core::defender_census::{
+    BackLine, ChaseYield, Credit, DefenderCensus, DefenderCensusSnapshot, DeflectionEnd,
+    DeflectionKind, Duty, HeaderBooking, HeaderRule, Phase, Rank, Situation, SpellEnd, TakeRule,
+};
+use core::forward_census::{
+    ForwardCensus, ForwardCensusSnapshot, FrontPlace, FwdHeaderRule, FwdHeadingExit, FwdJob,
+    FwdLimit, FwdPhase, FwdRefusal, FwdRequest, FwdSituation, FwdTackleTake, LineGap, PressDoor,
+    RunDoor, RunEnd,
+};
+use core::keeper_census::KeeperCensus;
+use core::midfielder_census::{
+    AttackJob, BallHeld, DropEnd, DropReach, HeadingExit, MidHeaderRule, MidPhase, MidSituation,
+    MidfieldPlace, MidfielderCensus, MidfielderCensusSnapshot, TackleTake,
+};
+use core::r#match::forwarders::states::ForwardState;
+use core::r#match::midfielders::states::MidfielderState;
 use core::r#match::FootballEngine;
 use core::r#match::MatchSquad;
+use core::r#match::defenders::states::DefenderState;
+use core::r#match::goalkeepers::states::state::GoalkeeperState;
 use core::r#match::player::MatchPlayer;
 use core::r#match::player::state::PlayerState;
 use core::r#match::player::strategies::players::ops::skill_composites as sc;
@@ -23,6 +41,7 @@ use rayon::prelude::*;
 use serde::Serialize;
 use shared::{Appearance, Region, SkinBucket, SkinDist};
 use std::cmp::Reverse;
+use std::collections::HashSet;
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
@@ -198,20 +217,6 @@ const VIEWER_WASM_GZ: &[u8] =
 /// The rendered viewer page, built once the match has been played.
 static VIEWER_PAGE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-const POSITIONS_442: [PlayerPositionType; 11] = [
-    PlayerPositionType::Goalkeeper,
-    PlayerPositionType::DefenderLeft,
-    PlayerPositionType::DefenderCenterLeft,
-    PlayerPositionType::DefenderCenterRight,
-    PlayerPositionType::DefenderRight,
-    PlayerPositionType::MidfielderLeft,
-    PlayerPositionType::MidfielderCenterLeft,
-    PlayerPositionType::MidfielderCenterRight,
-    PlayerPositionType::MidfielderRight,
-    PlayerPositionType::ForwardLeft,
-    PlayerPositionType::ForwardRight,
-];
-
 /// Formation the synthetic squads line up in, read once from `TACTIC` (and
 /// `TACTIC_B` for the away side).
 ///
@@ -290,6 +295,23 @@ impl HarnessTactic {
             Self::selected()
         } else {
             Self::selected_away()
+        }
+    }
+
+    /// The line of the slot a player was generated for — 0 GK, 1 DEF,
+    /// 2 MID, 3 FWD — read from his side's shape, so a 4-3-3's left
+    /// forward is a forward and a 4-2-3-1's holding midfielder a defender,
+    /// as the engine runs them. Ids are `team_id * 100 + slot`; a bench id
+    /// (slot 11 and up) reads as a forward.
+    fn group_of(id: u32) -> u8 {
+        let Some(pos) = Self::positions(id / 100).get((id % 100) as usize) else {
+            return 3;
+        };
+        match pos.position_group() {
+            PlayerFieldPositionGroup::Goalkeeper => 0,
+            PlayerFieldPositionGroup::Defender => 1,
+            PlayerFieldPositionGroup::Midfielder => 2,
+            PlayerFieldPositionGroup::Forward => 3,
         }
     }
 
@@ -1462,6 +1484,8 @@ fn make_squad_simple(team_id: u32, level: u8) -> MatchSquad {
         selection_omissions: Vec::new(),
         overlooked: Vec::new(),
         coach_snapshot: None,
+        coach_card: None,
+        familiarity: None,
     }
 }
 
@@ -1474,7 +1498,7 @@ fn make_squad_viewer(
     let base_id = team_id * 100;
     let mut players_json = Vec::new();
 
-    let main_squad: Vec<MatchPlayer> = POSITIONS_442
+    let main_squad: Vec<MatchPlayer> = HarnessTactic::positions(team_id)
         .iter()
         .enumerate()
         .map(|(i, &pos)| {
@@ -1531,7 +1555,7 @@ fn make_squad_viewer(
     let squad = MatchSquad {
         team_id,
         team_name: team_name.to_string(),
-        tactics: Tactics::new(MatchTacticType::T442),
+        tactics: Tactics::new(HarnessTactic::for_team(team_id)),
         main_squad,
         substitutes,
         captain_id: None,
@@ -1541,6 +1565,8 @@ fn make_squad_viewer(
         selection_omissions: Vec::new(),
         overlooked: Vec::new(),
         coach_snapshot: None,
+        coach_card: None,
+        familiarity: None,
     };
 
     (squad, players_json)
@@ -1742,19 +1768,12 @@ fn rating_volume_profile(result: &core::r#match::MatchResultRaw) -> [RatingVolum
     agg
 }
 
-/// Position group for a player id, using the deterministic 442 slot
-/// scheme in make_squad_simple (base_id = team_id*100):
-/// 0 GK, 1-4 DEF, 5-8 MID, 9-10 FWD. Stats runs have no substitutes so
-/// every id maps cleanly to 0..=10. This is the lens for the GOALS BY
-/// LINE diagnostic — the share of goals scored by each positional line,
-/// which is what "defenders/midfielders rarely score" is measured against.
+/// Position group for a player id: 0 GK, 1 DEF, 2 MID, 3 FWD. This is the
+/// lens for the GOALS BY LINE diagnostic — the share of goals scored by each
+/// positional line, which is what "defenders/midfielders rarely score" is
+/// measured against. See `HarnessTactic::group_of`.
 fn pos_group_of(id: u32) -> u8 {
-    match id % 100 {
-        0 => 0,     // GK
-        1..=4 => 1, // DEF
-        5..=8 => 2, // MID
-        _ => 3,     // FWD (9, 10)
-    }
+    HarnessTactic::group_of(id)
 }
 
 /// `(id, goals, shots, xg, pos_group, rating, minutes, assists)`.
@@ -1902,7 +1921,7 @@ struct LeagueTeam {
 
 fn build_league_team(id: u32, name: &str, level: u8) -> LeagueTeam {
     let base_id = id * 100;
-    let players = POSITIONS_442
+    let players = HarnessTactic::positions(id)
         .iter()
         .enumerate()
         .map(|(i, &pos)| {
@@ -1927,7 +1946,7 @@ fn league_squad(t: &LeagueTeam) -> MatchSquad {
     MatchSquad {
         team_id: t.id,
         team_name: t.name.clone(),
-        tactics: Tactics::new(MatchTacticType::T442),
+        tactics: Tactics::new(HarnessTactic::for_team(t.id)),
         main_squad: t.players.clone(),
         substitutes: Vec::new(),
         captain_id: None,
@@ -1937,6 +1956,8 @@ fn league_squad(t: &LeagueTeam) -> MatchSquad {
         selection_omissions: Vec::new(),
         overlooked: Vec::new(),
         coach_snapshot: None,
+        coach_card: None,
+        familiarity: None,
     }
 }
 
@@ -2213,6 +2234,33 @@ fn run_league(n_teams: usize, rounds: usize, min_lvl: u8, max_lvl: u8) {
             r.ga,
             r.pts()
         );
+    }
+
+    // The season's shape: the two ends of the table, its spread, the goals
+    // and the top scorer. A 38-game season over a real top division's spread
+    // of clubs (levels 12 to 18) is held to a real division's two ends.
+    {
+        let points: Vec<f64> = order.iter().map(|&ti| table[ti].pts() as f64).collect();
+        let champion = points.first().copied().unwrap_or(0.0);
+        let last = points.last().copied().unwrap_or(0.0);
+        let mean = points.iter().sum::<f64>() / points.len().max(1) as f64;
+        let sd = (points.iter().map(|p| (p - mean).powi(2)).sum::<f64>()
+            / points.len().max(1) as f64)
+            .sqrt();
+        let top_scorer = agg.values().map(|e| e.0).max().unwrap_or(0);
+        println!("
+--- SEASON SHAPE ---");
+        println!("  champion {champion:.0} pts, last {last:.0} pts, spread sd {sd:.1} (range {:.0})", champion - last);
+        println!(
+            "  goals {:.2} a match, top scorer {top_scorer}",
+            total_goals as f32 / n_matches.max(1) as f32
+        );
+        if (min_lvl, max_lvl) == (12, 18) && n_teams == 20 && rounds == 2 {
+            for (label, value, lo, hi) in [("champion", champion, 75.0, 100.0), ("last club", last, 15.0, 40.0)] {
+                let verdict = if (lo..=hi).contains(&value) { "ok " } else { "OUT" };
+                println!("  [{verdict}] {label:<10} {value:>4.0} pts   band {lo:.0} .. {hi:.0}");
+            }
+        }
     }
 
     // Top scorers — the headline. `Gls` over a full double round-robin IS the
@@ -2622,6 +2670,2015 @@ fn print_outfield_error_ladder(played: &[LeagueMatch], side_matches: u32) {
 /// the harness exposes no loose helper functions.
 /// Printable names for the `compact_id()`s the engine's censuses are
 /// keyed by.
+/// The keeper action census (`KeeperCensus`): who decided each shot and each
+/// claim, the rebound, the time down after a dive, the pace at the strike
+/// and the readiness phases.
+struct KeeperCensusReport;
+
+impl KeeperCensusReport {
+    fn print(n_matches: usize) {
+        let c = KeeperCensus::snapshot();
+        let matches = n_matches.max(1) as f64;
+        let keeper_matches = matches * 2.0;
+        let pct = |n: u64, of: u64| n as f64 * 100.0 / of.max(1) as f64;
+        Self::print_shots(&c, matches);
+        Self::print_claims(&c, matches, pct);
+        Self::print_rebounds(&c, matches, pct);
+        Self::print_ground(&c, keeper_matches, pct);
+        Self::print_strike(&c, matches, pct);
+        Self::print_phases(&c, pct);
+    }
+
+    fn print_shots(c: &core::keeper_census::KeeperCensusSnapshot, matches: f64) {
+        let rolled: u64 = c.physics.iter().sum();
+        if rolled == 0 && c.machine == 0 {
+            return;
+        }
+        println!();
+        println!("--- KEEPER SHOT ADJUDICATION (who decided each shot; per match) ---");
+        let outcomes = core::keeper_census::SaveSettlement::LABELS
+            .iter()
+            .zip(c.physics.iter())
+            .map(|(label, n)| format!("{label} {:.2}", *n as f64 / matches))
+            .collect::<Vec<_>>()
+            .join("  ");
+        println!(
+            "  ball-side save model rolled {:.2}: {outcomes}",
+            rolled as f64 / matches
+        );
+        println!(
+            "  beyond his reach, no roll {:.2}",
+            c.beyond_reach as f64 / matches
+        );
+        println!(
+            "  state machine handed him a live shot {:.2}, {:.2} of them after the save model had rolled",
+            c.machine as f64 / matches,
+            c.both as f64 / matches
+        );
+        println!(
+            "  settled by the save model only {:.2}   by the state machine only {:.2}   by BOTH {:.2}  (expected 0)",
+            rolled.saturating_sub(c.both) as f64 / matches,
+            c.machine.saturating_sub(c.both) as f64 / matches,
+            c.both as f64 / matches
+        );
+    }
+
+    fn print_claims(
+        c: &core::keeper_census::KeeperCensusSnapshot,
+        matches: f64,
+        pct: impl Fn(u64, u64) -> f64,
+    ) {
+        use core::keeper_census::{ClaimEnd, ClaimSite};
+        let closed: u64 = c.claim_ends.iter().sum();
+        if closed == 0 {
+            return;
+        }
+        println!();
+        println!(
+            "--- KEEPER CLAIMS (high balls he came for: {:.2}/match) ---",
+            c.claims as f64 / matches
+        );
+        println!(
+            "  action: catch {:.0}%  punch {:.0}%  never played it {:.0}%",
+            pct(c.claim_actions[0], closed),
+            pct(c.claim_actions[1], closed),
+            pct(c.claim_actions[2], closed)
+        );
+        let ends = ClaimEnd::LABELS
+            .iter()
+            .zip(c.claim_ends.iter())
+            .map(|(label, n)| format!("{label} {:.0}%", pct(*n, closed)))
+            .collect::<Vec<_>>()
+            .join("  ");
+        println!("  ended: {ends}");
+        let counts = c
+            .claim_site_count
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| **n > 0)
+            .map(|(sites, n)| format!("{sites} → {:.0}%", pct(*n, closed)))
+            .collect::<Vec<_>>()
+            .join("  ");
+        let several: u64 = c.claim_site_count[2..].iter().sum();
+        println!(
+            "  sites that rolled per claim: {counts}   (more than one site: {:.1}%)",
+            pct(several, closed)
+        );
+        let sites = ClaimSite::LABELS
+            .iter()
+            .zip(c.claim_sites.iter())
+            .map(|(label, n)| format!("{label} {:.0}%", pct(*n, closed)))
+            .collect::<Vec<_>>()
+            .join("  ");
+        println!("  a site rolled in the claim: {sites}");
+        let decided = ClaimSite::LABELS
+            .iter()
+            .chain(std::iter::once(&"nothing"))
+            .zip(c.claim_decided_by.iter())
+            .map(|(label, n)| format!("{label} {:.0}%", pct(*n, closed)))
+            .collect::<Vec<_>>()
+            .join("  ");
+        println!("  decided by (the last site to roll): {decided}");
+        println!(
+            "  rolls per claim {:.2}   contest rolls for a keeper who had not come {:.2}/match",
+            c.claim_rolls as f64 / closed as f64,
+            c.contest_uncommitted as f64 / matches
+        );
+    }
+
+    fn print_rebounds(
+        c: &core::keeper_census::KeeperCensusSnapshot,
+        matches: f64,
+        pct: impl Fn(u64, u64) -> f64,
+    ) {
+        if c.rebounds == 0 {
+            return;
+        }
+        println!();
+        println!(
+            "--- KEEPER REBOUNDS (shots within 3 s of a loose keeper touch: {:.2}/match) ---",
+            c.rebounds as f64 / matches
+        );
+        let mut states: Vec<(usize, u64)> = c
+            .rebound_state
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        states.sort_by_key(|(_, n)| Reverse(*n));
+        let listed = states
+            .iter()
+            .map(|(slot, n)| {
+                format!(
+                    "{} {:.0}%",
+                    KeeperCensus::slot_name(*slot),
+                    pct(*n, c.rebounds)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("  ");
+        println!("  his state at the strike: {listed}");
+        println!(
+            "  mean height {:.2} m   mean ground speed {:.2} m/s",
+            c.rebound_height_cm as f64 / 100.0 / c.rebounds as f64,
+            c.rebound_speed_cmps as f64 / 100.0 / c.rebounds as f64
+        );
+        let ended: u64 = c.rebound_ends.iter().sum();
+        let ends = core::keeper_census::ShotEnd::LABELS
+            .iter()
+            .zip(c.rebound_ends.iter())
+            .filter(|(_, n)| **n > 0)
+            .map(|(label, n)| format!("{label} {:.0}%", pct(*n, ended)))
+            .collect::<Vec<_>>()
+            .join("  ");
+        println!("  ended: {ends}");
+    }
+
+    fn print_ground(
+        c: &core::keeper_census::KeeperCensusSnapshot,
+        keeper_matches: f64,
+        pct: impl Fn(u64, u64) -> f64,
+    ) {
+        if c.dives == 0 {
+            return;
+        }
+        println!();
+        println!("--- KEEPER ON THE GROUND (from a dive's landing to his first upright state) ---");
+        println!(
+            "  dives {:.2}/keeper/match   lay down in the dive {:.0}%   left it still airborne {:.0}%   never left the ground {:.0}%   took off again from the floor {:.2}/keeper/match",
+            c.dives as f64 / keeper_matches,
+            pct(c.dives_landed, c.dives),
+            pct(c.dives_up_airborne, c.dives),
+            pct(c.dives_never_airborne, c.dives),
+            c.redives as f64 / keeper_matches
+        );
+        println!(
+            "  cut short by a stoppage (a goal, a substitution) and not counted below: {:.2}/keeper/match",
+            c.spells_cut as f64 / keeper_matches
+        );
+        for (kind, label) in ["without the ball", "with the ball   "].iter().enumerate() {
+            let spells = c.down_spells[kind];
+            if spells == 0 {
+                continue;
+            }
+            let seconds = c.down_ticks[kind] as f64 / 100.0;
+            let time_bin = KeeperCensus::TIME_BIN_TICKS as f64 / 100.0;
+            println!(
+                "  {label}: {:.2}/keeper/match   time down {:.2} s (median {:.2}, p90 {:.2})   speed {:.2} m/s (p90 {:.2})",
+                spells as f64 / keeper_matches,
+                seconds / spells as f64,
+                KeeperCensus::quantile(&c.down_time_hist[kind], 0.5, time_bin),
+                KeeperCensus::quantile(&c.down_time_hist[kind], 0.9, time_bin),
+                c.down_path_mm[kind] as f64 / 1000.0 / seconds.max(1e-9),
+                KeeperCensus::quantile(
+                    &c.down_speed_hist[kind],
+                    0.9,
+                    KeeperCensus::SPEED_BIN_MPS as f64
+                )
+            );
+        }
+        println!("  real: down 0.6-1.2 s, no faster than a 1.5 m/s scramble");
+    }
+
+    fn print_strike(
+        c: &core::keeper_census::KeeperCensusSnapshot,
+        matches: f64,
+        pct: impl Fn(u64, u64) -> f64,
+    ) {
+        let shots: u64 = c.strike_shots.iter().sum();
+        if shots == 0 {
+            return;
+        }
+        println!();
+        println!(
+            "--- KEEPER AT THE STRIKE (his ground speed as a shot at his goal is struck: {:.2}/match) ---",
+            shots as f64 / matches
+        );
+        println!(
+            "  {:<20} {:>8} {:>7} {:>11}   {:>6} {:>10} {:>9}   {:>9}",
+            "state", "per match", "share", "mean speed", "<0.5", "0.5-2.4", ">2.4 m/s", "off line"
+        );
+        let mut slots: Vec<usize> = (0..KeeperCensus::SLOTS)
+            .filter(|s| c.strike_shots[*s] > 0)
+            .collect();
+        slots.sort_by_key(|s| Reverse(c.strike_shots[*s]));
+        for slot in slots {
+            let n = c.strike_shots[slot];
+            println!(
+                "  {:<20} {:>8.2} {:>6.1}% {:>8.2} m/s   {:>5.0}% {:>9.0}% {:>8.0}%   {:>7.2} m",
+                KeeperCensus::slot_name(slot),
+                n as f64 / matches,
+                pct(n, shots),
+                c.strike_speed_cmps[slot] as f64 / 100.0 / n as f64,
+                pct(c.strike_pace[slot][0], n),
+                pct(c.strike_pace[slot][1], n),
+                pct(c.strike_pace[slot][2], n),
+                c.strike_off_line_cm[slot] as f64 / 100.0 / n as f64
+            );
+        }
+    }
+
+    fn print_phases(c: &core::keeper_census::KeeperCensusSnapshot, pct: impl Fn(u64, u64) -> f64) {
+        let ticks: u64 = c.phase_ticks.iter().sum();
+        if ticks == 0 {
+            return;
+        }
+        let minutes = ticks as f64 / 6000.0;
+        println!();
+        println!(
+            "--- KEEPER PHASES (relaxed = Walking, alert = Standing, set = PreparingForSave) ---"
+        );
+        let shares = KeeperCensus::PHASE_LABELS
+            .iter()
+            .zip(c.phase_ticks.iter())
+            .map(|(label, n)| format!("{label} {:.1}%", pct(*n, ticks)))
+            .collect::<Vec<_>>()
+            .join("  ");
+        println!("  time: {shares}");
+        println!(
+            "  phase changes {:.1}/keeper/minute, {:.0}% reversed inside 300 ms",
+            c.phase_changes as f64 / minutes,
+            pct(c.phase_reversed, c.phase_changes)
+        );
+        println!(
+            "  relaxed <-> alert {:.2}/keeper/minute, {:.0}% reversed inside 300 ms   (band: < 4, < 10%)",
+            c.relaxed_alert_changes as f64 / minutes,
+            pct(c.relaxed_alert_reversed, c.relaxed_alert_changes)
+        );
+    }
+}
+
+struct DefenderCensusReport;
+
+impl DefenderCensusReport {
+    fn print(n_matches: usize) {
+        let c = DefenderCensus::snapshot();
+        let matches = n_matches.max(1) as f64;
+        let pct = |n: u64, of: u64| n as f64 * 100.0 / of.max(1) as f64;
+        Self::print_dispossessions(&c, matches, pct);
+        Self::print_duels(&c, matches, pct);
+        Self::print_headers(&c, matches, pct);
+        Self::print_assignment(&c, matches, pct);
+        Self::print_doors(&c, pct);
+        Self::print_motion(&c, pct);
+        Self::print_phases(&c, pct);
+        Self::print_chases(&c, matches, pct);
+        Self::print_deflections(&c, matches, pct);
+    }
+
+    /// The heaviest defender states of a per-state row, as "name share%".
+    fn top_states(row: &[u64], take: usize) -> String {
+        let total: u64 = row.iter().sum();
+        let mut ranked: Vec<(usize, u64)> = row
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        ranked.sort_by_key(|r| Reverse(r.1));
+        ranked
+            .iter()
+            .take(take)
+            .map(|(slot, n)| {
+                format!(
+                    "{} {:.0}%",
+                    DefenderCensus::slot_name(*slot),
+                    *n as f64 * 100.0 / total.max(1) as f64
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn print_dispossessions(
+        c: &DefenderCensusSnapshot,
+        matches: f64,
+        pct: impl Fn(u64, u64) -> f64 + Copy,
+    ) {
+        let total: u64 = c.turnovers.iter().flatten().sum();
+        if total == 0 {
+            return;
+        }
+        println!();
+        println!(
+            "--- DISPOSSESSION CENSUS ({:.1} turnovers/match: the ball now with the other side, by the rule that put it there) ---",
+            total as f64 / matches
+        );
+        for (r, label) in TakeRule::LABELS.iter().enumerate() {
+            let [released, carried] = c.turnovers[r];
+            let n = released + carried;
+            if n == 0 {
+                continue;
+            }
+            let roles = c.take_role[r];
+            let prior = c.take_prior[r];
+            let credit = Credit::LABELS
+                .iter()
+                .zip(c.take_credit[r].iter())
+                .map(|(l, k)| format!("{l} {:.0}%", pct(*k, n)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!(
+                "  {label:<27} {:>6.2}/match ({:.2} off a carrier, {:.2} a released ball)  taker GK {:.0}% DEF {:.0}% MID {:.0}% FWD {:.0}%  gap {:.2} m  the loser had held it {:.2} s",
+                n as f64 / matches,
+                carried as f64 / matches,
+                released as f64 / matches,
+                pct(roles[0], n),
+                pct(roles[1], n),
+                pct(roles[2], n),
+                pct(roles[3], n),
+                c.take_gap_mm[r] as f64 / 1000.0 / n as f64,
+                c.take_tenure_ticks[r] as f64 / 100.0 / n as f64,
+            );
+            println!(
+                "    {:<25} challenge on him in the 0.5 s before: none {:.0}% won {:.0}% missed {:.0}% foul {:.0}%   credited: {credit}",
+                "",
+                pct(prior[0], n),
+                pct(prior[1], n),
+                pct(prior[2], n),
+                pct(prior[3], n),
+            );
+            if roles[1] > 0 {
+                println!(
+                    "    {:<25} defender takers' states: {}",
+                    "",
+                    Self::top_states(&c.take_def_state[r], 4)
+                );
+            }
+        }
+    }
+
+    fn print_duels(c: &DefenderCensusSnapshot, matches: f64, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        if c.spells == 0 {
+            return;
+        }
+        let challenges: u64 = c.challenges.iter().sum();
+        println!();
+        println!(
+            "--- DUEL CENSUS ({:.1} defender spells on a carrier/match: closing in Pressing, containing in Tackling) ---",
+            c.spells as f64 / matches
+        );
+        println!(
+            "  a spell: {:.2} s closing, {:.2} s containing   ended: {}",
+            c.spell_pressing_ticks as f64 / 100.0 / c.spells as f64,
+            c.spell_tackling_ticks as f64 / 100.0 / c.spells as f64,
+            SpellEnd::LABELS
+                .iter()
+                .zip(c.spell_ends.iter())
+                .map(|(l, n)| format!("{l} {:.0}%", pct(*n, c.spells)))
+                .collect::<Vec<_>>()
+                .join("  ")
+        );
+        println!(
+            "  Tackling entered {:.1}/match for {:.1} challenges/match  →  {:.1} entries a challenge   (one is the state counting tackles)",
+            c.tackling_entries as f64 / matches,
+            challenges as f64 / matches,
+            c.tackling_entries as f64 / challenges.max(1) as f64
+        );
+        for (k, kind) in ["block tackle", "recovery slide"].iter().enumerate() {
+            let n = c.challenges[k];
+            if n == 0 {
+                continue;
+            }
+            let o = c.challenge_outcomes[k];
+            println!(
+                "  {kind:<15} {:.2}/match: won {:.0}%  missed {:.0}%  foul {:.0}%",
+                n as f64 / matches,
+                pct(o[0], n),
+                pct(o[1], n),
+                pct(o[2], n)
+            );
+        }
+        println!(
+            "  at the challenge: moving at {:.2} m/s, goal-side of the carrier on {:.0}%",
+            c.challenge_speed_cmps as f64 / 100.0 / challenges.max(1) as f64,
+            pct(c.challenge_goal_side, challenges)
+        );
+    }
+
+    fn print_headers(c: &DefenderCensusSnapshot, matches: f64, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let total: u64 = c.headers.iter().sum();
+        if total == 0 && c.heading_rolls == 0 {
+            return;
+        }
+        println!();
+        println!(
+            "--- AERIAL CENSUS ({:.2} headers by outfielders/match, by the rule that decided each) ---",
+            total as f64 / matches
+        );
+        let heading = DefenderState::Heading as usize;
+        let mut defensive = 0u64;
+        let mut outside = 0u64;
+        let (mut played_away, mut away_outside) = (0u64, 0u64);
+        for (r, label) in HeaderRule::LABELS.iter().enumerate() {
+            let n = c.headers[r];
+            let taken_into_control = r == HeaderRule::OwnershipClaim as usize;
+            for (slot, k) in c.header_state[r].iter().enumerate().take(DefenderState::SLOTS) {
+                defensive += k;
+                if slot != heading {
+                    outside += k;
+                }
+                if !taken_into_control {
+                    played_away += k;
+                    if slot != heading {
+                        away_outside += k;
+                    }
+                }
+            }
+            if n == 0 {
+                continue;
+            }
+            let booked = HeaderBooking::LABELS
+                .iter()
+                .zip(c.header_booked[r].iter())
+                .map(|(l, k)| format!("{l} {:.0}%", pct(*k, n)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!(
+                "  {label:<22} {:>6.2}/match  off the ground {:.0}%  booked: {booked}",
+                n as f64 / matches,
+                pct(c.header_leap[r], n),
+            );
+            println!(
+                "    {:<20} played from: {}",
+                "",
+                Self::top_states(&c.header_state[r], 5)
+            );
+        }
+        println!(
+            "  defenders' headers: {:.2}/match, {:.0}% of them played outside Heading;  Heading's own shots (DEF_HEADING / DEF_HEADER_ON_GOAL): {:.2}/match",
+            defensive as f64 / matches,
+            pct(outside, defensive),
+            c.header_booked[HeaderRule::HeadingShot as usize][HeaderBooking::Shot as usize] as f64
+                / matches
+        );
+        println!(
+            "    of them played away (a contest's header, not a high ball taken into his control): {:.2}/match, {:.0}% outside Heading",
+            played_away as f64 / matches,
+            pct(away_outside, played_away)
+        );
+        println!(
+            "  flights decided by both the aerial duel and the cross contest: {} ({:.2}/match)   heading-state rolls {:.2}/match, of them for a ball already awarded to him {} ({:.2}/match)   (expected 0)",
+            c.flights_both,
+            c.flights_both as f64 / matches,
+            c.heading_rolls as f64 / matches,
+            c.heading_rerolls,
+            c.heading_rerolls as f64 / matches
+        );
+    }
+
+    fn print_assignment(
+        c: &DefenderCensusSnapshot,
+        matches: f64,
+        pct: impl Fn(u64, u64) -> f64 + Copy,
+    ) {
+        let total: u64 = c.assignment.iter().flatten().sum();
+        if total == 0 {
+            return;
+        }
+        println!();
+        println!(
+            "--- ASSIGNMENT CENSUS (defender AI ticks out of possession: the plan's duty against the per-tick ranking) ---"
+        );
+        println!(
+            "  {:<14} {:>7}  {}",
+            "plan duty",
+            "share",
+            Rank::LABELS
+                .iter()
+                .map(|l| format!("{l:>8}"))
+                .collect::<Vec<_>>()
+                .join("")
+        );
+        for (d, label) in Duty::LABELS.iter().enumerate() {
+            let row = c.assignment[d];
+            let n: u64 = row.iter().sum();
+            if n == 0 {
+                continue;
+            }
+            println!(
+                "  {label:<14} {:>6.1}%  {}   in: {}",
+                pct(n, total),
+                row.iter()
+                    .map(|k| format!("{:>7.0}%", pct(*k, n)))
+                    .collect::<Vec<_>>()
+                    .join(""),
+                Self::top_states(&c.assignment_state[d], 4)
+            );
+        }
+        let changes = c.changes_out_of_possession;
+        println!(
+            "  state changes out of possession {:.1}/match: after a change of ranking only {:.0}%, of plan duty only {:.0}%, of both {:.0}%",
+            changes as f64 / matches,
+            pct(c.changes_after_rank, changes),
+            pct(c.changes_after_duty, changes),
+            pct(c.changes_after_both, changes)
+        );
+        println!(
+            "  the press duty changed hands {:.1}/match, the cover duty {:.1}/match ({:.1} of them the cover man taking the press)   (cover should change no more often than press)",
+            c.press_hands as f64 / matches,
+            c.cover_hands as f64 / matches,
+            c.cover_to_press as f64 / matches
+        );
+        let covering = DefenderState::Covering as usize;
+        let covering_ticks: u64 = c.assignment_state.iter().map(|row| row[covering]).sum();
+        println!(
+            "  a defender in Covering holds the cover duty on {:.1}% of those ticks   (band: >= 95%)",
+            pct(c.assignment_state[Duty::COVER][covering], covering_ticks)
+        );
+        println!(
+            "  two or more defenders in Pressing/Tackling on the carrier: outside their area {:.1}% of carried ticks, inside it {:.1}%",
+            pct(c.crowded_ticks[0], c.carrier_ticks[0]),
+            pct(c.crowded_ticks[1], c.carrier_ticks[1])
+        );
+    }
+
+    fn print_doors(c: &DefenderCensusSnapshot, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let any: u64 = c.doors.iter().flatten().map(|cell| cell[0]).sum();
+        if any == 0 {
+            return;
+        }
+        println!();
+        println!(
+            "--- DOOR CENSUS (defender AI ticks in each situation, by state: share on which the state's handler acted on it) ---"
+        );
+        println!(
+            "  {:<18}{}",
+            "state",
+            Situation::LABELS
+                .iter()
+                .map(|l| format!("{l:>28}"))
+                .collect::<Vec<_>>()
+                .join("")
+        );
+        for slot in 0..DefenderState::SLOTS {
+            let seen: u64 = (0..Situation::COUNT).map(|s| c.doors[s][slot][0]).sum();
+            if seen == 0 {
+                continue;
+            }
+            let cells = (0..Situation::COUNT)
+                .map(|s| {
+                    let [n, acted] = c.doors[s][slot];
+                    if n == 0 {
+                        format!("{:>28}", "—")
+                    } else {
+                        format!("{:>28}", format!("{:.0}% of {}", pct(acted, n), n))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            println!("  {:<18}{cells}", DefenderCensus::slot_name(slot));
+        }
+    }
+
+    fn print_motion(c: &DefenderCensusSnapshot, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let ticks: u64 = c.motion_ticks.iter().flatten().sum();
+        if ticks == 0 {
+            return;
+        }
+        const TICKS_PER_90: f64 = 540_000.0;
+        println!();
+        println!(
+            "--- DEFENDER MOTION CENSUS (speed read as displacement over 250 ms; km per 90 minutes on the pitch) ---"
+        );
+        for (line, label) in BackLine::LABELS.iter().enumerate() {
+            let [dead_ticks, live_ticks] = c.motion_ticks[line];
+            let all = dead_ticks + live_ticks;
+            if all == 0 {
+                continue;
+            }
+            let km = |mm: u64| mm as f64 / 1_000_000.0 / all as f64 * TICKS_PER_90;
+            let [dead_mm, live_mm] = c.motion_path_mm[line];
+            let bands = |live: usize, n: u64| {
+                DefenderCensus::BAND_LABELS
+                    .iter()
+                    .zip(c.motion_bands[line][live].iter())
+                    .map(|(l, k)| format!("{l} {:.0}%", pct(*k, n)))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            println!(
+                "  {label:<21} {:.2} km/90 = live {:.2} + dead {:.2}  (live {:.0}% of his time)   sprints/90: live {:.1} dead {:.1}",
+                km(dead_mm + live_mm),
+                km(live_mm),
+                km(dead_mm),
+                pct(live_ticks, all),
+                c.sprints[line][1] as f64 / all as f64 * TICKS_PER_90,
+                c.sprints[line][0] as f64 / all as f64 * TICKS_PER_90,
+            );
+            println!("    live: {}", bands(1, live_ticks));
+            println!("    dead: {}", bands(0, dead_ticks));
+        }
+        let split = core::dead_ball_diag::MotionCensus::back_line_split();
+        let pooled = core::dead_ball_diag::MotionCensus::snapshot().0;
+        let split_ticks: u64 = split.iter().map(|(_, t)| *t).sum();
+        let weighted: f64 = split
+            .iter()
+            .map(|(km, t)| *km as f64 * *t as f64)
+            .sum::<f64>()
+            / split_ticks.max(1) as f64;
+        println!(
+            "  pooled outfield (velocity per tick) {:.2} km/90 = centre-backs {:.2} · full-backs {:.2} · holding {:.2} · the rest {:.2}  (tick-weighted {:.2})",
+            pooled, split[0].0, split[1].0, split[2].0, split[3].0, weighted
+        );
+        let state_total: u64 = c.state_ticks.iter().sum();
+        let mut ranked: Vec<(usize, u64)> = c
+            .state_ticks
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        ranked.sort_by_key(|r| Reverse(r.1));
+        let rows = ranked
+            .iter()
+            .map(|(slot, n)| {
+                format!(
+                    "{} {:.1}% at {:.2} m/s",
+                    DefenderCensus::slot_name(*slot),
+                    pct(*n, state_total),
+                    c.state_speed_cmps[*slot] as f64 / 100.0 / *n as f64
+                )
+            })
+            .collect::<Vec<_>>();
+        for chunk in rows.chunks(4) {
+            println!("    {}", chunk.join("  ·  "));
+        }
+        let on_ball = ranked
+            .iter()
+            .filter(|(slot, _)| c.state_ball_ticks[*slot] > 0)
+            .map(|(slot, n)| {
+                format!(
+                    "{} {:.1}%",
+                    DefenderCensus::slot_name(*slot),
+                    pct(c.state_ball_ticks[*slot], *n)
+                )
+            })
+            .collect::<Vec<_>>();
+        println!("    his ball, share of the state's ticks: {}", on_ball.join("  ·  "));
+        let lines: u64 = c.offside_line.iter().sum();
+        let mut setters: Vec<(usize, u64)> = c
+            .offside_line
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        setters.sort_by_key(|r| Reverse(r.1));
+        let setters = setters
+            .iter()
+            .map(|(slot, n)| {
+                format!(
+                    "{} {:.1}% ({:.1}% of ticks)",
+                    DefenderCensus::slot_name(*slot),
+                    pct(*n, lines),
+                    pct(c.state_ticks[*slot], state_total)
+                )
+            })
+            .collect::<Vec<_>>();
+        println!("    line held at a pass with a man offside, by state: {}", setters.join("  ·  "));
+    }
+
+    fn print_phases(c: &DefenderCensusSnapshot, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let ticks: u64 = c.phase_ticks.iter().sum();
+        if ticks == 0 {
+            return;
+        }
+        let minutes = ticks as f64 / 6000.0;
+        println!();
+        println!(
+            "--- DEFENDER PHASES (relaxed = Walking, alert = HoldingLine; share of defender ticks) ---"
+        );
+        println!(
+            "  time: {}",
+            Phase::LABELS
+                .iter()
+                .zip(c.phase_ticks.iter())
+                .map(|(l, n)| format!("{l} {:.1}%", pct(*n, ticks)))
+                .collect::<Vec<_>>()
+                .join("  ")
+        );
+        println!(
+            "  relaxed <-> alert {:.2}/defender/minute, {:.0}% reversed inside 300 ms   (band: < 4, < 10%)",
+            c.relaxed_alert_changes as f64 / minutes,
+            pct(c.relaxed_alert_reversed, c.relaxed_alert_changes)
+        );
+    }
+
+    fn print_chases(c: &DefenderCensusSnapshot, matches: f64, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let entries: u64 = c.chase_entries.iter().sum();
+        if entries == 0 {
+            return;
+        }
+        let reversed: u64 = c.chase_reversed.iter().flatten().sum();
+        println!();
+        println!(
+            "--- LOOSE-BALL ROUND TRIP ({:.1} TakeBall entries/match by a defender state's own door; {:.0}% yielded by the dispatcher within ten AI ticks) ---",
+            entries as f64 / matches,
+            pct(reversed, entries)
+        );
+        let mut doors: Vec<usize> = (0..DefenderState::SLOTS)
+            .filter(|s| c.chase_entries[*s] > 0)
+            .collect();
+        doors.sort_by_key(|s| Reverse(c.chase_entries[*s]));
+        for slot in doors {
+            let n = c.chase_entries[slot];
+            let back: u64 = c.chase_reversed[slot].iter().sum();
+            println!(
+                "  {:<16} {:>6.1}/match  reversed {:>3.0}%   why: {}",
+                DefenderCensus::slot_name(slot),
+                n as f64 / matches,
+                pct(back, n),
+                ChaseYield::LABELS
+                    .iter()
+                    .zip(c.chase_reversed[slot].iter())
+                    .map(|(l, k)| format!("{l} {:.0}%", pct(*k, n)))
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            );
+        }
+    }
+
+    fn print_deflections(
+        c: &DefenderCensusSnapshot,
+        matches: f64,
+        pct: impl Fn(u64, u64) -> f64 + Copy,
+    ) {
+        let total: u64 = c.deflections.iter().sum();
+        if total == 0 {
+            return;
+        }
+        println!();
+        println!(
+            "--- DEFLECTION CENSUS (blocked shots and tackled balls: how fast they leave, how far they go) ---"
+        );
+        for (k, label) in DeflectionKind::LABELS.iter().enumerate() {
+            let n = c.deflections[k];
+            if n == 0 {
+                continue;
+            }
+            let ended: u64 = c.deflection_ends[k].iter().sum();
+            let speed = c.deflection_speed_x1000[k] as f64 / 1000.0 / n as f64;
+            println!(
+                "  {label:<24} {:>5.2}/match  left at {:.2} u/tick ({:.1} m/s), {:.0}% at 1.0 u/tick or more  gap at contact {:.2} m, beyond a lunge {}",
+                n as f64 / matches,
+                speed,
+                speed * 12.5,
+                pct(c.deflection_fast[k], n),
+                c.deflection_gap_mm[k] as f64 / 1000.0 / n as f64,
+                c.deflection_beyond_lunge[k],
+            );
+            if ended > 0 {
+                println!(
+                    "    {:<22} travelled {:.1} m on average: {}   ended: {}",
+                    "",
+                    c.deflection_travel_mm[k] as f64 / 1000.0 / ended as f64,
+                    DefenderCensus::TRAVEL_LABELS
+                        .iter()
+                        .zip(c.deflection_travel[k].iter())
+                        .map(|(l, b)| format!("{l} {:.0}%", pct(*b, ended)))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    DeflectionEnd::LABELS
+                        .iter()
+                        .zip(c.deflection_ends[k].iter())
+                        .map(|(l, e)| format!("{l} {:.0}%", pct(*e, ended)))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                );
+            }
+        }
+    }
+}
+
+struct MidfielderCensusReport;
+
+impl MidfielderCensusReport {
+    fn print(n_matches: usize) {
+        let c = MidfielderCensus::snapshot();
+        let matches = n_matches.max(1) as f64;
+        let pct = |n: u64, of: u64| n as f64 * 100.0 / of.max(1) as f64;
+        Self::print_motion(&c, pct);
+        Self::print_assignment(&c, matches, pct);
+        Self::print_attack(&c, pct);
+        Self::print_duels(&c, matches, pct);
+        Self::print_headers(&c, matches, pct);
+        Self::print_doors(&c, pct);
+        Self::print_phases(&c, pct);
+        Self::print_chases(&c, matches, pct);
+        Self::print_receptions(&c, matches, pct);
+    }
+
+    /// The heaviest midfielder states of a per-state row, as "name share%".
+    fn top_states(row: &[u64], take: usize) -> String {
+        let total: u64 = row.iter().sum();
+        let mut ranked: Vec<(usize, u64)> = row
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        ranked.sort_by_key(|r| Reverse(r.1));
+        ranked
+            .iter()
+            .take(take)
+            .map(|(slot, n)| {
+                format!(
+                    "{} {:.0}%",
+                    MidfielderCensus::slot_name(*slot),
+                    *n as f64 * 100.0 / total.max(1) as f64
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn print_motion(c: &MidfielderCensusSnapshot, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let ticks: u64 = c.motion_ticks.iter().flatten().flatten().sum();
+        if ticks == 0 {
+            return;
+        }
+        const TICKS_PER_90: f64 = 540_000.0;
+        println!();
+        println!(
+            "--- MIDFIELDER MOTION CENSUS (speed read as displacement over 250 ms; km per 90 minutes on the pitch) ---"
+        );
+        for (place, label) in MidfieldPlace::LABELS.iter().enumerate() {
+            let all: u64 = c.motion_ticks[place].iter().flatten().sum();
+            if all == 0 {
+                continue;
+            }
+            let km = |mm: u64| mm as f64 / 1_000_000.0 / all as f64 * TICKS_PER_90;
+            let path = |held: usize, live: usize| c.motion_path_mm[place][held][live];
+            let live_mm: u64 = (0..BallHeld::COUNT).map(|h| path(h, 1)).sum();
+            let dead_mm: u64 = (0..BallHeld::COUNT).map(|h| path(h, 0)).sum();
+            let live_ticks: u64 = (0..BallHeld::COUNT).map(|h| c.motion_ticks[place][h][1]).sum();
+            println!(
+                "  {label:<20} {:.2} km/90 = live {:.2} + dead {:.2}  (live {:.0}% of his time)",
+                km(live_mm + dead_mm),
+                km(live_mm),
+                km(dead_mm),
+                pct(live_ticks, all),
+            );
+            for (held, held_label) in BallHeld::LABELS.iter().enumerate() {
+                for (live, live_label) in ["dead", "live"].iter().enumerate() {
+                    let n = c.motion_ticks[place][held][live];
+                    if n == 0 {
+                        continue;
+                    }
+                    let bands = DefenderCensus::BAND_LABELS
+                        .iter()
+                        .zip(c.motion_bands[place][held][live].iter())
+                        .map(|(l, k)| format!("{l} {:.0}%", pct(*k, n)))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    println!(
+                        "    {held_label:<15} {live_label}: {:.0}% of his time, {:.2} km/90, sprints/90 {:.1}   {bands}",
+                        pct(n, all),
+                        km(path(held, live)),
+                        c.sprints[place][held][live] as f64 / all as f64 * TICKS_PER_90,
+                    );
+                }
+            }
+        }
+        let state_total: u64 = c.state_ticks.iter().sum();
+        let mut ranked: Vec<(usize, u64)> = c
+            .state_ticks
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        ranked.sort_by_key(|r| Reverse(r.1));
+        let rows = ranked
+            .iter()
+            .map(|(slot, n)| {
+                format!(
+                    "{} {:.1}% at {:.2} m/s",
+                    MidfielderCensus::slot_name(*slot),
+                    pct(*n, state_total),
+                    c.state_speed_cmps[*slot] as f64 / 100.0 / *n as f64
+                )
+            })
+            .collect::<Vec<_>>();
+        for chunk in rows.chunks(4) {
+            println!("    {}", chunk.join("  ·  "));
+        }
+        let on_ball = ranked
+            .iter()
+            .filter(|(slot, _)| c.state_ball_ticks[*slot] > 0)
+            .map(|(slot, n)| {
+                format!(
+                    "{} {:.1}%",
+                    MidfielderCensus::slot_name(*slot),
+                    pct(c.state_ball_ticks[*slot], *n)
+                )
+            })
+            .collect::<Vec<_>>();
+        println!("    his ball, share of the state's ticks: {}", on_ball.join("  ·  "));
+    }
+
+    fn print_assignment(
+        c: &MidfielderCensusSnapshot,
+        matches: f64,
+        pct: impl Fn(u64, u64) -> f64 + Copy,
+    ) {
+        let total: u64 = c.assignment.iter().flatten().sum();
+        if total == 0 {
+            return;
+        }
+        println!();
+        println!(
+            "--- MIDFIELDER ASSIGNMENT OUT OF POSSESSION (AI ticks: the plan's duty against the loose-ball election and the engagement licence) ---"
+        );
+        let columns = [
+            "in band, licensed",
+            "in band, not",
+            "out of band, licensed",
+            "out of band, not",
+        ];
+        println!(
+            "  {:<14} {:>7}  {}",
+            "plan duty",
+            "share",
+            columns
+                .iter()
+                .map(|l| format!("{l:>21}"))
+                .collect::<Vec<_>>()
+                .join("")
+        );
+        for (d, label) in Duty::LABELS.iter().enumerate() {
+            let row = c.assignment[d];
+            let n: u64 = row.iter().sum();
+            if n == 0 {
+                continue;
+            }
+            println!(
+                "  {label:<14} {:>6.1}%  {}   in: {}",
+                pct(n, total),
+                row.iter()
+                    .map(|k| format!("{:>20.0}%", pct(*k, n)))
+                    .collect::<Vec<_>>()
+                    .join(""),
+                Self::top_states(&c.assignment_state[d], 5)
+            );
+        }
+        let changes = c.changes_out_of_possession;
+        println!(
+            "  state changes out of possession {:.1}/match: after a change of election only {:.0}%, of plan duty only {:.0}%, of both {:.0}%",
+            changes as f64 / matches,
+            pct(c.changes_after_election, changes),
+            pct(c.changes_after_duty, changes),
+            pct(c.changes_after_both, changes)
+        );
+        println!(
+            "  two or more midfielders closing or containing the carrier: outside their area {:.2}% of carried ticks, inside it {:.2}%",
+            pct(c.crowded_ticks[0], c.carrier_ticks[0]),
+            pct(c.crowded_ticks[1], c.carrier_ticks[1])
+        );
+    }
+
+    fn print_attack(c: &MidfielderCensusSnapshot, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let total: u64 = c.attack_job.iter().sum();
+        if total == 0 {
+            return;
+        }
+        println!();
+        println!(
+            "--- MIDFIELDER ASSIGNMENT IN POSSESSION (live ticks his side holds the ball, a pass in flight included: the attack plan's job against his state) ---"
+        );
+        for (j, label) in AttackJob::LABELS.iter().enumerate() {
+            let n = c.attack_job[j];
+            if n == 0 {
+                continue;
+            }
+            println!(
+                "  {label:<22} {:>5.1}%  ahead of the ball {:>3.0}%   in: {}",
+                pct(n, total),
+                pct(c.attack_job_ahead[j], n),
+                Self::top_states(&c.attack_job_state[j], 5)
+            );
+        }
+        let kept = AttackJob::KEPT_BEHIND;
+        let supporting = MidfielderState::AttackSupporting as usize;
+        println!(
+            "  kept behind the ball: ahead of it on {:.1}% of those ticks (band: <= 10%), in AttackSupporting on {:.1}%",
+            pct(c.attack_job_ahead[kept], c.attack_job[kept]),
+            pct(c.attack_job_state[kept][supporting], c.attack_job[kept])
+        );
+        println!(
+            "  both central midfielders in the opposition's area: {:.2}% of a side's live ticks",
+            pct(c.central_pair_in_area, c.central_pair_ticks)
+        );
+        println!(
+            "  free team-mates ahead of the ball (nobody within 8 m): {:.2} a possession tick   (real 1-3)",
+            c.free_ahead as f64 / c.possession_ticks.max(1) as f64
+        );
+        if c.strikes > 0 {
+            println!(
+                "  at a shot: {:.2} team-mates ahead of the ball (real 2-4), {:.2} in the area (real 3-5)   ({} shots)",
+                c.strike_ahead as f64 / c.strikes as f64,
+                c.strike_in_area as f64 / c.strikes as f64,
+                c.strikes
+            );
+        }
+    }
+
+    fn print_duels(c: &MidfielderCensusSnapshot, matches: f64, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let spells: u64 = c.spells.iter().sum();
+        if spells == 0 {
+            return;
+        }
+        let challenges: u64 = c.challenges.iter().sum();
+        println!();
+        println!(
+            "--- MIDFIELDER DUEL CENSUS ({:.1} spells on a carrier/match: closing in Pressing, containing in Tackling) ---",
+            spells as f64 / matches
+        );
+        for (place, label) in MidfieldPlace::LABELS.iter().enumerate() {
+            let n = c.spells[place];
+            if n == 0 {
+                continue;
+            }
+            println!(
+                "  {label:<20} {:.1}/match: {:.2} s closing, {:.2} s containing   ended: {}",
+                n as f64 / matches,
+                c.spell_closing_ticks[place] as f64 / 100.0 / n as f64,
+                c.spell_containing_ticks[place] as f64 / 100.0 / n as f64,
+                SpellEnd::LABELS
+                    .iter()
+                    .zip(c.spell_ends[place].iter())
+                    .map(|(l, k)| format!("{l} {:.0}%", pct(*k, n)))
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            );
+        }
+        println!(
+            "  Tackling entered {:.1}/match for {:.1} challenges/match  →  {:.1} entries a challenge",
+            c.tackling_entries as f64 / matches,
+            challenges as f64 / matches,
+            c.tackling_entries as f64 / challenges.max(1) as f64
+        );
+        for (k, kind) in ["block tackle", "recovery slide"].iter().enumerate() {
+            let n = c.challenges[k];
+            if n == 0 {
+                continue;
+            }
+            let o = c.challenge_outcomes[k];
+            println!(
+                "  {kind:<15} {:.2}/match: won {:.0}%  missed {:.0}%  foul {:.0}%",
+                n as f64 / matches,
+                pct(o[0], n),
+                pct(o[1], n),
+                pct(o[2], n)
+            );
+        }
+        println!(
+            "  at the challenge: moving at {:.2} m/s, goal-side of the carrier on {:.0}%",
+            c.challenge_speed_cmps as f64 / 100.0 / challenges.max(1) as f64,
+            pct(c.challenge_goal_side, challenges)
+        );
+        println!(
+            "  balls he came away with from Tackling, by rule: {}",
+            TackleTake::LABELS
+                .iter()
+                .zip(c.tackle_takes.iter())
+                .map(|(l, n)| format!("{l} {:.1}/match", *n as f64 / matches))
+                .collect::<Vec<_>>()
+                .join("  ")
+        );
+    }
+
+    fn print_headers(c: &MidfielderCensusSnapshot, matches: f64, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        // A high ball claimed uncontested is a reception, not a header.
+        let claim = MidHeaderRule::OwnershipClaim as usize;
+        let total: u64 = c.headers.iter().sum();
+        println!();
+        println!(
+            "--- MIDFIELDER AERIAL CENSUS ({:.2} headers by midfielders/match, by the rule that decided each; {:.2} high balls claimed uncontested, a reception) ---",
+            (total - c.headers[claim]) as f64 / matches,
+            c.headers[claim] as f64 / matches
+        );
+        let heading = MidfielderState::Heading as usize;
+        let (mut all, mut in_heading_off_ground) = (0u64, 0u64);
+        for (r, label) in MidHeaderRule::LABELS.iter().enumerate() {
+            let n = c.headers[r];
+            if r != claim {
+                all += n;
+                in_heading_off_ground += c.header_state[r][heading].min(c.header_leap[r]);
+            }
+            if n == 0 {
+                continue;
+            }
+            let booked = HeaderBooking::LABELS
+                .iter()
+                .zip(c.header_booked[r].iter())
+                .map(|(l, k)| format!("{l} {:.0}%", pct(*k, n)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!(
+                "  {label:<17} {:>6.2}/match  off the ground {:.0}%  booked: {booked}",
+                n as f64 / matches,
+                pct(c.header_leap[r], n),
+            );
+            println!(
+                "    {:<15} played from: {}",
+                "",
+                Self::top_states(&c.header_state[r], 5)
+            );
+        }
+        println!(
+            "  played in Heading and off the ground (at most): {:.0}% of midfielders' headers, the claims apart   (band: >= 90%)",
+            pct(in_heading_off_ground, all)
+        );
+        let exits: u64 = c.heading_exits.iter().sum();
+        println!(
+            "  Heading entered {:.2}/match, left: {}",
+            c.heading_entries as f64 / matches,
+            HeadingExit::LABELS
+                .iter()
+                .zip(c.heading_exits.iter())
+                .filter(|(_, n)| **n > 0)
+                .map(|(l, n)| format!("{l} {:.2}/match ({:.0}%)", *n as f64 / matches, pct(*n, exits)))
+                .collect::<Vec<_>>()
+                .join("  ")
+        );
+        if c.drops > 0 {
+            println!(
+                "  dropping balls with nobody named: {:.1}/match, decided by an aerial rule {:.2}/match   in reach: the side that played it {}  the other side {}",
+                c.drops as f64 / matches,
+                c.drop_decided as f64 / matches,
+                ["none", "one", "two+"]
+                    .iter()
+                    .zip(c.drop_reach_men[0].iter())
+                    .map(|(l, k)| format!("{l} {:.0}%", pct(*k, c.drops)))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                ["none", "one", "two+"]
+                    .iter()
+                    .zip(c.drop_reach_men[1].iter())
+                    .map(|(l, k)| format!("{l} {:.0}%", pct(*k, c.drops)))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
+            for (r, label) in DropReach::LABELS.iter().enumerate() {
+                let n: u64 = c.drop_ends[r].iter().sum();
+                if n == 0 {
+                    continue;
+                }
+                println!(
+                    "    in reach of {label:<18} {:.1}/match: {}",
+                    n as f64 / matches,
+                    DropEnd::LABELS
+                        .iter()
+                        .zip(c.drop_ends[r].iter())
+                        .map(|(l, k)| format!("{l} {:.0}%", pct(*k, n)))
+                        .collect::<Vec<_>>()
+                        .join("  ")
+                );
+            }
+        }
+        let cleared: u64 = c.clearance_after.iter().sum();
+        if cleared > 0 {
+            println!(
+                "  3 s after a clearance ({:.1}/match): the side that cleared it has the ball {:.0}%, the other side {:.0}%, nobody {:.0}%",
+                cleared as f64 / matches,
+                pct(c.clearance_after[0], cleared),
+                pct(c.clearance_after[1], cleared),
+                pct(c.clearance_after[2], cleared)
+            );
+        }
+    }
+
+    fn print_doors(c: &MidfielderCensusSnapshot, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let any: u64 = c.doors.iter().flatten().map(|cell| cell[0]).sum();
+        if any == 0 {
+            return;
+        }
+        println!();
+        println!(
+            "--- MIDFIELDER DOOR CENSUS (AI ticks in each situation, by state: share on which the state acted on it; for an unlicensed carrier, acting is a press) ---"
+        );
+        println!(
+            "  {:<18}{}",
+            "state",
+            MidSituation::LABELS
+                .iter()
+                .map(|l| format!("{l:>27}"))
+                .collect::<Vec<_>>()
+                .join("")
+        );
+        for slot in 0..MidfielderState::SLOTS {
+            let seen: u64 = (0..MidSituation::COUNT).map(|s| c.doors[s][slot][0]).sum();
+            if seen == 0 {
+                continue;
+            }
+            let cells = (0..MidSituation::COUNT)
+                .map(|s| {
+                    let [n, acted] = c.doors[s][slot];
+                    if n == 0 {
+                        format!("{:>27}", "—")
+                    } else {
+                        format!("{:>27}", format!("{:.0}% of {}", pct(acted, n), n))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            println!("  {:<18}{cells}", MidfielderCensus::slot_name(slot));
+        }
+    }
+
+    fn print_phases(c: &MidfielderCensusSnapshot, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let ticks: u64 = c.phase_ticks.iter().sum();
+        if ticks == 0 {
+            return;
+        }
+        let minutes = ticks as f64 / 6000.0;
+        println!();
+        println!(
+            "--- MIDFIELDER PHASES (relaxed = Walking, alert = HoldingShape; share of midfielder ticks) ---"
+        );
+        println!(
+            "  time: {}",
+            MidPhase::LABELS
+                .iter()
+                .zip(c.phase_ticks.iter())
+                .map(|(l, n)| format!("{l} {:.1}%", pct(*n, ticks)))
+                .collect::<Vec<_>>()
+                .join("  ")
+        );
+        println!(
+            "  relaxed <-> alert {:.2}/midfielder/minute, {:.0}% reversed inside 300 ms   (band: < 6, < 10%)",
+            c.relaxed_alert_changes as f64 / minutes,
+            pct(c.relaxed_alert_reversed, c.relaxed_alert_changes)
+        );
+        let tracking = &c.state_held_ticks[MidfielderState::TrackingBack as usize];
+        let returning = &c.state_held_ticks[MidfielderState::Returning as usize];
+        println!(
+            "  recovering: Tracking Back with their ball or nobody's on {:.1}% of its ticks (band: >= 95%), Returning with his side's ball or a dead one on {:.1}%",
+            pct(tracking[1] + tracking[2], tracking.iter().sum()),
+            pct(returning[0] + returning[3], returning.iter().sum())
+        );
+    }
+
+    fn print_chases(c: &MidfielderCensusSnapshot, matches: f64, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let entries: u64 = c.chase_entries.iter().sum();
+        if entries == 0 {
+            return;
+        }
+        let reversed: u64 = c.chase_reversed.iter().flatten().sum();
+        println!();
+        println!(
+            "--- MIDFIELDER LOOSE-BALL ROUND TRIP ({:.1} TakeBall entries/match by a midfielder state's own door; {:.0}% yielded by the dispatcher within ten AI ticks) ---",
+            entries as f64 / matches,
+            pct(reversed, entries)
+        );
+        let mut doors: Vec<usize> = (0..MidfielderState::SLOTS)
+            .filter(|s| c.chase_entries[*s] > 0)
+            .collect();
+        doors.sort_by_key(|s| Reverse(c.chase_entries[*s]));
+        for slot in doors {
+            let n = c.chase_entries[slot];
+            let back: u64 = c.chase_reversed[slot].iter().sum();
+            println!(
+                "  {:<18} {:>6.1}/match  reversed {:>3.0}%   why: {}",
+                MidfielderCensus::slot_name(slot),
+                n as f64 / matches,
+                pct(back, n),
+                ChaseYield::LABELS
+                    .iter()
+                    .zip(c.chase_reversed[slot].iter())
+                    .map(|(l, k)| format!("{l} {:.0}%", pct(*k, n)))
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            );
+        }
+    }
+
+    fn print_receptions(c: &MidfielderCensusSnapshot, matches: f64, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let receptions: u64 = c.receptions.iter().sum();
+        if receptions == 0 {
+            return;
+        }
+        let in_running = c.receptions[MidfielderState::Running as usize];
+        println!();
+        println!(
+            "--- MIDFIELDER RECEPTION CENSUS ({:.1} receptions by midfielders/match) ---",
+            receptions as f64 / matches
+        );
+        println!(
+            "  received in: {}",
+            Self::top_states(&c.receptions, 6)
+        );
+        println!(
+            "  in Running {:.0}% of them; Running's age then: up to 0.4 s {:.0}%, 0.4-1.2 s {:.0}%, older than 1.2 s {:.0}%",
+            pct(in_running, receptions),
+            pct(c.reception_running_age[0], in_running),
+            pct(c.reception_running_age[1], in_running),
+            pct(c.reception_running_age[2], in_running),
+        );
+        println!(
+            "  an opponent within 3 m at the reception: {:.0}%",
+            pct(c.reception_pressed, receptions)
+        );
+        for (p, label) in ["not pressed", "pressed"].iter().enumerate() {
+            let n = c.releases[p];
+            if n == 0 {
+                continue;
+            }
+            println!(
+                "  {label:<12} kept it {:.2} s on average; the forced release fired on {:.0}%",
+                c.release_ticks[p] as f64 / 100.0 / n as f64,
+                pct(c.release_forced[p], n)
+            );
+        }
+    }
+}
+
+struct ForwardCensusReport;
+
+impl ForwardCensusReport {
+    fn print(n_matches: usize) {
+        let c = ForwardCensus::snapshot();
+        let matches = n_matches.max(1) as f64;
+        let pct = |n: u64, of: u64| n as f64 * 100.0 / of.max(1) as f64;
+        Self::print_motion(&c, pct);
+        Self::print_out_of_possession(&c, matches, pct);
+        Self::print_in_possession(&c, pct);
+        Self::print_runs(&c, matches, pct);
+        Self::print_duels(&c, matches, pct);
+        Self::print_headers(&c, matches, pct);
+        Self::print_requests(&c, matches, pct);
+        Self::print_doors(&c, pct);
+        Self::print_phases(&c, pct);
+        Self::print_chases(&c, matches, pct);
+        Self::print_receptions(&c, matches, pct);
+    }
+
+    /// The heaviest forward states of a per-state row, as "name share%".
+    fn top_states(row: &[u64], take: usize) -> String {
+        let total: u64 = row.iter().sum();
+        let mut ranked: Vec<(usize, u64)> = row
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        ranked.sort_by_key(|r| Reverse(r.1));
+        ranked
+            .iter()
+            .take(take)
+            .map(|(slot, n)| {
+                format!(
+                    "{} {:.0}%",
+                    ForwardCensus::slot_name(*slot),
+                    *n as f64 * 100.0 / total.max(1) as f64
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn print_motion(c: &ForwardCensusSnapshot, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let ticks: u64 = c.motion_ticks.iter().flatten().flatten().sum();
+        if ticks == 0 {
+            return;
+        }
+        const TICKS_PER_90: f64 = 540_000.0;
+        println!();
+        println!(
+            "--- FORWARD MOTION CENSUS (speed read as displacement over 250 ms; km per 90 minutes on the pitch) ---"
+        );
+        for (place, label) in FrontPlace::LABELS.iter().enumerate() {
+            let all: u64 = c.motion_ticks[place].iter().flatten().sum();
+            if all == 0 {
+                continue;
+            }
+            let km = |mm: u64| mm as f64 / 1_000_000.0 / all as f64 * TICKS_PER_90;
+            let path = |held: usize, live: usize| c.motion_path_mm[place][held][live];
+            let live_mm: u64 = (0..BallHeld::COUNT).map(|h| path(h, 1)).sum();
+            let dead_mm: u64 = (0..BallHeld::COUNT).map(|h| path(h, 0)).sum();
+            let live_ticks: u64 = (0..BallHeld::COUNT).map(|h| c.motion_ticks[place][h][1]).sum();
+            let slow: u64 = (0..BallHeld::COUNT)
+                .map(|h| c.motion_bands[place][h][1][0] + c.motion_bands[place][h][1][1])
+                .sum();
+            println!(
+                "  {label:<16} {:.2} km/90 = live {:.2} + dead {:.2}  (live {:.0}% of his time; at or below 2 m/s on {:.0}% of live play)",
+                km(live_mm + dead_mm),
+                km(live_mm),
+                km(dead_mm),
+                pct(live_ticks, all),
+                pct(slow, live_ticks),
+            );
+            for (held, held_label) in BallHeld::LABELS.iter().enumerate() {
+                for (live, live_label) in ["dead", "live"].iter().enumerate() {
+                    let n = c.motion_ticks[place][held][live];
+                    if n == 0 {
+                        continue;
+                    }
+                    let bands = DefenderCensus::BAND_LABELS
+                        .iter()
+                        .zip(c.motion_bands[place][held][live].iter())
+                        .map(|(l, k)| format!("{l} {:.0}%", pct(*k, n)))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    println!(
+                        "    {held_label:<15} {live_label}: {:.0}% of his time, {:.2} km/90, sprints/90 {:.1}   {bands}",
+                        pct(n, all),
+                        km(path(held, live)),
+                        c.sprints[place][held][live] as f64 / all as f64 * TICKS_PER_90,
+                    );
+                }
+            }
+            println!(
+                "    his states: {}",
+                Self::top_states(&c.place_state_ticks[place], 10)
+            );
+        }
+        let state_total: u64 = c.state_ticks.iter().sum();
+        let mut ranked: Vec<(usize, u64)> = c
+            .state_ticks
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        ranked.sort_by_key(|r| Reverse(r.1));
+        let rows = ranked
+            .iter()
+            .map(|(slot, n)| {
+                format!(
+                    "{} {:.1}% at {:.2} m/s",
+                    ForwardCensus::slot_name(*slot),
+                    pct(*n, state_total),
+                    c.state_speed_cmps[*slot] as f64 / 100.0 / *n as f64
+                )
+            })
+            .collect::<Vec<_>>();
+        for chunk in rows.chunks(4) {
+            println!("    {}", chunk.join("  ·  "));
+        }
+        let on_ball = ranked
+            .iter()
+            .filter(|(slot, _)| c.state_ball_ticks[*slot] > 0)
+            .map(|(slot, n)| {
+                format!(
+                    "{} {:.1}%",
+                    ForwardCensus::slot_name(*slot),
+                    pct(c.state_ball_ticks[*slot], *n)
+                )
+            })
+            .collect::<Vec<_>>();
+        println!("    his ball, share of the state's ticks: {}", on_ball.join("  ·  "));
+        let held_rows = ranked
+            .iter()
+            .filter(|(slot, _)| *slot < ForwardState::SLOTS)
+            .take(8)
+            .map(|(slot, n)| {
+                let h = c.state_held_ticks[*slot];
+                format!(
+                    "{} {:.0}/{:.0}/{:.0}/{:.0}",
+                    ForwardCensus::slot_name(*slot),
+                    pct(h[0], *n),
+                    pct(h[1], *n),
+                    pct(h[2], *n),
+                    pct(h[3], *n)
+                )
+            })
+            .collect::<Vec<_>>();
+        println!(
+            "    by whose ball (his side / theirs / nobody's / dead, %): {}",
+            held_rows.join("  ·  ")
+        );
+    }
+
+    fn print_out_of_possession(
+        c: &ForwardCensusSnapshot,
+        matches: f64,
+        pct: impl Fn(u64, u64) -> f64 + Copy,
+    ) {
+        let total: u64 = c.out_ticks.iter().sum();
+        if total == 0 {
+            return;
+        }
+        println!();
+        println!(
+            "--- FORWARD ASSIGNMENT OUT OF POSSESSION (AI ticks his side is not on the ball: the plan's press duty, the loose-ball election, the licence to engage the carrier) ---"
+        );
+        for presser in [true, false] {
+            for elected in [true, false] {
+                for licensed in [true, false] {
+                    let n = c.out_ticks
+                        [usize::from(presser) * 4 + usize::from(elected) * 2 + usize::from(licensed)];
+                    if n == 0 {
+                        continue;
+                    }
+                    println!(
+                        "  {:<16} {:<18} {:<15} {:>5.1}%",
+                        if presser { "named presser" } else { "not named" },
+                        if elected { "in the chase band" } else { "out of the band" },
+                        if licensed { "licensed" } else { "not licensed" },
+                        pct(n, total)
+                    );
+                }
+            }
+        }
+        for presser in [true, false] {
+            println!(
+                "  {}: in {}",
+                if presser { "named presser" } else { "not named   " },
+                Self::top_states(&c.out_state[usize::from(presser)], 6)
+            );
+        }
+        println!(
+            "  two or more forwards closing or containing the same carrier: {:.2}% of the ticks a carrier runs at a side with two forwards or more",
+            pct(c.crowded_ticks, c.carrier_ticks)
+        );
+        for (d, label) in PressDoor::LABELS.iter().enumerate() {
+            let [unlicensed, licensed] = c.press_doors[d];
+            println!(
+                "  {label:<40} {:>7.1}/match: by a forward not licensed for the carrier {:.1}/match, licensed {:.1}/match",
+                (unlicensed + licensed) as f64 / matches,
+                unlicensed as f64 / matches,
+                licensed as f64 / matches
+            );
+        }
+    }
+
+    fn print_in_possession(c: &ForwardCensusSnapshot, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let total: u64 = c.job_ticks.iter().sum();
+        if total == 0 {
+            return;
+        }
+        println!();
+        println!(
+            "--- FORWARD ASSIGNMENT IN POSSESSION (AI ticks his side has the ball: the attack plan's job against his state) ---"
+        );
+        for (j, label) in FwdJob::LABELS.iter().enumerate() {
+            let n = c.job_ticks[j];
+            if n == 0 {
+                continue;
+            }
+            println!(
+                "  {label:<22} {:>5.1}%   in: {}",
+                pct(n, total),
+                Self::top_states(&c.job_state[j], 5)
+            );
+        }
+        println!(
+            "  RunningInBehind ticks by a man the plan did not name the runner: {:.1}%   the plan's runner in RunningInBehind on {:.1}% of the ticks it names him",
+            pct(c.rib_unnamed_ticks, c.rib_ticks),
+            pct(c.runner_in_rib_ticks, c.runner_named_ticks)
+        );
+        println!(
+            "  two or more forwards in RunningInBehind at once: {:.2}% of the possession ticks of a side with two forwards or more",
+            pct(c.both_in_rib_ticks, c.side_possession_ticks)
+        );
+        println!(
+            "  a central forward off the ball in possession holds a box place: staged {:.1}%, not staged {:.1}% of those ticks",
+            pct(c.striker_box_ticks[0], c.striker_possession_ticks),
+            pct(c.striker_box_ticks[1], c.striker_possession_ticks)
+        );
+        let m = MidfielderCensus::snapshot();
+        if m.strikes > 0 {
+            println!(
+                "  at a shot: {:.2} team-mates ahead of the ball, {:.2} in the area   ({} shots)",
+                m.strike_ahead as f64 / m.strikes as f64,
+                m.strike_in_area as f64 / m.strikes as f64,
+                m.strikes
+            );
+        }
+    }
+
+    fn print_runs(c: &ForwardCensusSnapshot, matches: f64, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let runs: u64 = c.runs.iter().sum();
+        if runs == 0 {
+            return;
+        }
+        println!();
+        println!(
+            "--- FORWARD RUN CENSUS ({:.1} runs in behind/match, {:.2} s each) ---",
+            runs as f64 / matches,
+            c.run_ticks as f64 / 100.0 / runs as f64
+        );
+        for (place, label) in FrontPlace::LABELS.iter().enumerate() {
+            let n = c.runs[place];
+            if n == 0 {
+                continue;
+            }
+            println!(
+                "  {label:<16} {:.1}/match, named by the plan on {:.0}%",
+                n as f64 / matches,
+                pct(c.runs_named[place], n)
+            );
+        }
+        println!(
+            "  started by: {}",
+            RunDoor::LABELS
+                .iter()
+                .zip(c.run_doors.iter())
+                .map(|(l, k)| format!("{l} {:.0}%", pct(*k, runs)))
+                .collect::<Vec<_>>()
+                .join("  ")
+        );
+        println!(
+            "  held on the line {:.2} s a run at {:.2} m/s; played the ball {:.1}%; flagged {:.1}% ({:.2}/match)",
+            c.run_held_ticks as f64 / 100.0 / runs as f64,
+            c.run_held_speed_cmps as f64 / 100.0 / c.run_held_ticks.max(1) as f64,
+            pct(c.run_played, runs),
+            pct(c.run_flagged, runs),
+            c.run_flagged as f64 / matches
+        );
+        println!(
+            "  ended: {}",
+            RunEnd::LABELS
+                .iter()
+                .zip(c.run_ends.iter())
+                .map(|(l, k)| format!("{l} {:.0}%", pct(*k, runs)))
+                .collect::<Vec<_>>()
+                .join("  ")
+        );
+        println!(
+            "  where it ended, against the referee's line: {}",
+            LineGap::LABELS
+                .iter()
+                .zip(c.run_line_gap.iter())
+                .map(|(l, k)| format!("{l} {:.0}%", pct(*k, runs)))
+                .collect::<Vec<_>>()
+                .join("  ")
+        );
+    }
+
+    fn print_duels(c: &ForwardCensusSnapshot, matches: f64, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let spells: u64 = c.spells.iter().sum();
+        if spells == 0 {
+            return;
+        }
+        let challenges: u64 = c.challenges.iter().sum();
+        println!();
+        println!(
+            "--- FORWARD DUEL CENSUS ({:.1} spells on a carrier/match: closing in Pressing, containing in Tackling or Jockeying) ---",
+            spells as f64 / matches
+        );
+        for (place, label) in FrontPlace::LABELS.iter().enumerate() {
+            let n = c.spells[place];
+            if n == 0 {
+                continue;
+            }
+            println!(
+                "  {label:<16} {:.1}/match: {:.2} s closing, {:.2} s containing   ended: {}",
+                n as f64 / matches,
+                c.spell_closing_ticks[place] as f64 / 100.0 / n as f64,
+                c.spell_containing_ticks[place] as f64 / 100.0 / n as f64,
+                SpellEnd::LABELS
+                    .iter()
+                    .zip(c.spell_ends[place].iter())
+                    .map(|(l, k)| format!("{l} {:.0}%", pct(*k, n)))
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            );
+        }
+        println!(
+            "  Tackling entered {:.1}/match for {:.2} challenges/match  →  {:.1} entries a challenge",
+            c.tackling_entries as f64 / matches,
+            challenges as f64 / matches,
+            c.tackling_entries as f64 / challenges.max(1) as f64
+        );
+        for (k, kind) in ["block tackle", "recovery slide"].iter().enumerate() {
+            let n = c.challenges[k];
+            if n == 0 {
+                continue;
+            }
+            let o = c.challenge_outcomes[k];
+            println!(
+                "  {kind:<15} {:.2}/match: won {:.0}%  missed {:.0}%  foul {:.0}%",
+                n as f64 / matches,
+                pct(o[0], n),
+                pct(o[1], n),
+                pct(o[2], n)
+            );
+        }
+        println!(
+            "  at the challenge: moving at {:.2} m/s, goal-side of the carrier on {:.0}%",
+            c.challenge_speed_cmps as f64 / 100.0 / challenges.max(1) as f64,
+            pct(c.challenge_goal_side, challenges)
+        );
+        println!(
+            "  balls he came away with from Tackling, by rule: {}",
+            FwdTackleTake::LABELS
+                .iter()
+                .zip(c.tackle_takes.iter())
+                .map(|(l, n)| format!("{l} {:.2}/match", *n as f64 / matches))
+                .collect::<Vec<_>>()
+                .join("  ")
+        );
+    }
+
+    fn print_headers(c: &ForwardCensusSnapshot, matches: f64, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let claim = FwdHeaderRule::OwnershipClaim as usize;
+        let total: u64 = c.headers.iter().sum();
+        println!();
+        println!(
+            "--- FORWARD AERIAL CENSUS ({:.2} headers by forwards/match, by the rule that decided each; {:.2} high balls claimed uncontested, a reception) ---",
+            (total - c.headers[claim]) as f64 / matches,
+            c.headers[claim] as f64 / matches
+        );
+        let heading = ForwardState::Heading as usize;
+        let (mut all, mut in_heading, mut in_heading_off_ground) = (0u64, 0u64, 0u64);
+        for (r, label) in FwdHeaderRule::LABELS.iter().enumerate() {
+            let n = c.headers[r];
+            if r != claim {
+                all += n;
+                in_heading += c.header_state[r][heading];
+                in_heading_off_ground += c.header_state[r][heading].min(c.header_leap[r]);
+            }
+            if n == 0 {
+                continue;
+            }
+            let booked = HeaderBooking::LABELS
+                .iter()
+                .zip(c.header_booked[r].iter())
+                .map(|(l, k)| format!("{l} {:.0}%", pct(*k, n)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!(
+                "  {label:<22} {:>6.2}/match  off the ground {:.0}%  booked: {booked}",
+                n as f64 / matches,
+                pct(c.header_leap[r], n),
+            );
+            println!(
+                "    {:<20} played from: {}",
+                "",
+                Self::top_states(&c.header_state[r], 5)
+            );
+        }
+        println!(
+            "  played in Heading {:.0}%, in Heading and off the ground (at most) {:.0}% of forwards' headers, the claims apart   (band: >= 90%)",
+            pct(in_heading, all),
+            pct(in_heading_off_ground, all)
+        );
+        let exits: u64 = c.heading_exits.iter().sum();
+        println!(
+            "  Heading entered {:.2}/match, left: {}",
+            c.heading_entries as f64 / matches,
+            FwdHeadingExit::LABELS
+                .iter()
+                .zip(c.heading_exits.iter())
+                .filter(|(_, n)| **n > 0)
+                .map(|(l, n)| format!("{l} {:.2}/match ({:.0}%)", *n as f64 / matches, pct(*n, exits)))
+                .collect::<Vec<_>>()
+                .join("  ")
+        );
+    }
+
+    fn print_requests(c: &ForwardCensusSnapshot, matches: f64, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let total: u64 = c.requests.iter().sum();
+        if total == 0 {
+            return;
+        }
+        println!();
+        println!(
+            "--- FORWARD REQUEST CENSUS (every shot and pass a forward's state asks for, by site: asked, approved by the helper, played, and what refused the rest) ---"
+        );
+        for (r, label) in FwdRequest::LABELS.iter().enumerate() {
+            let n = c.requests[r];
+            if n == 0 {
+                continue;
+            }
+            let refused = FwdRefusal::LABELS
+                .iter()
+                .zip(c.refused[r].iter())
+                .filter(|(_, k)| **k > 0)
+                .map(|(l, k)| format!("{l} {:.1}", *k as f64 / matches))
+                .collect::<Vec<_>>()
+                .join("  ");
+            println!(
+                "  {label:<42} {:>8.2}/match  approved {:>7.2}  played {:>7.2} ({:>3.0}%)   refused: {refused}",
+                n as f64 / matches,
+                c.approved[r] as f64 / matches,
+                c.taken[r] as f64 / matches,
+                pct(c.taken[r], n),
+            );
+        }
+        let decisions: u64 = [
+            FwdRequest::PassAfterHold,
+            FwdRequest::PassShouldPass,
+            FwdRequest::PassAfterStall,
+            FwdRequest::PassOther,
+        ]
+        .iter()
+        .map(|r| c.requests[*r as usize])
+        .sum();
+        let passed: u64 = [
+            FwdRequest::PassAfterHold,
+            FwdRequest::PassShouldPass,
+            FwdRequest::PassAfterStall,
+            FwdRequest::PassOther,
+        ]
+        .iter()
+        .map(|r| c.taken[*r as usize])
+        .sum();
+        println!(
+            "  decisions to pass (Running -> Passing): {:.1}/match, {:.0}% ended with a pass   (band: >= 60%)",
+            decisions as f64 / matches,
+            pct(passed, decisions)
+        );
+        println!(
+            "  the four limits on his time on the ball, fired: {}",
+            FwdLimit::LABELS
+                .iter()
+                .zip(c.limits.iter())
+                .map(|(l, k)| format!("{l} {:.1}/match", *k as f64 / matches))
+                .collect::<Vec<_>>()
+                .join("  ")
+        );
+    }
+
+    fn print_doors(c: &ForwardCensusSnapshot, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let any: u64 = c.doors.iter().flatten().map(|cell| cell[0]).sum();
+        if any == 0 {
+            return;
+        }
+        println!();
+        println!(
+            "--- FORWARD DOOR CENSUS (AI ticks in each situation, by state: share on which the state acted on it; for an unlicensed carrier, acting is a press) ---"
+        );
+        println!(
+            "  {:<18}{}",
+            "state",
+            FwdSituation::LABELS
+                .iter()
+                .map(|l| format!("{l:>27}"))
+                .collect::<Vec<_>>()
+                .join("")
+        );
+        for slot in 0..ForwardState::SLOTS {
+            let seen: u64 = (0..FwdSituation::COUNT).map(|s| c.doors[s][slot][0]).sum();
+            if seen == 0 {
+                continue;
+            }
+            let cells = (0..FwdSituation::COUNT)
+                .map(|s| {
+                    let [n, acted] = c.doors[s][slot];
+                    if n == 0 {
+                        format!("{:>27}", "—")
+                    } else {
+                        format!("{:>27}", format!("{:.0}% of {}", pct(acted, n), n))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            println!("  {:<18}{cells}", ForwardCensus::slot_name(slot));
+        }
+    }
+
+    fn print_phases(c: &ForwardCensusSnapshot, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let ticks: u64 = c.phase_ticks.iter().sum();
+        if ticks == 0 {
+            return;
+        }
+        let minutes = ticks as f64 / 6000.0;
+        println!();
+        println!(
+            "--- FORWARD PHASES (relaxed = Walking, alert = HoldingShape; share of forward ticks) ---"
+        );
+        println!(
+            "  time: {}",
+            FwdPhase::LABELS
+                .iter()
+                .zip(c.phase_ticks.iter())
+                .map(|(l, n)| format!("{l} {:.1}%", pct(*n, ticks)))
+                .collect::<Vec<_>>()
+                .join("  ")
+        );
+        println!(
+            "  relaxed <-> alert {:.2}/forward/minute, {:.0}% reversed inside 300 ms   (band: < 6, < 10%)",
+            c.relaxed_alert_changes as f64 / minutes,
+            pct(c.relaxed_alert_reversed, c.relaxed_alert_changes)
+        );
+    }
+
+    fn print_chases(c: &ForwardCensusSnapshot, matches: f64, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let entries: u64 = c.chase_entries.iter().sum();
+        if entries == 0 {
+            return;
+        }
+        let reversed: u64 = c.chase_reversed.iter().flatten().sum();
+        println!();
+        println!(
+            "--- FORWARD LOOSE-BALL ROUND TRIP ({:.1} TakeBall entries/match by a forward state's own door; {:.0}% yielded by the dispatcher within ten AI ticks) ---",
+            entries as f64 / matches,
+            pct(reversed, entries)
+        );
+        let mut doors: Vec<usize> = (0..ForwardState::SLOTS)
+            .filter(|s| c.chase_entries[*s] > 0)
+            .collect();
+        doors.sort_by_key(|s| Reverse(c.chase_entries[*s]));
+        for slot in doors {
+            let n = c.chase_entries[slot];
+            let back: u64 = c.chase_reversed[slot].iter().sum();
+            println!(
+                "  {:<18} {:>6.1}/match  reversed {:>3.0}%   why: {}",
+                ForwardCensus::slot_name(slot),
+                n as f64 / matches,
+                pct(back, n),
+                ChaseYield::LABELS
+                    .iter()
+                    .zip(c.chase_reversed[slot].iter())
+                    .map(|(l, k)| format!("{l} {:.0}%", pct(*k, n)))
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            );
+        }
+    }
+
+    fn print_receptions(c: &ForwardCensusSnapshot, matches: f64, pct: impl Fn(u64, u64) -> f64 + Copy) {
+        let receptions: u64 = c.receptions.iter().sum();
+        if receptions == 0 {
+            return;
+        }
+        let in_running = c.receptions[ForwardState::Running as usize];
+        println!();
+        println!(
+            "--- FORWARD RECEPTION CENSUS ({:.1} receptions by forwards/match) ---",
+            receptions as f64 / matches
+        );
+        println!("  received in: {}", Self::top_states(&c.receptions, 6));
+        println!(
+            "  in Running {:.0}% of them; Running's age then: up to 0.4 s {:.0}%, 0.4-2.4 s {:.0}%, older than 2.4 s {:.0}%",
+            pct(in_running, receptions),
+            pct(c.reception_running_age[0], in_running),
+            pct(c.reception_running_age[1], in_running),
+            pct(c.reception_running_age[2], in_running),
+        );
+        println!(
+            "  an opponent within 3 m at the reception: {:.0}%",
+            pct(c.reception_pressed, receptions)
+        );
+        for (p, label) in ["not pressed", "pressed"].iter().enumerate() {
+            let n = c.releases[p];
+            if n == 0 {
+                continue;
+            }
+            println!(
+                "  {label:<12} kept it {:.2} s on average",
+                c.release_ticks[p] as f64 / 100.0 / n as f64,
+            );
+        }
+        let released: u64 = c.releases.iter().sum();
+        println!(
+            "  limits that fired while he had it: {}",
+            FwdLimit::LABELS
+                .iter()
+                .zip(c.release_limits.iter())
+                .map(|(l, k)| format!("{l} {:.1}%", pct(*k, released)))
+                .collect::<Vec<_>>()
+                .join("  ")
+        );
+    }
+}
+
 struct StateNames;
 
 impl StateNames {
@@ -2766,14 +4823,30 @@ impl SpotlightSlot {
         }
     }
 
-    /// Index into `POSITIONS_442` — also the player's id offset.
-    fn slot_index(self) -> usize {
-        match self {
-            Self::Goalkeeper => 0,
-            Self::CentreBack => 2, // DefenderCenterLeft
-            Self::CentreMid => 6,  // MidfielderCenterLeft
-            Self::Forward => 9,    // ForwardLeft
-        }
+    /// The first slot of this kind in the side's formation — also the
+    /// player's id offset. In a 4-4-2: the keeper, `DefenderCenterLeft`,
+    /// `MidfielderCenterLeft`, `ForwardLeft`.
+    fn slot_index(self, team_id: u32) -> usize {
+        HarnessTactic::positions(team_id)
+            .iter()
+            .position(|pos| match self {
+                Self::Goalkeeper => pos.is_goalkeeper(),
+                Self::CentreBack => matches!(
+                    pos,
+                    PlayerPositionType::DefenderCenterLeft
+                        | PlayerPositionType::DefenderCenter
+                        | PlayerPositionType::DefenderCenterRight
+                ),
+                Self::CentreMid => matches!(
+                    pos,
+                    PlayerPositionType::MidfielderCenterLeft
+                        | PlayerPositionType::MidfielderCenter
+                        | PlayerPositionType::MidfielderCenterRight
+                        | PlayerPositionType::AttackingMidfielderCenter
+                ),
+                Self::Forward => pos.is_forward(),
+            })
+            .expect("every shipped formation has a keeper, a centre-back, a centre-mid and a forward")
     }
 
     fn label(self) -> &'static str {
@@ -2965,8 +5038,8 @@ impl MixedQualityHarness {
         core::save_accounting_stats::reset();
         core::gk_claim_diag::reset();
 
-        let senior_slot_id = 100 + slot.slot_index() as u32;
-        let youth_slot_id = 200 + slot.slot_index() as u32;
+        let senior_slot_id = 100 + slot.slot_index(1) as u32;
+        let youth_slot_id = 200 + slot.slot_index(2) as u32;
 
         struct Row {
             senior_gk: SpotlightAgg,
@@ -2993,14 +5066,14 @@ impl MixedQualityHarness {
             let youth = Self::build_team(2, level, slot, Self::YOUTH_MEAN);
             skills.0 += Self::skill_of(&senior, 0);
             skills.1 += Self::skill_of(&youth, 0);
-            skills.2 += Self::skill_of(&senior, slot.slot_index());
-            skills.3 += Self::skill_of(&youth, slot.slot_index());
+            skills.2 += Self::skill_of(&senior, slot.slot_index(1));
+            skills.3 += Self::skill_of(&youth, slot.slot_index(2));
 
             let rows: Vec<Row> = (0..per_draw)
                 .into_par_iter()
                 .map(|_| {
-                    let home = Self::squad(&senior, 1);
-                    let away = Self::squad(&youth, 2);
+                    let home = Self::squad(&senior, 1, HarnessTactic::for_team(1));
+                    let away = Self::squad(&youth, 2, HarnessTactic::for_team(2));
                     let result = FootballEngine::<840, 545>::play(home, away, false, false, false);
                     let score = result.score.as_ref().unwrap();
                     let hg = score.home_team.get() as u32;
@@ -3119,20 +5192,20 @@ impl MixedQualityHarness {
             youth.failed_claims_shot as f32 / youth.apps(),
             youth.failed_claims_goal as f32 / youth.apps(),
         );
-        let (gathers, moments, flaps) = core::gk_claim_diag::snapshot();
+        let (gathers, moments, claims, flaps) = core::gk_claim_diag::snapshot();
         let (flap_shots_seen, flap_charged, flap_dropped) = core::gk_claim_diag::resolution();
         let matches = (senior.apps() + youth.apps()).max(1.0);
         println!(
             "  claim contest (both keepers): {:.2} gathers/m, {:.2} command moments/m, \
-             {:.3} flaps/m ({:.1}% of moments)   real: ~1-3 claims/m, a handful of \
+             {:.3} flaps/m ({:.1}% of the claims decided)   real: ~1-3 claims/m, a handful of \
              flapped crosses a SEASON",
             gathers as f32 / matches * 2.0,
             moments as f32 / matches * 2.0,
             flaps as f32 / matches * 2.0,
-            if moments == 0 {
+            if claims == 0 {
                 0.0
             } else {
-                flaps as f32 / moments as f32 * 100.0
+                flaps as f32 / claims as f32 * 100.0
             },
         );
         println!(
@@ -3206,13 +5279,13 @@ impl MixedQualityHarness {
         slot_skill: f32,
     ) -> Vec<MatchPlayer> {
         let base_id = team_id * 100;
-        POSITIONS_442
+        HarnessTactic::positions(team_id)
             .iter()
             .enumerate()
             .map(|(i, &pos)| {
                 let id = base_id + i as u32;
                 let mut player = generate_player(id, pos, level);
-                if i == slot.slot_index() {
+                if i == slot.slot_index(team_id) {
                     // Retarget the overall level first (so the whole
                     // player is youth / senior, not just his headline
                     // attributes), then pin the composite exactly.
@@ -3224,11 +5297,11 @@ impl MixedQualityHarness {
             .collect()
     }
 
-    fn squad(players: &[MatchPlayer], team_id: u32) -> MatchSquad {
+    fn squad(players: &[MatchPlayer], team_id: u32, shape: MatchTacticType) -> MatchSquad {
         MatchSquad {
             team_id,
             team_name: format!("Team {}", team_id),
-            tactics: Tactics::new(MatchTacticType::T442),
+            tactics: Tactics::new(shape),
             main_squad: players.to_vec(),
             substitutes: Vec::new(),
             captain_id: None,
@@ -3238,6 +5311,8 @@ impl MixedQualityHarness {
             selection_omissions: Vec::new(),
             overlooked: Vec::new(),
             coach_snapshot: None,
+            coach_card: None,
+            familiarity: None,
         }
     }
 
@@ -3270,6 +5345,10 @@ impl AssuranceHarness {
         use core::r#match::engine::teamplay::tactical::TeamSkillAggregates;
 
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("error")).init();
+        if HarnessTactic::selected() != HarnessTactic::selected_away() {
+            eprintln!("assurance plays one eleven against its own copy: unset TACTIC_B");
+            std::process::exit(2);
+        }
         let per_draw = (n_matches / Self::DRAWS).max(2);
         let (label_a, label_b) = if confident {
             ("settled", "cocky")
@@ -3296,7 +5375,7 @@ impl AssuranceHarness {
         let mut b_out = SpotlightAgg::default();
         let mut drawn = Vec::with_capacity(Self::DRAWS);
         for _ in 0..Self::DRAWS {
-            let mut team_a: Vec<MatchPlayer> = POSITIONS_442
+            let mut team_a: Vec<MatchPlayer> = HarnessTactic::positions(1)
                 .iter()
                 .enumerate()
                 .map(|(i, &pos)| {
@@ -3350,8 +5429,8 @@ impl AssuranceHarness {
             let rows: Vec<[SpotlightAgg; 4]> = (0..per_draw)
                 .into_par_iter()
                 .map(|i| {
-                    let a = MixedQualityHarness::squad(&team_a, 1);
-                    let b = MixedQualityHarness::squad(&team_b, 2);
+                    let a = MixedQualityHarness::squad(&team_a, 1, HarnessTactic::selected());
+                    let b = MixedQualityHarness::squad(&team_b, 2, HarnessTactic::selected());
                     let a_home = i % 2 == 0;
                     let (home, away) = if a_home { (a, b) } else { (b, a) };
                     let result = FootballEngine::<840, 545>::play(home, away, false, false, false);
@@ -3436,19 +5515,19 @@ impl AssuranceHarness {
                     a[0].kickoff_mind = mind;
                     b[0].kickoff_mind = mind;
                     (0..census_per_draw).into_par_iter().for_each(|i| {
-                        let home = MixedQualityHarness::squad(&a, 1);
-                        let away = MixedQualityHarness::squad(&b, 2);
+                        let home = MixedQualityHarness::squad(&a, 1, HarnessTactic::selected());
+                        let away = MixedQualityHarness::squad(&b, 2, HarnessTactic::selected());
                         let (home, away) = if i % 2 == 0 { (home, away) } else { (away, home) };
                         FootballEngine::<840, 545>::play(home, away, false, false, false);
                     });
                 }
-                let (_, moments, flaps) = core::gk_claim_diag::snapshot();
-                (moments, flaps)
+                let (_, _, claims, flaps) = core::gk_claim_diag::snapshot();
+                (claims, flaps)
             })
             .collect();
-        let flapped = |(moments, flaps): (u64, u64)| flaps as f32 / moments.max(1) as f32 * 100.0;
+        let flapped = |(claims, flaps): (u64, u64)| flaps as f32 / claims.max(1) as f32 * 100.0;
         println!(
-            "  claim census ({} matches an arm, both keepers alike): {} {:.1}% / {} {:.1}% of command moments flapped ({} / {} flaps)",
+            "  claim census ({} matches an arm, both keepers alike): {} {:.1}% / {} {:.1}% of the claims decided flapped ({} / {} flaps)",
             census_per_draw * Self::DRAWS,
             label_b,
             flapped(census[1]),
@@ -3485,8 +5564,8 @@ impl AssuranceHarness {
                     Self::stamp(&mut a, *mind_a, mind, true);
                     Self::stamp(&mut b, *mind_a, mind, true);
                     (0..census_per_draw).into_par_iter().for_each(|i| {
-                        let home = MixedQualityHarness::squad(&a, 1);
-                        let away = MixedQualityHarness::squad(&b, 2);
+                        let home = MixedQualityHarness::squad(&a, 1, HarnessTactic::selected());
+                        let away = MixedQualityHarness::squad(&b, 2, HarnessTactic::selected());
                         let (home, away) = if i % 2 == 0 { (home, away) } else { (away, home) };
                         FootballEngine::<840, 545>::play(home, away, false, false, false);
                     });
@@ -3642,6 +5721,10 @@ fn print_usage() {
         "  dev_match ball_track [lvlA] [lvlB]  one recorded match: ball reversals, pace steps, reception profiles"
     );
     eprintln!("  dev_match league [teams] [rounds] [minLvl] [maxLvl]  full round-robin season");
+    eprintln!(
+        "  dev_match ladder [N] [--baseline]  strength ladder: gaps 0/2/4/6/9 around level 14, both venues"
+    );
+    eprintln!("  pins: {}", core::r#match::TeamPins::USAGE);
     eprintln!(
         "                                      defaults: 20 teams, 2 rounds (38 games), levels 8–18"
     );
@@ -3805,7 +5888,7 @@ impl SubstitutionCensus {
             let bench_level = level.saturating_sub(bench_gap).max(1);
             let cond = |k: usize| 8200 + ((seed * 7 + k * 131) % 1400) as i16;
 
-            let main_squad: Vec<MatchPlayer> = POSITIONS_442
+            let main_squad: Vec<MatchPlayer> = HarnessTactic::positions(team_id)
                 .iter()
                 .enumerate()
                 .map(|(i, &pos)| {
@@ -3837,7 +5920,7 @@ impl SubstitutionCensus {
             MatchSquad {
                 team_id,
                 team_name: format!("Team {}", team_id),
-                tactics: Tactics::new(MatchTacticType::T442),
+                tactics: Tactics::new(HarnessTactic::for_team(team_id)),
                 main_squad,
                 substitutes,
                 captain_id: None,
@@ -3847,6 +5930,8 @@ impl SubstitutionCensus {
                 selection_omissions: Vec::new(),
                 overlooked: Vec::new(),
                 coach_snapshot: None,
+                coach_card: None,
+                familiarity: None,
             }
         };
 
@@ -4181,6 +6266,18 @@ substitutes taken back off: {} ({:.2}% of changes)",
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mode = args.get(1).map(|s| s.as_str()).unwrap_or("viewer");
+    if !matches!(mode, "--help" | "-h" | "help") {
+        println!("shape: {}", HarnessTactic::label());
+        match core::r#match::TeamPins::from_env() {
+            Ok(pins) => println!("team: {}", pins.describe()),
+            Err(why) => {
+                eprintln!("{why}
+
+Usage: {}", core::r#match::TeamPins::USAGE);
+                std::process::exit(2);
+            }
+        }
+    }
 
     match mode {
         "stats" => {
@@ -4194,6 +6291,14 @@ fn main() {
             let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(200);
             let write_baseline = args.iter().any(|a| a == "--baseline");
             if !RealismBatch::run(n, write_baseline) {
+                std::process::exit(1);
+            }
+        }
+        // Strength ladder - see `StrengthLadder`.
+        "ladder" => {
+            let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(200);
+            let write_baseline = args.iter().any(|a| a == "--baseline");
+            if !StrengthLadder::run(n, write_baseline) {
                 std::process::exit(1);
             }
         }
@@ -4599,7 +6704,7 @@ fn run_audit_levels(n: usize) {
 fn make_squad_calibrated(team_id: u32, level: u8) -> MatchSquad {
     let base_id = team_id * 100;
     let target = 3.0 + (level as f32 / 20.0) * 14.0;
-    let main_squad: Vec<MatchPlayer> = POSITIONS_442
+    let main_squad: Vec<MatchPlayer> = HarnessTactic::positions(team_id)
         .iter()
         .enumerate()
         .map(|(i, &pos)| {
@@ -4666,7 +6771,7 @@ fn make_squad_calibrated(team_id: u32, level: u8) -> MatchSquad {
     MatchSquad {
         team_id,
         team_name: format!("Team {}", team_id),
-        tactics: Tactics::new(MatchTacticType::T442),
+        tactics: Tactics::new(HarnessTactic::for_team(team_id)),
         main_squad,
         substitutes: Vec::new(),
         captain_id: None,
@@ -4676,6 +6781,8 @@ fn make_squad_calibrated(team_id: u32, level: u8) -> MatchSquad {
         selection_omissions: Vec::new(),
         overlooked: Vec::new(),
         coach_snapshot: None,
+        coach_card: None,
+        familiarity: None,
     }
 }
 
@@ -5013,6 +7120,715 @@ fn run_audit_engine_gap(n: usize, level_a: u8, level_b: u8) {
 /// the numbers used to be. The squads come from the same generator as
 /// `stats`, which draws its own attributes, so two runs still differ by
 /// squad noise; read a drift against the ±0.2 goals the `stats` notes give.
+// ── team census: how each side played, and how it was managed ─────────
+//
+// Read off each result's tally (`TeamCensusTally`) and coach records, so
+// `stats`, `realism` and `ladder` print the same block.
+struct DeliveryCensusReport;
+
+impl DeliveryCensusReport {
+    fn print(t: &core::delivery_diag::DeliveryTally, n_matches: usize) {
+        use core::block_diag::CrossPriceCensus;
+        use core::delivery_diag::DeliveryCensus as C;
+        let per = |v: f64| v / n_matches.max(1) as f64;
+        let pct = |n: u64, d: u64| n as f64 * 100.0 / d.max(1) as f64;
+        let sum = |row: &[u32]| row.iter().map(|&v| v as u64).sum::<u64>();
+        let kind_total = |k: usize| sum(&t.struck[k]);
+        let column = |table: &[[[u32; 9]; 6]; 5], k: usize, c: usize| {
+            table[k].iter().map(|r| r[c] as u64).sum::<u64>()
+        };
+        let end_column = |k: usize, c: usize| t.end[k].iter().map(|r| r[c] as u64).sum::<u64>();
+        let closer_column = |k: usize, c: usize| t.closer[k].iter().map(|r| r[c] as u64).sum::<u64>();
+        let mate_first = |firsts: &[u32; 9]| {
+            (firsts[C::ATTACKER_HEAD] + firsts[C::ATTACKER_FEET]) as u64
+        };
+
+        println!();
+        println!(
+            "--- DELIVERY CENSUS --- every cross from its strike to its first contact and its end"
+        );
+        println!(
+            "  {:<28} {:>7} {:>8} {:>8} {:>8} {:>8} {:>9} {:>9}",
+            "kind", "/match", "depth m", "inside%", "<6m%", "byline%", "1st-mate%", "booked%"
+        );
+        for (k, name) in C::KINDS.iter().enumerate() {
+            let n = kind_total(k);
+            if n == 0 {
+                continue;
+            }
+            let firsts: u64 = t.first[k].iter().map(mate_first).sum();
+            let depth: u64 = t.depth_dm[k].iter().sum();
+            println!(
+                "  {:<28} {:>7.2} {:>8.1} {:>7.1}% {:>7.1}% {:>7.1}% {:>8.1}% {:>8.1}%",
+                name,
+                per(n as f64),
+                depth as f64 / 10.0 / n as f64,
+                pct(sum(&t.inside_width[k]), n),
+                pct(sum(&t.within_six[k]), n),
+                pct(sum(&t.byline[k]), n),
+                pct(firsts, n),
+                pct(sum(&t.booked_completed[k]), n),
+            );
+        }
+        println!(
+            "  (1st-mate: the first player to play it was a team-mate — the new completion; booked: today's reception rule)"
+        );
+
+        println!("  closer at the strike, % of each kind:");
+        for (k, name) in C::KINDS.iter().enumerate() {
+            let n = kind_total(k);
+            if n == 0 {
+                continue;
+            }
+            let cells: Vec<String> = CrossPriceCensus::CLOSERS
+                .iter()
+                .enumerate()
+                .map(|(c, label)| format!("{label} {:.0}%", pct(closer_column(k, c), n)))
+                .collect();
+            println!("    {:<28} {}", name, cells.join("  "));
+        }
+
+        println!("  first contact, % of each kind:");
+        for (k, name) in C::KINDS.iter().enumerate() {
+            let n = kind_total(k);
+            if n == 0 {
+                continue;
+            }
+            let cells: Vec<String> = C::FIRSTS
+                .iter()
+                .enumerate()
+                .filter(|(c, _)| column(&t.first, k, *c) > 0)
+                .map(|(c, label)| format!("{label} {:.0}%", pct(column(&t.first, k, c), n)))
+                .collect();
+            println!("    {:<28} {}", name, cells.join("  "));
+        }
+
+        println!("  end, % of each kind:");
+        for (k, name) in C::KINDS.iter().enumerate() {
+            let n = kind_total(k);
+            if n == 0 {
+                continue;
+            }
+            let cells: Vec<String> = C::ENDS
+                .iter()
+                .enumerate()
+                .filter(|(c, _)| end_column(k, *c) > 0)
+                .map(|(c, label)| format!("{label} {:.0}%", pct(end_column(k, c), n)))
+                .collect();
+            println!("    {:<28} {}", name, cells.join("  "));
+        }
+
+        for k in [C::OPEN_PLAY, C::CORNER] {
+            let n = kind_total(k);
+            if n == 0 {
+                continue;
+            }
+            println!("  {} by type:", C::KINDS[k]);
+            for (slot, type_name) in C::TYPES.iter().enumerate() {
+                let struck = t.struck[k][slot] as u64;
+                if struck == 0 {
+                    continue;
+                }
+                let firsts: Vec<String> = C::FIRSTS
+                    .iter()
+                    .enumerate()
+                    .filter(|(c, _)| t.first[k][slot][*c] > 0)
+                    .map(|(c, label)| format!("{label} {:.0}%", pct(t.first[k][slot][c] as u64, struck)))
+                    .collect();
+                let ends: Vec<String> = C::ENDS
+                    .iter()
+                    .enumerate()
+                    .filter(|(c, _)| t.end[k][slot][*c] > 0)
+                    .map(|(c, label)| format!("{label} {:.0}%", pct(t.end[k][slot][c] as u64, struck)))
+                    .collect();
+                println!(
+                    "    {:<14} {:>5.2}/match ({:.0}%)  byline {:.0}%  1st-mate {:.0}%  booked {:.0}%  headers at goal {:.3}/match",
+                    type_name,
+                    per(struck as f64),
+                    pct(struck, n),
+                    pct(t.byline[k][slot] as u64, struck),
+                    pct(mate_first(&t.first[k][slot]), struck),
+                    pct(t.booked_completed[k][slot] as u64, struck),
+                    per(t.headers_at_goal[k][slot] as f64),
+                );
+                println!("      first: {}", firsts.join("  "));
+                println!("      end:   {}", ends.join("  "));
+            }
+        }
+
+        let other: u64 = t.other_shape.iter().flatten().flatten().map(|&v| v as u64).sum();
+        if other > 0 {
+            println!(
+                "  other open-play crosses: {:.2}/match, % by length and aim (lofted | ground):",
+                per(other as f64)
+            );
+            for (l, length) in C::LENGTHS.iter().enumerate() {
+                let cells: Vec<String> = C::AIMS
+                    .iter()
+                    .enumerate()
+                    .map(|(a, aim)| {
+                        format!(
+                            "{aim} {:.0}|{:.0}",
+                            pct(t.other_shape[1][l][a] as u64, other),
+                            pct(t.other_shape[0][l][a] as u64, other)
+                        )
+                    })
+                    .collect();
+                println!("    {:<8} {}", length, cells.join("   "));
+            }
+        }
+        println!(
+            "  headers at goal off open-play crosses: {} in {} matches ({:.3}/match)   (before the forward change: ~0.5/match)",
+            t.open_play_headers_at_goal(),
+            n_matches,
+            per(t.open_play_headers_at_goal() as f64)
+        );
+
+        let corners: u64 = sum(&t.corners);
+        println!();
+        println!("--- CORNERS BY SOURCE --- {:.2}/match awarded", per(corners as f64));
+        for (i, name) in C::CORNER_SOURCES.iter().enumerate() {
+            println!(
+                "  {:<40} {:>6.2}  {:>4.0}%",
+                name,
+                per(t.corners[i] as f64),
+                pct(t.corners[i] as u64, corners)
+            );
+        }
+
+        let throw_ins: u64 = t.throw_ins.iter().map(|h| (h[0] + h[1]) as u64).sum();
+        println!();
+        println!(
+            "--- THROW-INS BY SOURCE --- {:.2}/match, by what the last toucher did   (own half | opponents' half)",
+            per(throw_ins as f64)
+        );
+        for (i, name) in C::THROW_SOURCES.iter().enumerate() {
+            let [own, theirs] = t.throw_ins[i];
+            println!(
+                "  {:<26} {:>6.2}  {:>4.0}%   ({:.2} | {:.2})",
+                name,
+                per((own + theirs) as f64),
+                pct((own + theirs) as u64, throw_ins),
+                per(own as f64),
+                per(theirs as f64)
+            );
+        }
+        if t.throw_in_gaps > 0 {
+            println!(
+                "  mean gap from the previous throw-in {:.1} s",
+                t.throw_in_gap_ticks as f64 / t.throw_in_gaps as f64 / 100.0
+            );
+        }
+
+        println!();
+        println!(
+            "--- OWN GOALS BY ROUTE --- balls in the frame off the defending side, /match   (own goal | credited to an attacker | refused at the line)"
+        );
+        for (i, name) in C::OWN_GOAL_ROUTES.iter().enumerate() {
+            let [own, credited, refused] = t.own_goals[i];
+            println!(
+                "  {:<30} {:>6.3} | {:>6.3} | {:>6.3}",
+                name,
+                per(own as f64),
+                per(credited as f64),
+                per(refused as f64)
+            );
+        }
+        println!(
+            "  own goals given off an attacker's last touch {:.3}/match; balls in off an attacker with no shot (refused) {:.3}/match",
+            per(t.own_goals_off_an_attacker as f64),
+            per(t.refused_no_shot as f64)
+        );
+    }
+}
+
+struct TeamCensusReport;
+
+impl TeamCensusReport {
+    /// Engine ticks in ninety minutes.
+    const TICKS_PER_90: f64 = 540_000.0;
+
+    fn print(census: &core::r#match::TeamCensusTally, results: &[&core::r#match::MatchResultRaw]) {
+        use core::r#match::LedgerState;
+        let matches = results.len().max(1) as f64;
+        let all_ticks: u64 = census
+            .ledger
+            .iter()
+            .flat_map(|side| side.iter())
+            .map(|l| l.ticks)
+            .sum();
+
+        println!();
+        println!("--- TEAM CENSUS: game-state ledger (both sides pooled) ---");
+        println!(
+            "  {:<12} {:>6} {:>6} {:>6} {:>8} {:>7} {:>6} {:>7} {:>8} {:>8}",
+            "state", "time%", "poss%", "terr%", "shots/90", "xG/90", "PPDA", "line m", "block L", "block W"
+        );
+        let rows: [(&str, &[LedgerState]); 8] = [
+            ("leading 2+", &[LedgerState::LeadingByTwo]),
+            ("leading 1", &[LedgerState::LeadingByOne]),
+            ("level", &[LedgerState::Level]),
+            ("trailing 1", &[LedgerState::TrailingByOne]),
+            ("trailing 2+", &[LedgerState::TrailingByTwo]),
+            ("LEADING", &[LedgerState::LeadingByOne, LedgerState::LeadingByTwo]),
+            ("LEVEL", &[LedgerState::Level]),
+            ("TRAILING", &[LedgerState::TrailingByOne, LedgerState::TrailingByTwo]),
+        ];
+        for (label, states) in rows {
+            let mut l = core::r#match::StateLedger::default();
+            for &state in states {
+                l.absorb(&census.pooled(state));
+            }
+            if l.ticks == 0 {
+                println!("  {:<12} {:>6}", label, "-");
+                continue;
+            }
+            let per90 = |v: f64| v * Self::TICKS_PER_90 / l.ticks as f64;
+            let samples = l.block_samples.max(1) as f64;
+            println!(
+                "  {:<12} {:>6.1} {:>6.1} {:>6.1} {:>8.2} {:>7.2} {:>6.1} {:>7.1} {:>8.1} {:>8.1}",
+                label,
+                l.ticks as f64 * 100.0 / all_ticks.max(1) as f64,
+                l.possession_ticks as f64 * 100.0 / l.held_ticks.max(1) as f64,
+                l.territory_ticks as f64 * 100.0 / l.ticks as f64,
+                per90(l.shots as f64),
+                per90(l.xg_milli as f64 / 1000.0),
+                l.opposition_passes as f64 / l.defensive_actions.max(1) as f64,
+                l.line_height_mm as f64 / samples / 1000.0,
+                l.block_length_mm as f64 / samples / 1000.0,
+                l.block_width_mm as f64 / samples / 1000.0,
+            );
+        }
+        println!("  (PPDA: opposition passes completed in its own 60% per tackle, interception or foul there;");
+        println!("   line: the back line's height from its own goal without the ball; block: outfielders' length and width)");
+
+        println!();
+        println!("--- TEAM CENSUS: style fingerprint ---");
+        println!(
+            "  {:<5} {:>6} {:>7} {:>7} {:>8} {:>8} {:>6} {:>9} {:>8} {:>9} {:>8}",
+            "side", "poss%", "PPDA", "press m", "line m", "block L", "width", "pass/pos", "sec/pos", "direct m/s", "counters"
+        );
+        for (side, label) in ["home", "away"].iter().enumerate() {
+            let mut l = core::r#match::StateLedger::default();
+            for ledger in &census.ledger[side] {
+                l.absorb(ledger);
+            }
+            let style = &census.style[side];
+            let pos = &census.possessions[side];
+            let possessions = pos.possessions.max(1) as f64;
+            let seconds = pos.ticks as f64 / 100.0;
+            println!(
+                "  {:<5} {:>6.1} {:>7.1} {:>7.1} {:>8.1} {:>8.1} {:>6.1} {:>9.2} {:>8.1} {:>9.2} {:>8.2}",
+                label,
+                l.possession_ticks as f64 * 100.0 / l.held_ticks.max(1) as f64,
+                l.opposition_passes as f64 / l.defensive_actions.max(1) as f64,
+                style.regain_height_mm as f64 / style.regains.max(1) as f64 / 1000.0,
+                l.line_height_mm as f64 / l.block_samples.max(1) as f64 / 1000.0,
+                l.block_length_mm as f64 / l.block_samples.max(1) as f64 / 1000.0,
+                style.width_in_possession_mm as f64 / style.width_samples.max(1) as f64 / 1000.0,
+                pos.passes as f64 / possessions,
+                seconds / possessions,
+                pos.progress_mm as f64 / 1000.0 / seconds.max(1.0),
+                style.counter_attacks as f64 / matches,
+            );
+        }
+        println!("  (press m: where the side won the ball in play, from its own goal; width: outfielders' width with the ball;");
+        println!("   counters: possessions won in play that reach a shot within 15 s, a match)");
+
+        println!();
+        println!("--- TEAM CENSUS: possessions ---");
+        for (side, label) in ["home", "away"].iter().enumerate() {
+            let pos = &census.possessions[side];
+            let total = pos.possessions.max(1) as f64;
+            let ended: Vec<String> = core::r#match::PossessionEnd::NAMES
+                .iter()
+                .zip(pos.ended.iter())
+                .map(|(name, &n)| format!("{name} {:.1}%", n as f64 * 100.0 / total))
+                .collect();
+            let lengths: Vec<String> = ["0-1", "2-3", "4-6", "7-10", "11+"]
+                .iter()
+                .zip(pos.by_passes.iter())
+                .map(|(name, &n)| format!("{name} {:.1}%", n as f64 * 100.0 / total))
+                .collect();
+            println!(
+                "  {:<5} {:.1} a match; ended: {}",
+                label,
+                pos.possessions as f64 / matches,
+                ended.join(", ")
+            );
+            println!("        passes: {}", lengths.join(", "));
+        }
+
+        Self::print_coaches(results);
+    }
+
+    fn print_coaches(results: &[&core::r#match::MatchResultRaw]) {
+        use core::r#match::{ChangeMoment, GamePlan};
+        let matches = results.len().max(1) as f64;
+        println!();
+        println!("--- TEAM CENSUS: coaches ---");
+        for (side, label) in ["home", "away"].iter().enumerate() {
+            let record = |r: &core::r#match::MatchResultRaw| {
+                if side == 0 {
+                    r.coach_home.clone()
+                } else {
+                    r.coach_away.clone()
+                }
+            };
+            let records: Vec<core::r#match::CoachRecord> = results.iter().map(|r| record(r)).collect();
+            let mut plan = [0.0f64; 7];
+            let mut planned = 0.0;
+            for p in records.iter().filter_map(|r| r.kickoff_plan) {
+                for (sum, dial) in plan.iter_mut().zip(p.dials()) {
+                    *sum += dial as f64;
+                }
+                planned += 1.0;
+            }
+            let plan_line: Vec<String> = GamePlan::DIALS
+                .iter()
+                .zip(plan.iter())
+                .map(|(name, sum)| format!("{name} {:.2}", sum / f64::max(planned, 1.0)))
+                .collect();
+            println!("  {label}: kickoff plan (mean) {}", plan_line.join(", "));
+
+            let mut bands = [(0.0f64, 0u32); 7];
+            for r in &records {
+                for (minute, &value) in r.commitment.iter().enumerate() {
+                    let band = (minute / 15).min(6);
+                    bands[band].0 += value as f64;
+                    bands[band].1 += 1;
+                }
+            }
+            let band_line: Vec<String> = ["0-15", "15-30", "30-45", "45-60", "60-75", "75-90", "90+"]
+                .iter()
+                .zip(bands.iter())
+                .filter(|(_, (_, n))| *n > 0)
+                .map(|(name, (sum, n))| format!("{name}' {:+.2}", sum / *n as f64))
+                .collect();
+            println!("        commitment by period (−1 hold … +1 commit): {}", band_line.join("  "));
+
+            let mut by_moment = [0u32; ChangeMoment::COUNT];
+            let mut by_period = [0u32; 7];
+            let mut shapes = 0u32;
+            for change in records.iter().flat_map(|r| r.changes.iter()) {
+                by_moment[change.moment.index()] += 1;
+                by_period[(change.minute as usize / 15).min(6)] += 1;
+                if change.changes_shape() {
+                    shapes += 1;
+                }
+            }
+            let total: u32 = by_moment.iter().sum();
+            let moments: Vec<String> = ChangeMoment::NAMES
+                .iter()
+                .zip(by_moment.iter())
+                .filter(|(_, n)| **n > 0)
+                .map(|(name, n)| format!("{name} {n}"))
+                .collect();
+            let periods: Vec<String> = ["0-15", "15-30", "30-45", "45-60", "60-75", "75-90", "90+"]
+                .iter()
+                .zip(by_period.iter())
+                .filter(|(_, n)| **n > 0)
+                .map(|(name, n)| format!("{name}' {n}"))
+                .collect();
+            println!(
+                "        changes {:.2} a match ({:.2} of shape); by moment: {}; by period: {}",
+                total as f64 / matches,
+                shapes as f64 / matches,
+                if moments.is_empty() { "-".to_string() } else { moments.join(", ") },
+                if periods.is_empty() { "-".to_string() } else { periods.join(", ") }
+            );
+            let breaks: u32 = records.iter().map(|r| r.line_breaks_against).sum();
+            println!(
+                "        line breaks conceded {:.2} a match",
+                breaks as f64 / matches
+            );
+            let mut talks: Vec<(String, u32)> = Vec::new();
+            for tone in records.iter().filter_map(|r| r.half_time_talk) {
+                let name = format!("{tone:?}");
+                match talks.iter_mut().find(|(n, _)| *n == name) {
+                    Some((_, count)) => *count += 1,
+                    None => talks.push((name, 1)),
+                }
+            }
+            let talk_line: Vec<String> = talks.iter().map(|(n, c)| format!("{n} {c}")).collect();
+            println!(
+                "        half-time talks: {}",
+                if talk_line.is_empty() { "none given".to_string() } else { talk_line.join(", ") }
+            );
+        }
+
+        if let Some(first) = results.first() {
+            println!("  first match's log:");
+            for (label, record) in [("home", &first.coach_home), ("away", &first.coach_away)] {
+                let plan = record
+                    .kickoff_plan
+                    .map(|p| p.describe())
+                    .unwrap_or_else(|| "none".to_string());
+                println!("    {label}: kickoff plan {plan}");
+                let every_five: Vec<String> = record
+                    .commitment
+                    .iter()
+                    .enumerate()
+                    .filter(|(minute, _)| minute % 5 == 0)
+                    .map(|(minute, value)| format!("{minute}' {value:+.2}"))
+                    .collect();
+                println!("          commitment: {}", every_five.join(" "));
+                for change in &record.changes {
+                    println!(
+                        "          {}' {:?}: {:?} -> {:?}",
+                        change.minute, change.moment, change.shape_before, change.shape_after
+                    );
+                }
+                if let Some(talk) = record.half_time_talk {
+                    println!("          half-time talk: {talk:?}");
+                }
+            }
+        }
+    }
+}
+
+// ── ladder: the strength ladder ───────────────────────────────────────
+//
+// Sides a fixed number of levels apart around level 14, each fixture played
+// at both venues, read against how often a real favourite wins, draws and
+// loses at that gap. `OF_PLAN=neutral ladder N` is the decomposition arm.
+struct StrengthLadder;
+
+#[derive(Default, Clone, Copy)]
+struct LadderSide {
+    goals: f64,
+    shots: f64,
+    xg: f64,
+    possession_ticks: u64,
+    held_ticks: u64,
+}
+
+#[derive(Default, Clone, Copy)]
+struct LadderRung {
+    matches: u32,
+    /// `[favourite at home, favourite away]` × `[win, draw, loss]`.
+    results: [[u32; 3]; 2],
+    favourite: LadderSide,
+    underdog: LadderSide,
+}
+
+impl StrengthLadder {
+    const GAPS: [u8; 5] = [0, 2, 4, 6, 9];
+    const CENTRE: u8 = 14;
+    const SEED_BASE: u64 = 0x1ADD_E400_0000;
+    /// Real `(favourite wins, draws, underdog wins)` bands, by gap.
+    const BANDS: [(u8, [(f64, f64); 3]); 4] = [
+        (2, [(0.37, 0.53), (0.19, 0.31), (0.22, 0.38)]),
+        (4, [(0.50, 0.66), (0.16, 0.28), (0.12, 0.28)]),
+        (6, [(0.62, 0.78), (0.11, 0.23), (0.06, 0.20)]),
+        (9, [(0.70, 0.86), (0.07, 0.19), (0.03, 0.15)]),
+    ];
+
+    fn levels(gap: u8) -> (u8, u8) {
+        let favourite = Self::CENTRE + gap.div_ceil(2);
+        (favourite, favourite - gap)
+    }
+
+    fn squad(team_id: u32, level: u8) -> MatchSquad {
+        const BENCH: [PlayerPositionType; 7] = [
+            PlayerPositionType::Goalkeeper,
+            PlayerPositionType::DefenderCenterLeft,
+            PlayerPositionType::DefenderCenterRight,
+            PlayerPositionType::MidfielderCenterLeft,
+            PlayerPositionType::MidfielderCenterRight,
+            PlayerPositionType::ForwardLeft,
+            PlayerPositionType::ForwardRight,
+        ];
+        let mut squad = make_squad_simple(team_id, level);
+        let bench_level = level.saturating_sub(3).max(1);
+        squad.substitutes = BENCH
+            .iter()
+            .enumerate()
+            .map(|(i, &pos)| {
+                let player = generate_player(team_id * 100 + 11 + i as u32, pos, bench_level);
+                MatchPlayer::from_player(team_id, &player, pos, true, None)
+            })
+            .collect();
+        squad
+    }
+
+    fn baseline_path(n: usize) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("baselines")
+            .join(format!("ladder-{n}.json"))
+    }
+
+    fn run(n: usize, write_baseline: bool) -> bool {
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("error")).init();
+        println!(
+            "Strength ladder: {n} fixtures a gap around level {}, half with the favourite at home",
+            Self::CENTRE
+        );
+        let mut lines: Vec<(String, f64, Option<(f64, f64)>)> = Vec::new();
+        let mut all_results: Vec<core::r#match::MatchResultRaw> = Vec::new();
+        for (rung_index, &gap) in Self::GAPS.iter().enumerate() {
+            let (favourite_level, underdog_level) = Self::levels(gap);
+            let results: Vec<(bool, core::r#match::MatchResultRaw)> = (0..n)
+                .into_par_iter()
+                .map(|i| {
+                    let favourite_home = i % 2 == 0;
+                    let (home_level, away_level) = if favourite_home {
+                        (favourite_level, underdog_level)
+                    } else {
+                        (underdog_level, favourite_level)
+                    };
+                    let result = FootballEngine::<840, 545>::play_seeded(
+                        Self::squad(1, home_level),
+                        Self::squad(2, away_level),
+                        false,
+                        false,
+                        false,
+                        Some(Self::SEED_BASE + rung_index as u64 * 1_000_000 + i as u64),
+                    );
+                    (favourite_home, result)
+                })
+                .collect();
+
+            let mut rung = LadderRung::default();
+            for (favourite_home, result) in &results {
+                let score = result.score.as_ref().unwrap();
+                let (home, away) = (score.home_team.get(), score.away_team.get());
+                let (fav, dog) = if *favourite_home { (home, away) } else { (away, home) };
+                let outcome = match fav.cmp(&dog) {
+                    std::cmp::Ordering::Greater => 0,
+                    std::cmp::Ordering::Equal => 1,
+                    std::cmp::Ordering::Less => 2,
+                };
+                rung.matches += 1;
+                rung.results[usize::from(!*favourite_home)][outcome] += 1;
+                let census = &result.tally.team_census;
+                for (team_id, venue, goals) in [(1u32, 0usize, home), (2, 1, away)] {
+                    let is_favourite = (venue == 0) == *favourite_home;
+                    let stats = team_stats(result, team_id);
+                    let side = if is_favourite { &mut rung.favourite } else { &mut rung.underdog };
+                    side.goals += goals as f64;
+                    side.shots += stats.shots as f64;
+                    side.xg += stats.xg as f64;
+                    for ledger in &census.ledger[venue] {
+                        side.possession_ticks += ledger.possession_ticks;
+                        side.held_ticks += ledger.held_ticks;
+                    }
+                }
+            }
+            Self::print_rung(gap, favourite_level, underdog_level, &rung, &mut lines);
+            all_results.extend(results.into_iter().map(|(_, r)| r));
+        }
+
+        let mut census = core::r#match::TeamCensusTally::default();
+        for result in &all_results {
+            census.absorb(&result.tally.team_census);
+        }
+        let refs: Vec<&core::r#match::MatchResultRaw> = all_results.iter().collect();
+        TeamCensusReport::print(&census, &refs);
+
+        let path = Self::baseline_path(n);
+        match std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&text).ok())
+        {
+            Some(baseline) => {
+                println!();
+                println!("Against the baseline at {}:", path.display());
+                for (name, value, _) in &lines {
+                    match baseline.get(name.as_str()).and_then(|v| v.as_f64()) {
+                        Some(before) => println!(
+                            "  {:<28} {:>8.3}   baseline {:>8.3}   Δ {:+.3}",
+                            name,
+                            value,
+                            before,
+                            value - before
+                        ),
+                        None => println!("  {:<28} {:>8.3}   (new line)", name, value),
+                    }
+                }
+            }
+            None => println!("\nNo baseline at {} yet.", path.display()),
+        }
+        if write_baseline {
+            let map: serde_json::Map<String, serde_json::Value> = lines
+                .iter()
+                .map(|(name, value, _)| (name.clone(), serde_json::json!(value)))
+                .collect();
+            std::fs::create_dir_all(path.parent().expect("baseline dir")).expect("create baselines dir");
+            std::fs::write(&path, serde_json::to_string_pretty(&map).expect("baseline json"))
+                .expect("write baseline");
+            println!("Baseline written to {}", path.display());
+        }
+
+        let misses: Vec<&(String, f64, Option<(f64, f64)>)> = lines
+            .iter()
+            .filter(|(_, value, band)| band.is_some_and(|(lo, hi)| *value < lo || *value > hi))
+            .collect();
+        println!();
+        for (name, value, band) in &misses {
+            let (lo, hi) = band.unwrap();
+            println!("OUT OF BAND: {name} = {value:.3}, band {lo:.3} .. {hi:.3}");
+        }
+        let checked = lines.iter().filter(|(_, _, band)| band.is_some()).count();
+        println!("{} of {} ladder lines in band", checked - misses.len(), checked);
+        misses.is_empty()
+    }
+
+    fn print_rung(
+        gap: u8,
+        favourite_level: u8,
+        underdog_level: u8,
+        rung: &LadderRung,
+        lines: &mut Vec<(String, f64, Option<(f64, f64)>)>,
+    ) {
+        let n = rung.matches.max(1) as f64;
+        let total = |outcome: usize| (rung.results[0][outcome] + rung.results[1][outcome]) as f64 / n;
+        let bands = Self::BANDS.iter().find(|(g, _)| *g == gap).map(|(_, b)| *b);
+        println!();
+        println!(
+            "--- gap {gap}: level {favourite_level} against level {underdog_level}, {} fixtures ---",
+            rung.matches
+        );
+        for (outcome, label) in ["favourite wins", "draws", "underdog wins"].iter().enumerate() {
+            let value = total(outcome);
+            let band = bands.map(|b| b[outcome]);
+            let verdict = match band {
+                Some((lo, hi)) if value < lo || value > hi => format!("OUT  band {lo:.2}-{hi:.2}"),
+                Some((lo, hi)) => format!("ok   band {lo:.2}-{hi:.2}"),
+                None => "-".to_string(),
+            };
+            println!("  {:<15} {:>6.1}%   {}", label, value * 100.0, verdict);
+            lines.push((format!("gap {gap} {label} %"), value, band));
+        }
+        for (venue, label) in ["favourite at home", "favourite away"].iter().enumerate() {
+            let row = rung.results[venue];
+            let m = row.iter().sum::<u32>().max(1) as f64;
+            println!(
+                "    {:<18} W {:>5.1}%  D {:>5.1}%  L {:>5.1}%",
+                label,
+                row[0] as f64 * 100.0 / m,
+                row[1] as f64 * 100.0 / m,
+                row[2] as f64 * 100.0 / m
+            );
+        }
+        for (label, side) in [("favourite", &rung.favourite), ("underdog", &rung.underdog)] {
+            let possession = side.possession_ticks as f64 / side.held_ticks.max(1) as f64;
+            println!(
+                "  {:<10} goals {:>5.2}  shots {:>5.1}  xG {:>5.2}  possession {:>5.1}%",
+                label,
+                side.goals / n,
+                side.shots / n,
+                side.xg / n,
+                possession * 100.0
+            );
+            lines.push((format!("gap {gap} {label} goals"), side.goals / n, None));
+            lines.push((format!("gap {gap} {label} shots"), side.shots / n, None));
+            lines.push((format!("gap {gap} {label} xG"), side.xg / n, None));
+            lines.push((format!("gap {gap} {label} possession"), possession, None));
+        }
+    }
+}
+
 struct RealismBatch;
 
 impl RealismBatch {
@@ -5079,6 +7895,8 @@ impl RealismBatch {
             calibration.record(result);
         }
         calibration.print_report();
+        let refs: Vec<&core::r#match::MatchResultRaw> = results.iter().collect();
+        TeamCensusReport::print(&calibration.tally.team_census, &refs);
 
         let path = Self::baseline_path(n);
         let lines = calibration.report_lines();
@@ -5184,6 +8002,10 @@ struct LevelRow {
     draws: u32,
     high_scoring: u32,
     box_shot_share: f32,
+    /// Open-play deliveries, and the ones struck from the byline — the
+    /// wide game, which must not walk with the level either.
+    deliveries: u32,
+    byline: u32,
     /// Corners awarded, and how many of them a cross was actually struck
     /// from. Divisional, because the corner is where the engine's
     /// absolute constants bite hardest: the delivery deadline
@@ -5294,7 +8116,7 @@ impl LevelSweep {
             .collect();
 
         println!(
-            "{:>5} {:>8} {:>9} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>8}",
+            "{:>5} {:>8} {:>9} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>8} {:>8} {:>7}",
             "level",
             "goals/m",
             "shots/tm",
@@ -5304,13 +8126,15 @@ impl LevelSweep {
             "draw%",
             "4+%",
             "box%",
-            "int/tm"
+            "int/tm",
+            "dlv/tm",
+            "byl%"
         );
         for r in &rows {
             let n = r.matches.max(1) as f32;
             let shots = r.shots.max(1) as f32;
             println!(
-                "{:>5} {:>8.2} {:>9.1} {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>8.1}",
+                "{:>5} {:>8.2} {:>9.1} {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>8.1} {:>8.1} {:>6.1}%",
                 r.level,
                 r.goals as f32 / n,
                 r.shots as f32 / n / 2.0,
@@ -5325,6 +8149,8 @@ impl LevelSweep {
                 r.high_scoring as f32 / n * 100.0,
                 r.box_shot_share * 100.0,
                 r.interceptions as f32 / n / 2.0,
+                r.deliveries as f32 / n / 2.0,
+                r.byline as f32 * 100.0 / r.deliveries.max(1) as f32,
             );
         }
 
@@ -5634,7 +8460,7 @@ impl LevelSweep {
         core::shot_accuracy_diag::reset();
         core::reception_diag::reset();
 
-        let outcomes: Vec<(u8, u8, TeamStats, TeamStats)> = (0..n_matches)
+        let outcomes: Vec<(u8, u8, TeamStats, TeamStats, (u32, u32))> = (0..n_matches)
             .into_par_iter()
             .map(|_| {
                 let home = make_squad_simple(1, level);
@@ -5646,6 +8472,7 @@ impl LevelSweep {
                     score.away_team.get(),
                     team_stats(&result, 1),
                     team_stats(&result, 2),
+                    result.tally.delivery.open_play_byline(),
                 )
             })
             .collect();
@@ -5697,7 +8524,9 @@ impl LevelSweep {
             },
             ..Default::default()
         };
-        for (hg, ag, h, a) in &outcomes {
+        for (hg, ag, h, a, (deliveries, byline)) in &outcomes {
+            row.deliveries += deliveries;
+            row.byline += byline;
             let total = *hg as u32 + *ag as u32;
             row.goals += total;
             row.goals_sq += (total as u64) * (total as u64);
@@ -5752,7 +8581,6 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             n_matches, RANDOM_LEVEL_MIN, RANDOM_LEVEL_MAX, n_threads
         ),
     }
-    println!("  shape: {}", HarnessTactic::label());
     println!();
     println!(
         "{:>3} {:>3}v{:>3} {:>3}-{:>3} | {:>3}/{:>3} sh {:>3}/{:>3} ot {:>4}/{:>4} xG {:>3}/{:>3} sv {:>3}/{:>3} tk {:>3}/{:>3} int {:>4}/{:>4} pa {:>2}/{:>2}% acc",
@@ -5795,6 +8623,10 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     core::arrival_diag::ArrivalCensus::reset();
     core::arrival_diag::ShotTiming::reset();
     core::goal_kick_diag::GoalKickCensus::reset();
+    KeeperCensus::reset();
+    DefenderCensus::reset();
+    MidfielderCensus::reset();
+    ForwardCensus::reset();
     core::teleport::TeleportCensus::reset();
     core::teleport::PlayerTeleportCensus::reset();
     BlockDiag::reset();
@@ -6407,10 +9239,6 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     // 90 minutes of match time = 5_400_000.
     const TICKS_PER_MIN: u64 = 60_000;
     let mut first_goal_buckets = [0u32; 7]; // 0-15, 15-30, ... 75-90, no goal
-    let mut equalizers_within_15 = 0u32;
-    let mut goals_that_could_be_equalised = 0u32;
-    let mut quick_response_within_5min = 0u32;
-    let mut lead_flips = 0u32;
     let mut matches_with_a_lead = 0u32;
     let mut goal_gap_total: u64 = 0;
     let mut goal_gap_count: u32 = 0;
@@ -6435,71 +9263,19 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         // Walk through the goal stream tracking lead state.
         let mut home_g = 0u8;
         let mut away_g = 0u8;
-        let mut last_leader: Option<bool> = None; // Some(true) home, Some(false) away
         let mut ever_had_lead = false;
         for window in o.goal_events.windows(2) {
             let gap = window[1].0.saturating_sub(window[0].0);
             goal_gap_total += gap;
             goal_gap_count += 1;
         }
-        for &(time, home_scored) in &o.goal_events {
-            // Record state BEFORE this goal — was a leader being equalised?
-            let pre_diff = home_g as i16 - away_g as i16;
-            // Apply the goal.
+        for &(_, home_scored) in &o.goal_events {
             if home_scored {
                 home_g += 1;
             } else {
                 away_g += 1;
             }
-            let post_diff = home_g as i16 - away_g as i16;
-
-            // Equalizer detection: previous goal put someone ahead, and
-            // this goal restored parity within X minutes.
-            if pre_diff != 0 && post_diff == 0 {
-                // Lookup prior goal time (could be many goals back, but
-                // the most recent one is what matters). Find the most
-                // recent goal before `time`.
-                // We iterate again, so we find the previous goal event:
-                // this is the goal that PUT the now-equalising team behind.
-                if let Some(prev_time) = o
-                    .goal_events
-                    .iter()
-                    .take_while(|(t, _)| *t < time)
-                    .last()
-                    .map(|(t, _)| *t)
-                {
-                    let gap_ticks = time.saturating_sub(prev_time);
-                    let gap_min = gap_ticks / TICKS_PER_MIN;
-                    goals_that_could_be_equalised += 1;
-                    if gap_min <= 15 {
-                        equalizers_within_15 += 1;
-                    }
-                    if gap_min <= 5 {
-                        quick_response_within_5min += 1;
-                    }
-                }
-            }
-
-            // Lead-flip: someone was ahead and now the other side is.
-            if let Some(prev_leader) = last_leader {
-                let now_leader = if post_diff > 0 {
-                    Some(true)
-                } else if post_diff < 0 {
-                    Some(false)
-                } else {
-                    None
-                };
-                if let Some(now) = now_leader
-                    && now != prev_leader
-                {
-                    lead_flips += 1;
-                }
-            }
-            if post_diff > 0 {
-                last_leader = Some(true);
-                ever_had_lead = true;
-            } else if post_diff < 0 {
-                last_leader = Some(false);
+            if home_g != away_g {
                 ever_had_lead = true;
             }
         }
@@ -6539,29 +9315,47 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     );
     println!();
     println!("  Response-goal mechanics (the draw-cascade signal):");
-    let equ_pct = if goals_that_could_be_equalised > 0 {
-        equalizers_within_15 as f32 / goals_that_could_be_equalised as f32 * 100.0
-    } else {
-        0.0
-    };
-    let quick_pct = if goals_that_could_be_equalised > 0 {
-        quick_response_within_5min as f32 / goals_that_could_be_equalised as f32 * 100.0
-    } else {
-        0.0
-    };
-    println!(
-        "    after a go-ahead goal, equalizer within 15min: {:>4}/{:<4} ({:>5.1}%)  ref ~28%",
-        equalizers_within_15, goals_that_could_be_equalised, equ_pct
-    );
-    println!(
-        "    after a go-ahead goal, equalizer within  5min: {:>4}/{:<4} ({:>5.1}%)  ref ~10%",
-        quick_response_within_5min, goals_that_could_be_equalised, quick_pct
-    );
-    let flip_pct = lead_flips as f32 / total_n * 100.0;
-    println!(
-        "    lead-flips per match (trailer goes ahead)   : {:>4} ({:>5.1}% of matches)  ref ~7%",
-        lead_flips, flip_pct,
-    );
+    // Counted from the go-ahead goal, as the realism band is: level again
+    // within fifteen minutes of it, whatever goals came between. Read beside
+    // what the batch's own rates and goal times give two sides scoring
+    // independently.
+    {
+        use core::r#match::calibration::{GoalTimeline, IndependentScoring};
+        let mut timeline = GoalTimeline::default();
+        let mut goal_minutes: Vec<u32> = Vec::new();
+        let (mut home_total, mut away_total) = (0u64, 0u64);
+        for o in &outcomes {
+            let goals = o.result.goal_timeline();
+            timeline.absorb(&GoalTimeline::read(&goals, o.result.match_time_ms));
+            for &(time, _) in &goals {
+                let minute = (time / TICKS_PER_MIN) as usize;
+                if goal_minutes.len() <= minute {
+                    goal_minutes.resize(minute + 1, 0);
+                }
+                goal_minutes[minute] += 1;
+            }
+            home_total += o.home_goals as u64;
+            away_total += o.away_goals as u64;
+        }
+        let (equalised_if_independent, changed_if_independent) = IndependentScoring::reference(
+            home_total as f64 / total_n as f64,
+            away_total as f64 / total_n as f64,
+            &goal_minutes,
+        );
+        println!(
+            "    go-ahead goals level again within 15min   : {:>4}/{:<4} ({:>5.1}%)  independent scoring {:>5.1}%",
+            timeline.go_ahead_equalised,
+            timeline.go_ahead,
+            timeline.go_ahead_equalised as f32 / timeline.go_ahead.max(1) as f32 * 100.0,
+            equalised_if_independent * 100.0
+        );
+        println!(
+            "    matches where the lead changes hands      : {:>4} ({:>5.1}% of matches)  independent scoring {:>5.1}%",
+            timeline.matches_with_lead_change,
+            timeline.matches_with_lead_change as f32 / total_n * 100.0,
+            changed_if_independent * 100.0
+        );
+    }
     let avg_gap_min = if goal_gap_count > 0 {
         (goal_gap_total as f32 / goal_gap_count as f32) / TICKS_PER_MIN as f32
     } else {
@@ -7963,7 +10757,29 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         let d = &vol_by_pos[1];
         let m = &vol_by_pos[2];
         let f = &vol_by_pos[3];
-        let rows: [(&str, f32, f32, f32, &str); 14] = [
+        let tackle_flow = core::tackle_stats::snapshot();
+        let per_role = |v: &RatingVolumeAgg, n: u64| -> f32 {
+            if v.samples == 0 {
+                0.0
+            } else {
+                n as f32 / v.samples as f32
+            }
+        };
+        let rows: [(&str, f32, f32, f32, &str); 16] = [
+            (
+                "tackles attempted",
+                per_role(d, tackle_flow[4]),
+                per_role(m, tackle_flow[5]),
+                per_role(f, tackle_flow[6]),
+                "no band: never counted before",
+            ),
+            (
+                "tackles won",
+                per_role(d, tackle_flow[8]),
+                per_role(m, tackle_flow[9]),
+                per_role(f, tackle_flow[10]),
+                "~1.6 / ~1.8",
+            ),
             (
                 "tackles",
                 per(d, d.tackles),
@@ -9385,6 +12201,12 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 }
             };
             let (struck, goalside, near_line, range, depth) = BlockDiag::strike_snapshot();
+            let bands = BlockDiag::strike_bands()
+                .iter()
+                .zip(["<6m", "6-11m", "11-16.5m", "16.5-22m", "22-30m", "30m+"])
+                .map(|((n, g), name)| format!("{name} {:.2} ({n})", *g as f64 / (*n).max(1) as f64))
+                .collect::<Vec<_>>();
+            println!("  goal-side at the strike by shot distance: {}", bands.join("  ·  "));
             println!(
                 "  at the strike: {} shots — opposition outfielders goal-side of the ball \
                  {:.2}/shot, of those within 30u of the ball's line to goal {:.2}/shot   \
@@ -9422,29 +12244,6 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     (total - bands[0]) as f64 / total as f64 * 100.0,
                 );
             }
-            const DEF_STATE_NAMES: [&str; 21] = [
-                "Standing",
-                "Covering",
-                "PushingUp",
-                "Resting",
-                "Passing",
-                "Running",
-                "Intercepting",
-                "Marking",
-                "Clearing",
-                "Heading",
-                "Tackling",
-                "Pressing",
-                "TrackingBack",
-                "HoldingLine",
-                "Returning",
-                "Walking",
-                "TakeBall",
-                "Shooting",
-                "Guarding",
-                "AttackingCorner",
-                "Crossing",
-            ];
             let states = BlockDiag::defender_state_snapshot();
             let total: u64 = states.iter().sum();
             let mut ranked: Vec<(usize, u64)> = states
@@ -9460,7 +12259,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 .map(|(i, c)| {
                     format!(
                         "{} {:.0}%",
-                        DEF_STATE_NAMES[*i],
+                        DefenderState::from_slot(*i)
+                            .map_or_else(|| format!("state#{i}"), |s| s.to_string()),
                         *c as f32 / total.max(1) as f32 * 100.0
                     )
                 })
@@ -9794,12 +12594,26 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 per(w[7]),
             );
             println!(
-                "  …of them from inside the box's width (a byline ball) {:.1}%; mean distance from the goal line {:.1} m",
+                "  …of them struck from inside the box's width {:.1}%; mean distance from the goal line {:.1} m",
                 w[8] as f64 * 100.0 / deliveries.max(1) as f64,
                 (w[9] as f64 / deliveries.max(1) as f64) * 0.125,
             );
             println!(
+                "  …struck within 6 m of the goal line {:.1}%",
+                w[10] as f64 * 100.0 / deliveries.max(1) as f64,
+            );
+            println!(
+                "  …a byline ball (inside the box's width or within 6 m of the goal line) {:.1}%   (band 15-35%)",
+                w[11] as f64 * 100.0 / deliveries.max(1) as f64,
+            );
+            println!(
                 "  real reference: a Premier League team crosses 16-18 times a match, of which ~25% are cut back or struck from inside the width of the box"
+            );
+            println!(
+                "  runners at the near post and the edge while the ball is at the byline inside the box ({:.0} ticks/match): near post {:.0}%, edge {:.0}%",
+                per(w[12]),
+                w[13] as f64 * 100.0 / w[12].max(1) as f64,
+                w[14] as f64 * 100.0 / w[12].max(1) as f64,
             );
         }
     }
@@ -9836,37 +12650,16 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         }
     }
 
-    // ── KEEPER SWEEP FUNNEL ────────────────────────────────────────────
+    // ── KEEPER SWEEP EXITS ─────────────────────────────────────────────
     {
         use core::mid_run_diag::KeeperSweepDiag;
-        let s = KeeperSweepDiag::snapshot();
-        if s[0] > 0 {
+        let e = KeeperSweepDiag::exits();
+        if e.iter().sum::<u64>() > 0 {
             println!();
             println!(
-                "--- KEEPER SWEEP FUNNEL --- {:.0} come-out questions/match → carrier exists \
-                 {:.0} → inside scan {:.0} → nobody covering him {:.0} → COMMITTED {:.1}",
-                s[0] as f64 / n_matches as f64,
-                s[1] as f64 / n_matches as f64,
-                s[2] as f64 / n_matches as f64,
-                s[4] as f64 / n_matches as f64,
-                s[3] as f64 / n_matches as f64
-            );
-            let e = KeeperSweepDiag::exits();
-            println!(
-                "    sweep abandoned by: got-the-ball {} beyond-pursuit {} \
-                 ball-crossed-halfway {}",
-                e[0], e[5], e[6]
-            );
-            println!(
-                "                        TOO-FAR-FROM-SLOT {} opponent-too-close {} \
-                 carrier-going-away {} shot-in-flight {}",
-                e[8], e[7], e[9], e[10]
-            );
-            println!(
-                "    save REACTION set: diving {:.1}/match  catching {:.1}  blocked {:.1}",
-                e[1] as f64 / n_matches as f64,
-                e[3] as f64 / n_matches as f64,
-                e[4] as f64 / n_matches as f64
+                "--- KEEPER SWEEP EXITS --- dived {} beyond-pursuit {} ball-crossed-halfway {} \
+                 somebody-has-it {} outside-his-territory {}",
+                e[2], e[5], e[6], e[7], e[8]
             );
         }
     }
@@ -10063,27 +12856,9 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     g[13] as f64 * 100.0 / g[10].max(1) as f64
                 );
                 let by_state = KeeperGatherDiag::state_snapshot();
-                let names: [(usize, &str); 17] = [
-                    (0, "Standing"),
-                    (2, "Jumping"),
-                    (3, "Diving"),
-                    (4, "Catching"),
-                    (5, "Punching"),
-                    (6, "Kicking"),
-                    (7, "Clearing"),
-                    (8, "HoldingBall"),
-                    (9, "Throwing"),
-                    (10, "PickingUpBall"),
-                    (11, "Distributing"),
-                    (12, "ComingOut"),
-                    (13, "Passing"),
-                    (14, "ReturningToGoal"),
-                    (17, "PreparingForSave"),
-                    (18, "Walking"),
-                    (19, "TakeBall"),
-                ];
                 println!("  by the state he was in when the ball was handed to him:");
-                for (id, name) in names {
+                for state in GoalkeeperState::ALL {
+                    let (id, name) = (state as usize, state.to_string());
                     let count = by_state[id * 2];
                     if count == 0 {
                         continue;
@@ -10151,11 +12926,23 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             // entirely, which reads as "fine" when it is the loudest
             // possible signal — `Jumping` had no inbound transition in the
             // whole engine for months and nothing said so. Walk the state
-            // universe and name the silent ones.
+            // universe and name the silent ones. A state the decision chain
+            // passes through, as `Kicking` does when it strikes the ball on
+            // entry, holds no tick either; the transition graph tells it
+            // apart from one nothing reaches.
+            let entered: HashSet<u16> = core::r#match::TransitionGraph::edges()
+                .iter()
+                .map(|edge| edge.to.compact_id())
+                .collect();
             for state in PlayerState::all() {
                 let id = state.compact_id();
                 if (100..200).contains(&id) && !gk.iter().any(|r| r.0 == id) {
-                    println!("  {:<26} {:>10}  ** NEVER ENTERED **", state.to_string(), 0);
+                    let verdict = if entered.contains(&id) {
+                        "entered, left inside its tick"
+                    } else {
+                        "** NEVER ENTERED **"
+                    };
+                    println!("  {:<26} {:>10}  {verdict}", state.to_string(), 0);
                 }
             }
         }
@@ -10320,7 +13107,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             );
             println!(
                 "  of the first-tick ones: ball owned {:.0}%   his own delivery {:.0}%   \
-                 outside his ground {:.0}%   a shot in flight {:.0}%   reached it {:.0}%   \
+                 outside his ground {:.0}%   the read {:.0}%   reached it {:.0}%   \
                  timed out {:.0}%",
                 share(c[1]),
                 share(c[2]),
@@ -10329,6 +13116,40 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 share(c[5]),
                 share(c[6])
             );
+        }
+    }
+
+    // ── KEEPER DUEL EXITS ──────────────────────────────────────────────
+    // How a one-on-one ends, and how many end inside 300 ms of starting: a
+    // duel the carrier ends early (a strike, a pass) is football, one the
+    // keeper's own test ends is a gate disagreeing with itself.
+    {
+        use core::mid_run_diag::KeeperDuelDiag;
+        let d = KeeperDuelDiag::snapshot();
+        let total: u64 = d[..KeeperDuelDiag::QUICK].iter().sum();
+        if total > 0 {
+            let per = |v: u64| v as f64 / n_matches as f64;
+            let quick = |i: usize| d[KeeperDuelDiag::QUICK + i] as f64 * 100.0 / d[i].max(1) as f64;
+            println!();
+            println!(
+                "--- KEEPER DUEL EXITS (GoalkeeperOneOnOneState: {:.1}/match) ---",
+                per(total)
+            );
+            for (i, label) in [
+                "the read took him (strike, smother, ball his)",
+                "the man off the ball (pass, tackle)",
+                "a defender in his path",
+                "the man turned away",
+            ]
+            .iter()
+            .enumerate()
+            {
+                println!(
+                    "  {label:<46} {:>6.1}/match   inside 300 ms {:>3.0}%",
+                    per(d[i]),
+                    quick(i)
+                );
+            }
         }
     }
 
@@ -10446,12 +13267,12 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 for to in 0..n {
                     let count = p[from * n + to];
                     if count > 0 {
-                        rows.push((count, p[400 + from * n + to], from, to));
+                        rows.push((count, p[KeeperPairDiag::PAIRS + from * n + to], from, to));
                     }
                 }
             }
             rows.sort_by_key(|r| Reverse(r.0));
-            let quick: u64 = p[400..400 + n * n].iter().sum();
+            let quick: u64 = p[KeeperPairDiag::PAIRS..].iter().sum();
             println!();
             println!(
                 "--- KEEPER TWO-CYCLE CENSUS ({:.0} transitions/keeper/match, {:.0}% inside 300 ms) ---",
@@ -10605,7 +13426,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     .map(|(slot, n)| {
                         format!(
                             "{} {:.0}%",
-                            GoalKickCensus::slot_name(*slot),
+                            KeeperCensus::slot_name(*slot),
                             *n as f64 * 100.0 / total
                         )
                     })
@@ -10894,6 +13715,11 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             }
         }
     }
+
+    KeeperCensusReport::print(n_matches);
+    DefenderCensusReport::print(n_matches);
+    MidfielderCensusReport::print(n_matches);
+    ForwardCensusReport::print(n_matches);
 
     // ── KEEPER BODY ────────────────────────────────────────────────────
     // How often the ball hits the man rather than passing through him.
@@ -11482,6 +14308,19 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 "--- TOUCHLINE CENSUS --- {:.1} throw-ins/match   (real ~40-50)",
                 per(r[0])
             );
+            {
+                use core::mid_run_diag::TouchlineCallDiag;
+                let t = TouchlineCallDiag::snapshot();
+                println!(
+                    "  touchline call, on-ball ticks/match: pinned {:.1}, pressed within a \
+                     stride {:.1}, past his tolerance {:.1}, with an out {:.1}, put out {:.2}",
+                    per(t[TouchlineCallDiag::PINNED]),
+                    per(t[TouchlineCallDiag::PRESSED]),
+                    per(t[TouchlineCallDiag::PAST_TOLERANCE]),
+                    per(t[TouchlineCallDiag::WITH_AN_OUT]),
+                    per(t[TouchlineCallDiag::PUT_OUT]),
+                );
+            }
             println!(
                 "  awarded on a DISPUTED last touch (toucher and owner on opposite sides): \
                  {} ({:.0}%)   must be ~0 — either answer is a coin flip",
@@ -11489,7 +14328,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 r[1] as f64 * 100.0 / r[0] as f64
             );
             println!(
-                "  the ball straight back out within {} ticks: {:.1}/match ({:.0}%)",
+                "  awarded within {} ticks of the previous throw-in: {:.1}/match ({:.0}%)",
                 RestartCensus::PING_PONG_TICKS,
                 per(r[2]),
                 r[2] as f64 * 100.0 / r[0] as f64
@@ -12033,8 +14872,12 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             );
         }
 
+        DeliveryCensusReport::print(&calibration.tally.delivery, n_matches);
+
         println!();
         calibration.print_report();
+        let refs: Vec<&core::r#match::MatchResultRaw> = outcomes.iter().map(|o| &o.result).collect();
+        TeamCensusReport::print(&calibration.tally.team_census, &refs);
     }
 
     // ── SPACING CENSUS ─────────────────────────────────────────────────
@@ -12682,6 +15525,19 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                             won as f64 / n as f64 * 100.0,
                         );
                     }
+                    let zones = LaneDiag::by_zone();
+                    let near: u64 = zones.iter().map(|z| z.1).sum();
+                    println!(
+                        "    a man within 0.5 m from the strike on ({near} passes, {:.1}%), where he stood:",
+                        near as f64 / total as f64 * 100.0
+                    );
+                    for (label, n, won) in zones {
+                        println!(
+                            "      {label:<26} {n:>7} ({:>4.1}%)  →  won by an opponent {:>5.1}%",
+                            n as f64 / near.max(1) as f64 * 100.0,
+                            won as f64 / n.max(1) as f64 * 100.0,
+                        );
+                    }
                     println!("    by what the PASSER priced the lane at when he struck it:");
                     for (label, n, won, mean) in LaneDiag::by_prediction() {
                         if n == 0 {
@@ -13179,12 +16035,13 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         let staged = s::PENDING_STAGED.load(Relaxed);
         let no_shooter = s::PENDING_NO_SHOOTER.load(Relaxed);
         let delivered = s::PENDING_DELIVERED.load(Relaxed);
+        let off_frame = s::PENDING_OFF_FRAME.load(Relaxed);
         let no_player = s::PENDING_LOST_NO_PLAYER.load(Relaxed);
         let same_team = s::PENDING_LOST_SAME_TEAM.load(Relaxed);
-        let vanished = staged.saturating_sub(delivered + no_player + same_team);
+        let vanished = staged.saturating_sub(delivered + off_frame + no_player + same_team);
         println!(
-            "  physics-save credit: staged {}, DELIVERED {} ({:.1}%)   lost: \
-             no-shooter-to-pair {}, id not on field {}, same team {}, \
+            "  physics-save credit: staged {}, DELIVERED {} ({:.1}%), off frame (no save) {}   \
+             lost: no-shooter-to-pair {}, id not on field {}, same team {}, \
              VANISHED BEFORE DELIVERY {}",
             staged,
             delivered,
@@ -13193,6 +16050,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             } else {
                 0.0
             },
+            off_frame,
             no_shooter,
             no_player,
             same_team,
@@ -13923,16 +16781,12 @@ fn run_forward_paths(minutes: u64, level: u8) {
     let ids = data.get_player_ids();
     let last = data.max_timestamp().min(window_ms);
 
-    // The two forward slots of the starting XI. `POSITIONS_442` puts
-    // them at indices 9 and 10, so their ids are base+9 and base+10.
-    //
-    // NOT `id % 100 >= 9`, which is what `paths` uses to bucket by line:
-    // the bench is generated after the XI, so ids ending 11 and up came
-    // back as forwards too — and they are parked off-pitch, which showed
-    // up as four "forwards" covering 0.00 km and standing still 100% of
-    // the time. Substitutes are therefore out of scope here; over a
-    // five-minute window nobody has come on yet.
-    let is_forward = |id: u32| matches!(id % 100, 9 | 10);
+    // The forward slots of the starting XI only. The bench is generated
+    // after the XI, so ids ending 11 and up read as forwards too — and
+    // they are parked off-pitch, which showed up as "forwards" covering
+    // 0.00 km and standing still 100% of the time. Substitutes are out of
+    // scope here; over a five-minute window nobody has come on yet.
+    let is_forward = |id: u32| id % 100 < 11 && HarnessTactic::group_of(id) == 3;
     let forwards: Vec<u32> = ids.iter().copied().filter(|id| is_forward(*id)).collect();
     if forwards.is_empty() {
         println!("  no forwards on the team sheet");
@@ -14205,14 +17059,7 @@ fn run_paths(matches: usize, level: u8) {
     }
 
     // 0 GK, 1 DEF, 2 MID, 3 FWD
-    let line_of = |id: u32| -> usize {
-        match id % 100 {
-            0 => 0,
-            1..=4 => 1,
-            5..=8 => 2,
-            _ => 3,
-        }
-    };
+    let line_of = |id: u32| -> usize { HarnessTactic::group_of(id) as usize };
 
     let mut lines: [LineStats; 4] = Default::default();
     let mut team_length = 0.0_f64;
@@ -16595,5 +19442,51 @@ impl HeatCensusRun {
             Ok(()) => println!("\n  grids written to {}", path),
             Err(e) => eprintln!("  could not write {}: {}", path, e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::r#match::Adherence;
+
+    /// The adherence references are the mean reading of the eleven the
+    /// level-14 batches field: fresh, in their roles, a settled side,
+    /// neutral buy-in.
+    #[test]
+    fn the_level_14_population_reads_one_on_average() {
+        let players: Vec<MatchPlayer> = (1..=200)
+            .flat_map(|team| make_squad_simple(team, 14).main_squad)
+            .collect();
+        let n = players.len() as f32;
+        let (place, press, raw_place, raw_press) = players.iter().fold(
+            (0.0f32, 0.0f32, 0.0f32, 0.0f32),
+            |(a, b, c, d), p| {
+                let reading = Adherence::of(p, 1.0);
+                let (rp, rr) = Adherence::raw(p, 1.0);
+                (a + reading.place, b + reading.press, c + rp, d + rr)
+            },
+        );
+        let (place, press) = (place / n, press / n);
+        let raw = (raw_place / n, raw_press / n);
+        assert!((place - 1.0).abs() < 0.01, "place {place}, raw means {raw:?}");
+        assert!((press - 1.0).abs() < 0.01, "press {press}, raw means {raw:?}");
+    }
+
+    #[test]
+    fn each_level_14_eleven_reads_unevenly() {
+        let narrowest = (1..=200)
+            .map(|team| {
+                let readings: Vec<f32> = make_squad_simple(team, 14)
+                    .main_squad
+                    .iter()
+                    .map(|p| Adherence::of(p, 1.0).place)
+                    .collect();
+                let high = readings.iter().copied().fold(f32::MIN, f32::max);
+                let low = readings.iter().copied().fold(f32::MAX, f32::min);
+                high - low
+            })
+            .fold(f32::MAX, f32::min);
+        assert!(narrowest > 0.03, "an eleven spreads only {narrowest}");
     }
 }

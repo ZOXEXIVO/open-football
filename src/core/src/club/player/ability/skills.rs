@@ -43,6 +43,8 @@ pub enum GoalkeeperSpeedContext {
     Positioning,
     /// Walking, holding, distributing — minimal
     Casual,
+    /// On the ground after going down: a scramble, never faster than 1.5 m/s.
+    Grounded,
 }
 
 impl PlayerSkills {
@@ -308,10 +310,17 @@ impl PlayerSkills {
             GoalkeeperSpeedContext::Active => 0.85 + agility * 0.4 + acceleration * 0.25,
             GoalkeeperSpeedContext::Positioning => 0.75 + agility * 0.25,
             GoalkeeperSpeedContext::Casual => 0.65,
+            GoalkeeperSpeedContext::Grounded => {
+                return (base * 0.25).min(Self::GROUNDED_SCRAMBLE);
+            }
         };
 
         base * boost
     }
+
+    /// 1.5 m/s, in units per engine tick: a man on the floor drags himself,
+    /// he does not travel.
+    pub const GROUNDED_SCRAMBLE: f32 = 0.12;
 }
 
 #[derive(Debug, Copy, Clone, Default, serde::Serialize, serde::Deserialize)]

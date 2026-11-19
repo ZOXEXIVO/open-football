@@ -1,8 +1,8 @@
-use crate::club::staff::{CoachMatchSnapshot, CoachProfile, CoachStrategy};
+use crate::club::staff::{CoachMatchSnapshot, CoachPlayerBond, CoachProfile, CoachStrategy};
 use crate::club::team::MatchdayLeadership;
 use crate::r#match::squad::{CoachStrategyForSelection, PlayerSelectionResult};
-use crate::r#match::{MatchPlayer, MatchSquad, SelectionContext, SquadSelector};
-use crate::{Player, Staff, Tactics, TacticsSelector, Team};
+use crate::r#match::{CoachCard, MatchPlayer, MatchSquad, SelectionContext, SquadSelector};
+use crate::{FormationFamiliarity, MatchTacticType, Player, Staff, Tactics, TacticsSelector, Team};
 use chrono::NaiveDate;
 use rustc_hash::FxHashMap;
 use std::cmp::Ordering;
@@ -15,7 +15,7 @@ impl Team {
     pub fn get_rotation_match_squad_at(&self, date: NaiveDate) -> MatchSquad {
         let head_coach = self.staffs.head_coach();
 
-        let squad_result = SquadSelector::select_for_rotation(self, head_coach);
+        let mut squad_result = SquadSelector::select_for_rotation(self, head_coach);
 
         let final_tactics = self
             .tactics
@@ -33,6 +33,9 @@ impl Team {
         );
 
         let coach_snapshot = MatchCoachSnapshot::for_rotation(head_coach, date);
+        self.stamp_buy_in(&mut squad_result, &[], head_coach, date);
+        self.stamp_partnerships(&mut squad_result);
+        let familiarity = self.familiarity(final_tactics.tactic_type, &squad_result);
         let penalty_taker_id = self.select_penalty_taker(&squad_result.main_squad);
         let free_kick_taker_id = self.select_free_kick_taker(&squad_result.main_squad);
 
@@ -49,6 +52,8 @@ impl Team {
             selection_omissions: squad_result.omissions,
             overlooked: squad_result.overlooked,
             coach_snapshot,
+            coach_card: CoachCard::of_head_coach(head_coach),
+            familiarity: Some(familiarity),
         }
     }
 
@@ -61,7 +66,7 @@ impl Team {
     ) -> MatchSquad {
         let head_coach = self.staffs.head_coach();
 
-        let squad_result =
+        let mut squad_result =
             SquadSelector::select_for_rotation_with_context(self, head_coach, reserve_players, ctx);
 
         let final_tactics = self
@@ -84,6 +89,9 @@ impl Team {
             ctx,
             self.players.iter().chain(reserve_players.iter().copied()),
         );
+        self.stamp_buy_in(&mut squad_result, reserve_players, head_coach, ctx.date);
+        self.stamp_partnerships(&mut squad_result);
+        let familiarity = self.familiarity(final_tactics.tactic_type, &squad_result);
         let penalty_taker_id = self.select_penalty_taker(&squad_result.main_squad);
         let free_kick_taker_id = self.select_free_kick_taker(&squad_result.main_squad);
 
@@ -100,6 +108,8 @@ impl Team {
             selection_omissions: squad_result.omissions,
             overlooked: squad_result.overlooked,
             coach_snapshot,
+            coach_card: CoachCard::of_head_coach(head_coach),
+            familiarity: Some(familiarity),
         }
     }
 
@@ -112,22 +122,16 @@ impl Team {
     ) -> MatchSquad {
         let head_coach = self.staffs.head_coach();
 
-        // Pick the match tactic before selecting players. Otherwise the XI
-        // can be built for the default shape and then validated against a
-        // late opponent-aware counter shape.
-        let head_coach_tac = head_coach.staff_attributes.knowledge.tactical_knowledge;
-        let final_tactics = if let (Some(opp), true) = (ctx.opponent_tactic, head_coach_tac >= 14) {
-            let roster: Vec<&Player> = self.players.players();
-            TacticsSelector::select_counter_tactic(&opp, &roster)
-        } else {
-            self.tactics
-                .as_ref()
-                .cloned()
-                .unwrap_or_else(|| TacticsSelector::select(self, head_coach))
-        };
+        // The match is played in the side's own system; the plan answers
+        // the opponent.
+        let final_tactics = self
+            .tactics
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| TacticsSelector::select(self, head_coach));
 
         // Use squad selection with reserve pool for the final match tactic.
-        let squad_result = SquadSelector::select_with_tactics_context(
+        let mut squad_result = SquadSelector::select_with_tactics_context(
             self,
             head_coach,
             reserve_players,
@@ -150,6 +154,9 @@ impl Team {
             ctx,
             self.players.iter().chain(reserve_players.iter().copied()),
         );
+        self.stamp_buy_in(&mut squad_result, reserve_players, head_coach, ctx.date);
+        self.stamp_partnerships(&mut squad_result);
+        let familiarity = self.familiarity(final_tactics.tactic_type, &squad_result);
         let penalty_taker_id = self.select_penalty_taker(&squad_result.main_squad);
         let free_kick_taker_id = self.select_free_kick_taker(&squad_result.main_squad);
 
@@ -166,7 +173,54 @@ impl Team {
             selection_omissions: squad_result.omissions,
             overlooked: squad_result.overlooked,
             coach_snapshot,
+            coach_card: CoachCard::of_head_coach(head_coach),
+            familiarity: Some(familiarity),
         }
+    }
+
+    /// How much each man the selector named believes in `coach`'s plan.
+    fn stamp_buy_in(
+        &self,
+        squad: &mut PlayerSelectionResult,
+        reserves: &[&Player],
+        coach: &Staff,
+        date: NaiveDate,
+    ) {
+        for picked in squad
+            .main_squad
+            .iter_mut()
+            .chain(squad.substitutes.iter_mut())
+        {
+            let player = self
+                .players
+                .find(picked.id)
+                .or_else(|| reserves.iter().copied().find(|p| p.id == picked.id));
+            if let Some(player) = player {
+                picked.buy_in = CoachPlayerBond::build(player, coach, date).tactical_buy_in;
+            }
+        }
+    }
+
+    /// The team-mates each man named has started alongside, from the
+    /// side's record.
+    fn stamp_partnerships(&self, squad: &mut PlayerSelectionResult) {
+        for picked in squad
+            .main_squad
+            .iter_mut()
+            .chain(squad.substitutes.iter_mut())
+        {
+            picked.started_with = self.match_history.started_with(picked.id);
+        }
+    }
+
+    /// The side's familiarity with each formation, for the eleven named.
+    fn familiarity(
+        &self,
+        shape: MatchTacticType,
+        squad: &PlayerSelectionResult,
+    ) -> FormationFamiliarity {
+        let eleven: Vec<u32> = squad.main_squad.iter().map(|p| p.id).collect();
+        self.match_history.formation_familiarity(shape, &eleven)
     }
 
     fn validate_squad_selection(&self, squad_result: &PlayerSelectionResult, tactics: &Tactics) {
@@ -314,5 +368,157 @@ impl MatchCoachSnapshot {
             })
             .collect();
         Some(snapshot)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::team::TeamType;
+    use crate::r#match::{CoachCard, SelectionContext};
+    use crate::shared::fullname::FullName;
+    use crate::{MatchTacticType, Tactics, TacticsSelector};
+    use crate::{
+        PersonAttributes, Player, PlayerAttributes, PlayerCollection, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills, StaffClubContract, StaffCollection,
+        StaffPosition, StaffStatus, StaffStub, Team, TeamBuilder, TeamReputation, TrainingSchedule,
+    };
+    use chrono::{NaiveDate, NaiveTime};
+
+    fn player(id: u32, position: PlayerPositionType) -> Player {
+        PlayerBuilder::new()
+            .id(id)
+            .full_name(FullName::new("T".into(), id.to_string()))
+            .birth_date(NaiveDate::from_ymd_opt(1998, 1, 1).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position,
+                    level: 18,
+                }],
+            })
+            .player_attributes(PlayerAttributes::default())
+            .build()
+            .unwrap()
+    }
+
+    fn team(staff: Vec<crate::Staff>) -> Team {
+        use PlayerPositionType::*;
+        let positions = [
+            Goalkeeper,
+            Goalkeeper,
+            DefenderLeft,
+            DefenderCenterLeft,
+            DefenderCenterRight,
+            DefenderRight,
+            DefenderCenter,
+            MidfielderLeft,
+            MidfielderCenterLeft,
+            MidfielderCenterRight,
+            MidfielderRight,
+            MidfielderCenter,
+            ForwardLeft,
+            ForwardRight,
+            Striker,
+            Striker,
+        ];
+        let players = positions
+            .iter()
+            .enumerate()
+            .map(|(i, &pos)| player(i as u32 + 1, pos))
+            .collect();
+        TeamBuilder::new()
+            .id(1)
+            .league_id(Some(1))
+            .club_id(1)
+            .name("Main".to_string())
+            .slug("main".to_string())
+            .team_type(TeamType::Main)
+            .players(PlayerCollection::new(players))
+            .staffs(StaffCollection::new(staff))
+            .reputation(TeamReputation::new(100, 100, 200))
+            .training_schedule(TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            ))
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_club_squad_carries_its_head_coachs_card() {
+        let mut manager = StaffStub::build();
+        manager.id = 77;
+        manager.staff_attributes.mental.adaptability = 17;
+        manager.contract = Some(StaffClubContract::new(
+            50_000,
+            NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
+            StaffPosition::Manager,
+            StaffStatus::Active,
+        ));
+        let expected = CoachCard::of_head_coach(&manager);
+        assert!(expected.is_some());
+        let date = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+        let squad = team(vec![manager]).get_rotation_match_squad_at(date);
+        assert_eq!(squad.coach_card, expected);
+
+        let squad = team(Vec::new()).get_rotation_match_squad_at(date);
+        assert_eq!(
+            squad.coach_card, None,
+            "an empty dugout leaves the match to draw"
+        );
+    }
+
+    fn manager(tactical_knowledge: u8) -> crate::Staff {
+        let mut manager = StaffStub::build();
+        manager.id = 77;
+        manager.staff_attributes.knowledge.tactical_knowledge = tactical_knowledge;
+        manager.contract = Some(StaffClubContract::new(
+            50_000,
+            NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
+            StaffPosition::Manager,
+            StaffStatus::Active,
+        ));
+        manager
+    }
+
+    #[test]
+    fn a_new_coach_and_a_closed_window_choose_the_system_again() {
+        let mut side = team(vec![manager(12)]);
+        let chosen = TacticsSelector::select(&side, side.staffs.head_coach()).tactic_type;
+        let other = MatchTacticType::all()
+            .into_iter()
+            .find(|&t| t != chosen)
+            .unwrap();
+
+        side.tactics = Some(Tactics::new(other));
+        side.on_head_coach_appointed();
+        assert_eq!(side.tactics.as_ref().map(|t| t.tactic_type), Some(chosen));
+
+        side.tactics = Some(Tactics::new(other));
+        side.on_window_closed();
+        assert_eq!(side.tactics.as_ref().map(|t| t.tactic_type), Some(chosen));
+    }
+
+    #[test]
+    fn a_side_starts_in_its_own_system_whatever_its_coach_knows_and_keeps_it() {
+        for knowledge in [13, 14] {
+            let mut side = team(vec![manager(knowledge)]);
+            side.tactics = Some(Tactics::new(MatchTacticType::T442));
+            for _ in 0..2 {
+                let squad = side.get_enhanced_match_squad(&[], &SelectionContext::default());
+                assert_eq!(
+                    squad.tactics.tactic_type,
+                    MatchTacticType::T442,
+                    "knowledge {knowledge}"
+                );
+            }
+            assert_eq!(
+                side.tactics.as_ref().map(|t| t.tactic_type),
+                Some(MatchTacticType::T442)
+            );
+        }
     }
 }

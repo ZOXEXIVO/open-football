@@ -1,3 +1,4 @@
+use crate::FormationFamiliarity;
 use crate::MatchTacticType;
 use crate::PlayerPositionType;
 use crate::r#match::TeamScore;
@@ -52,6 +53,67 @@ impl MatchHistory {
 
     pub fn items(&self) -> &[MatchHistoryItem] {
         &self.items
+    }
+
+    /// How many of the side's latest matches its familiarity and its
+    /// partnerships are read from.
+    const RECORD: usize = 10;
+
+    /// How familiar the side is with each formation. Each of its last ten
+    /// matches counts as a start in the shape it kicked off in, worth more
+    /// the more of `eleven` started it with. What the record does not say —
+    /// a match not yet played, a shape or an eleven not recorded — counts as
+    /// a start in `current` with this eleven, so a side with no record is
+    /// settled in the shape it plays.
+    pub fn formation_familiarity(
+        &self,
+        current: MatchTacticType,
+        eleven: &[u32],
+    ) -> FormationFamiliarity {
+        // A start rehearses the shape even with none of today's eleven in it.
+        const SHAPE_ALONE: f32 = 0.4;
+        let recent: Vec<&MatchHistoryItem> = self.items.iter().rev().take(Self::RECORD).collect();
+        let played = recent.iter().map(|item| {
+            let together = if item.starting_eleven.is_empty() || eleven.is_empty() {
+                1.0
+            } else {
+                eleven
+                    .iter()
+                    .filter(|id| item.starting_eleven.iter().any(|(p, _)| p == *id))
+                    .count() as f32
+                    / eleven.len() as f32
+            };
+            (
+                item.tactic_started.unwrap_or(current),
+                SHAPE_ALONE + (1.0 - SHAPE_ALONE) * together,
+            )
+        });
+        let unplayed = std::iter::repeat_n((current, 1.0), Self::RECORD - recent.len());
+        FormationFamiliarity::from_starts(played.chain(unplayed), Self::RECORD)
+    }
+
+    /// The team-mates `player_id` started alongside in the side's last ten
+    /// matches; `None` when the record holds no starting elevens to read.
+    pub fn started_with(&self, player_id: u32) -> Option<Vec<u32>> {
+        let recent: Vec<&MatchHistoryItem> = self
+            .items
+            .iter()
+            .rev()
+            .take(Self::RECORD)
+            .filter(|item| !item.starting_eleven.is_empty())
+            .collect();
+        if recent.is_empty() {
+            return None;
+        }
+        let mut team_mates: Vec<u32> = recent
+            .iter()
+            .filter(|item| item.starting_eleven.iter().any(|(id, _)| *id == player_id))
+            .flat_map(|item| item.starting_eleven.iter().map(|(id, _)| *id))
+            .filter(|&id| id != player_id)
+            .collect();
+        team_mates.sort_unstable();
+        team_mates.dedup();
+        Some(team_mates)
     }
 
     /// Wins / draws / losses in the most recent `n` matches. `score.0` is
@@ -164,15 +226,12 @@ pub struct MatchHistoryItem {
     /// when the in-match coach changed shape mid-match.
     pub tactic_started: Option<MatchTacticType>,
     /// The shape this team actually finished the match in. May differ
-    /// from the starting plan when the in-match coach switched to a
-    /// chase / protect / counter shape via
-    /// `evaluate_situational_shape`. Lets the web tactics view show
-    /// the planned formation alongside what the manager really used.
+    /// from the starting plan when its coach changed formation during
+    /// the match. Lets the web tactics view show the planned formation
+    /// alongside what the manager really used.
     pub tactic_used: Option<MatchTacticType>,
-    /// Sim-minute at which the FIRST shape change fired (for either
-    /// side — the engine records a single minute per match). `None`
-    /// when neither side changed shape, which is the common case for
-    /// stable scorelines.
+    /// The minute this team first changed formation. `None` when it
+    /// kept its shape.
     pub tactic_change_minute: Option<u8>,
     /// The starting XI this team fielded at kickoff, each player
     /// paired with the tactical slot they were deployed in. Lets the
@@ -451,5 +510,68 @@ mod tests {
         assert!(played.took_the_field(12));
         // Named on the bench, never brought on.
         assert!(!played.took_the_field(13));
+    }
+
+    fn started(shape: MatchTacticType, eleven: &[u32]) -> MatchHistoryItem {
+        item(1, 1)
+            .with_tactic_summary(Some(shape), Some(shape), None)
+            .with_starting_eleven(
+                eleven
+                    .iter()
+                    .map(|&id| (id, PlayerPositionType::MidfielderCenter))
+                    .collect(),
+            )
+    }
+
+    #[test]
+    fn a_settled_side_knows_its_shape_better_than_one_that_switched_this_week() {
+        let eleven: Vec<u32> = (1..=11).collect();
+        let mut settled = MatchHistory::new();
+        let mut switched = MatchHistory::new();
+        for _ in 0..10 {
+            settled.add(started(MatchTacticType::T442, &eleven));
+            switched.add(started(MatchTacticType::T433, &eleven));
+        }
+        let settled = settled.formation_familiarity(MatchTacticType::T442, &eleven);
+        let switched = switched.formation_familiarity(MatchTacticType::T442, &eleven);
+        assert_eq!(settled.of(MatchTacticType::T442), 1.0);
+        assert_eq!(switched.of(MatchTacticType::T442), 0.0);
+        assert_eq!(switched.of(MatchTacticType::T433), 1.0);
+    }
+
+    #[test]
+    fn a_shape_learned_with_other_players_counts_for_less() {
+        let eleven: Vec<u32> = (1..=11).collect();
+        let others: Vec<u32> = (21..=31).collect();
+        let mut same = MatchHistory::new();
+        let mut rotated = MatchHistory::new();
+        for _ in 0..10 {
+            same.add(started(MatchTacticType::T442, &eleven));
+            rotated.add(started(MatchTacticType::T442, &others));
+        }
+        let same = same.formation_familiarity(MatchTacticType::T442, &eleven);
+        let rotated = rotated.formation_familiarity(MatchTacticType::T442, &eleven);
+        assert!(rotated.of(MatchTacticType::T442) < same.of(MatchTacticType::T442));
+        assert!(rotated.of(MatchTacticType::T442) > 0.0);
+    }
+
+    #[test]
+    fn a_player_has_started_with_the_men_he_lined_up_beside_and_a_signing_with_nobody() {
+        let mut history = MatchHistory::new();
+        history.add(started(MatchTacticType::T442, &[1, 2, 3]));
+        history.add(started(MatchTacticType::T442, &[1, 4]));
+        assert_eq!(history.started_with(1), Some(vec![2, 3, 4]));
+        assert_eq!(history.started_with(4), Some(vec![1]));
+        assert_eq!(history.started_with(99), Some(Vec::new()));
+        assert_eq!(MatchHistory::new().started_with(1), None);
+    }
+
+    #[test]
+    fn a_side_with_no_record_is_settled_in_the_shape_it_plays() {
+        let familiarity = MatchHistory::new().formation_familiarity(MatchTacticType::T352, &[]);
+        assert_eq!(
+            familiarity,
+            FormationFamiliarity::settled(MatchTacticType::T352)
+        );
     }
 }

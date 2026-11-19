@@ -1,10 +1,7 @@
 use crate::club::finance::RevenueModel;
 use crate::club::staff::perception::DevelopmentFormEvidence;
 use crate::context::GlobalContext;
-use crate::league::{
-    League, LeagueDynamics, LeagueMatch, LeagueMatchResultResult, LeagueTable, Schedule,
-};
-use crate::r#match::MatchSquad;
+use crate::league::{League, LeagueMatch, LeagueMatchResultResult, LeagueTable, Schedule};
 use crate::r#match::squad::selection::helpers::PlayerAvailability;
 use crate::r#match::squad::selection::model::MatchSelectionGameModel;
 use crate::r#match::{
@@ -92,8 +89,7 @@ impl League {
     /// Pure read of league state — leaves `self.dynamics` untouched, so
     /// many leagues can be built up front and dispatched as one batch
     /// later. `apply_matchday_results` is the matching half: it takes
-    /// the played results back, stamps them onto `scheduled_matches`
-    /// and updates the per-team momentum.
+    /// the played results back and stamps them onto `scheduled_matches`.
     pub(in crate::league) fn build_matchday_matches(
         &self,
         scheduled_matches: &[LeagueMatch],
@@ -131,7 +127,6 @@ impl League {
                     clubs,
                     &lookup,
                     ctx,
-                    &self.dynamics,
                     &self.table,
                     friendly,
                     knockout,
@@ -144,9 +139,8 @@ impl League {
     }
 
     /// Stamp played results back onto `scheduled_matches` (paired by
-    /// index with the order returned from `build_matchday_matches`) and
-    /// bump each team's momentum. Run after the engine — local or
-    /// distributed — has returned the matches.
+    /// index with the order returned from `build_matchday_matches`). Run
+    /// after the engine — local or distributed — has returned the matches.
     pub(in crate::league) fn apply_matchday_results(
         &mut self,
         scheduled_matches: &mut [LeagueMatch],
@@ -154,13 +148,6 @@ impl League {
     ) {
         for (scheduled_match, result) in scheduled_matches.iter_mut().zip(match_results.iter()) {
             scheduled_match.result = Some(LeagueMatchResultResult::from_score(&result.score));
-        }
-        for result in match_results {
-            self.dynamics.update_team_momentum_after_match(
-                result.home_team_id,
-                result.away_team_id,
-                result,
-            );
         }
     }
 
@@ -200,7 +187,6 @@ impl League {
         clubs: &[Club],
         lookup: &MatchdayLookup<'_>,
         ctx: &GlobalContext<'_>,
-        dynamics: &LeagueDynamics,
         table: &LeagueTable,
         friendly: bool,
         knockout: bool,
@@ -215,17 +201,6 @@ impl League {
         let away_team = lookup
             .team(scheduled_match.away_team_id)
             .expect("Away team not found");
-
-        let home_momentum = dynamics.get_team_momentum(scheduled_match.home_team_id);
-        let away_momentum = dynamics.get_team_momentum(scheduled_match.away_team_id);
-
-        let (home_pressure, away_pressure) = Self::calculate_match_pressures_static(
-            home_team,
-            away_team,
-            ctx.simulation.date.date(),
-            dynamics,
-            table,
-        );
 
         // Match importance for squad selection decisions. A league game
         // reads the table; continental ties build their own context and
@@ -327,12 +302,6 @@ impl League {
         let away_philosophy: Option<ClubPhilosophy> =
             lookup.club(away_team.club_id).map(|c| c.philosophy);
 
-        // Surface each side's baseline tactic to the other so a sharp
-        // coach can pick a counter. If the team hasn't locked in tactics
-        // yet, the enhanced squad builder will fall back to its default.
-        let home_baseline = home_team.tactics.as_ref().map(|t| t.tactic_type);
-        let away_baseline = away_team.tactics.as_ref().map(|t| t.tactic_type);
-
         // Exact season length per side for the development minutes plan —
         // the busiest-player fallback under-reads in a rotated squad.
         let played_in_table = |team_id: u32| -> Option<f32> {
@@ -363,7 +332,6 @@ impl League {
             date,
             match_importance: home_importance,
             philosophy: home_philosophy,
-            opponent_tactic: away_baseline,
             competition: home_competition,
             game_model: None,
             development_guest_ids: Vec::new(),
@@ -375,7 +343,6 @@ impl League {
             date,
             match_importance: away_importance,
             philosophy: away_philosophy,
-            opponent_tactic: home_baseline,
             competition: away_competition,
             game_model: None,
             development_guest_ids: Vec::new(),
@@ -416,7 +383,7 @@ impl League {
             ));
         }
 
-        let (mut home_squad, mut away_squad) = if friendly {
+        let (home_squad, away_squad) = if friendly {
             let mut home_supplements = Self::collect_supplementary_players(
                 clubs,
                 home_team.club_id,
@@ -486,9 +453,6 @@ impl League {
                 away_team.get_enhanced_match_squad(&away_reserves, &away_ctx),
             )
         };
-
-        Self::apply_psychological_factors_static(&mut home_squad, home_momentum, home_pressure);
-        Self::apply_psychological_factors_static(&mut away_squad, away_momentum, away_pressure);
 
         let competition = if friendly {
             CompetitionKind::Friendly
@@ -894,63 +858,6 @@ impl League {
             return false;
         }
         true
-    }
-
-    pub(in crate::league) fn calculate_match_pressures_static(
-        home_team: &Team,
-        away_team: &Team,
-        current_date: NaiveDate,
-        dynamics: &LeagueDynamics,
-        table: &LeagueTable,
-    ) -> (f32, f32) {
-        let home = Self::calculate_match_pressure_static(home_team, table, current_date, dynamics);
-        let away = Self::calculate_match_pressure_static(away_team, table, current_date, dynamics);
-        (home, away)
-    }
-
-    fn calculate_match_pressure_static(
-        team: &Team,
-        table: &LeagueTable,
-        _current_date: NaiveDate,
-        dynamics: &LeagueDynamics,
-    ) -> f32 {
-        let total_teams = table.rows.len();
-        // Cup (knockout) leagues have no standings table — guard the
-        // position arithmetic so `total_teams - 3` can't underflow and so
-        // an empty table doesn't masquerade as "top of the league".
-        if total_teams == 0 {
-            return 0.5;
-        }
-
-        let position = table
-            .rows
-            .iter()
-            .position(|r| r.team_id == team.id)
-            .unwrap_or(0);
-
-        let mut pressure: f32 = 0.5;
-
-        if position < 3 {
-            pressure += 0.3;
-        }
-
-        if position >= total_teams.saturating_sub(3) {
-            pressure += 0.4;
-        }
-
-        let losing_streak = dynamics.get_team_losing_streak(team.id);
-        if losing_streak > 3 {
-            pressure += 0.2;
-        }
-
-        pressure.min(1.0)
-    }
-
-    fn apply_psychological_factors_static(squad: &mut MatchSquad, momentum: f32, pressure: f32) {
-        debug!(
-            "Team {} - Momentum: {:.2}, Pressure: {:.2}",
-            squad.team_name, momentum, pressure
-        );
     }
 }
 

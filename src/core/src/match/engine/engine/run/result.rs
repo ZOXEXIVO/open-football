@@ -19,6 +19,20 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         result.additional_time_ms = context.additional_time_ms;
         result.tally = context.tally.clone();
+        #[cfg(feature = "match-logs")]
+        context.keeper_census.get_mut().finish(&mut result.tally);
+        #[cfg(feature = "match-logs")]
+        context.defender_census.get_mut().finish(&mut result.tally);
+        #[cfg(feature = "match-logs")]
+        context.midfielder_census.get_mut().finish(&mut result.tally);
+        #[cfg(feature = "match-logs")]
+        context.forward_census.get_mut().finish(&mut result.tally);
+        #[cfg(feature = "match-logs")]
+        context.team_census.finish(&mut result.tally);
+        #[cfg(feature = "match-logs")]
+        {
+            result.tally.delivery = field.ball.delivery_tally.clone();
+        }
         result.weather = context.environment.weather;
         result.pitch = context.environment.pitch;
         result.penalty_shootout = context.penalty_shootout_kicks.clone();
@@ -49,8 +63,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // The engine swaps `left_team_tactics` / `right_team_tactics` on
         // every halftime swap, so at this point those fields track the
         // tactic the team currently ON the left / right is using —
-        // including any mid-match shape change applied by
-        // `evaluate_situational_shape`. Map them back to home / away
+        // including any change of formation a coach made during the
+        // match. Map them back to home / away
         // using the same team-id rule we use for player squads.
         let left_team_tac = field.left_team_tactics.tactic_type;
         let right_team_tac = field.right_team_tactics.tactic_type;
@@ -68,7 +82,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
         result.starting_home_tactic = context.starting_home_tactic;
         result.starting_away_tactic = context.starting_away_tactic;
-        result.shape_change_minute = context.first_shape_change_minute;
+        result.coach_home = context.coach_home.record.clone();
+        result.coach_away = context.coach_away.record.clone();
 
         // Copy substitution records to result
         for sub_record in &context.substitutions {

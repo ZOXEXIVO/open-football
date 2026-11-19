@@ -31,6 +31,7 @@ pub mod tick;
 // decides how far off the pitch a restart taker may go, and the two must
 // be one constant or the taker is pinned short of the ball he is fetching.
 pub use boundary::{Perimeter, RunOff, frame, net, runoff};
+pub use contest::claim::KeeperClaimCall;
 use contest::pass_block::PassBlockCommit;
 pub use contest::{
     BlockContact, PassChainEntry, PassReach, PlayerReach, PossessionSource, block, interception,
@@ -56,11 +57,13 @@ pub use restarts::{
 // the set pieces live.
 #[cfg(feature = "match-logs")]
 pub use diagnostics::{
-    arrival_diag, assist_diag, block_diag, flight_diag, frame_trace, goal_kick_diag, knock_diag,
-    lane_diag, strike_diag, teleport,
+    arrival_diag, assist_diag, block_diag, delivery_diag, flight_diag, frame_trace,
+    goal_kick_diag, knock_diag, lane_diag, strike_diag, teleport,
 };
 
+use crate::r#match::engine::ball::ball::frame::GoalFrame;
 use crate::r#match::engine::ball::ball::net::BallInNet;
+use crate::r#match::engine::goal::GoalPosition;
 use crate::r#match::engine::officiating::restart_shape::RestartStation;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::psychology::LapseFamily;
@@ -177,6 +180,23 @@ pub struct Ball {
     /// [`block_diag::StrikeOrigin`]. Diagnostic only.
     #[cfg(feature = "match-logs")]
     pub strike_origin: Option<block_diag::StrikeOrigin>,
+    /// The delivery in flight, from its strike to its end — see
+    /// [`delivery_diag`]. Diagnostic only.
+    #[cfg(feature = "match-logs")]
+    pub delivery_ledger: Option<delivery_diag::DeliveryLedger>,
+    /// `(kind, type)` of the cross struck last, held until the next strike
+    /// so a completion credited at the reception lands on its delivery.
+    #[cfg(feature = "match-logs")]
+    pub delivery_identity: Option<(usize, usize)>,
+    /// This match's deliveries and restart sources. Diagnostic only.
+    #[cfg(feature = "match-logs")]
+    pub delivery_tally: delivery_diag::DeliveryTally,
+    /// What the touch about to be recorded is, named by the site making
+    /// it; [`Ball::record_touch`] spends it. Diagnostic only.
+    #[cfg(feature = "match-logs")]
+    pub touch_kind_hint: Option<delivery_diag::TouchKind>,
+    #[cfg(feature = "match-logs")]
+    pub last_touch_kind: delivery_diag::TouchKind,
     /// The grant still waiting for the ball's next move — see
     /// [`arrival_diag`]. Diagnostic only.
     #[cfg(feature = "match-logs")]
@@ -269,9 +289,10 @@ pub struct Ball {
     /// read happens where the defender sees the pass, the contact has to
     /// happen where his body is.
     pub pass_blocked_by: Option<PassBlockCommit>,
-    /// The lofted delivery in flight has had its aerial duel — see
-    /// [`contest::aerial_duel`]. Reset when the ball is next struck.
-    pub aerial_duel_resolved: bool,
+    /// This flight's aerial contest has been decided, by the duel (see
+    /// [`contest::aerial_duel`]) or the cross contest — one of them, once.
+    /// Reset when the ball is next struck.
+    pub aerial_decided: bool,
     pub contested_claim_count: u32,
     pub unowned_ticks: u32,
     /// Snapshot captured at the moment the ball became uncontrolled — ball
@@ -379,6 +400,9 @@ pub struct Ball {
     /// corner path documents and works around with a clean-contact
     /// floor). Cleared on the next touch or when the ball settles.
     pub aerial_contest_winner: Option<u32>,
+    /// The contest's decision on the claim of the keeper that reservation
+    /// is for, carried out when the ball reaches him and lapsing with it.
+    pub keeper_claim: Option<KeeperClaimCall>,
     /// A decided aerial contest whose ball is still on its way to the
     /// winner. See [`AerialDelivery`] — this is what lets the corner and
     /// cross contests keep their duel and lose their teleport.
@@ -434,16 +458,10 @@ pub struct Ball {
     /// independent saves that often missed.
     pub pending_save_credit: Option<(u32, u32)>,
 
-    /// How hard the keeper had to work for that save, in reach ratio
-    /// (0 = straight at him, 1 = full-stretch). Consumed alongside
-    /// `pending_save_credit` to put him into the matching STATE.
-    ///
-    /// Without it the physics save resolves a shot entirely inside ball
-    /// physics and the keeper's own state machine never runs, so he never
-    /// visibly dives, catches or gets up — the ball simply stops at a
-    /// standing man. Measured: ~86 saves a match, of which only 8.4 put
-    /// him in `Diving` and `Goalkeeper: Diving` sat below 0.25% of ticks.
-    pub pending_save_reach: f32,
+    /// The staged save was of a shot on frame. Off it, his touch is still
+    /// his outcome to carry out, but neither a save nor a shot on target.
+    pub pending_save_on_frame: bool,
+
     /// The staged save kept out the spot-kick itself, untouched since the
     /// taker struck it.
     pub pending_save_spot_kick: bool,
@@ -472,6 +490,15 @@ pub struct Ball {
     pub last_touch_team_id: Option<u32>,
     pub last_touch_tick: u64,
     pub last_touch_was_controlled: bool,
+    /// The untouched shot by the other side that the last touch met, when
+    /// it met one. Cleared by the next touch.
+    pub shot_met: Option<ShotMet>,
+    /// A booked cross nobody has played yet: the crosser and his side. Its
+    /// first contact decides it, once.
+    pub cross_in_flight: Option<(u32, u32)>,
+    /// The crosser whose cross a team-mate played first, waiting for the
+    /// engine to credit the completion — the ball keeps no stat lines.
+    pub completed_cross: Option<u32>,
     /// Latest tick captured at update entry. Lets per-update helpers
     /// (intercept, block, save, claim, throw-in) record_touch without
     /// having to thread the tick through every signature.
@@ -544,6 +571,10 @@ pub struct Ball {
     /// The team-mates stationed to show short for it.
     #[cfg(feature = "match-logs")]
     pub throw_in_options: Vec<u32>,
+    /// When the previous throw-in was awarded — the touchline census's own
+    /// clock, which a touch does not reset.
+    #[cfg(feature = "match-logs")]
+    pub last_throw_in_tick: Option<u64>,
     /// Set at pass-kick. Lives for the pass window (~220 ticks) and the
     /// offside resolver fires the call only when the receiver becomes
     /// active (touches the ball or claims). Cleared on resolution,
@@ -630,6 +661,8 @@ pub struct Ball {
     /// crossed the line and were rejected — 34% of all shots, and the
     /// single largest reason the engine scored 1.6 goals a game.
     pub last_shot_struck_tick: u64,
+    /// That shot was heading on frame as it was struck.
+    pub last_shot_on_frame: bool,
 
     /// Shot-lifecycle census state (`match-logs` only). Set at the strike
     /// and cleared the moment the shot resolves; see
@@ -879,6 +912,26 @@ impl ShotTarget {
     pub fn screened(&self) -> f32 {
         (self.seen_from - self.struck_from).xy().norm()
     }
+
+    /// Was it struck on frame, where it was projected to cross? For a ball
+    /// that has since stopped flying; one still in flight is read by
+    /// [`Ball::shot_on_frame`].
+    pub fn struck_on_frame(&self, goals: &GoalPosition) -> bool {
+        let goal = match self.defending_side {
+            PlayerSide::Left => goals.left,
+            PlayerSide::Right => goals.right,
+        };
+        GoalFrame::holds(self.goal_line_y - goal.y, self.goal_line_z)
+    }
+}
+
+/// A shot met by the side defending against it before anybody else had
+/// touched it — the one ball an own goal is not made of when it was going
+/// in anyway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShotMet {
+    pub shooter: u32,
+    pub on_frame: bool,
 }
 
 #[derive(Default, Clone)]
@@ -959,6 +1012,16 @@ impl Ball {
             #[cfg(feature = "match-logs")]
             strike_origin: None,
             #[cfg(feature = "match-logs")]
+            delivery_ledger: None,
+            #[cfg(feature = "match-logs")]
+            delivery_identity: None,
+            #[cfg(feature = "match-logs")]
+            delivery_tally: delivery_diag::DeliveryTally::default(),
+            #[cfg(feature = "match-logs")]
+            touch_kind_hint: None,
+            #[cfg(feature = "match-logs")]
+            last_touch_kind: delivery_diag::TouchKind::Other,
+            #[cfg(feature = "match-logs")]
             arrival: None,
             #[cfg(feature = "match-logs")]
             granted_at: 0,
@@ -990,7 +1053,7 @@ impl Ball {
             possession_source_for: None,
             intercept_rolled: 0,
             pass_block_rolled: 0,
-            aerial_duel_resolved: false,
+            aerial_decided: false,
             pass_blocked_by: None,
             contested_claim_count: 0,
             unowned_ticks: 0,
@@ -1011,6 +1074,7 @@ impl Ball {
             cross_contest_resolved: true,
             pending_cross_type: None,
             aerial_contest_winner: None,
+            keeper_claim: None,
             aerial_delivery: None,
             pending_aerial_strike: None,
             owned_stuck_ticks: 0,
@@ -1021,7 +1085,7 @@ impl Ball {
             stall_anchor_tick: 0,
             cached_shot_target: None,
             pending_save_credit: None,
-            pending_save_reach: 0.0,
+            pending_save_on_frame: false,
             pending_save_spot_kick: false,
             pending_save_site: 1,
             last_touch_player_id: None,
@@ -1030,6 +1094,9 @@ impl Ball {
             last_touch_team_id: None,
             last_touch_tick: 0,
             last_touch_was_controlled: false,
+            shot_met: None,
+            cross_in_flight: None,
+            completed_cross: None,
             current_tick_cached: 0,
             pass_origin_restart: PassOriginRestart::OpenPlay,
             phase_origin: None,
@@ -1046,6 +1113,8 @@ impl Ball {
             throw_in_team: None,
             #[cfg(feature = "match-logs")]
             throw_in_options: Vec::new(),
+            #[cfg(feature = "match-logs")]
+            last_throw_in_tick: None,
             offside_snapshot: None,
             pending_pass_origin: None,
             pending_pass_target: None,
@@ -1061,6 +1130,7 @@ impl Ball {
             last_shot_xgot: 0.0,
             last_shot_shooter_id: None,
             last_shot_struck_tick: 0,
+            last_shot_on_frame: false,
             #[cfg(feature = "match-logs")]
             census_shot_live: false,
             #[cfg(feature = "match-logs")]
@@ -1118,7 +1188,7 @@ impl Ball {
         self.intercept_rolled = 0;
         self.pass_block_rolled = 0;
         self.pass_blocked_by = None;
-        self.aerial_duel_resolved = false;
+        self.aerial_decided = false;
         // …and the kick-off is over the instant the taker lets go of it:
         // the restart IS that one touch.
         if self.kickoff_taker == Some(player_id) {
@@ -1217,6 +1287,23 @@ impl Ball {
     /// that is whose property it is: see [`PlayerReach`].
     pub fn within_possession_reach(&self, player: &MatchPlayer) -> bool {
         PlayerReach::can_possess(self, player)
+    }
+
+    /// A keeper has caught it: stopped dead and in his gloves, where the
+    /// rest of the engine can see it is his — no claim, no tackle, no
+    /// interception, and no point pressing him.
+    pub fn take_into_hands(&mut self, keeper_id: u32, team_id: u32, tick: u64) {
+        self.previous_owner = self.current_owner;
+        self.current_owner = Some(keeper_id);
+        self.velocity = Vector3::zeros();
+        self.flags.in_flight_state = 0;
+        self.gather_in_hands(keeper_id, team_id, tick);
+        // Belt and braces behind `held_in_hands`: covers the hold (up to
+        // ~5.5 s) plus the distribution that follows it.
+        self.claim_cooldown = 700;
+        self.pass_target_player_id = None;
+        // A shot it was is dead: nobody chases its projected intercept.
+        self.cached_shot_target = None;
     }
 
     /// Take the ball into `keeper_id`'s gloves.
@@ -1380,6 +1467,11 @@ impl Ball {
     ///
     /// Headers are cleared toward the touchline, not straight back down
     /// the middle the attack came from.
+    /// The hardest a clearance leaves a man, horizontally: 2.8 u/tick is
+    /// 35 m/s, harder than any pass and about as hard as a defender hits a
+    /// ball.
+    pub const MAX_CLEARANCE_SPEED: f32 = 2.8;
+
     pub fn headed_clear_velocity(
         from: Vector3<f32>,
         attacked_goal: Vector3<f32>,
@@ -1393,7 +1485,8 @@ impl Ball {
             .try_normalize(0.01)
             .unwrap_or_else(|| Vector3::new(1.0, 0.0, 0.0));
         let lateral = if from.y >= attacked_goal.y { 1.0 } else { -1.0 };
-        let dir = Vector3::new(away.x + lateral * 0.15, away.y + lateral * 0.55, 0.0)
+        let upfield = if away.x >= 0.0 { 1.0 } else { -1.0 };
+        let dir = Vector3::new(away.x + upfield * 0.15, away.y + lateral * 0.55, 0.0)
             .try_normalize(0.01)
             .unwrap_or(away);
         Vector3::new(dir.x * speed, dir.y * speed, vz)
@@ -1580,11 +1673,31 @@ impl Ball {
     /// Record a meaningful touch. Drives restart resolution. `controlled`
     /// distinguishes a clean reception from a deflection / failed save.
     pub fn record_touch(&mut self, player_id: u32, team_id: u32, tick: u64, controlled: bool) {
+        self.shot_met = self.untouched_shot_against(team_id);
+        // The first man to play a cross decides it: a team-mate completes
+        // it; an opponent, a keeper or a ball that has come to rest does not.
+        if let Some((crosser, crossing_team)) = self.cross_in_flight.take()
+            && team_id == crossing_team
+            && self.unowned_stopped_ticks == 0
+        {
+            self.completed_cross = Some(crosser);
+        }
         // Where the touch happened, so a downstream diagnostic can ask how
         // far the ball ran afterwards. Diagnostic-only — see
         // `EndlineCensus`.
         #[cfg(feature = "match-logs")]
         {
+            let kind = self.touch_kind_hint.take().unwrap_or_else(|| {
+                delivery_diag::TouchKind::of_contact(controlled, self.position.z)
+            });
+            self.last_touch_kind = kind;
+            if let Some(ledger) = self.delivery_ledger.as_mut()
+                && let Some(end) =
+                    ledger.on_touch(player_id, team_id, kind, controlled, self.position.z)
+                && let Some(ledger) = self.delivery_ledger.take()
+            {
+                ledger.close(end, &mut self.delivery_tally);
+            }
             self.last_touch_position = self.position;
             goal_kick_diag::GoalKickCensus::note_touch(
                 &mut self.goal_kick_track,
@@ -1686,6 +1799,25 @@ impl Ball {
         self.last_touch_was_controlled = controlled;
     }
 
+    /// A booked cross has been struck: its first contact will decide it.
+    pub fn on_cross_struck(&mut self, crosser: u32, team_id: u32) {
+        self.cross_in_flight = Some((crosser, team_id));
+    }
+
+    /// The shot a touch by `team_id` meets, when it is an untouched shot by
+    /// the other side: the touch before this one was its strike.
+    fn untouched_shot_against(&self, team_id: u32) -> Option<ShotMet> {
+        let shooter = self.last_shot_shooter_id?;
+        (self.last_shot_struck_tick > 0
+            && self.last_touch_player_id == Some(shooter)
+            && self.last_touch_tick == self.last_shot_struck_tick
+            && self.last_touch_team_id != Some(team_id))
+        .then_some(ShotMet {
+            shooter,
+            on_frame: self.last_shot_on_frame,
+        })
+    }
+
     /// Clear the offside snapshot. Called on opponent touch, claim, foul,
     /// or pass expiry.
     pub fn clear_offside_snapshot(&mut self) {
@@ -1703,11 +1835,20 @@ impl Ball {
     /// rather than zeroing individual fields, so a future field added
     /// to the open-play set is reset automatically.
     pub fn clear_open_play_metadata(&mut self) {
+        self.keeper_claim = None;
         #[cfg(feature = "match-logs")]
-        if self.pending_pass_passer.is_some() {
-            use std::sync::atomic::Ordering;
-            ownership::reception_diag::DIED_DEAD_BALL.fetch_add(1, Ordering::Relaxed);
+        {
+            if self.pending_pass_passer.is_some() {
+                use std::sync::atomic::Ordering;
+                ownership::reception_diag::DIED_DEAD_BALL.fetch_add(1, Ordering::Relaxed);
+            }
+            if let Some(ledger) = self.delivery_ledger.take() {
+                ledger.close(delivery_diag::DeliveryCensus::LOOSE, &mut self.delivery_tally);
+            }
         }
+        self.shot_met = None;
+        self.cross_in_flight = None;
+        self.last_shot_on_frame = false;
         self.cached_shot_target = None;
         self.pass_target_player_id = None;
         self.pending_pass_passer = None;
@@ -1984,7 +2125,7 @@ impl Ball {
         self.intercept_rolled = 0;
         self.pass_block_rolled = 0;
         self.pass_blocked_by = None;
-        self.aerial_duel_resolved = false;
+        self.aerial_decided = false;
         self.contested_claim_count = 0;
         self.unowned_ticks = 0;
         #[cfg(feature = "match-logs")]
@@ -1992,6 +2133,9 @@ impl Ball {
             self.lane_census = None;
             self.pass_block_census = None;
             self.strike_origin = None;
+            if let Some(ledger) = self.delivery_ledger.take() {
+                ledger.close(delivery_diag::DeliveryCensus::LOOSE, &mut self.delivery_tally);
+            }
         }
         self.cached_landing_position = self.position;
         self.pending_set_piece_teleport = None;

@@ -1,4 +1,5 @@
 use crate::r#match::engine::ball::ball::HandlingVerdict;
+use crate::r#match::engine::flow::context::MATCH_TIME_INCREMENT_MS;
 use crate::r#match::engine::officiating::management::TimeWastingRestart;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
@@ -15,11 +16,12 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 /// How long a keeper keeps the ball in his hands before releasing it, in
-/// ticks (100 = 1 s).
+/// AI ticks (50 = 1 s): 2.0 s and 5.5 s.
 ///
-/// Law 12 gives him six seconds; in practice a keeper takes two on a quick
-/// counter and five when his side is happy to slow the game down, and the
-/// referee's whistle is close to a dead letter. These bracket that.
+/// Law 12 gives him eight seconds, and since 2025 holding it longer
+/// concedes a corner (`KeeperRelease::HANDS_LIMIT_MS`). In practice a
+/// keeper takes two on a quick counter and five when his side is happy to
+/// slow the game down. These bracket that.
 ///
 /// They were 25 and 60 — half a second to one and a quarter, which is
 /// physically impossible: he had not finished catching it. The engine's
@@ -34,6 +36,8 @@ use nalgebra::Vector3;
 /// his gloves for 27.9% of the match against a real 3-6%.
 const MIN_HOLDING_DURATION: u64 = 100;
 const MAX_HOLDING_DURATION: u64 = 275;
+/// …and with a counter on: 0.5 s and 1.0 s, on the hands clock.
+const COUNTER_HOLDING_DURATION: (u64, u64) = (25, 50);
 /// AI ticks are 20 ms.
 const AI_TICK_MS: u64 = 20;
 const HANDS_LIMIT: u64 = KeeperRelease::HANDS_LIMIT_MS / AI_TICK_MS;
@@ -109,8 +113,16 @@ impl StateProcessingHandler for GoalkeeperHoldingState {
             ));
         }
 
-        // Past the count: the referee gives the corner.
-        if ctx.in_state_time > HANDS_LIMIT {
+        // Past the count: the referee gives the corner. The count runs from
+        // the moment the ball went into his gloves, however long he lay on
+        // the floor with it before he got up into this state.
+        let held = ctx
+            .context
+            .current_tick()
+            .saturating_sub(ctx.tick_context.ball.hands_since_tick)
+            * MATCH_TIME_INCREMENT_MS
+            / AI_TICK_MS;
+        if held > HANDS_LIMIT {
             return Some(StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::Standing,
                 Event::PlayerEvent(PlayerEvent::HeldTooLong(ctx.player.id)),
@@ -120,7 +132,8 @@ impl StateProcessingHandler for GoalkeeperHoldingState {
         // After holding for a skill-based duration, release the ball.
         // Better decision-makers distribute faster. A keeper whose side is
         // ahead late sits on it for as long as he dares — and only a poor
-        // reader of the referee's count dares past it.
+        // reader of the referee's count dares past it. His own pace runs on
+        // his time in this state; the dare is against the count.
         let decision = ctx.player.skills.mental.decisions / 20.0;
         let natural = MAX_HOLDING_DURATION
             - ((MAX_HOLDING_DURATION - MIN_HOLDING_DURATION) as f32 * decision) as u64;
@@ -129,10 +142,23 @@ impl StateProcessingHandler for GoalkeeperHoldingState {
             ctx.player.skills.mental.aggression,
             TimeWastingRestart::KeeperHold,
         ) / AI_TICK_MS;
+
+        // A counter on, and a side not sitting on a lead: the gather is the
+        // whole of his hold, counted from the ball going into his gloves.
+        let counter_hold = COUNTER_HOLDING_DURATION.1
+            - ((COUNTER_HOLDING_DURATION.1 - COUNTER_HOLDING_DURATION.0) as f32 * decision) as u64;
+        if wasting == 0
+            && held >= counter_hold
+            && KeeperRelease::counter_opportunity(ctx) > KeeperRelease::COUNTER_ON
+        {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                Self::pick_distribution(ctx).into_state(),
+            ));
+        }
         let margin = -25.0 + 125.0 * decision;
         let dares = (HANDS_LIMIT as f32 - margin).max(0.0) as u64;
-        let holding_duration = (natural + wasting).min(dares.max(natural));
-        if ctx.in_state_time >= holding_duration {
+        if ctx.in_state_time >= natural + wasting || (ctx.in_state_time >= natural && held >= dares)
+        {
             return Some(StateChangeResult::with_goalkeeper_state(
                 Self::pick_distribution(ctx).into_state(),
             ));

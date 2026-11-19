@@ -725,11 +725,6 @@ a:active {
     color: #546a78;
 }
 
-.fm-transfer-history-head {
-    margin-top: 10px;
-    border-radius: 4px 4px 0 0;
-}
-
 .fm-panel-action {
     font-size: 11px;
     font-weight: 600;
@@ -852,6 +847,103 @@ a.fm-seasonstep-arrow:hover {
     color: #6b7580;
     font-size: 13px;
     font-style: italic;
+}
+
+/* ============================================
+   FM SUB-TABS
+   ============================================ */
+
+.fm-subtabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    background: linear-gradient(180deg, #1c2830 0%, #192228 100%);
+    border: 1px solid #263340;
+    border-radius: 4px;
+    padding: 4px;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.fm-subtab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.9px;
+    color: #6a7a86;
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+    text-decoration: none !important;
+    transition:
+        color 0.15s,
+        background 0.15s;
+    font-family: inherit;
+}
+
+.fm-subtab:hover {
+    color: #c8d6e0;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.fm-subtab.active {
+    color: #fff;
+    background: linear-gradient(180deg, #2a3a47 0%, #213038 100%);
+}
+
+.fm-subtab-icon {
+    font-size: 11px;
+    opacity: 0.85;
+}
+
+.fm-subtab-count {
+    display: inline-flex;
+    min-width: 18px;
+    height: 16px;
+    padding: 0 5px;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 700;
+    color: #8a949c;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+}
+
+.fm-subtab.active .fm-subtab-count {
+    color: var(--tab-fg-active, #0e1f12);
+    background: var(--header-bg, #6db974);
+}
+
+.fm-subtab-panel {
+    display: none;
+}
+
+.fm-subtab-panel.active {
+    display: block;
+}
+
+.fm-subtab-panel > .fm-panel + .fm-panel,
+.fm-subtab-panel > .fm-panel + .fm-transfers-row,
+.fm-subtab-panel > .fm-transfers-row + .fm-panel,
+.fm-subtab-panel > .fm-transfers-row + .fm-transfers-row {
+    margin-top: 10px;
+}
+
+@media (max-width: 600px) {
+    .fm-subtab {
+        padding: 7px 10px;
+        font-size: 9px;
+        letter-spacing: 0.5px;
+    }
 }
 
 /* Staff page */
@@ -1187,6 +1279,284 @@ a.fm-seasonstep-arrow:hover {
 
 .fm-transfers-row .fm-panel {
     margin-bottom: 0;
+}
+
+/* ============================================
+   TEAM TRANSFERS TAB
+   ============================================ */
+
+.trf-sum {
+    font-size: 11px;
+    font-weight: 600;
+    color: #546a78;
+}
+
+.trf-sum b {
+    margin-left: 4px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #dfe7ee;
+    font-variant-numeric: tabular-nums;
+}
+
+.trf-table th {
+    white-space: nowrap;
+}
+
+.trf-table th.trf-r {
+    text-align: right;
+}
+
+.trf-player a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+/* The row's link spans photo and nationality; only the name underlines. */
+.fm-squad .trf-player a:hover {
+    text-decoration: none !important;
+}
+
+.trf-player a:hover b {
+    color: #fff;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.trf-ava {
+    position: relative;
+    flex: none;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    overflow: hidden;
+    background: linear-gradient(180deg, #2f3e4a, #243139);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.trf-ava::before {
+    content: attr(data-initials);
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: #8796a2;
+}
+
+.trf-ava img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center top;
+}
+
+.trf-id {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.25;
+}
+
+.trf-id b {
+    font-weight: 500;
+    color: #d8dee4;
+}
+
+.trf-id small {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 1px;
+    font-size: 11.5px;
+    color: #7a868e;
+    white-space: nowrap;
+}
+
+.trf-id .flag {
+    flex: none;
+    width: 16px;
+    height: 12px;
+    border-radius: 2px;
+}
+
+.trf-pos,
+.trf-date,
+.trf-wage,
+.trf-fee,
+.trf-return {
+    width: 1%;
+    white-space: nowrap;
+}
+
+.trf-pill {
+    display: inline-block;
+    min-width: 36px;
+    padding: 3px 6px;
+    border-radius: 3px;
+    text-align: center;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    line-height: 1.2;
+    color: var(--pill);
+    background: color-mix(in srgb, var(--pill) 15%, transparent);
+}
+
+.trf-pill-gk {
+    --pill: #f2b84b;
+}
+
+.trf-pill-def {
+    --pill: #5aa7f0;
+}
+
+.trf-pill-mid {
+    --pill: #49c08a;
+}
+
+.trf-pill-fwd {
+    --pill: #f06b5a;
+}
+
+.trf-club a,
+.trf-club span {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    white-space: nowrap;
+}
+
+.trf-club .trf-free-agent {
+    color: #7a868e;
+}
+
+.trf-crest {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: radial-gradient(circle, var(--c1) 0 52%, var(--c2) 54%);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+
+.fm-squad .trf-date {
+    font-size: 13px;
+    color: #7a868e;
+}
+
+.fm-squad .trf-wage {
+    text-align: right;
+    font-size: 14px;
+}
+
+.fm-squad .trf-fee {
+    text-align: right;
+    font-weight: 600;
+    color: #eef2f5;
+}
+
+.trf-free {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #7a868e;
+    background: rgba(255, 255, 255, 0.055);
+}
+
+.fm-squad .trf-status {
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.trf-status::before {
+    content: "";
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-right: 8px;
+    border-radius: 50%;
+    vertical-align: 1px;
+    background: var(--tone);
+}
+
+.trf-status-regular {
+    --tone: #49c08a;
+}
+
+.trf-status-rotation {
+    --tone: #f2b84b;
+}
+
+.trf-status-backup {
+    --tone: #6d7d89;
+}
+
+.fm-squad .trf-return {
+    text-align: right;
+    font-size: 13px;
+}
+
+.trf-bar {
+    display: inline-block;
+    vertical-align: middle;
+    width: 64px;
+    height: 4px;
+    margin-right: 10px;
+    border-radius: 2px;
+    background: #2a3946;
+    overflow: hidden;
+}
+
+.trf-bar i {
+    display: block;
+    height: 100%;
+    border-radius: 2px;
+    background: #7ea2ff;
+}
+
+@media (max-width: 1000px) {
+    .trf-minor {
+        display: none;
+    }
+}
+
+@media (max-width: 760px) {
+    .trf-ava {
+        width: 28px;
+        height: 28px;
+    }
+
+    .trf-player a {
+        gap: 8px;
+    }
+
+    .trf-id small {
+        white-space: normal;
+    }
+
+    .trf-pill {
+        min-width: 0;
+        padding: 3px 5px;
+    }
+
+    .trf-club a,
+    .trf-club span {
+        gap: 6px;
+        font-size: 13px;
+    }
+
+    .trf-bar {
+        display: none;
+    }
 }
 
 /* ============================================
@@ -8998,8 +9368,9 @@ html.match-scroll-locked body {
 
     /* The panel scrolls sideways here and its head stretches to the table's
        full width, so anything right-aligned lands past the first screen.
-       Keep the stepper beside the title, inside the sticky zone. */
-    .fm-panel-head:has(.fm-seasonstep) {
+       Keep the season control beside the title, inside the sticky zone. */
+    .fm-panel-head:has(.fm-seasonstep),
+    .fm-panel-head:has(.fm-season-select) {
         justify-content: flex-start;
         gap: 12px;
     }
@@ -10245,91 +10616,6 @@ html.match-scroll-locked body {
    SCOUTING TAB
    ============================================ */
 
-.sc-subtabs {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px;
-    background: linear-gradient(180deg, #1c2830 0%, #192228 100%);
-    border: 1px solid #263340;
-    border-radius: 4px;
-    padding: 4px;
-    margin-bottom: 12px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-}
-
-.sc-subtab {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 14px;
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.9px;
-    color: #6a7a86;
-    background: transparent;
-    border: none;
-    border-radius: 3px;
-    cursor: pointer;
-    white-space: nowrap;
-    text-decoration: none !important;
-    transition:
-        color 0.15s,
-        background 0.15s;
-    font-family: inherit;
-}
-
-.sc-subtab:hover {
-    color: #c8d6e0;
-    background: rgba(255, 255, 255, 0.04);
-}
-
-.sc-subtab.active {
-    color: #fff;
-    background: linear-gradient(180deg, #2a3a47 0%, #213038 100%);
-}
-
-.sc-subtab-icon {
-    font-size: 11px;
-    opacity: 0.85;
-}
-
-.sc-subtab-count {
-    display: inline-flex;
-    min-width: 18px;
-    height: 16px;
-    padding: 0 5px;
-    align-items: center;
-    justify-content: center;
-    font-size: 9px;
-    font-weight: 700;
-    color: #8a949c;
-    background: rgba(255, 255, 255, 0.06);
-    border-radius: 8px;
-    font-variant-numeric: tabular-nums;
-    letter-spacing: 0;
-}
-
-.sc-subtab.active .sc-subtab-count {
-    color: var(--tab-fg-active, #0e1f12);
-    background: var(--header-bg, #6db974);
-}
-
-.sc-tab-panel {
-    display: none;
-}
-
-.sc-tab-panel.active {
-    display: block;
-}
-
-.sc-tab-panel > .fm-panel + .fm-panel,
-.sc-tab-panel > .fm-panel + .fm-transfers-row,
-.sc-tab-panel > .fm-transfers-row + .fm-panel,
-.sc-tab-panel > .fm-transfers-row + .fm-transfers-row {
-    margin-top: 10px;
-}
-
 .sc-summary {
     display: grid;
     grid-template-columns: repeat(8, minmax(0, 1fr));
@@ -10788,11 +11074,6 @@ html.match-scroll-locked body {
 @media (max-width: 600px) {
     .sc-summary {
         grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    .sc-subtab {
-        padding: 7px 10px;
-        font-size: 9px;
-        letter-spacing: 0.5px;
     }
 }
 

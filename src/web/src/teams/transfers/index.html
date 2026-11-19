@@ -2,102 +2,142 @@
 
 {% block html_title %}{{ title }} - {{ i18n.t("transfers") }} | {{ i18n.t("site_name") }}{% endblock %}
 
+{% macro player_cells(p, lang) %}
+<td class="trf-player">
+    <a href="/{{ lang }}/players/{{ p.slug }}">
+        <span class="trf-ava" data-initials="{{ p.initials }}">
+            {% if p.known %}
+            {% if p.generated %}
+            <img src="/api/players/{{ p.id }}/face.svg?v={{ crate::face::FACE_VERSION }}" alt="" loading="lazy">
+            {% else %}
+            <img src="https://open-football.org/player/{{ p.id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ p.id }}/face.svg?v={{ crate::face::FACE_VERSION }}';" alt="" loading="lazy">
+            {% endif %}
+            {% endif %}
+        </span>
+        <span class="trf-id">
+            <b>{{ p.name }}</b>
+            {% if p.known %}<small><span class="flag flag-{{ p.country_code }}"></span>{{ p.country_name }}, {{ p.age }}</small>{% endif %}
+        </span>
+    </a>
+</td>
+<td class="trf-pos">{% if p.known %}<span class="trf-pill trf-pill-{{ p.position_group }}">{{ p.position }}</span>{% endif %}</td>
+{% endmacro %}
+
+{% macro club_cell(c, lang) %}
+<td class="trf-club">
+    {% if c.free_agent %}
+    <span class="trf-free-agent">{{ c.name }}</span>
+    {% else if c.slug.is_empty() %}
+    <span><i class="trf-crest" style="--c1: {{ c.background }}; --c2: {{ c.foreground }};"></i>{{ c.name }}</span>
+    {% else %}
+    <a href="/{{ lang }}/teams/{{ c.slug }}"><i class="trf-crest" style="--c1: {{ c.background }}; --c2: {{ c.foreground }};"></i>{{ c.name }}</a>
+    {% endif %}
+</td>
+{% endmacro %}
+
+{% macro season_select(seasons, lang, team_slug, label) %}
+<select class="fm-season-select" aria-label="{{ label }}"
+        onchange="window.location.href='/{{ lang }}/teams/{{ team_slug }}/transfers?season=' + this.value + window.location.hash">
+    {% for s in seasons %}
+    <option value="{{ s.year }}"{% if s.selected %} selected{% endif %}>{{ s.display }}</option>
+    {% endfor %}
+</select>
+{% endmacro %}
+
 {% block content %}
-<div class="fm-page">
-    <section class="fm-panel">
-        <div class="fm-panel-head">
-            <h3>{{ i18n.t("transfer_list") }}</h3>
-            <span class="fm-panel-count">{{ items.len() }}</span>
-        </div>
-        {% if items.is_empty() %}
-        <div class="fm-empty">{{ i18n.t("no_transfer_list") }}</div>
-        {% else %}
-        <table class="fm-squad">
-            <thead>
-                <tr>
-                    <th>{{ i18n.t("player") }}</th>
-                    <th>{{ i18n.t("position") }}</th>
-                    <th>{{ i18n.t("value") }}</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for item in items %}
-                <tr>
-                    <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a></td>
-                    <td class="sq-pos">{{ item.position }}</td>
-                    <td>{{ item.value }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        {% endif %}
-    </section>
+<div class="fm-page trf-page">
+    <nav class="fm-subtabs" role="tablist">
+        <a class="fm-subtab active" href="#trf-list" data-trf-target="list" role="tab">
+            <i class="fa fa-tags fm-subtab-icon"></i>
+            <span>{{ i18n.t("transfer_list") }}</span>
+            <span class="fm-subtab-count">{{ items.len() }}</span>
+        </a>
+        <a class="fm-subtab" href="#trf-incoming" data-trf-target="incoming" role="tab">
+            <i class="fa fa-right-to-bracket fm-subtab-icon"></i>
+            <span>{{ i18n.t("transfers_tab_incoming") }}</span>
+            <span class="fm-subtab-count">{{ ledger.incoming_transfers.len() }}</span>
+        </a>
+        <a class="fm-subtab" href="#trf-outgoing" data-trf-target="outgoing" role="tab">
+            <i class="fa fa-right-from-bracket fm-subtab-icon"></i>
+            <span>{{ i18n.t("transfers_tab_outgoing") }}</span>
+            <span class="fm-subtab-count">{{ ledger.outgoing_transfers.len() }}</span>
+        </a>
+        <a class="fm-subtab" href="#trf-loans" data-trf-target="loans" role="tab">
+            <i class="fa fa-handshake fm-subtab-icon"></i>
+            <span>{{ i18n.t("transfers_tab_loans") }}</span>
+            <span class="fm-subtab-count">{{ ledger.incoming_loans.len() + ledger.outgoing_loans.len() }}</span>
+        </a>
+    </nav>
 
-    <div class="fm-panel-head fm-transfer-history-head">
-        <h3>{{ i18n.t("transfer_history") }}</h3>
-        <select class="fm-season-select" onchange="window.location.href='/' + '{{ lang }}' + '/teams/{{ team_slug }}/transfers?season=' + this.value">
-            {% for s in seasons %}
-            <option value="{{ s.year }}"{% if s.selected %} selected{% endif %}>{{ s.display }}</option>
-            {% endfor %}
-        </select>
-    </div>
-
-    <div class="fm-transfers-row">
+    <div class="fm-subtab-panel active" data-trf-panel="list" role="tabpanel">
         <section class="fm-panel">
             <div class="fm-panel-head">
-                <h3>{{ i18n.t("incoming_transfers") }}</h3>
-                <span class="fm-panel-count">{{ incoming_transfers.len() }}</span>
+                <h3>{{ i18n.t("transfer_list") }}</h3>
+                {% if !items.is_empty() %}
+                <span class="trf-sum">{{ i18n.t("total_value") }} <b>{{ list_value }}</b></span>
+                {% endif %}
             </div>
-            {% if incoming_transfers.is_empty() %}
+            {% if items.is_empty() %}
+            <div class="fm-empty">{{ i18n.t("no_transfer_list") }}</div>
+            {% else %}
+            <table class="fm-squad trf-table">
+                <thead>
+                    <tr>
+                        <th>{{ i18n.t("player") }}</th>
+                        <th>{{ i18n.t("position") }}</th>
+                        <th class="trf-minor">{{ i18n.t("squad_status") }}</th>
+                        <th class="trf-minor">{{ i18n.t("contract_expiry") }}</th>
+                        <th class="trf-r trf-minor">{{ i18n.t("wage") }}</th>
+                        <th class="trf-r">{{ i18n.t("value") }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in items %}
+                    <tr>
+                        {% call player_cells(item.player, lang) %}{% endcall %}
+                        <td class="trf-status trf-status-{{ item.squad_tone }} trf-minor">{{ item.squad_status }}</td>
+                        <td class="trf-date trf-minor">{{ item.contract_until }}</td>
+                        <td class="trf-wage trf-minor">{{ item.wage }}</td>
+                        <td class="trf-fee">{{ item.value }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+        </section>
+    </div>
+
+    <div class="fm-subtab-panel" data-trf-panel="incoming" role="tabpanel">
+        <section class="fm-panel">
+            <div class="fm-panel-head">
+                <div class="fm-panel-head-lead">
+                    <h3>{{ i18n.t("incoming_transfers") }}</h3>
+                    {% if !ledger.incoming_transfers.is_empty() %}
+                    <span class="trf-sum">{{ i18n.t("transfers_spent") }} <b>{{ ledger.spent }}</b></span>
+                    {% endif %}
+                </div>
+                {% call season_select(seasons, lang, team_slug, i18n.t("season")) %}{% endcall %}
+            </div>
+            {% if ledger.incoming_transfers.is_empty() %}
             <div class="fm-empty">{{ i18n.t("no_incoming_transfers") }}</div>
             {% else %}
-            <table class="fm-squad">
+            <table class="fm-squad trf-table">
                 <thead>
                     <tr>
                         <th>{{ i18n.t("player") }}</th>
+                        <th>{{ i18n.t("position") }}</th>
                         <th>{{ i18n.t("from") }}</th>
-                        <th>{{ i18n.t("fee") }}</th>
-                        <th>{{ i18n.t("date") }}</th>
+                        <th class="trf-minor">{{ i18n.t("date") }}</th>
+                        <th class="trf-r">{{ i18n.t("fee") }}</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {% for item in incoming_transfers %}
+                    {% for item in ledger.incoming_transfers %}
                     <tr>
-                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a></td>
-                        <td><a href="/{{ lang }}/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
-                        <td>{{ item.fee }}</td>
-                        <td>{{ item.date }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            {% endif %}
-        </section>
-
-        <section class="fm-panel">
-            <div class="fm-panel-head">
-                <h3>{{ i18n.t("outgoing_transfers") }}</h3>
-                <span class="fm-panel-count">{{ outgoing_transfers.len() }}</span>
-            </div>
-            {% if outgoing_transfers.is_empty() %}
-            <div class="fm-empty">{{ i18n.t("no_outgoing_transfers") }}</div>
-            {% else %}
-            <table class="fm-squad">
-                <thead>
-                    <tr>
-                        <th>{{ i18n.t("player") }}</th>
-                        <th>{{ i18n.t("to") }}</th>
-                        <th>{{ i18n.t("fee") }}</th>
-                        <th>{{ i18n.t("date") }}</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for item in outgoing_transfers %}
-                    <tr>
-                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a></td>
-                        <td><a href="/{{ lang }}/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
-                        <td>{{ item.fee }}</td>
-                        <td>{{ item.date }}</td>
+                        {% call player_cells(item.player, lang) %}{% endcall %}
+                        {% call club_cell(item.club, lang) %}{% endcall %}
+                        <td class="trf-date trf-minor">{{ item.date }}</td>
+                        <td class="trf-fee">{% if item.free %}<span class="trf-free">{{ item.fee }}</span>{% else %}{{ item.fee }}{% endif %}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -106,31 +146,74 @@
         </section>
     </div>
 
-    <div class="fm-transfers-row">
+    <div class="fm-subtab-panel" data-trf-panel="outgoing" role="tabpanel">
         <section class="fm-panel">
             <div class="fm-panel-head">
-                <h3>{{ i18n.t("incoming_loans") }}</h3>
-                <span class="fm-panel-count">{{ incoming_loans.len() }}</span>
+                <div class="fm-panel-head-lead">
+                    <h3>{{ i18n.t("outgoing_transfers") }}</h3>
+                    {% if !ledger.outgoing_transfers.is_empty() %}
+                    <span class="trf-sum">{{ i18n.t("transfers_received") }} <b>{{ ledger.received }}</b></span>
+                    {% endif %}
+                </div>
+                {% call season_select(seasons, lang, team_slug, i18n.t("season")) %}{% endcall %}
             </div>
-            {% if incoming_loans.is_empty() %}
-            <div class="fm-empty">{{ i18n.t("no_incoming_loans") }}</div>
+            {% if ledger.outgoing_transfers.is_empty() %}
+            <div class="fm-empty">{{ i18n.t("no_outgoing_transfers") }}</div>
             {% else %}
-            <table class="fm-squad">
+            <table class="fm-squad trf-table">
                 <thead>
                     <tr>
                         <th>{{ i18n.t("player") }}</th>
-                        <th>{{ i18n.t("from") }}</th>
-                        <th>{{ i18n.t("date") }}</th>
-                        <th>{{ i18n.t("end_date") }}</th>
+                        <th>{{ i18n.t("position") }}</th>
+                        <th>{{ i18n.t("to") }}</th>
+                        <th class="trf-minor">{{ i18n.t("date") }}</th>
+                        <th class="trf-r">{{ i18n.t("fee") }}</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {% for item in incoming_loans %}
+                    {% for item in ledger.outgoing_transfers %}
                     <tr>
-                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a></td>
-                        <td><a href="/{{ lang }}/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
-                        <td>{{ item.date }}</td>
-                        <td>{{ item.end_date }}</td>
+                        {% call player_cells(item.player, lang) %}{% endcall %}
+                        {% call club_cell(item.club, lang) %}{% endcall %}
+                        <td class="trf-date trf-minor">{{ item.date }}</td>
+                        <td class="trf-fee">{% if item.free %}<span class="trf-free">{{ item.fee }}</span>{% else %}{{ item.fee }}{% endif %}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+        </section>
+    </div>
+
+    <div class="fm-subtab-panel" data-trf-panel="loans" role="tabpanel">
+        <section class="fm-panel">
+            <div class="fm-panel-head">
+                <div class="fm-panel-head-lead">
+                    <h3>{{ i18n.t("outgoing_loans") }}</h3>
+                    <span class="fm-panel-count">{{ ledger.outgoing_loans.len() }}</span>
+                </div>
+                {% call season_select(seasons, lang, team_slug, i18n.t("season")) %}{% endcall %}
+            </div>
+            {% if ledger.outgoing_loans.is_empty() %}
+            <div class="fm-empty">{{ i18n.t("no_outgoing_loans") }}</div>
+            {% else %}
+            <table class="fm-squad trf-table">
+                <thead>
+                    <tr>
+                        <th>{{ i18n.t("player") }}</th>
+                        <th>{{ i18n.t("position") }}</th>
+                        <th>{{ i18n.t("to") }}</th>
+                        <th class="trf-minor">{{ i18n.t("date") }}</th>
+                        <th class="trf-r">{{ i18n.t("end_date") }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in ledger.outgoing_loans %}
+                    <tr>
+                        {% call player_cells(item.player, lang) %}{% endcall %}
+                        {% call club_cell(item.club, lang) %}{% endcall %}
+                        <td class="trf-date trf-minor">{{ item.start }}</td>
+                        <td class="trf-return"><span class="trf-bar"><i style="width: {{ item.progress }}%"></i></span>{{ item.end }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -140,28 +223,31 @@
 
         <section class="fm-panel">
             <div class="fm-panel-head">
-                <h3>{{ i18n.t("outgoing_loans") }}</h3>
-                <span class="fm-panel-count">{{ outgoing_loans.len() }}</span>
+                <div class="fm-panel-head-lead">
+                    <h3>{{ i18n.t("incoming_loans") }}</h3>
+                    <span class="fm-panel-count">{{ ledger.incoming_loans.len() }}</span>
+                </div>
             </div>
-            {% if outgoing_loans.is_empty() %}
-            <div class="fm-empty">{{ i18n.t("no_outgoing_loans") }}</div>
+            {% if ledger.incoming_loans.is_empty() %}
+            <div class="fm-empty">{{ i18n.t("no_incoming_loans") }}</div>
             {% else %}
-            <table class="fm-squad">
+            <table class="fm-squad trf-table">
                 <thead>
                     <tr>
                         <th>{{ i18n.t("player") }}</th>
-                        <th>{{ i18n.t("to") }}</th>
-                        <th>{{ i18n.t("date") }}</th>
-                        <th>{{ i18n.t("end_date") }}</th>
+                        <th>{{ i18n.t("position") }}</th>
+                        <th>{{ i18n.t("from") }}</th>
+                        <th class="trf-minor">{{ i18n.t("date") }}</th>
+                        <th class="trf-r">{{ i18n.t("end_date") }}</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {% for item in outgoing_loans %}
+                    {% for item in ledger.incoming_loans %}
                     <tr>
-                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a></td>
-                        <td><a href="/{{ lang }}/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
-                        <td>{{ item.date }}</td>
-                        <td>{{ item.end_date }}</td>
+                        {% call player_cells(item.player, lang) %}{% endcall %}
+                        {% call club_cell(item.club, lang) %}{% endcall %}
+                        <td class="trf-date trf-minor">{{ item.start }}</td>
+                        <td class="trf-return"><span class="trf-bar"><i style="width: {{ item.progress }}%"></i></span>{{ item.end }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -170,4 +256,50 @@
         </section>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    var root = document.querySelector('.trf-page');
+    if (!root) return;
+    var tabs = root.querySelectorAll('[data-trf-target]');
+    var panels = root.querySelectorAll('[data-trf-panel]');
+
+    function activate(name) {
+        var found = false;
+        tabs.forEach(function (t) {
+            var on = t.getAttribute('data-trf-target') === name;
+            t.classList.toggle('active', on);
+            t.setAttribute('aria-selected', on ? 'true' : 'false');
+            if (on) found = true;
+        });
+        if (!found) return false;
+        panels.forEach(function (p) {
+            p.classList.toggle('active', p.getAttribute('data-trf-panel') === name);
+        });
+        return true;
+    }
+
+    function fromHash() {
+        var h = (window.location.hash || '').replace(/^#trf-/, '');
+        if (h && activate(h)) return;
+        activate(/[?&]season=/.test(window.location.search) ? 'incoming' : 'list');
+    }
+
+    tabs.forEach(function (t) {
+        t.addEventListener('click', function (e) {
+            e.preventDefault();
+            var name = t.getAttribute('data-trf-target');
+            activate(name);
+            try {
+                history.replaceState(null, '', '#trf-' + name);
+            } catch (err) {}
+        });
+    });
+
+    window.addEventListener('hashchange', fromHash);
+    fromHash();
+})();
+</script>
 {% endblock %}

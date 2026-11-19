@@ -24,7 +24,7 @@ use crate::r#match::common_states::{
     JADEDNESS_INCREMENT, LOW_CONDITION_THRESHOLD, TackleDecision, TackleEngagement, TackleOutcome,
 };
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::DefenderCondition;
+use crate::r#match::defenders::states::common::{DefenderCondition, DefenderRead};
 use crate::r#match::engine::psychology::PsychState;
 use crate::r#match::engine::result::Score;
 use crate::r#match::player::events::FoulSeverity;
@@ -60,7 +60,8 @@ fn the_engagement_distances_are_ordered() {
 // ── The doors ─────────────────────────────────────────────────────────
 
 /// Source scan: every site that constructs a `Tackling` transition target
-/// carries the shared predicate within a few lines above it.
+/// carries the shared predicate within a few lines above it — or, for a
+/// defender, stages the challenge it decided, which `Tackling` alone rolls.
 ///
 /// A behavioural test cannot reach twenty-one doors, and the defect this
 /// replaces was structural — each state deciding the same thing on its
@@ -118,12 +119,15 @@ fn every_tackling_door_asks_the_shared_contract() {
                 continue;
             }
             // The guard sits above the transition; a dozen lines covers
-            // the widest of them (the box-emergency helper included).
+            // the widest of them. A staged challenge sits just below it.
             let from = i.saturating_sub(12);
-            let guarded = lines[from..=i].iter().any(|l| {
-                l.contains("TackleEngagement::should_commit")
-                    || l.contains("BoxEmergency::response")
-            });
+            let to = (i + 2).min(lines.len() - 1);
+            let guarded = lines[from..=i]
+                .iter()
+                .any(|l| l.contains("TackleEngagement::should_commit"))
+                || lines[i..=to]
+                    .iter()
+                    .any(|l| l.contains(".with_staged_challenge("));
             if !guarded {
                 offenders.push(format!("{}:{}", path.display(), i + 1));
             }
@@ -266,6 +270,8 @@ fn a_state_change_below_the_line_adds_no_jadedness() {
             player: &mut defender,
             conditions: &context.conditions,
             match_progress: 0.5,
+            side_on_ball: false,
+            ball_dead: false,
         });
     }
     assert_eq!(defender.player_attributes.jadedness, 0);
@@ -281,6 +287,8 @@ fn a_man_held_below_the_line_accrues_jadedness_at_the_interval() {
             player: &mut defender,
             conditions: &context.conditions,
             match_progress: 0.5,
+            side_on_ball: false,
+            ball_dead: false,
         });
     }
     assert_eq!(
@@ -436,7 +444,7 @@ fn losing_the_ball_during_the_wind_up_cancels_the_kick() {
     );
     assert_eq!(
         aborted.state,
-        Some(PlayerState::Defender(DefenderState::Standing)),
+        Some(PlayerState::Defender(DefenderRead::resolve(&stolen))),
         "an aborted clearance hands him back to an off-ball decision"
     );
 }
@@ -458,7 +466,7 @@ fn a_booked_man_picks_his_moments() {
             context: &context,
             tick_context: &tick_context,
         };
-        TackleDecision::booked_caution(&ctx)
+        TackleDecision::booked_caution(ctx.player)
     };
 
     assert_eq!(caution(&field), 1.0);

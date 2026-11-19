@@ -1,4 +1,6 @@
 use crate::r#match::engine::ball::ball::PossessionSource;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::diagnostics::delivery_diag::TouchKind;
 use crate::r#match::engine::psychology::LapseFamily;
 use crate::r#match::engine::ball::ball::frame::FramePart;
 use crate::r#match::engine::player::events::players::{FoulSource, PlayerEventDispatcher};
@@ -322,6 +324,10 @@ impl BallEventDispatcher {
                 // side that concedes the corner. Left on the crosser, every
                 // cross a defender put over his own line was a goal kick.
                 if let Some(team_id) = field.get_player(clearer_id).map(|p| p.team_id) {
+                    #[cfg(feature = "match-logs")]
+                    {
+                        field.ball.touch_kind_hint = Some(TouchKind::Head);
+                    }
                     field
                         .ball
                         .record_touch(clearer_id, team_id, context.current_tick(), false);

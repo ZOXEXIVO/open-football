@@ -1,4 +1,6 @@
-//! Goalkeeper cross-claim contest.
+//! Goalkeeper cross-claim contest: how the aerial contest prices the claim
+//! of a keeper who comes for a high ball (`FootballEngine::resolve_keeper_claim`),
+//! and the command-of-area credit a gather earns.
 //!
 //! When a keeper gathers an opponent's ball that is not a shot, the
 //! engine used to do two things unconditionally: hand him the ball, and
@@ -21,7 +23,7 @@
 //! tier, so EVERY keeper cleared both bars every week regardless of how
 //! he played.
 //!
-//! Both are fixed here, at the producer, rather than at the rating
+//! Both are fixed at the producer, rather than at the rating
 //! boundary — an over-emitting counter is an engine gap, and the divisor
 //! table exists for volume, not for meaning.
 //!
@@ -47,7 +49,10 @@ pub mod gk_claim_diag {
     pub static GATHERS: AtomicU64 = AtomicU64::new(0);
     /// Of those, the ones that read as a genuine command-of-area claim.
     pub static COMMAND_MOMENTS: AtomicU64 = AtomicU64::new(0);
-    /// Of those, the ones the keeper flapped.
+    /// High balls he came for that the contest decided: caught, punched or
+    /// flapped.
+    pub static CLAIMS: AtomicU64 = AtomicU64::new(0);
+    /// Of those, the ones he flapped.
     pub static FLAPS: AtomicU64 = AtomicU64::new(0);
     /// Shot events that fired while a flap was still pending — the
     /// numerator of "does a spilled cross actually become a chance".
@@ -62,6 +67,7 @@ pub mod gk_claim_diag {
         for c in [
             &GATHERS,
             &COMMAND_MOMENTS,
+            &CLAIMS,
             &FLAPS,
             &FLAP_SHOTS_SEEN,
             &FLAP_TO_SHOT,
@@ -71,10 +77,12 @@ pub mod gk_claim_diag {
         }
     }
 
-    pub fn snapshot() -> (u64, u64, u64) {
+    /// `(gathers, command moments, claims decided, flaps)`.
+    pub fn snapshot() -> (u64, u64, u64, u64) {
         (
             GATHERS.load(Ordering::Relaxed),
             COMMAND_MOMENTS.load(Ordering::Relaxed),
+            CLAIMS.load(Ordering::Relaxed),
             FLAPS.load(Ordering::Relaxed),
         )
     }
@@ -89,12 +97,14 @@ pub mod gk_claim_diag {
     }
 }
 
-use crate::PlayerFieldPositionGroup;
-use crate::r#match::MatchField;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext as EffSkillCtx, effective_skill,
 };
+use crate::r#match::player::strategies::players::ops::goalkeeper_skill::{
+    GoalkeeperSkillInputs, GoalkeeperSkillProfile,
+};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::{ClaimIntent, MatchField, MatchPlayer};
 
 /// How the situation reads at the moment the keeper reaches the ball.
 pub struct ClaimSituation {
@@ -104,6 +114,38 @@ pub struct ClaimSituation {
     pub command_weight: f32,
     /// 0..1 — how hard the claim is, given height, traffic and pace.
     pub difficulty: f32,
+    /// 0..1 — the traffic: opponents close enough to challenge for it.
+    pub pressure: f32,
+}
+
+impl ClaimSituation {
+    /// A ball `height` metres up with `pressure` of traffic around it,
+    /// travelling at `speed` u/tick, and whether it was crossed.
+    pub fn of(height: f32, pressure: f32, speed: f32, cross: bool) -> Self {
+        // Height: a ball above head height is a claim; one rolling along
+        // the ground is a gather.
+        let aerial = (height / GkClaimContest::AERIAL_HEIGHT).clamp(0.0, 1.0);
+        let pace = (speed / 4.0).clamp(0.0, 1.0);
+        let cross = if cross { 1.0 } else { 0.0 };
+
+        // Command weight — what makes a gather read as commanding the
+        // box. Height and traffic dominate; a cross is the archetypal
+        // case, pace is a minor contributor.
+        let command_weight =
+            (aerial * 0.42 + pressure * 0.30 + cross * 0.20 + pace * 0.08).clamp(0.0, 1.0);
+
+        // Difficulty shares the same inputs but weights pace higher (a
+        // driven cross is hard to hold whatever the traffic) and adds a
+        // floor so even an uncontested high ball can be fumbled.
+        let difficulty =
+            (0.12 + aerial * 0.30 + pressure * 0.26 + pace * 0.22 + cross * 0.10).clamp(0.0, 1.0);
+
+        ClaimSituation {
+            command_weight,
+            difficulty,
+            pressure,
+        }
+    }
 }
 
 pub struct GkClaimContest;
@@ -132,9 +174,6 @@ impl GkClaimContest {
     /// Read the situation around the keeper as he reaches the ball.
     pub fn assess(field: &MatchField, gk_id: u32) -> ClaimSituation {
         let ball_pos = field.ball.position;
-        let ball_speed = field.ball.velocity.norm();
-        let from_cross = field.ball.pending_pass_was_cross;
-
         let gk_team = field
             .players
             .iter()
@@ -143,64 +182,41 @@ impl GkClaimContest {
 
         // Traffic: opponents close enough to challenge. Saturating so a
         // crowded six-yard box doesn't run away with the weight.
-        let mut opponents_near = 0.0f32;
-        if let Some(team) = gk_team {
-            for p in field.players.iter() {
-                if p.team_id == team || p.off_pitch {
-                    continue;
-                }
-                let dx = p.position.x - ball_pos.x;
-                let dy = p.position.y - ball_pos.y;
-                if dx * dx + dy * dy <= Self::PRESSURE_RADIUS * Self::PRESSURE_RADIUS {
-                    opponents_near += 1.0;
-                }
-            }
-        }
-        let pressure = 1.0 - (-opponents_near / 1.5).exp();
-
-        // Height: a ball above head height is a claim; one rolling along
-        // the ground is a gather.
-        let aerial = (ball_pos.z / Self::AERIAL_HEIGHT).clamp(0.0, 1.0);
-        let pace = (ball_speed / 4.0).clamp(0.0, 1.0);
-        let cross = if from_cross { 1.0 } else { 0.0 };
-
-        // Command weight — what makes a gather read as commanding the
-        // box. Height and traffic dominate; a cross is the archetypal
-        // case, pace is a minor contributor.
-        let command_weight =
-            (aerial * 0.42 + pressure * 0.30 + cross * 0.20 + pace * 0.08).clamp(0.0, 1.0);
-
-        // Difficulty shares the same inputs but weights pace higher (a
-        // driven cross is hard to hold whatever the traffic) and adds a
-        // floor so even an uncontested high ball can be fumbled.
-        let difficulty =
-            (0.12 + aerial * 0.30 + pressure * 0.26 + pace * 0.22 + cross * 0.10).clamp(0.0, 1.0);
-
-        ClaimSituation {
-            command_weight,
-            difficulty,
-        }
+        let opponents_near = field
+            .players
+            .iter()
+            .filter(|p| Some(p.team_id) != gk_team && !p.off_pitch)
+            .filter(|p| {
+                (p.position.x - ball_pos.x).hypot(p.position.y - ball_pos.y)
+                    <= Self::PRESSURE_RADIUS
+            })
+            .count() as f32;
+        ClaimSituation::of(
+            ball_pos.z,
+            1.0 - (-opponents_near / 1.5).exp(),
+            field.ball.velocity.norm(),
+            field.ball.pending_pass_was_cross,
+        )
     }
 
-    /// Probability the keeper flaps this claim.
-    ///
-    /// `minute` routes the composites through `effective_skill`, so a
-    /// tired keeper late in the game is more likely to spill — the same
-    /// fatigue channel the save model uses.
-    pub fn failure_probability(
-        field: &MatchField,
-        gk_id: u32,
+    /// Probability the keeper's chosen action fails here: a catch is
+    /// dropped, a punch misses. Either is a flap.
+    pub fn failure(
+        keeper: &MatchPlayer,
+        intent: ClaimIntent,
         situation: &ClaimSituation,
         minute: u32,
     ) -> f32 {
-        let Some(keeper) = field.players.iter().find(|p| p.id == gk_id) else {
-            return 0.0;
-        };
-        if keeper.tactical_position.current_position.position_group()
-            != PlayerFieldPositionGroup::Goalkeeper
-        {
-            return 0.0;
+        match intent {
+            ClaimIntent::Catch => Self::catch_failure(keeper, situation, minute),
+            ClaimIntent::Punch => 1.0 - Self::punch_success(keeper, situation, minute),
         }
+    }
+
+    /// `minute` routes the composites through `effective_skill`, so a
+    /// tired keeper late in the game is more likely to spill — the same
+    /// fatigue channel the save model uses.
+    fn catch_failure(keeper: &MatchPlayer, situation: &ClaimSituation, minute: u32) -> f32 {
         // Claiming a cross is `gk_claim_cross` (aerial reach, command of
         // area, handling, positioning, anticipation, jumping) held
         // together by the head: a keeper who loses his nerve in traffic
@@ -218,5 +234,30 @@ impl GkClaimContest {
         let shortfall = (1.0 - skill).powf(Self::FAILURE_EXPONENT);
         (Self::FAILURE_SCALE * situation.difficulty * shortfall)
             .clamp(Self::FAILURE_MIN, Self::FAILURE_MAX)
+    }
+
+    /// A fist only has to meet it, so command of the area leads and the
+    /// traffic costs him less than it costs a catch. Between ~0.40 (weak,
+    /// in heavy traffic) and ~0.92 (elite, in space).
+    fn punch_success(keeper: &MatchPlayer, situation: &ClaimSituation, minute: u32) -> f32 {
+        let prof = GoalkeeperSkillProfile::from_player(
+            keeper,
+            &GoalkeeperSkillInputs {
+                minute,
+                condition_pct: (keeper.player_attributes.condition as f32 / 10_000.0)
+                    .clamp(0.0, 1.0),
+            },
+        );
+        let quality = (prof.aerial_command * 0.46
+            + prof.positioning * 0.18
+            + prof.rushing_out_profile * 0.12
+            + prof.communication * 0.10
+            + prof.condition_mult * 0.06)
+            .clamp(0.0, 1.0);
+        let difficulty = (situation.pressure * 0.32
+            + (1.0 - prof.parry_control) * 0.20
+            + prof.poor_skill_penalty * 0.18)
+            .clamp(0.0, 1.0);
+        (quality * 0.85 - difficulty * 0.30 + prof.elite_lift).clamp(0.20, 0.95)
     }
 }

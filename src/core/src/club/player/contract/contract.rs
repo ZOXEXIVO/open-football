@@ -136,6 +136,22 @@ pub enum PlayerSquadStatus {
 }
 
 impl PlayerSquadStatus {
+    /// Empty for the statuses no player is shown with.
+    pub fn i18n_key(&self) -> &'static str {
+        match self {
+            PlayerSquadStatus::KeyPlayer => "squad_key_player",
+            PlayerSquadStatus::FirstTeamRegular => "squad_first_team_regular",
+            PlayerSquadStatus::FirstTeamSquadRotation => "squad_rotation",
+            PlayerSquadStatus::MainBackupPlayer => "squad_backup_player",
+            PlayerSquadStatus::HotProspectForTheFuture => "squad_hot_prospect",
+            PlayerSquadStatus::DecentYoungster => "squad_decent_youngster",
+            PlayerSquadStatus::NotNeeded => "squad_not_needed",
+            PlayerSquadStatus::NotYetSet
+            | PlayerSquadStatus::Invalid
+            | PlayerSquadStatus::SquadStatusCount => "",
+        }
+    }
+
     /// Seniority order used when comparing squad-role promises in contract
     /// negotiation (higher = more senior). Single source of truth — the
     /// acceptance handler, the renewal AI, and the reactive renewal path all

@@ -166,6 +166,7 @@ pub mod dead_ball_diag {
             athletic: f32,
             intensity: ActivityIntensity,
             keeper: bool,
+            back_line: Option<usize>,
         ) {
             let covered = if covered.is_finite() { covered } else { 0.0 };
             if keeper {
@@ -176,6 +177,10 @@ pub mod dead_ball_diag {
             }
             MOTION_TICKS.fetch_add(1, Ordering::Relaxed);
             MOTION_DISTANCE_X1000.fetch_add((covered * 1000.0) as u64, Ordering::Relaxed);
+            let line = back_line.unwrap_or(Self::LINES - 1);
+            MOTION_LINE_TICKS[line].fetch_add(1, Ordering::Relaxed);
+            MOTION_LINE_DISTANCE_X1000[line]
+                .fetch_add((covered * 1000.0) as u64, Ordering::Relaxed);
             // 1.2 m/s is a walk; below it he is standing or strolling.
             if covered < Self::WALKING_PACE {
                 MOTION_STILL.fetch_add(1, Ordering::Relaxed);
@@ -220,6 +225,25 @@ pub mod dead_ball_diag {
             )
         }
 
+        /// The defender census's back-line places, then every other
+        /// outfielder: the pooled line split four ways.
+        pub const LINES: usize = 4;
+
+        /// `(km per 90, player-ticks)` by back-line place, the last row the
+        /// rest of the outfield. The ticks sum to the pooled line's.
+        pub fn back_line_split() -> [(f32, u64); Self::LINES] {
+            std::array::from_fn(|i| {
+                let ticks = MOTION_LINE_TICKS[i].load(Ordering::Relaxed);
+                (
+                    Self::per_90(
+                        MOTION_LINE_DISTANCE_X1000[i].load(Ordering::Relaxed),
+                        ticks.max(1),
+                    ),
+                    ticks,
+                )
+            })
+        }
+
         /// Thousandths of a game unit, over this many player-ticks, as
         /// kilometres over a ninety-minute match.
         ///
@@ -253,6 +277,11 @@ pub mod dead_ball_diag {
     }
 
     pub static MOTION_TICKS: AtomicU64 = AtomicU64::new(0);
+    /// `MOTION_TICKS` and `MOTION_DISTANCE_X1000` split by
+    /// [`MotionCensus::back_line_split`]'s rows.
+    pub static MOTION_LINE_TICKS: [AtomicU64; MotionCensus::LINES] = [ZERO; MotionCensus::LINES];
+    pub static MOTION_LINE_DISTANCE_X1000: [AtomicU64; MotionCensus::LINES] =
+        [ZERO; MotionCensus::LINES];
     /// Ground covered, in thousandths of a game unit (a unit is 0.125 m).
     pub static MOTION_DISTANCE_X1000: AtomicU64 = AtomicU64::new(0);
     /// Ticks spent below a walking pace — 1.2 m/s, or 0.096 u/tick.
@@ -444,6 +473,8 @@ pub mod dead_ball_diag {
             .chain(CARRIER_PRESSURE_BY_THIRD.iter())
             .chain(CHASE_TIER.iter())
             .chain(MOTION_TIER.iter())
+            .chain(MOTION_LINE_TICKS.iter())
+            .chain(MOTION_LINE_DISTANCE_X1000.iter())
         {
             c.store(0, Ordering::Relaxed);
         }

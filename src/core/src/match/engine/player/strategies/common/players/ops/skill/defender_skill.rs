@@ -47,7 +47,6 @@ pub struct DefenderSkillProfile {
     pub defensive_reading: f32,
     /// Reaction delay in ticks (lower is faster).
     pub reaction_delay_ticks: f32,
-    pub hold_line_bias: f32,
 
     // Marking
     pub marking_profile: f32,
@@ -55,25 +54,12 @@ pub struct DefenderSkillProfile {
     pub lost_runner_chance: f32,
     pub goal_side_weight: f32,
 
-    // Cover
-    pub cover_profile: f32,
-    pub second_defender_cover_bonus: f32,
-
     // Duel / tackle
     pub tackle_profile: f32,
     pub discipline: f32,
 
     // Press
     pub press_profile: f32,
-
-    // Interception
-    pub interception_profile: f32,
-    pub interception_radius: f32,
-    pub shot_block_reaction: f32,
-
-    // Aerial
-    pub aerial_defense: f32,
-    pub poor_aerial_mistake: f32,
 
     // Clearance
     pub clearance_profile: f32,
@@ -302,7 +288,6 @@ impl DefenderSkillProfile {
         //    to per-read effective_skill — see SkillBands) ──────────────
         let tackling_eff = bands.apply(s.technical.tackling, SkillCategory::Technical);
         let marking_eff = bands.apply(s.technical.marking, SkillCategory::Technical);
-        let heading_eff = bands.apply(s.technical.heading, SkillCategory::Technical);
         let passing_eff = bands.apply(s.technical.passing, SkillCategory::Technical);
         let technique_eff = bands.apply(s.technical.technique, SkillCategory::Technical);
         let first_touch_eff = bands.apply(s.technical.first_touch, SkillCategory::Technical);
@@ -322,7 +307,6 @@ impl DefenderSkillProfile {
         let off_ball_eff = bands.apply(s.mental.off_the_ball, SkillCategory::Mental);
 
         let strength_eff = bands.apply(s.physical.strength, SkillCategory::Explosive);
-        let jumping_eff = bands.apply(s.physical.jumping, SkillCategory::Explosive);
         let pace_eff = bands.apply(s.physical.pace, SkillCategory::Explosive);
         let acceleration_eff = bands.apply(s.physical.acceleration, SkillCategory::Explosive);
         let agility_eff = bands.apply(s.physical.agility, SkillCategory::Explosive);
@@ -332,7 +316,6 @@ impl DefenderSkillProfile {
         // ── Normalised reads ─────────────────────────────────────────
         let tackling01 = norm01(tackling_eff);
         let marking01 = norm01(marking_eff);
-        let heading01 = norm01(heading_eff);
         let passing01 = norm01(passing_eff);
         let technique01 = norm01(technique_eff);
         let first_touch01 = norm01(first_touch_eff);
@@ -352,7 +335,6 @@ impl DefenderSkillProfile {
         let off_ball01 = norm01(off_ball_eff);
 
         let strength01 = norm01(strength_eff);
-        let jumping01 = norm01(jumping_eff);
         let pace01 = norm01(pace_eff);
         let acceleration01 = norm01(acceleration_eff);
         let agility01 = norm01(agility_eff);
@@ -382,7 +364,7 @@ impl DefenderSkillProfile {
         let fatigue = (1.0 - cond).max(0.0).powf(1.30);
         let jadedness = (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
         let jadedness_penalty = jadedness * 0.16;
-        let fitness_recovery = 1.0 - fatigue * (0.17 + fitness * 0.22);
+        let fitness_recovery = 1.0 - fatigue * (0.17 + (1.0 - fitness) * 0.22);
         let mental_fatigue = 1.0 - fatigue * (0.08 + poor_penalty * 0.20);
         let late_drop = if inputs.minute >= 70 {
             1.0 - ((inputs.minute as f32 - 70.0) / 50.0).clamp(0.0, 1.0)
@@ -437,7 +419,6 @@ impl DefenderSkillProfile {
 
         let reaction_delay_ticks =
             (30.0 - defensive_reading * 22.0 + fatigue * 12.0).clamp(4.0, 40.0);
-        let hold_line_bias = defensive_reading - poor_penalty * 0.20;
 
         // ── Marking ──────────────────────────────────────────────────
         let marking_profile = ((pow_curve(marking01, 1.55) * 0.24
@@ -457,18 +438,6 @@ impl DefenderSkillProfile {
         let goal_side_weight =
             (0.45 + pow_curve(positioning01, 1.30) * 0.30 + pow_curve(decisions01, 1.30) * 0.15)
                 .clamp(0.45, 0.85);
-
-        // ── Cover ────────────────────────────────────────────────────
-        let cover_profile = (pow_curve(positioning01, 1.50) * 0.24
-            + pow_curve(anticipation01, 1.45) * 0.22
-            + pow_curve(acceleration01, 1.25) * 0.12
-            + pow_curve(pace01, 1.20) * 0.10
-            + pow_curve(decisions01, 1.35) * 0.10
-            + pow_curve(concentration01, 1.25) * 0.10
-            + pow_curve(teamwork01, 1.20) * 0.08
-            + pow_curve(agility01, 1.15) * 0.04)
-            .clamp(0.0, 1.0);
-        let second_defender_cover_bonus = 0.06 + cover_profile * 0.10;
 
         // ── Tackle ───────────────────────────────────────────────────
         let tackle_profile = ((pow_curve(tackling01, 1.65) * 0.28
@@ -506,34 +475,6 @@ impl DefenderSkillProfile {
             + pow_curve(teamwork01, 1.15) * 0.08)
             * pressing_condition_mult)
             .clamp(0.0, 1.0);
-
-        // ── Interception ─────────────────────────────────────────────
-        let interception_profile = (pow_curve(anticipation01, 1.55) * 0.24
-            + pow_curve(positioning01, 1.45) * 0.22
-            + pow_curve(concentration01, 1.35) * 0.16
-            + pow_curve(acceleration01, 1.25) * 0.12
-            + pow_curve(pace01, 1.15) * 0.08
-            + pow_curve(agility01, 1.15) * 0.06
-            + pow_curve(decisions01, 1.30) * 0.06
-            + pow_curve(bravery01, 1.10) * 0.06)
-            .clamp(0.0, 1.0);
-        let interception_radius = 3.0 + interception_profile * 6.0;
-        let shot_block_reaction =
-            (0.08 + interception_profile * 0.38 + pow_curve(bravery01, 1.10) * 0.08)
-                .clamp(0.05, 0.58);
-
-        // ── Aerial defense ───────────────────────────────────────────
-        let aerial_defense = (pow_curve(heading01, 1.55) * 0.24
-            + pow_curve(jumping01, 1.45) * 0.18
-            + pow_curve(strength01, 1.30) * 0.14
-            + pow_curve(positioning01, 1.35) * 0.14
-            + pow_curve(bravery01, 1.25) * 0.10
-            + pow_curve(anticipation01, 1.30) * 0.10
-            + pow_curve(concentration01, 1.20) * 0.06
-            + pow_curve(balance01, 1.15) * 0.04)
-            .clamp(0.0, 1.0);
-        let poor_aerial_mistake =
-            (poor_penalty * 0.12 + fatigue * 0.08 - aerial_defense * 0.06).clamp(0.01, 0.22);
 
         // ── Clearance ────────────────────────────────────────────────
         let clearance_profile = ((pow_curve(technique01, 1.35) * 0.18
@@ -612,21 +553,13 @@ impl DefenderSkillProfile {
             clearance_condition_mult,
             defensive_reading,
             reaction_delay_ticks,
-            hold_line_bias,
             marking_profile,
             ideal_marking_distance,
             lost_runner_chance,
             goal_side_weight,
-            cover_profile,
-            second_defender_cover_bonus,
             tackle_profile,
             discipline,
             press_profile,
-            interception_profile,
-            interception_radius,
-            shot_block_reaction,
-            aerial_defense,
-            poor_aerial_mistake,
             clearance_profile,
             poor_clearance_chance,
             buildup_profile,
@@ -635,18 +568,6 @@ impl DefenderSkillProfile {
             overlap_profile,
             pressure_penalty,
         }
-    }
-
-    /// Whether the defender should engage in primary pressing.
-    #[inline]
-    pub fn allows_primary_press(&self) -> bool {
-        self.press_profile >= 0.34
-    }
-
-    /// Whether the defender should engage in counter-pressing.
-    #[inline]
-    pub fn allows_counterpress(&self) -> bool {
-        self.press_profile >= 0.42 && self.def_condition_mult >= 0.68
     }
 
     /// Whether the defender should attempt a switch-of-play pass.
@@ -685,12 +606,6 @@ impl DefenderSkillProfile {
     #[inline]
     pub fn allows_late_lead_overlap(&self) -> bool {
         self.overlap_profile >= 0.70
-    }
-
-    /// Whether the defender should step out of the line.
-    #[inline]
-    pub fn allows_step_up(&self) -> bool {
-        self.defensive_reading >= 0.42
     }
 
     /// Press boost multiplier on closing speed.
@@ -819,8 +734,29 @@ mod tests {
         assert!(prof.marking_profile > 0.65);
         // Elite defender marks closer.
         assert!(prof.ideal_marking_distance < 9.0);
-        // Elite defender allows step-up.
-        assert!(prof.allows_step_up());
+    }
+
+    #[test]
+    fn the_fitter_defender_keeps_more_of_his_defending() {
+        let mut fit = build_player(12.0, 6500);
+        let mut unfit = build_player(12.0, 6500);
+        for (p, level) in [(&mut fit, 18.0), (&mut unfit, 6.0)] {
+            p.skills.physical.stamina = level;
+            p.skills.physical.natural_fitness = level;
+            p.skills.physical.match_readiness = level;
+        }
+        let inputs = DefenderSkillInputs {
+            condition_pct: 0.65,
+            ..default_inputs()
+        };
+        let fit = DefenderSkillProfile::from_player(&fit, &inputs);
+        let unfit = DefenderSkillProfile::from_player(&unfit, &inputs);
+        assert!(
+            fit.def_condition_mult > unfit.def_condition_mult,
+            "fit {} against unfit {}",
+            fit.def_condition_mult,
+            unfit.def_condition_mult
+        );
     }
 
     #[test]

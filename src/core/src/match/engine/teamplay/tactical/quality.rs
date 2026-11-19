@@ -55,25 +55,6 @@ impl TeamTacticalState {
         (press_intensity * mult).clamp(0.0, 1.0)
     }
 
-    /// Damping factor for "panic" tactical shape changes. Returns a
-    /// multiplier in [0.85, 1.05] — high concentration / teamwork
-    /// damps the panic response (the leader holds shape better);
-    /// poor organisation slightly amplifies it (the leader rushes
-    /// clearances and gives the ball back). Spec: 0.85..1.05.
-    pub fn protect_lead_damping(concentration_teamwork_avg: f32) -> f32 {
-        let q = concentration_teamwork_avg.clamp(0.0, 1.0);
-        if q >= 0.50 {
-            // Above 0.50: scale down toward 0.85 at q=1.0.
-            let damp = (q - 0.50) / 0.50 * 0.15;
-            (1.0 - damp).clamp(0.85, 1.05)
-        } else {
-            // Below 0.50: very slight amplification — a poorly-organised
-            // side that's leading can play wilder than they should.
-            let amp = (0.50 - q) / 0.50 * 0.05;
-            (1.0 + amp).clamp(0.85, 1.05)
-        }
-    }
-
     /// Sweeper-keeper line lift: a high `gk_quality` lets the back
     /// line push higher because the keeper covers space behind. Capped
     /// at 0.02 of pitch width so this is a tweak, not a takeover.
@@ -84,25 +65,6 @@ impl TeamTacticalState {
         }
         // 0.55 → 0, 1.00 → 0.02 of field_width.
         ((q - 0.55) / 0.45 * 0.02).max(0.0) * field_width
-    }
-
-    /// Bias delta when chasing a result. Sides with the actual
-    /// attacking quality to convert get a small tempo / risk lift —
-    /// poor sides chasing late don't, since rushing wouldn't help
-    /// them. Spec: bounded to ±0.05.
-    pub(crate) fn attacking_chase_lift(attacking_quality: f32, minute: f32) -> f32 {
-        // Only bites in the back half of the match (chasing late, not
-        // hunting in minute 12).
-        let late = ((minute - 60.0).max(0.0) / 30.0).clamp(0.0, 1.0);
-        // Skill gate: only sides above 0.55 attacking_quality see the
-        // lift; weaker sides stay disciplined.
-        let q = attacking_quality.clamp(0.0, 1.0);
-        if q <= 0.55 {
-            return 0.0;
-        }
-        // 0.55 → 0; 1.00 → 0.05 max at minute 90.
-        let raw = (q - 0.55) / 0.45 * 0.05;
-        (raw * late).clamp(0.0, 0.05)
     }
 }
 
@@ -160,24 +122,6 @@ mod tests {
     }
 
     #[test]
-    fn protect_lead_damping_in_band() {
-        // Spec range 0.85..1.05.
-        assert!((TeamTacticalState::protect_lead_damping(0.50) - 1.0).abs() < 1e-6);
-        // Elite organisation: max 15% damp.
-        let elite = TeamTacticalState::protect_lead_damping(1.0);
-        assert!((elite - 0.85).abs() < 1e-6);
-        // Poor organisation: slight amplification.
-        let poor = TeamTacticalState::protect_lead_damping(0.0);
-        assert!((poor - 1.05).abs() < 1e-6);
-        // Always inside [0.85, 1.05].
-        for q_int in 0..=20 {
-            let q = q_int as f32 / 20.0;
-            let v = TeamTacticalState::protect_lead_damping(q);
-            assert!((0.85 - 1e-6..=1.05 + 1e-6).contains(&v), "q={q} v={v}");
-        }
-    }
-
-    #[test]
     fn gk_line_lift_zero_when_average() {
         assert_eq!(TeamTacticalState::gk_line_lift(0.50, 840.0), 0.0);
     }
@@ -187,20 +131,5 @@ mod tests {
         let lift = TeamTacticalState::gk_line_lift(1.0, 840.0);
         assert!(lift <= 840.0 * 0.0201);
         assert!(lift >= 840.0 * 0.019);
-    }
-
-    #[test]
-    fn attacking_chase_lift_zero_for_weak_side() {
-        // Weak attack chasing late shouldn't get a free pass.
-        assert_eq!(TeamTacticalState::attacking_chase_lift(0.40, 85.0), 0.0);
-    }
-
-    #[test]
-    fn attacking_chase_lift_grows_late_for_strong_side() {
-        let early = TeamTacticalState::attacking_chase_lift(0.85, 30.0);
-        let late = TeamTacticalState::attacking_chase_lift(0.85, 88.0);
-        assert!(late > early);
-        // Spec cap: bounded to 0.05.
-        assert!(late <= 0.0501);
     }
 }

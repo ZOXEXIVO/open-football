@@ -922,3 +922,61 @@ fn two_equal_players_have_different_seasons() {
         "season ratings spread {season_spread:.3}, match noise alone gives {noise_alone:.3}"
     );
 }
+
+#[test]
+fn a_stub_match_gives_both_half_time_talks_by_its_half_time_score() {
+    use crate::club::team::talks::TeamTalkTone;
+    let (home, away) = (squad(1, 100), squad(2, 200));
+    let (mut praised, mut calm, mut lifted) = (0, 0, 0);
+    for seed in 0..80 {
+        let result = play(&home, &away, seed, false);
+        let half: i32 = result
+            .score
+            .as_ref()
+            .unwrap()
+            .detail()
+            .iter()
+            .filter(|g| g.stat_type == MatchStatisticType::Goal && g.time < 45 * 60 * 1000)
+            .map(|g| {
+                if (g.player_id < 200) != g.is_auto_goal {
+                    1
+                } else {
+                    -1
+                }
+            })
+            .sum();
+        for (talk, lead) in [
+            (result.coach_home.half_time_talk, half),
+            (result.coach_away.half_time_talk, -half),
+        ] {
+            let talk = talk.expect("each coach gives his talk");
+            match lead {
+                2.. => {
+                    assert_eq!(talk, TeamTalkTone::Praise, "two up at the half");
+                    praised += 1;
+                }
+                0 => {
+                    assert_eq!(talk, TeamTalkTone::TacticalSilent, "level at the half");
+                    calm += 1;
+                }
+                ..=-1 => {
+                    assert!(
+                        matches!(
+                            talk,
+                            TeamTalkTone::Criticise
+                                | TeamTalkTone::Passionate
+                                | TeamTalkTone::Encourage
+                        ),
+                        "behind at the half: {talk:?}"
+                    );
+                    lifted += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(
+        praised > 0 && calm > 0 && lifted > 0,
+        "praised {praised}, calm {calm}, lifted {lifted}"
+    );
+}

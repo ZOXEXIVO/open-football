@@ -20,11 +20,11 @@ impl LineStep {
             as u64
     }
 
-    /// The depth he holds once he has gone with the call: just past the
-    /// runner, and never deeper than `target_x`, where he was going anyway.
-    /// `None` while there is no call or he has not read it yet.
-    pub fn depth(ctx: &StateProcessingContext, target_x: f32) -> Option<f32> {
-        let call = ctx.team().defensive_plan().line_step?;
+    /// Whether the line's call is live and he has read it.
+    pub fn is_read(ctx: &StateProcessingContext) -> bool {
+        let Some(call) = ctx.team().defensive_plan().line_step else {
+            return false;
+        };
         let team_id = ctx.player.team_id;
         let reaction = Self::reaction_ticks(
             ctx.player.skills.mental.anticipation,
@@ -33,9 +33,17 @@ impl LineStep {
                 .offside_trap_risk(),
             ctx.context.skill_aggregates_for_team(team_id).keeper_voice,
         );
-        if ctx.context.current_tick() < call.called_tick + reaction {
+        ctx.context.current_tick() >= call.called_tick + reaction
+    }
+
+    /// The depth he holds once he has gone with the call: just past the
+    /// runner, and never deeper than `target_x`, where he was going anyway.
+    /// `None` while there is no call or he has not read it yet.
+    pub fn depth(ctx: &StateProcessingContext, target_x: f32) -> Option<f32> {
+        if !Self::is_read(ctx) {
             return None;
         }
+        let call = ctx.team().defensive_plan().line_step?;
         let forward = ctx.player.side?.forward_dir_x();
         let stepped =
             ctx.tick_context.positions.players.position(call.runner).x + forward * Self::PAST;

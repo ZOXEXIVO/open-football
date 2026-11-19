@@ -1,7 +1,7 @@
 # core/league/standings Specification
 
 ## Purpose
-Owns the league's derived-from-results state that is not the table itself: aggregate statistics and rankings, and per-team momentum/rivalry/race dynamics.
+Owns the league's derived-from-results state that is not the table itself: aggregate statistics and rankings, and per-team streak/rivalry/race dynamics.
 
 ## Requirements
 
@@ -12,9 +12,9 @@ Processing a finished match SHALL update the league's aggregate statistics (goal
 - **WHEN** a country has a Tier-2 striker with more goals than the Tier-1 league's leading scorer
 - **THEN** the Tier-1 league's top-scorer ranking is computed only from Tier-1 teams and does not surface the Tier-2 player
 
-### Requirement: Team momentum and rivalry dynamics update after each match
-After each match result, the league SHALL update each team's momentum (a bounded rolling form signal), win/loss streak counters, and derby/rivalry recognition, and periodically refresh title-race, relegation-battle, and European-qualification-race framing from the current table.
+### Requirement: Team streaks and rivalry dynamics update after each match
+After each match result, the league SHALL update each team's winning, unbeaten and losing streak counters and derby/rivalry recognition, and periodically refresh title-race, relegation-battle, and European-qualification-race framing from the current table. The league SHALL NOT keep a separate per-team momentum value.
 
 #### Scenario: Team on a winning run
 - **WHEN** a team wins several consecutive matches
-- **THEN** its momentum value and winning-streak counter both increase, and its losing-streak counter resets to zero
+- **THEN** its winning-streak counter increases with each win, and its losing-streak counter resets to zero

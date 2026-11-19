@@ -274,6 +274,9 @@ impl TeamCollection {
                 Self::fire_manager_departure_events(&mut self.teams, prev_id, date);
                 Self::fire_new_manager_bounce_events(&mut self.teams, coach_id, date);
             }
+            if let Some(team) = self.main_mut() {
+                team.on_head_coach_appointed();
+            }
         }
 
         // Whoever is in the seat starts working with the squad in front of

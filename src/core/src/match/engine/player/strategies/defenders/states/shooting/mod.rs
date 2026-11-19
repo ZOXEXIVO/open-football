@@ -1,5 +1,6 @@
-use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, DefenderRead,
+};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
@@ -14,21 +15,17 @@ impl StateProcessingHandler for DefenderShootingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Must have possession to shoot
         if !ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Standing,
-            ));
+            return Some(DefenderRead::change(ctx));
         }
 
         // Last-second quality check: defenders should almost never shoot from distance
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
         if distance_to_goal > 35.0 && !ctx.player().has_clear_shot() {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Standing,
-            ));
+            return Some(DefenderRead::change(ctx));
         }
 
         Some(StateChangeResult::with_defender_state_and_event(
-            DefenderState::Standing,
+            DefenderRead::released(ctx),
             Event::PlayerEvent(PlayerEvent::Shoot(
                 ShootingEventContext::builder()
                     .with_player_id(ctx.player.id)

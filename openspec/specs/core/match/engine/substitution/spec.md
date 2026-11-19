@@ -45,3 +45,22 @@ An injured player SHALL be resolved by the severity decided in the match: a seri
 #### Scenario: Exhausted player is not an injury
 - **WHEN** an uninjured player's condition falls below the critical threshold and they are replaced
 - **THEN** the change is recorded with a fatigue reason and no injury is recorded for the player after the match
+
+### Requirement: The bench reads the coach's match
+What the bench is asked for (attackers, defenders, a midfielder or fresh legs) SHALL come from two things: the coach's commitment reading, and the coach's read of the run of play that the side on the pitch is playing to. The bench SHALL see the real score from the same moment the pitch does. The bench's timing SHALL stay within its calibration:
+- about four and a half changes a team;
+- a first change around the hour, with half-time a minority of first changes;
+- no player taken off at the tick the player came on, and no discretionary change of a player who has played under 15 minutes.
+
+#### Scenario: A side chasing the match brings on attackers
+- **WHEN** a side's commitment reading is chasing the match and it makes a discretionary change
+- **THEN** the bench is asked for an attacking player
+
+#### Scenario: The bench sees the score with the pitch
+- **WHEN** a side goes two goals behind in the 20th minute
+- **THEN** its bench reads the deficit from that moment, as its players on the pitch do
+
+#### Scenario: The bench keeps its rhythm
+- **WHEN** 400 equal-strength matches are played with benches
+- **THEN** each team makes 4.0 to 5.0 changes on average, and the first change comes on average between the 55th and the 66th minute
+- **AND** no player is taken off at the tick the player came on, and no discretionary change takes off a player who has played under 15 minutes

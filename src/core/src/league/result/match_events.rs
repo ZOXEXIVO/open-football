@@ -728,13 +728,17 @@ impl LeagueResult {
             }
         };
 
-        // Collect each side's player ids + club id once. `rep_edge` is
-        // this side's reputation edge over the opponent (0-centred) —
-        // it decides whether the result reads as a humiliation or an
-        // upset on top of the raw scoreline.
+        // Collect each side's players and club id once: those who took the
+        // field for the pre-match and full-time talks, the whole dressing
+        // room and the talk its coach gave for the half-time one. `rep_edge`
+        // is this side's reputation edge over the opponent (0-centred) — it
+        // decides whether the result reads as a humiliation or an upset on
+        // top of the raw scoreline.
         struct SideTalk {
             club_id: u32,
             player_ids: Vec<u32>,
+            dressing_room: Vec<u32>,
+            half_time_talk: Option<TeamTalkTone>,
             delta: i8,
             ht_delta: i8,
             rep_edge: f32,
@@ -780,6 +784,8 @@ impl LeagueResult {
             sides.push(SideTalk {
                 club_id,
                 player_ids: pids,
+                dressing_room: slot.dressing_room().collect(),
+                half_time_talk: details.half_time_talk(slot.team_id),
                 delta,
                 ht_delta,
                 rep_edge,
@@ -820,16 +826,10 @@ impl LeagueResult {
                 );
             }
 
-            if !is_friendly
-                && let Some(tone) = TeamTalkMoments::half_time_tone(
-                    side.ht_delta,
-                    side.rep_edge,
-                    manager_clone.as_ref(),
-                )
-            {
+            if !is_friendly && let Some(tone) = side.half_time_talk {
                 Self::deliver_team_talk(
                     data,
-                    &side.player_ids,
+                    &side.dressing_room,
                     manager_clone.as_ref(),
                     tone,
                     TeamTalkContext {
@@ -2958,7 +2958,8 @@ mod canonical_rating_tests {
                 starting_away_tactic: None,
                 final_home_tactic: None,
                 final_away_tactic: None,
-                shape_change_minute: None,
+                coach_home: Default::default(),
+                coach_away: Default::default(),
                 tally: Default::default(),
                 weather: Default::default(),
                 pitch: Default::default(),

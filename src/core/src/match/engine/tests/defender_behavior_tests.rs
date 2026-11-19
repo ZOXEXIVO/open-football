@@ -115,7 +115,8 @@ fn defender_marking_challenges_a_carrier_running_past_his_off_ball_mark() {
             DefenderMarkingState::default()
                 .process(&situation)
                 .and_then(|r| r.state),
-            Some(PlayerState::Defender(DefenderState::Tackling))
+            Some(PlayerState::Defender(DefenderState::Jockeying)),
+            "goal-side inside the commit band he contains; the challenge is the duel's"
         );
         assert!(DefensiveRecovery::depth_override(&situation).is_none());
 
@@ -150,7 +151,7 @@ fn defender_local_challenge_respects_the_active_presser_and_tackle_cooldown() {
         DefenderMarkingState::default()
             .process(&ctx(&field, &context, &tick, 103))
             .and_then(|r| r.state),
-        Some(PlayerState::Defender(DefenderState::Pressing)),
+        Some(PlayerState::Defender(DefenderState::Jockeying)),
         "a recovering tackler should contain the carrier while his cooldown expires"
     );
 }

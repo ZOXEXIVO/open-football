@@ -1,0 +1,1058 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Open Football — Match Engine Architecture Report</title>
+<style>
+  :root{
+    --bg:#070d0a;
+    --bg2:#0b1410;
+    --panel:rgba(255,255,255,.035);
+    --panel2:rgba(255,255,255,.06);
+    --line:rgba(255,255,255,.09);
+    --line2:rgba(255,255,255,.16);
+    --txt:#e6efe9;
+    --mut:#9db3a6;
+    --dim:#6c8276;
+    --green:#3ddc84;
+    --green2:#0f9d55;
+    --gold:#f2c14e;
+    --blue:#5aa9e6;
+    --red:#ef6a5e;
+    --purple:#b48ce8;
+    --teal:#41d1c2;
+    --radius:16px;
+    --mono:"JetBrains Mono","Fira Code",Consolas,"Courier New",monospace;
+    --sans:"Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:
+      radial-gradient(1200px 600px at 85% -10%, rgba(61,220,132,.07), transparent 60%),
+      radial-gradient(900px 500px at -10% 30%, rgba(90,169,230,.05), transparent 60%),
+      var(--bg);
+    color:var(--txt);
+    font-family:var(--sans);
+    line-height:1.65;
+    font-size:16px;
+  }
+  ::selection{background:rgba(61,220,132,.3)}
+
+  /* ---------- layout ---------- */
+  .wrap{max-width:1180px;margin:0 auto;padding:0 28px}
+  main{padding-left:268px}
+  @media(max-width:900px){main{padding-left:0}}
+
+  /* ---------- nav ---------- */
+  nav{
+    position:fixed;left:0;top:0;bottom:0;width:268px;
+    padding:26px 16px 26px 22px;overflow-y:auto;
+    background:rgba(7,13,10,.85);backdrop-filter:blur(14px);
+    border-right:1px solid var(--line);z-index:50;
+  }
+  @media(max-width:900px){nav{display:none}}
+  nav .brand{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+  nav .brand .dot{width:34px;height:34px;border-radius:50%;
+    background:radial-gradient(circle at 32% 30%,#66ffa8,var(--green2) 70%);
+    box-shadow:0 0 18px rgba(61,220,132,.45), inset 0 0 6px rgba(0,0,0,.4);
+  }
+  nav .brand b{font-size:15px;letter-spacing:.4px}
+  nav .brand span{display:block;font-size:11px;color:var(--dim);font-weight:400}
+  nav a{
+    display:block;color:var(--mut);text-decoration:none;
+    font-size:13px;padding:7px 12px;border-radius:9px;margin-bottom:2px;
+    border-left:2px solid transparent;transition:.18s;
+  }
+  nav a:hover{color:var(--txt);background:var(--panel)}
+  nav a.active{color:var(--green);background:rgba(61,220,132,.08);border-left-color:var(--green)}
+  nav .grp{margin-top:18px;font-size:10.5px;letter-spacing:1.6px;text-transform:uppercase;color:var(--dim);padding-left:12px;margin-bottom:6px}
+
+  /* ---------- typography ---------- */
+  h1{font-size:clamp(30px,4.6vw,52px);line-height:1.12;font-weight:800;letter-spacing:-.5px}
+  h2{font-size:26px;font-weight:700;letter-spacing:-.3px;margin-bottom:10px}
+  h3{font-size:17px;font-weight:600;margin-bottom:8px}
+  p{margin-bottom:14px}
+  .lead{color:var(--mut);font-size:17px;max-width:760px}
+  .sec{padding:64px 0 20px;border-bottom:1px solid var(--line)}
+  .sec:last-of-type{border-bottom:none}
+  .sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:6px}
+  .step-badge{
+    flex:none;display:inline-flex;align-items:center;justify-content:center;
+    min-width:34px;height:34px;border-radius:10px;font-weight:800;font-size:14px;
+    color:#05200f;background:linear-gradient(135deg,var(--green),#8df0b5);
+    box-shadow:0 4px 14px rgba(61,220,132,.3);
+  }
+  .kicker{font-size:11px;letter-spacing:2.2px;text-transform:uppercase;color:var(--green);font-weight:700;margin-bottom:8px}
+  .file{
+    font-family:var(--mono);font-size:12.5px;color:var(--teal);
+    background:rgba(65,209,194,.08);border:1px solid rgba(65,209,194,.2);
+    padding:3px 9px;border-radius:7px;white-space:nowrap;
+  }
+  .file.inline{margin:0 2px}
+  code{font-family:var(--mono);font-size:.86em;color:var(--gold);background:rgba(242,193,78,.08);padding:1px 6px;border-radius:5px}
+  pre{
+    background:#050a07;border:1px solid var(--line);border-radius:var(--radius);
+    padding:18px 20px;overflow-x:auto;font-family:var(--mono);font-size:12.8px;
+    line-height:1.6;color:#cfe8d8;margin:14px 0 22px;
+  }
+  pre .c{color:var(--dim)}
+  pre .k{color:var(--purple)}
+  pre .s{color:var(--gold)}
+  pre .t{color:var(--teal)}
+  pre .n{color:var(--blue)}
+
+  /* ---------- cards / grids ---------- */
+  .grid{display:grid;gap:14px;margin:18px 0 26px}
+  .g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+  .g3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+  .g4{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+  .card{
+    background:linear-gradient(180deg,var(--panel2),var(--panel));
+    border:1px solid var(--line);border-radius:var(--radius);
+    padding:18px 20px;position:relative;overflow:hidden;
+  }
+  .card:hover{border-color:var(--line2)}
+  .card h3{display:flex;align-items:center;gap:9px;margin-bottom:6px}
+  .card p{color:var(--mut);font-size:14px;margin-bottom:0}
+  .card .ico{width:30px;height:30px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;font-size:15px;flex:none}
+  .card .tag{position:absolute;top:14px;right:14px;font-size:10.5px;font-family:var(--mono);color:var(--dim);border:1px solid var(--line);padding:2px 8px;border-radius:20px}
+  .note{
+    border-left:3px solid var(--gold);background:rgba(242,193,78,.06);
+    padding:13px 16px;border-radius:0 10px 10px 0;margin:16px 0;font-size:14px;color:var(--mut);
+  }
+  .note b{color:var(--gold)}
+  .warn{border-left-color:var(--red);background:rgba(239,106,94,.06)}
+  .warn b{color:var(--red)}
+
+  /* ---------- tables ---------- */
+  table{width:100%;border-collapse:collapse;margin:16px 0 26px;font-size:13.8px}
+  th{
+    text-align:left;font-size:11px;letter-spacing:1.4px;text-transform:uppercase;
+    color:var(--dim);padding:9px 12px;border-bottom:1px solid var(--line2);white-space:nowrap;
+  }
+  td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:rgba(255,255,255,.02)}
+  td code{font-size:12px}
+  .tbl-wrap{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow-x:auto;padding:6px 8px}
+  .num{font-family:var(--mono);color:var(--green);font-weight:700}
+
+  /* ---------- pipeline / steps ---------- */
+  .pipe{display:flex;flex-direction:column;gap:0;margin:20px 0 26px;counter-reset:ph}
+  .pipe-item{
+    position:relative;padding:15px 18px 15px 64px;background:var(--panel);
+    border:1px solid var(--line);border-radius:12px;margin-bottom:10px;transition:.18s;
+  }
+  .pipe-item:hover{transform:translateX(4px);border-color:var(--line2)}
+  .pipe-item::before{
+    counter-increment:ph;content:counter(ph);
+    position:absolute;left:16px;top:15px;width:32px;height:32px;border-radius:10px;
+    display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-weight:800;font-size:13px;
+    background:rgba(61,220,132,.12);color:var(--green);border:1px solid rgba(61,220,132,.3);
+  }
+  .pipe-item h4{font-size:14.5px;margin-bottom:3px}
+  .pipe-item p{font-size:13.5px;color:var(--mut);margin:0}
+  .pipe-item .ph{position:absolute;right:14px;top:14px;font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+  .pipe-item b{color:var(--txt)}
+  .pipe-group{
+    display:flex;align-items:center;gap:10px;margin:22px 0 6px;
+    font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--gold);font-weight:700;
+  }
+  .pipe-group::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--line2),transparent)}
+
+  /* ---------- svg diagram ---------- */
+  .diag{
+    background:linear-gradient(180deg,rgba(255,255,255,.02),rgba(255,255,255,0));
+    border:1px solid var(--line);border-radius:var(--radius);
+    padding:22px;margin:18px 0 26px;overflow-x:auto;
+  }
+  .diag svg{display:block;margin:0 auto;max-width:100%;height:auto}
+  .diag-title{font-size:12px;color:var(--dim);text-align:center;margin-top:8px;letter-spacing:.6px}
+
+  .pitch{fill:#0c4d2a}
+  .pitch-line{stroke:rgba(255,255,255,.5);stroke-width:1.4;fill:none}
+  .pitch-zone{stroke-dasharray:5 5;stroke:rgba(255,255,255,.28);stroke-width:1.2;fill:none}
+  .node-box{fill:#0d1a13;stroke:#3ddc84;stroke-width:1.3}
+  .node-box.alt{stroke:#5aa9e6}
+  .node-box.gold{stroke:#f2c14e}
+  .node-box.grey{stroke:#5c7265}
+  .node-txt{fill:#e6efe9;font-size:11.5px;font-weight:600;font-family:var(--mono)}
+  .node-sub{fill:#9db3a6;font-size:9.5px;font-family:var(--mono)}
+  .arrow{stroke:#8fa89a;stroke-width:1.4;fill:none;marker-end:url(#ah)}
+  .arrow.g{stroke:#3ddc84}
+  .lbl{fill:#9db3a6;font-size:10px;font-family:var(--mono)}
+  .lbl.g{fill:#3ddc84}
+
+  /* ---------- animated hero pitch ---------- */
+  .hero{position:relative;padding:70px 0 30px}
+  .hero .ball-anim{width:100%}
+  @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+  .fl{animation:floaty 4s ease-in-out infinite}
+
+  /* ---------- chips ---------- */
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 4px}
+  .chip{
+    font-family:var(--mono);font-size:11.5px;padding:4px 11px;border-radius:20px;
+    background:rgba(61,220,132,.08);border:1px solid rgba(61,220,132,.25);color:#b9e8cc;
+  }
+  .chip.blue{background:rgba(90,169,230,.08);border-color:rgba(90,169,230,.25);color:#bfe0f7}
+  .chip.gold{background:rgba(242,193,78,.08);border-color:rgba(242,193,78,.28);color:#f6dc9a}
+  .chip.purple{background:rgba(180,140,232,.08);border-color:rgba(180,140,232,.28);color:#dcc7f3}
+  .chip.red{background:rgba(239,106,94,.08);border-color:rgba(239,106,94,.28);color:#f5c2bd}
+
+  .foot{margin-top:40px;padding:34px 0 60px;color:var(--dim);font-size:13px;border-top:1px solid var(--line)}
+
+  @keyframes pulse{0%,100%{opacity:.55}50%{opacity:1}}
+  .pulse{animation:pulse 2.2s ease-in-out infinite}
+  @keyframes dashmove{to{stroke-dashoffset:-140}}
+  .dash-anim{stroke-dasharray:10 8;animation:dashmove 6s linear infinite}
+
+  /* phase walkthrough animation on the tick pipeline */
+  .tick-stage{transition:all .25s}
+  .tick-stage.hi{filter:brightness(1.35)}
+  .tick-stage.dim{filter:brightness(.45)}
+</style>
+</head>
+<body>
+
+<nav id="nav">
+  <div class="brand">
+    <div class="dot"></div>
+    <div><b>Match Engine</b><span>architecture report</span></div>
+  </div>
+  <div class="grp">Report</div>
+  <a href="#overview">Overview</a>
+  <a href="#architecture">Architecture map</a>
+  <div class="grp">The 14 steps</div>
+  <a href="#s1">1 · Entry &amp; configuration</a>
+  <a href="#s2">2 · Match lifecycle</a>
+  <a href="#s3">3 · The heartbeat loop</a>
+  <a href="#s4">4 · A full tick, phase by phase</a>
+  <a href="#s5">5 · The light tick</a>
+  <a href="#s6">6 · Ball pipeline</a>
+  <a href="#s7">7 · Ball physics &amp; contests</a>
+  <a href="#s8">8 · Player AI</a>
+  <a href="#s9">9 · Teamplay &amp; tactics</a>
+  <a href="#s10">10 · Officiating</a>
+  <a href="#s11">11 · Psychology</a>
+  <a href="#s12">12 · Events &amp; dispatcher</a>
+  <a href="#s13">13 · Substitutions</a>
+  <a href="#s14">14 · Result &amp; ratings</a>
+  <div class="grp">Reference</div>
+  <a href="#numbers">Numbers &amp; constants</a>
+  <a href="#diagnostics">Diagnostics</a>
+</nav>
+
+<main>
+<div class="wrap">
+
+  <!-- ================= HERO ================= -->
+  <header class="hero" id="overview">
+    <div class="kicker">Open Football · core simulation · <span class="file inline">src/core/src/match/engine/</span></div>
+    <h1>How the Match Engine<br>Plays a Game of Football</h1>
+    <p class="lead" style="margin-top:18px">
+      There is no single <code>engine.rs</code> — the match engine is a 421-file module tree under
+      <span class="file">src/core/src/match/engine/</span>, centred on a stateless type called
+      <code>FootballEngine&lt;W, H&gt;</code> defined in <span class="file">engine/engine/mod.rs</span>.
+      It simulates a full match as <b>millions of 10&nbsp;ms ticks</b>: the ball flies with real
+      ballistics, 22 players think through state machines, a referee officiates, coaches adapt, and
+      nerves rise and fall — until the final whistle produces a full result, ratings and highlights.
+    </p>
+    <div class="diag" style="padding:14px 22px">
+      <svg viewBox="0 0 940 300" class="ball-anim">
+        <defs>
+          <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#8fa89a"/></marker>
+        </defs>
+        <!-- pitch -->
+        <rect x="30" y="30" width="880" height="240" rx="10" class="pitch"/>
+        <line x1="470" y1="30" x2="470" y2="270" class="pitch-line"/>
+        <circle cx="470" cy="150" r="45" class="pitch-line"/>
+        <circle cx="470" cy="150" r="3" fill="rgba(255,255,255,.6)"/>
+        <rect x="30" y="90" width="130" height="120" class="pitch-line"/>
+        <rect x="780" y="90" width="130" height="120" class="pitch-line"/>
+        <rect x="30" y="122" width="44" height="56" class="pitch-line"/>
+        <rect x="866" y="122" width="44" height="56" class="pitch-line"/>
+        <rect x="250" y="30" width="220" height="240" class="pitch-zone"/>
+        <rect x="470" y="30" width="220" height="240" class="pitch-zone"/>
+        <text x="360" y="22" class="lbl" text-anchor="middle">DEFENSIVE THIRD</text>
+        <text x="580" y="22" class="lbl" text-anchor="middle">ATTACKING THIRD</text>
+        <text x="470" y="22" class="lbl" text-anchor="middle">MIDDLE THIRD</text>
+        <!-- animated ball run: kickoff -> build-up -> shot -->
+        <path id="run1" d="M470,150 C 420,150 380,170 330,160 C 260,148 240,110 200,105 C 150,98 120,90 100,84" fill="none" stroke="none"/>
+        <circle r="7" fill="#fff" stroke="#111" stroke-width="1.4">
+          <animateMotion dur="7s" repeatCount="indefinite" keyPoints="0;1;0" keyTimes="0;0.62;1" calcMode="linear">
+            <mpath href="#run1"/>
+          </animateMotion>
+        </circle>
+        <text x="60" y="60" class="lbl g">goal</text>
+        <text x="890" y="60" class="lbl g">goal</text>
+        <text x="470" y="285" class="lbl" text-anchor="middle">105 × 68 · one ball, 22 minds, 10 ms at a time</text>
+      </svg>
+      <div class="diag-title">A match in miniature — the loop that turns 10 ms ticks into 90 minutes of football</div>
+    </div>
+    <div class="grid g3">
+      <div class="card"><div class="tag">core loop</div><h3><span class="ico" style="background:rgba(61,220,132,.15)">⚽</span>Tick-driven</h3>
+        <p>Each tick is <b>10 ms</b> of match time. A half is 45 minutes ⇒ ~270 000 ticks. Full and “light” ticks alternate for performance.</p></div>
+      <div class="card"><div class="tag">stateless</div><h3><span class="ico" style="background:rgba(90,169,230,.15)">🧭</span>Stateless engine</h3>
+        <p><code>FootballEngine</code> carries no fields. All state lives in <code>MatchField</code>, <code>MatchContext</code> and the per-tick <code>GameTickContext</code>.</p></div>
+      <div class="card"><div class="tag">layered</div><h3><span class="ico" style="background:rgba(242,193,78,.15)">🪜</span>Layered AI</h3>
+        <p>Ball physics → contests → player state machines → team tactics → coach → psychology. Each layer only reads the layers below it.</p></div>
+    </div>
+  </header>
+
+  <!-- ================= ARCHITECTURE ================= -->
+  <section class="sec" id="architecture">
+    <div class="kicker">The module tree</div>
+    <h2>Architecture map — 13 modules, one pipeline</h2>
+    <p class="lead">The engine root re-exports a flat surface, but underneath, every module owns one concern. The
+    <b>engine</b> group is the orchestrator; everything else is a subsystem it drives once per tick.</p>
+
+    <div class="diag">
+      <svg viewBox="0 0 980 520">
+        <!-- orchestrator core -->
+        <rect x="330" y="20" width="320" height="64" rx="12" class="node-box gold"/>
+        <text x="490" y="48" text-anchor="middle" class="node-txt" style="font-size:13px;fill:#f6dc9a">engine / (FootballEngine)</text>
+        <text x="490" y="66" text-anchor="middle" class="node-sub">run · tick · resolve · diagnostics</text>
+
+        <!-- top row -->
+        <rect x="30" y="130" width="200" height="54" rx="10" class="node-box"/>
+        <text x="130" y="154" text-anchor="middle" class="node-txt">flow</text>
+        <text x="130" y="170" text-anchor="middle" class="node-sub">arena · context · result · celebration</text>
+
+        <rect x="260" y="130" width="200" height="54" rx="10" class="node-box"/>
+        <text x="360" y="154" text-anchor="middle" class="node-txt">state</text>
+        <text x="360" y="170" text-anchor="middle" class="node-sub">MatchState machine · manager</text>
+
+        <rect x="490" y="130" width="200" height="54" rx="10" class="node-box"/>
+        <text x="590" y="154" text-anchor="middle" class="node-txt">events</text>
+        <text x="590" y="170" text-anchor="middle" class="node-sub">EventCollection · dispatcher</text>
+
+        <rect x="720" y="130" width="230" height="54" rx="10" class="node-box alt"/>
+        <text x="835" y="154" text-anchor="middle" class="node-txt">officiating</text>
+        <text x="835" y="170" text-anchor="middle" class="node-sub">referee · set pieces · management</text>
+
+        <!-- ball row -->
+        <rect x="30" y="230" width="230" height="54" rx="10" class="node-box alt"/>
+        <text x="145" y="254" text-anchor="middle" class="node-txt">ball</text>
+        <text x="145" y="270" text-anchor="middle" class="node-sub">flight · contest · boundary · restarts</text>
+
+        <rect x="290" y="230" width="240" height="54" rx="10" class="node-box alt"/>
+        <text x="410" y="254" text-anchor="middle" class="node-txt">player</text>
+        <text x="410" y="270" text-anchor="middle" class="node-sub">states · strategies · positions · memory</text>
+
+        <rect x="560" y="230" width="200" height="54" rx="10" class="node-box"/>
+        <text x="660" y="254" text-anchor="middle" class="node-txt">teamplay</text>
+        <text x="660" y="270" text-anchor="middle" class="node-sub">plans · coach · chemistry · shape</text>
+
+        <rect x="790" y="230" width="160" height="54" rx="10" class="node-box"/>
+        <text x="870" y="254" text-anchor="middle" class="node-txt">tactics</text>
+        <text x="870" y="270" text-anchor="middle" class="node-sub">positions · field · paths</text>
+
+        <!-- bottom row -->
+        <rect x="30" y="330" width="190" height="54" rx="10" class="node-box"/>
+        <text x="125" y="354" text-anchor="middle" class="node-txt">psychology</text>
+        <text x="125" y="370" text-anchor="middle" class="node-sub">nerves · momentum · lapse</text>
+
+        <rect x="250" y="330" width="190" height="54" rx="10" class="node-box"/>
+        <text x="345" y="354" text-anchor="middle" class="node-txt">substitution</text>
+        <text x="345" y="370" text-anchor="middle" class="node-sub">urgency · scoring · swaps</text>
+
+        <rect x="470" y="330" width="190" height="54" rx="10" class="node-box"/>
+        <text x="565" y="354" text-anchor="middle" class="node-txt">rating</text>
+        <text x="565" y="370" text-anchor="middle" class="node-sub">post-match 1–10 model</text>
+
+        <rect x="690" y="330" width="260" height="54" rx="10" class="node-box"/>
+        <text x="820" y="354" text-anchor="middle" class="node-txt">raycast</text>
+        <text x="820" y="370" text-anchor="middle" class="node-sub">spatial reach · space queries</text>
+
+        <!-- links -->
+        <line x1="400" y1="84" x2="240" y2="130" class="arrow g"/>
+        <line x1="490" y1="84" x2="490" y2="130" class="arrow g"/>
+        <line x1="560" y1="84" x2="700" y2="130" class="arrow g"/>
+        <line x1="470" y1="84" x2="850" y2="130" class="arrow"/>
+        <line x1="330" y1="180" x2="200" y2="230" class="arrow"/>
+        <line x1="490" y1="180" x2="490" y2="230" class="arrow g"/>
+        <line x1="610" y1="180" x2="640" y2="230" class="arrow"/>
+        <line x1="760" y1="180" x2="850" y2="230" class="arrow"/>
+        <line x1="490" y1="280" x2="200" y2="330" class="arrow"/>
+        <line x1="490" y1="280" x2="380" y2="330" class="arrow"/>
+        <line x1="490" y1="280" x2="580" y2="330" class="arrow"/>
+        <line x1="490" y1="280" x2="790" y2="330" class="arrow"/>
+      </svg>
+      <div class="diag-title">The orchestrator (engine) drives everything below it once per tick — subsystems never call each other sideways</div>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>Module</th><th>Owns</th><th>Where it runs</th></tr>
+        <tr><td><code>engine/</code></td><td>Orchestration: lifecycle (<code>run</code>), per-tick driver (<code>tick</code>), cross-subsystem resolutions (<code>resolve</code>), profiler</td><td>Once per match / once per tick</td></tr>
+        <tr><td><code>ball/</code></td><td>Ball state, physics integration, contests, boundary law, restarts, stall detectors</td><td>Every tick, first</td></tr>
+        <tr><td><code>player/</code></td><td>22 state machines (GK/D/M/F), steering, waypoints, memory, fatigue, injury rolls</td><td>Full ticks only (except GK in shots)</td></tr>
+        <tr><td><code>teamplay/</code></td><td>Game phases, tactical state, team plans, live coach ladder, pair chemistry, match standard</td><td>Every 10–25 ticks / 5 s</td></tr>
+        <tr><td><code>tactics/</code></td><td>Formation geometry, positional targets, pitch field math</td><td>Read by everyone</td></tr>
+        <tr><td><code>officiating/</code></td><td>Referee profiles, fouls &amp; advantage, offside police, set-piece routines, dissent/time-wasting</td><td>On events</td></tr>
+        <tr><td><code>psychology/</code></td><td>Per-player nerves/confidence/momentum, skill modifiers, lapses</td><td>Seeded at kickoff, refreshed per tick</td></tr>
+        <tr><td><code>substitution/</code></td><td>Bench pressure (when), change scoring (who), the swap itself, medical pass</td><td>Dead balls, second half+</td></tr>
+        <tr><td><code>rating/</code></td><td>Post-match 1.0–10.0 ratings from stat lines</td><td>Once, after the whistle</td></tr>
+        <tr><td><code>flow/</code></td><td>Environment (weather/crowd), pitch, goal bookkeeping, celebration &amp; substitution cutscenes, result payload</td><td>Whole match</td></tr>
+        <tr><td><code>events/</code></td><td>Event collection + dispatcher with chained follow-ups</td><td>Twice per tick</td></tr>
+        <tr><td><code>state/</code></td><td>The 9-state <code>MatchState</code> machine and its manager</td><td>Outer loop</td></tr>
+        <tr><td><code>raycast/</code></td><td>Spatial reach and space queries for decision-making</td><td>Decision sites</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <!-- ================= STEP 1 ================= -->
+  <section class="sec" id="s1">
+    <div class="sec-head"><span class="step-badge">1</span><div class="kicker" style="margin:0">Entry</div></div>
+    <h2>Entry &amp; configuration — before a ball is kicked</h2>
+    <p class="lead">Three entry points, one config struct. The engine builds the whole world of the match from two squads and a <code>MatchEngineConfig</code>.</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>Entry point</th><th>What it does</th></tr>
+        <tr><td><code>play(left_squad, right_squad, recordings, friendly, knockout)</code></td><td>Classic entry — builds a default config from two flags.</td></tr>
+        <tr><td><code>play_seeded(…, seed: Option&lt;u64&gt;)</code></td><td>Pins the engine's owned RNG stream. Every calibrated roll — substitution timing, penalty shootout, foul cards, corner contests, player decisions — becomes reproducible. <code>None</code> = OS entropy.</td></tr>
+        <tr><td><code>play_with_config(squads, MatchEngineConfig)</code></td><td>Full control: seed, fixture date, weather/pitch/crowd/importance/derby, referee profile, friendly/knockout flags, recording switch.</td></tr>
+      </table>
+    </div>
+
+    <h3>What <code>play_with_config</code> builds, in order</h3>
+    <div class="pipe">
+      <div class="pipe-item"><h4>Score &amp; starting tactics</h4><p>A fresh <code>Score</code>, and a snapshot of both teams' kickoff <b>tactic type</b> (home is always on the left at kickoff).</p></div>
+      <div class="pipe-item"><h4><code>MatchStandard::measure</code></h4><p>Measures the standard of football this fixture will be played at — used downstream for result quality checks and blowout detection.</p></div>
+      <div class="pipe-item"><h4>Players &amp; field</h4><p><code>MatchPlayerCollection::from_squads</code> and <code>MatchField::new(W, H, …)</code> — the pitch, both squads, and the recording buffer.</p></div>
+      <div class="pipe-item"><h4><code>MatchContext::new_with_config</code></h4><p>The world: clock, score, environment, referee, seeded RNG, coach handles, plans. Psychology is seeded per player, and the <b>chemistry map</b> is built from the kickoff XI — pair scores feed the pass evaluator's one-touch bonus from the first whistle.</p></div>
+      <div class="pipe-item"><h4>Home-crowd arousal</h4><p>Crowd intensity × home advantage is stamped onto every player (starters <i>and</i> bench) as a multiplicative effective-skill edge — tuned across multiple 400-match titrations to land the real ~45/25/30 home/away/draw split.</p></div>
+      <div class="pipe-item"><h4>Kickoff</h4><p><code>StateManager::kick_off_period</code> puts the ball at the centre spot with the home side on it — no 14-second dead patch waiting for the emergency chaser override.</p></div>
+    </div>
+
+    <div class="note">⚙ <b>Seeding is load-bearing:</b> one RNG stream is shared by every calibrated decision in the match. A change that reorders draws — even in a branch that never fires for benchless squads — reshuffles every roll downstream. That is why calibration harnesses pin seeds.</div>
+  </section>
+
+  <!-- ================= STEP 2 ================= -->
+  <section class="sec" id="s2">
+    <div class="sec-head"><span class="step-badge">2</span><div class="kicker" style="margin:0">Outer loop</div></div>
+    <h2>The match lifecycle — a 9-state machine</h2>
+    <p class="lead"><code>StateManager</code> walks the match through <code>MatchState</code>, calling <code>play_inner</code> for every <b>timed</b> state and a dedicated <code>run_penalty_shootout</code> when a knockout tie demands it.</p>
+
+    <div class="diag">
+      <svg viewBox="0 0 980 240">
+        <defs><marker id="ah2" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#8fa89a"/></marker></defs>
+        <g>
+          <rect x="10" y="90" width="92" height="58" rx="10" class="node-box grey"/>
+          <text x="56" y="116" text-anchor="middle" class="node-txt">Initial</text>
+          <text x="56" y="133" text-anchor="middle" class="node-sub">setup</text>
+
+          <rect x="122" y="90" width="104" height="58" rx="10" class="node-box"/>
+          <text x="174" y="116" text-anchor="middle" class="node-txt">FirstHalf</text>
+          <text x="174" y="133" text-anchor="middle" class="node-sub">45′ · ~270k ticks</text>
+
+          <rect x="246" y="90" width="92" height="58" rx="10" class="node-box gold"/>
+          <text x="292" y="116" text-anchor="middle" class="node-txt">HalfTime</text>
+          <text x="292" y="133" text-anchor="middle" class="node-sub">swap ends</text>
+
+          <rect x="358" y="90" width="104" height="58" rx="10" class="node-box"/>
+          <text x="410" y="116" text-anchor="middle" class="node-txt">SecondHalf</text>
+          <text x="410" y="133" text-anchor="middle" class="node-sub">45′ + stoppage</text>
+
+          <rect x="482" y="10" width="92" height="50" rx="10" class="node-box grey"/>
+          <text x="528" y="32" text-anchor="middle" class="node-txt">End</text>
+          <text x="528" y="47" text-anchor="middle" class="node-sub">tie, league</text>
+
+          <rect x="482" y="90" width="112" height="58" rx="10" class="node-box"/>
+          <text x="538" y="116" text-anchor="middle" class="node-txt">ExtraTime 1</text>
+          <text x="538" y="133" text-anchor="middle" class="node-sub">15′ · knockout only</text>
+
+          <rect x="614" y="90" width="100" height="58" rx="10" class="node-box gold"/>
+          <text x="664" y="116" text-anchor="middle" class="node-txt">ET interval</text>
+          <text x="664" y="133" text-anchor="middle" class="node-sub">swap again</text>
+
+          <rect x="734" y="90" width="112" height="58" rx="10" class="node-box"/>
+          <text x="790" y="116" text-anchor="middle" class="node-txt">ExtraTime 2</text>
+          <text x="790" y="133" text-anchor="middle" class="node-sub">15′</text>
+
+          <rect x="866" y="90" width="104" height="58" rx="10" class="node-box alt"/>
+          <text x="918" y="116" text-anchor="middle" class="node-txt">Shootout</text>
+          <text x="918" y="133" text-anchor="middle" class="node-sub">discrete kicks</text>
+        </g>
+        <line x1="102" y1="119" x2="122" y2="119" class="arrow"/>
+        <line x1="226" y1="119" x2="246" y2="119" class="arrow"/>
+        <line x1="338" y1="119" x2="358" y2="119" class="arrow"/>
+        <line x1="462" y1="119" x2="482" y2="119" class="arrow"/>
+        <line x1="594" y1="119" x2="614" y2="119" class="arrow"/>
+        <line x1="714" y1="119" x2="734" y2="119" class="arrow"/>
+        <line x1="846" y1="119" x2="866" y2="119" class="arrow"/>
+        <path d="M462,110 C 470,50 500,30 528,30" fill="none" class="arrow"/>
+        <path d="M918,148 C 950,180 500,210 60,148" fill="none" class="arrow g" stroke-dasharray="6 5"/>
+        <text x="520" y="225" text-anchor="middle" class="lbl g">one state ends → handle_state_finish → StateManager::next(score, is_knockout) decides the next</text>
+        <text x="470" y="72" text-anchor="middle" class="lbl">league / friendly, score decided</text>
+      </svg>
+      <div class="diag-title">Timed states run the tick loop · gold = intervals (no ticks, free substitutions, sides swap) · the shootout is a discrete kick model</div>
+    </div>
+
+    <div class="grid g3">
+      <div class="card"><h3><span class="ico" style="background:rgba(61,220,132,.15)">⏱</span>Timed states</h3><p>Run <code>play_inner</code> — the tick loop. The clock only runs here.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(242,193,78,.15)">🔄</span>Intervals</h3><p>Half-time and extra-time interval: no ticks, no play. The single most common substitution minute in real football — a change here is <b>free</b> (no window spent), so <code>open_interval</code> opens a sub window that plays out at the first stoppage of the next half.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(90,169,230,.15)">🥅</span>Shootout</h3><p>When the states are exhausted and the tie is not: a discrete penalty-kick model with its own conversion probabilities and save credits.</p></div>
+    </div>
+  </section>
+
+  <!-- ================= STEP 3 ================= -->
+  <section class="sec" id="s3">
+    <div class="sec-head"><span class="step-badge">3</span><div class="kicker" style="margin:0">Inner loop</div></div>
+    <h2>The heartbeat — <code>play_inner</code>, one tick at a time</h2>
+    <p class="lead">This is the loop that actually plays football. It runs until <code>increment_time()</code> says the period is over — and, like the laws of the game, it refuses to end while a penalty is in flight.</p>
+
+    <div class="diag">
+      <svg viewBox="0 0 980 430">
+        <defs><marker id="ah3" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#8fa89a"/></marker></defs>
+        <!-- loop body -->
+        <rect x="20" y="20" width="230" height="52" rx="10" class="node-box"/>
+        <text x="135" y="43" text-anchor="middle" class="node-txt">while increment_time()</text>
+        <text x="135" y="59" text-anchor="middle" class="node-sub">10 ms · or penalty in progress</text>
+
+        <rect x="300" y="20" width="230" height="52" rx="10" class="node-box gold"/>
+        <text x="415" y="43" text-anchor="middle" class="node-txt">dead-ball window?</text>
+        <text x="415" y="59" text-anchor="middle" class="node-sub">celebration / sub break cutscene</text>
+
+        <rect x="580" y="20" width="180" height="52" rx="10" class="node-box"/>
+        <text x="670" y="43" text-anchor="middle" class="node-txt">coach eval</text>
+        <text x="670" y="59" text-anchor="middle" class="node-sub">every 500 ticks (5 s)</text>
+
+        <rect x="790" y="20" width="170" height="52" rx="10" class="node-box"/>
+        <text x="875" y="43" text-anchor="middle" class="node-txt">tactical refresh</text>
+        <text x="875" y="59" text-anchor="middle" class="node-sub">adaptive 10/25 ticks</text>
+
+        <rect x="300" y="120" width="380" height="64" rx="10" class="node-box alt"/>
+        <text x="490" y="146" text-anchor="middle" class="node-txt">tick_parity &amp; 1 == 0 → light tick</text>
+        <text x="490" y="164" text-anchor="middle" class="node-txt">else → full tick</text>
+
+        <rect x="300" y="230" width="380" height="52" rx="10" class="node-box"/>
+        <text x="490" y="253" text-anchor="middle" class="node-txt">position recording cursor</text>
+        <text x="490" y="269" text-anchor="middle" class="node-sub">one sample every 30 ms of match time</text>
+
+        <rect x="20" y="330" width="300" height="60" rx="10" class="node-box"/>
+        <text x="170" y="353" text-anchor="middle" class="node-txt">medical injury pass</text>
+        <text x="170" y="370" text-anchor="middle" class="node-sub">roll at 3–8′, re-arm 6–14′ · dead-ball gated</text>
+
+        <rect x="360" y="330" width="300" height="60" rx="10" class="node-box"/>
+        <text x="510" y="353" text-anchor="middle" class="node-txt">substitution pass</text>
+        <text x="510" y="370" text-anchor="middle" class="node-sub">plan 10–20′ · pressure look 1/s · dead-ball gated</text>
+
+        <rect x="700" y="330" width="260" height="60" rx="10" class="node-box grey"/>
+        <text x="830" y="353" text-anchor="middle" class="node-txt">loop</text>
+        <text x="830" y="370" text-anchor="middle" class="node-sub">whistle → tally added time</text>
+
+        <line x1="250" y1="46" x2="300" y2="46" class="arrow"/>
+        <line x1="530" y1="46" x2="580" y2="46" class="arrow"/>
+        <line x1="760" y1="46" x2="790" y2="46" class="arrow"/>
+        <line x1="875" y1="72" x2="830" y2="120" class="arrow"/>
+        <line x1="415" y1="72" x2="415" y2="120" class="arrow"/>
+        <line x1="490" y1="184" x2="490" y2="230" class="arrow"/>
+        <line x1="490" y1="282" x2="170" y2="330" class="arrow"/>
+        <line x1="490" y1="282" x2="510" y2="330" class="arrow"/>
+        <path d="M960,360 C 980,360 990,200 980,46 C 970,-20 60,-40 20,10" fill="none" class="arrow g" stroke-dasharray="6 5"/>
+        <text x="905" y="420" text-anchor="middle" class="lbl g">~6 000 000 total updates per release match</text>
+      </svg>
+      <div class="diag-title">Every pass through the body is one simulated 10 ms — the two “cadence” cards fire far less often than the tick itself</div>
+    </div>
+
+    <h3>The cadences (one loop body, several clocks)</h3>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>Concern</th><th>Cadence</th><th>Why</th></tr>
+        <tr><td>Match clock</td><td class="num">+10 ms / tick</td><td>Base granularity — ballistics need it.</td></tr>
+        <tr><td>Full AI vs light tick</td><td class="num">alternating</td><td>Half the ticks skip player thinking; movement continues on stored velocities. Saves ~half the AI cost.</td></tr>
+        <tr><td>Position recording</td><td class="num">every 30 ms</td><td>Replay samples, on a cursor so half-restarts keep the exact cadence.</td></tr>
+        <tr><td>Coach evaluation</td><td class="num">every 500 ticks ≈ 5 s</td><td>The touchline reacts in seconds, not milliseconds. Also probes situational formation overrides (chasing / protecting shapes).</td></tr>
+        <tr><td>Tactical refresh</td><td class="num">25 ticks base · 10 in transitions</td><td>Adaptive: a 40-tick window after any transition trigger (possession swing, goal, coach change, attacking-third entry/exit) uses the fast cadence so phases resolve crisply.</td></tr>
+        <tr><td>Medical roll</td><td class="num">3–8′, then 6–14′</td><td>Injury risk drawn from the shared RNG; replacements wait for dead balls, checked once per second.</td></tr>
+        <tr><td>Substitution plan</td><td class="num">10–20′, re-arm 5–15′</td><td>“Something around the hour” — but a pressure look can act between reviews when the game has gone wrong.</td></tr>
+        <tr><td>Dead-ball window</td><td class="num">45–75 s after a goal · 12 s for a sub</td><td>Cutscene ticks: no ball physics, no AI, no events — the celebration choreography runs instead.</td></tr>
+      </table>
+    </div>
+    <div class="note">⏳ <b>The clock outlasts the period:</b> <code>while increment_time() || ball.penalty_in_progress(…)</code> — the laws extend the half for a penalty still to be taken or travelling. The loop only ends when both agree.</div>
+  </section>
+
+  <!-- ================= STEP 4 ================= -->
+  <section class="sec" id="s4">
+    <div class="sec-head"><span class="step-badge">4</span><div class="kicker" style="margin:0">The work</div></div>
+    <h2>A full tick, phase by phase — <code>game_tick_inner</code></h2>
+    <p class="lead">The full tick is the engine's entire brain in one pass. Eight profiled phases, run in a strict order. Hover the pipeline to read each phase; the order is not negotiable — several phases exist to fix ordering bugs.</p>
+
+    <div class="pipe" id="tickPipe">
+      <div class="pipe-group">phase 0 · tick context</div>
+      <div class="pipe-item tick-stage" data-ph="0"><span class="ph">P_TICKCTX</span>
+        <h4><code>tick_ctx.update</code> — freeze the world</h4>
+        <p>The per-tick snapshot every decision reads: spatial grid, space buffers, the id→position roster join, the per-side <b>first-to-the-ball chase table</b>. Built once; all 22 players read the same frozen world — bit-identical and cache-friendly.</p></div>
+      <div class="pipe-group">phase 1 · ball</div>
+      <div class="pipe-item tick-stage" data-ph="1"><span class="ph">P_BALL</span>
+        <h4>Aerial contest resolves <i>before</i> the ball is claimable</h4>
+        <p><code>resolve_cross_contest</code> runs first: a lofted delivery descending into the claim ceiling (2.8 m) is attacked <b>in the air</b> before any receiver claim can bring it down — this ordering recovered the whole aerial game (~40 lofted deliveries a match).</p></div>
+      <div class="pipe-item tick-stage" data-ph="2"><span class="ph">P_BALL</span>
+        <h4><code>play_ball</code> — <code>Ball::update</code> (Step 6)</h4>
+        <p>Physics, contests, boundaries, restarts, ownership. Then: pending set-piece teleport → save credit → foul-advantage resolution → <code>tick_ctx.refresh_ball</code> so the player phase sees the <i>current</i> owner (prevents the TakeBall force-override firing for a player who already has the ball).</p></div>
+      <div class="pipe-group">phase 2 · players</div>
+      <div class="pipe-item tick-stage" data-ph="3"><span class="ph">P_PLAYERS</span>
+        <h4><code>play_players</code> — 22 minds, one at a time</h4>
+        <p>Each player's state machine runs <code>process</code>: decide a transition, emit an event, contribute a velocity. Then movement integrates and the boundary clamps. Exertion, fatigue and injury risk accrue here.</p></div>
+      <div class="pipe-group">phase 3 · events</div>
+      <div class="pipe-item tick-stage" data-ph="4"><span class="ph">P_DISPATCH</span>
+        <h4><code>EventDispatcher::dispatch</code> — drain everything</h4>
+        <p>Every staged event fires: fouls, goals, restarts, stats. Then <code>handle_goal_reset</code> and — critically — a <b>second</b> <code>apply_pending_set_piece_teleport</code>: free kicks, penalties and offsides are awarded by event handlers <i>after</i> the first drain, and without the post-dispatch teleport they sat staged until the next tick, when <code>move_to</code> nulled the taker 30–200u from the spot (47 owner-drops a match before the fix).</p></div>
+    </div>
+
+    <h3>Why this order exists — three lessons baked into the driver</h3>
+    <div class="grid g3">
+      <div class="card"><h3><span class="ico" style="background:rgba(90,169,230,.15)">🌤</span>Aerial before claim</h3><p>Claims resolved inside the receiver's priority pass would disarm the aerial contest that exists to stop exactly that — 22.9 disarmed contests per match. Running the contest first settles the race by construction.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(239,106,94,.15)">🥅</span>Drain after dispatch too</h3><p>Set-piece teleports staged by event handlers must be applied in the <b>same</b> tick, or the next tick's <code>move_to</code> drops ownership — the ball dead, ownerless, “OWNER_TOO_FAR”.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(242,193,78,.15)">⚽</span>Refresh the ball view</h3><p>Ownership can change inside <code>play_ball</code> (new claim, pass target receive). Without <code>refresh_ball</code>, player dispatch sees a stale owner.</p></div>
+    </div>
+
+    <div class="note">📊 <b>Measured cost</b> (per the engine's own PhaseProf): a full tick spends its time on tick-context, ball, players and dispatch — with player AI alone roughly velocity 36% / process 32% / fatigue 11% / move 8% / loose-ball override 6%. The profiler is env-gated: <code>OF_PHASE_PROF=1</code>.</div>
+  </section>
+
+  <!-- ================= STEP 5 ================= -->
+  <section class="sec" id="s5">
+    <div class="sec-head"><span class="step-badge">5</span><div class="kicker" style="margin:0">Performance</div></div>
+    <h2>The light tick — physics without the thinking</h2>
+    <p class="lead">Half of all ticks are <code>game_tick_light</code>: the ball integrates fully, players <b>move</b> on their stored velocities but do not re-think. One exception: a shot in flight wakes the goalkeepers.</p>
+
+    <div class="diag">
+      <svg viewBox="0 0 940 220">
+        <defs><marker id="ah5" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#8fa89a"/></marker></defs>
+        <rect x="10" y="80" width="170" height="56" rx="10" class="node-box alt"/>
+        <text x="95" y="103" text-anchor="middle" class="node-txt">ball.update_light</text>
+        <text x="95" y="119" text-anchor="middle" class="node-sub">full ball logic</text>
+        <rect x="210" y="80" width="170" height="56" rx="10" class="node-box"/>
+        <text x="295" y="103" text-anchor="middle" class="node-txt">set-piece + save credit</text>
+        <text x="295" y="119" text-anchor="middle" class="node-sub">pending work applied</text>
+        <rect x="410" y="80" width="190" height="56" rx="10" class="node-box gold"/>
+        <text x="505" y="103" text-anchor="middle" class="node-txt">shot in flight? → GK AI</text>
+        <text x="505" y="119" text-anchor="middle" class="node-sub">only 2 of 22 players think</text>
+        <rect x="630" y="80" width="170" height="56" rx="10" class="node-box"/>
+        <text x="715" y="103" text-anchor="middle" class="node-txt">all 22 move_to()</text>
+        <text x="715" y="119" text-anchor="middle" class="node-sub">velocity already decided</text>
+        <rect x="830" y="80" width="100" height="56" rx="10" class="node-box"/>
+        <text x="880" y="103" text-anchor="middle" class="node-txt">dispatch</text>
+        <text x="880" y="119" text-anchor="middle" class="node-sub">if events</text>
+        <line x1="180" y1="108" x2="210" y2="108" class="arrow"/>
+        <line x1="380" y1="108" x2="410" y2="108" class="arrow"/>
+        <line x1="600" y1="108" x2="630" y2="108" class="arrow"/>
+        <line x1="800" y1="108" x2="830" y2="108" class="arrow"/>
+        <text x="470" y="40" text-anchor="middle" class="lbl g">careful rules the light tick obeys</text>
+        <text x="470" y="175" text-anchor="middle" class="lbl">no in_state_time advance · no double GK move · sent-off players skipped · restart taker may fetch off-pitch</text>
+      </svg>
+      <div class="diag-title">Light ticks are full football minus the thinking — and the thinking is half the cost</div>
+    </div>
+
+    <ul style="margin:14px 0 8px 20px;color:var(--mut);font-size:14.5px">
+      <li><b style="color:var(--txt)">State timers stay frozen</b> — <code>in_state_time</code> counts <i>AI ticks only</i>. Advancing it on light ticks would halve every state timeout and double the fatigue curve's rate.</li>
+      <li><b style="color:var(--txt)">The keeper is never moved twice</b> — during a shot, the GK branch runs first; the movement loop then skips both goalkeepers so a leap is not integrated twice (gravity twice, arc collapsed).</li>
+      <li><b style="color:var(--txt)">Sent-off players are left at their sentinel</b> — a boundary clamp would drag them from (−500,−500) to the pitch corner and record a ghost replay sample.</li>
+      <li><b style="color:var(--txt)">The restart taker may leave the pitch</b> — the one player allowed off it, to fetch a ball that went out.</li>
+    </ul>
+  </section>
+
+  <!-- ================= STEP 6 ================= -->
+  <section class="sec" id="s6">
+    <div class="sec-head"><span class="step-badge">6</span><div class="kicker" style="margin:0">The ball</div></div>
+    <h2>Ball pipeline — <code>Ball::update</code>, 20+ stages a tick</h2>
+    <p class="lead">One call, twenty decisions, in this exact order. The ball stages intents (a restart, a save credit); the engine finishes them a phase later — the only place that holds <code>&amp;mut MatchField</code>.</p>
+
+    <div class="pipe">
+      <div class="pipe-group">entry gates</div>
+      <div class="pipe-item"><h4>In the net?</h4><p>The netting owns the ball; play is dead. The celebration drives it from here — nothing below applies (no pass to intercept, no shot to save).</p></div>
+      <div class="pipe-item"><h4>Awaiting a restart?</h4><p>Out of play: <code>tick_awaited_restart</code> integrates the ball until the hoardings stop it, then pins it. Everything below would fight the restart — chase signals would send an <b>opponent</b> to fetch it.</p></div>
+      <div class="pipe-group">flight</div>
+      <div class="pipe-item"><h4>Velocity integration</h4><p>Gravity, air drag, spin (Magnus), roll friction — the ballistics step (details in Step 7).</p></div>
+      <div class="pipe-item"><h4>Aerial delivery tick</h4><p>A lofted pass/cross updates its delivery state, apex and landing predictions.</p></div>
+      <div class="pipe-group">contests — anyone may touch it</div>
+      <div class="pipe-item"><h4>Try intercept</h4><p>Can a player cut the pass out before it arrives? Skill-based reach test.</p></div>
+      <div class="pipe-item"><h4>Try aerial duel</h4><p>Headers: two men jump; the stronger reach wins the knock-down.</p></div>
+      <div class="pipe-item"><h4>Try block shot / try block pass</h4><p>Bodies and legs in the lane — deflection, partial blocks, full stops.</p></div>
+      <div class="pipe-item"><h4>Try save shot</h4><p>The goalkeeper: reach, dive, split-step — or a goal if he cannot.</p></div>
+      <div class="pipe-group">safety nets — the stall police</div>
+      <div class="pipe-item"><h4>Notify standing ball</h4><p>Signal states that the ball is there to be played.</p></div>
+      <div class="pipe-item"><h4>Force claim if deadlocked</h4><p>The nuclear option: ball unowned and stopped too long → someone takes it.</p></div>
+      <div class="pipe-item"><h4>Force TakeBall if unowned too long</h4><p>Unconditional safety net — nearest players are dispatched to the loose ball.</p></div>
+      <div class="pipe-item"><h4>Position stall detection</h4><p>The strict signal: ball has not moved anywhere in 1000 ticks — a real stall. (The old “owned stuck” detector fired on legitimate 6–12 s defender holds.)</p></div>
+      <div class="pipe-group">ownership</div>
+      <div class="pipe-item"><h4>Process ownership</h4><p>Control claims, keeper pickups, pass-target receptions, the tracking distance that keeps the ball glued to a carrier.</p></div>
+      <div class="pipe-item"><h4>Carry tracker</h4><p>Dribble accounting — possession spells and the shots that end them.</p></div>
+      <div class="pipe-item"><h4>Keeper body block</h4><p>The keeper's own body as the last object that can touch the ball before it steps through him.</p></div>
+      <div class="pipe-group">movement, then the law</div>
+      <div class="pipe-item"><h4><code>move_to</code></h4><p>Integrate the ball's step — its own velocity, or the owner-tracking step while carried.</p></div>
+      <div class="pipe-item"><h4>Frame rebound → goal → over bar → wide → throw-in → boundary</h4><p>In this order: the woodwork first (a frame hit has not crossed the line, gone over or out), then the goal line, then the other lines.</p></div>
+      <div class="pipe-item"><h4>Police offside</h4><p>The offside snapshot and line — who was beyond the second-last defender when the pass left the foot.</p></div>
+      <div class="pipe-item"><h4>Update landing cache</h4><p>Predictive landing point, cached for every AI consumer to read cheaply.</p></div>
+    </div>
+  </section>
+
+  <!-- ================= STEP 7 ================= -->
+  <section class="sec" id="s7">
+    <div class="sec-head"><span class="step-badge">7</span><div class="kicker" style="margin:0">Ballistics</div></div>
+    <h2>Ball physics &amp; contests — real numbers</h2>
+    <p class="lead">The ball is a genuine physics object: 3-D position with metric height, a spin vector, gravity and drag per tick. Strikes solve their spin from the same Magnus coefficient the integrator uses — the two can never drift apart.</p>
+
+    <div class="grid g3">
+      <div class="card"><h3><span class="ico" style="background:rgba(90,169,230,.15)">🌀</span>Flight model</h3>
+        <p><code>GRAVITY_PER_TICK</code> · <code>AIR_DRAG_PER_TICK</code> · <code>GROUND_FRICTION</code> for rolls · <code>SpinModel</code>: angular velocity set at strike time, integrated as Magnus force airborne, scrubbed on contact. The only channel that can turn a flight sideways.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(239,106,94,.15)">🥊</span>Contests</h3>
+        <p>Interception, block, save, aerial duel, pass-block, tackle, reach, ownership, possession — each a skill-vs-skill roll gated by geometry (distance, flight height, claim ceiling 2.8 m).</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(242,193,78,.15)">🧱</span>Boundary &amp; restarts</h3>
+        <p>The goal frame (posts the replay draws are the same geometry the physics rebounds off), the net, the run-off rectangle the restart taker may walk in, and the awaited-restart state machine: throw-in, goal kick, corner, foul walk.</p></div>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>Constant</th><th>Value</th><th>Meaning</th></tr>
+        <tr><td><code>CONTROL_DISTANCE</code></td><td class="num">12 u = 1.5 m</td><td>One stride — a real first-touch distance. Must stay ≤ the owner-tracking cap (they once disagreed by 6× and 86% of shots were struck off loose balls).</td></tr>
+        <tr><td><code>LOOSE_CLAIM_DISTANCE</code></td><td class="num">5 u</td><td>A fifty-fifty is won by the man who gets his foot on it; chasers settle to ball speed inside this radius.</td></tr>
+        <tr><td><code>MAX_OWNER_TRACK_DISTANCE</code> / <code>KICKABLE_DISTANCE</code></td><td class="num">15 u = 1.9 m</td><td>Hard cap on owner tracking; also the kick gate that ended 1150-passes-a-team (players were kicking balls 40 m away, destroying passes in flight).</td></tr>
+        <tr><td><code>ASSIST_WINDOW_TICKS</code></td><td class="num">600 ≈ 6 s</td><td>Assist eligibility backstop — long ball flight + touch + strike, excluding the goal-kick “assist” for a solo run half a minute later.</td></tr>
+        <tr><td>Claim ceiling (aerial)</td><td class="num">2.8 m</td><td>Height below which a lofted delivery enters the contest band and must be won in the air.</td></tr>
+      </table>
+    </div>
+    <div class="note">⚖️ <b>Units are split on purpose:</b> players move in 0.125 m grid units on the horizontal plane, while vertical speed and the ball's z are metric. The two axes are kept apart so a leap can't be scaled by a limiter expressed in the wrong unit — the bug that once left goalkeepers computing textbook <code>sin</code> arcs and never leaving the ground.</div>
+  </section>
+
+  <!-- ================= STEP 8 ================= -->
+  <section class="sec" id="s8">
+    <div class="sec-head"><span class="step-badge">8</span><div class="kicker" style="margin:0">The players</div></div>
+    <h2>Player AI — 22 state machines, 78 states</h2>
+    <p class="lead">Every player is a state machine chosen by position group. The <code>StateProcessor</code> runs one state per player per full tick: <code>process</code> (transition + event) → <code>velocity</code> (movement) → <code>process_conditions</code> (fatigue, recovery).</p>
+
+    <div class="grid g4">
+      <div class="card"><h3><span class="ico" style="background:rgba(242,193,78,.15)">🧤</span>Goalkeeper</h3><p>16 states</p>
+        <div class="chips"><span class="chip gold">Standing</span><span class="chip gold">Diving</span><span class="chip gold">Catching</span><span class="chip gold">Punching</span><span class="chip gold">ComingOut</span><span class="chip gold">PreparingForSave</span><span class="chip gold">Distributing</span><span class="chip gold">ReturningToGoal</span></div></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(90,169,230,.15)">🛡️</span>Defender</h3><p>22 states</p>
+        <div class="chips"><span class="chip blue">Marking</span><span class="chip blue">Tackling</span><span class="chip blue">Pressing</span><span class="chip blue">HoldingLine</span><span class="chip blue">Covering</span><span class="chip blue">TrackingBack</span><span class="chip blue">Clearing</span><span class="chip blue">Overlapping</span></div></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(61,220,132,.15)">🎯</span>Midfielder</h3><p>21 states</p>
+        <div class="chips"><span class="chip">Distributing</span><span class="chip">SwitchingPlay</span><span class="chip">AttackSupporting</span><span class="chip">Crossing</span><span class="chip">DistanceShooting</span><span class="chip">CreatingSpace</span><span class="chip">Guarding</span><span class="chip">HoldingWidth</span></div></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(239,106,94,.15)">⚡</span>Forward</h3><p>19 states</p>
+        <div class="chips"><span class="chip red">Shooting</span><span class="chip red">Finishing</span><span class="chip red">RunningInBehind</span><span class="chip red">CrossReceiving</span><span class="chip red">CreatingSpace</span><span class="chip red">Pressing</span><span class="chip red">Dribbling</span><span class="chip red">HoldingWidth</span></div></div>
+    </div>
+
+    <h3>What each state machine decides with</h3>
+    <div class="grid g3">
+      <div class="card"><h3><span class="ico" style="background:rgba(61,220,132,.15)">📐</span>Positions &amp; closure</h3>
+        <p><code>GameTickContext</code> hands every state the frozen snapshot: a spatial grid, distance closures, ball metadata, waypoint targets. Aggregates are memoised per (player, tick) — bit-identical, computed once.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(90,169,230,.15)">🧮</span>Skill composites &amp; ops</h3>
+        <p>Attacking ops: <b>shooting with a single xG model</b> (<code>ShotSkillProfile::expected_xg</code> — distance, angle, keeper, pressure, shot type multipliers), passing evaluator (one-touch chemistry bonus, through balls, crosses, flanks), support movement. Defensive ops: pressing, marking, panic clearance, goal-side recovery. Duel ops: dribble duel, marker evasion.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(242,193,78,.15)">🧬</span>Body, fatigue &amp; traits</h3>
+        <p>Condition processor burns condition by <code>ActivityIntensity</code> × <code>MovementEffort</code>; injury rolls ride the same pass; traits (PPMs) bias decisions; <code>tackle_cooldown</code> stops 40-foul first-five-minutes; decision-commitment guards stop A→B→A flickering.</p></div>
+    </div>
+
+    <div class="diag">
+      <svg viewBox="0 0 940 200">
+        <defs><marker id="ah8" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#8fa89a"/></marker></defs>
+        <rect x="10" y="70" width="180" height="60" rx="10" class="node-box"/>
+        <text x="100" y="94" text-anchor="middle" class="node-txt">frozen tick context</text>
+        <text x="100" y="110" text-anchor="middle" class="node-sub">grid · closure · ball · waypoints</text>
+        <rect x="240" y="70" width="180" height="60" rx="10" class="node-box alt"/>
+        <text x="330" y="94" text-anchor="middle" class="node-txt">state.process()</text>
+        <text x="330" y="110" text-anchor="middle" class="node-sub">transition + event + velocity</text>
+        <rect x="470" y="70" width="180" height="60" rx="10" class="node-box gold"/>
+        <text x="560" y="94" text-anchor="middle" class="node-txt">dispatcher overrides</text>
+        <text x="560" y="110" text-anchor="middle" class="node-sub">loose-ball force / yield</text>
+        <rect x="700" y="70" width="220" height="60" rx="10" class="node-box"/>
+        <text x="810" y="94" text-anchor="middle" class="node-txt">move + boundary clamp</text>
+        <text x="810" y="110" text-anchor="middle" class="node-sub">velocity integrated, clamped</text>
+        <line x1="190" y1="100" x2="240" y2="100" class="arrow"/>
+        <line x1="420" y1="100" x2="470" y2="100" class="arrow"/>
+        <line x1="650" y1="100" x2="700" y2="100" class="arrow"/>
+        <path d="M560,130 C 560,170 330,170 330,130" fill="none" class="arrow g" stroke-dasharray="6 5"/>
+        <text x="470" y="185" text-anchor="middle" class="lbl g">the take-ball election may override a state's own plan — the only out-of-band rewrite</text>
+      </svg>
+      <div class="diag-title">One player's decision pipeline — and the loose-ball election that can overrule it</div>
+    </div>
+  </section>
+
+  <!-- ================= STEP 9 ================= -->
+  <section class="sec" id="s9">
+    <div class="sec-head"><span class="step-badge">9</span><div class="kicker" style="margin:0">The team</div></div>
+    <h2>Teamplay &amp; tactics — the game above the players</h2>
+    <p class="lead">Individual states branch on a shared reading of the game. <code>TeamTacticalState</code> classifies each side's situation into an 8-phase model, refreshed every 10–25 ticks; the <code>MatchCoach</code> sits above it, moving an instruction ladder every 5 seconds.</p>
+
+    <div class="diag">
+      <svg viewBox="0 0 940 330">
+        <defs><marker id="ah9" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#3ddc84"/></marker></defs>
+        <g font-family="var(--mono)">
+          <rect x="40" y="30" width="190" height="56" rx="10" class="node-box" transform="rotate(-14 135 58)"/>
+          <text x="135" y="52" text-anchor="middle" class="node-txt">BuildUp</text>
+          <text x="135" y="69" text-anchor="middle" class="node-sub">own third · outlets</text>
+          <rect x="240" y="10" width="190" height="56" rx="10" class="node-box" transform="rotate(-6 335 38)"/>
+          <text x="335" y="32" text-anchor="middle" class="node-txt">Progression</text>
+          <text x="335" y="49" text-anchor="middle" class="node-sub">middle third · lines broken</text>
+          <rect x="430" y="22" width="190" height="56" rx="10" class="node-box"/>
+          <text x="525" y="44" text-anchor="middle" class="node-txt">Attack</text>
+          <text x="525" y="61" text-anchor="middle" class="node-sub">attacking third · box play</text>
+          <rect x="620" y="58" width="190" height="56" rx="10" class="node-box gold" transform="rotate(6 715 86)"/>
+          <text x="715" y="80" text-anchor="middle" class="node-txt">AttackingTransition</text>
+          <text x="715" y="97" text-anchor="middle" class="node-sub">just won it · ≤ 5 s · fast break</text>
+          <rect x="620" y="170" width="190" height="56" rx="10" class="node-box gold" transform="rotate(-6 715 198)"/>
+          <text x="715" y="192" text-anchor="middle" class="node-txt">DefensiveTransition</text>
+          <text x="715" y="209" text-anchor="middle" class="node-sub">just lost it · counter-press</text>
+          <rect x="430" y="200" width="190" height="56" rx="10" class="node-box alt"/>
+          <text x="525" y="222" text-anchor="middle" class="node-txt">MidBlock</text>
+          <text x="525" y="239" text-anchor="middle" class="node-sub">compact 30–40 m · cut lanes</text>
+          <rect x="240" y="212" width="190" height="56" rx="10" class="node-box alt" transform="rotate(6 335 240)"/>
+          <text x="335" y="234" text-anchor="middle" class="node-txt">LowBlock</text>
+          <text x="335" y="251" text-anchor="middle" class="node-sub">park the bus · narrow</text>
+          <rect x="40" y="192" width="190" height="56" rx="10" class="node-box alt" transform="rotate(14 135 220)"/>
+          <text x="135" y="214" text-anchor="middle" class="node-txt">HighPress</text>
+          <text x="135" y="231" text-anchor="middle" class="node-sub">hunt it in their third</text>
+        </g>
+        <text x="470" y="290" text-anchor="middle" class="lbl">possession + ball zone + turnover clock → one phase per side · most real goals come in the transition windows</text>
+        <text x="470" y="310" text-anchor="middle" class="lbl g">every player state branches on the team's phase before falling back to local heuristics</text>
+      </svg>
+      <div class="diag-title">The 8 game phases — a team reads the game, then every state machine follows the reading</div>
+    </div>
+
+    <div class="grid g2">
+      <div class="card"><h3><span class="ico" style="background:rgba(242,193,78,.15)">🎛️</span>The coach ladder</h3>
+        <p><code>MatchCoach::evaluate</code> reads score, clock, fatigue and rolling metrics (xG for/against, shots, pressures, deep entries, dangerous turnovers), then picks an instruction. Each instruction is a table of decision biases consumed by the passing / shooting / movement scorers.</p>
+        <div class="chips">
+          <span class="chip red">WasteTime · 0.0</span>
+          <span class="chip gold">ParkTheBus · 0.1</span>
+          <span class="chip gold">SlowDown · 0.3</span>
+          <span class="chip">Normal · 0.5</span>
+          <span class="chip blue">PushForward · 0.75</span>
+          <span class="chip blue">AllOutAttack · 1.0</span>
+        </div>
+        <p style="margin-top:10px">One continuous <b>ambition axis</b> — no <code>if is_relegated</code> special cases; the same ladder covers every situation.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(61,220,132,.15)">🧪</span>Chemistry, shape &amp; standard</h3>
+        <p>Kickoff-latched pair chemistry feeds the one-touch passing bonus. Team plans (attack / defence / shape / wide) position the unit. <code>MatchStandard::measure</code> rates the standard of football for downstream quality gates. Leadership: the loudest organising voice (keeper included) lifts the whole back line.</p></div>
+    </div>
+  </section>
+
+  <!-- ================= STEP 10 ================= -->
+  <section class="sec" id="s10">
+    <div class="sec-head"><span class="step-badge">10</span><div class="kicker" style="margin:0">The referee</div></div>
+    <h2>Officiating — the laws, as a system</h2>
+    <p class="lead">The referee is not a coin-flip bolted onto tackles. It is a full subsystem: profiles, advantage, offside snapshots, restart shapes, set-piece routines, and game management.</p>
+
+    <div class="grid g3">
+      <div class="card"><h3><span class="ico" style="background:rgba(242,193,78,.15)">🧑‍⚖️</span>Referee profile</h3>
+        <p>Strictness and a marginal-call bias are configured per fixture — the officiating half of home advantage, stacked on top of the crowd-arousal half. The same foul reads differently under a strict referee.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(90,169,230,.15)">⚖️</span>Fouls &amp; advantage</h3>
+        <p><code>FoulResolver</code> supports deferred fouls with an advantage window, ticked every full tick — cheap in the dominant no-advantage case. Professional fouls, dissent and time-wasting are managed as game states, not scoreboard hacks.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(239,106,94,.15)">🚩</span>Offside police</h3>
+        <p>A snapshot of the line is taken when the pass leaves the foot — who was beyond the second-last defender at that instant — and checked at the receiver, so a late run is never punished and an early one never escapes.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(61,220,132,.15)">📐</span>Restart shapes</h3>
+        <p>Kickoff plans with stations, corner shapes with arming and a sweep lifecycle, goal-kick run-ups, throw-ins, penalty stances. Every restart is a choreographed shape, not a teleport with a whistle.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(180,140,232,.15)">🎯</span>Set-piece routines</h3>
+        <p>Corner routines are scored and picked per match with a repeat-penalty above an xG threshold; free-kick choices (shot / cross / pass) scored per band; penalty takers and saves scored. History-aware, so a side does not keep replaying a routine the defence has read.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(41,209,194,.15)">⏸️</span>Stoppages</h3>
+        <p>Injury stoppages, the restart wait, and the added-time tally — <code>context.tally.note_added_time</code> records exactly how much stoppage time each period accrued.</p></div>
+    </div>
+  </section>
+
+  <!-- ================= STEP 11 ================= -->
+  <section class="sec" id="s11">
+    <div class="sec-head"><span class="step-badge">11</span><div class="kicker" style="margin:0">The mind</div></div>
+    <h2>Psychology — nerves, momentum, and skill under pressure</h2>
+    <p class="lead">Every player carries a <code>PsychState</code> through the match. Events write to it; an aggregate pass reads it back into <b>skill modifiers</b> that feed effective skill — so a nervous debutant is genuinely a worse footballer until he plays himself in.</p>
+
+    <div class="diag">
+      <svg viewBox="0 0 940 210">
+        <defs><marker id="ah11" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#8fa89a"/></marker></defs>
+        <rect x="10" y="70" width="200" height="62" rx="10" class="node-box"/>
+        <text x="110" y="94" text-anchor="middle" class="node-txt">match events</text>
+        <text x="110" y="111" text-anchor="middle" class="node-sub">goal · error · booking · key tackle</text>
+        <rect x="270" y="70" width="220" height="62" rx="10" class="node-box alt"/>
+        <text x="380" y="88" text-anchor="middle" class="node-txt">PsychState</text>
+        <text x="380" y="105" text-anchor="middle" class="node-sub">confidence · nervousness · momentum</text>
+        <text x="380" y="119" text-anchor="middle" class="node-sub">mistake memory · involvement ticks</text>
+        <rect x="550" y="70" width="180" height="62" rx="10" class="node-box gold"/>
+        <text x="640" y="94" text-anchor="middle" class="node-txt">skill modifiers</text>
+        <text x="640" y="111" text-anchor="middle" class="node-sub">clamped deltas on skills</text>
+        <rect x="790" y="70" width="140" height="62" rx="10" class="node-box"/>
+        <text x="860" y="94" text-anchor="middle" class="node-txt">decisions</text>
+        <text x="860" y="111" text-anchor="middle" class="node-sub">next events…</text>
+        <line x1="210" y1="101" x2="270" y2="101" class="arrow"/>
+        <line x1="490" y1="101" x2="550" y2="101" class="arrow"/>
+        <line x1="730" y1="101" x2="790" y2="101" class="arrow"/>
+        <path d="M860,132 C 860,180 110,180 110,132" fill="none" class="arrow g" stroke-dasharray="6 5"/>
+        <text x="470" y="180" text-anchor="middle" class="lbl g">a closed loop — the mind shapes play, play shapes the mind</text>
+        <text x="110" y="196" text-anchor="middle" class="lbl">kickoff nerves ease as he plays himself in · event nerves (a booking) do not</text>
+      </svg>
+      <div class="diag-title">PsychologyState lives on MatchContext — seeded per player at kickoff, refreshed every tick</div>
+    </div>
+
+    <div class="grid g3">
+      <div class="card"><h3><span class="ico" style="background:rgba(61,220,132,.15)">🌡️</span>Two kinds of nerves</h3>
+        <p><b>Kickoff nerves</b> settle over minutes scaled by composure; <b>event nerves</b> (a booking) are permanent. Felt pressure at the closing stage of a close match is added on top.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(90,169,230,.15)">📈</span>Momentum</h3>
+        <p>Short-lived boosts after goals/errors/red cards, per player and per team (<code>TeamMomentum</code>), with leadership damping the swings.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(239,106,94,.15)">💥</span>Action lapses</h3>
+        <p><code>ActionLapse</code> families — a keeper who has just fumbled is more likely to fumble the next one; the lapse model makes errors cluster like they do in real football.</p></div>
+    </div>
+  </section>
+
+  <!-- ================= STEP 12 ================= -->
+  <section class="sec" id="s12">
+    <div class="sec-head"><span class="step-badge">12</span><div class="kicker" style="margin:0">Communication</div></div>
+    <h2>Events &amp; the dispatcher — how everything hears everything</h2>
+    <p class="lead">Players and the ball never touch each other's internals. They emit events; the dispatcher applies them. Fouls, goals, restarts and stats all travel through one bus.</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>Piece</th><th>Design</th><th>Why it matters</th></tr>
+        <tr><td><code>Event</code></td><td><code>BallEvent | PlayerEvent</code></td><td>Two emitters, one bus.</td></tr>
+        <tr><td><code>EventCollection</code></td><td>Inline slot for 1 event + boxed overflow <code>Vec</code></td><td>The hot path moves ~6M updates a match; 0–1 events is the dominant case. A 4-slot inline array alone was ~224 bytes of per-update move traffic.</td></tr>
+        <tr><td><code>EventDispatcher</code></td><td>Drain + recursion buffer for chained follow-ups</td><td>A goal resets the world and fans out new events; handlers can emit while dispatching.</td></tr>
+        <tr><td>Drain points</td><td>After <code>play_ball</code> and after <code>play_players</code> (full tick)</td><td>Set pieces the ball awards, and fouls/offsides the handlers award, each get applied the same tick they exist.</td></tr>
+      </table>
+    </div>
+    <div class="note">🔌 <b>Module boundaries are enforced by the bus:</b> the ball stages an intent (<i>“a restart is pending”</i>), the engine — the only place holding <code>&amp;mut MatchField</code> — finishes it a phase later. Nothing reaches sideways into another module.</div>
+  </section>
+
+  <!-- ================= STEP 13 ================= -->
+  <section class="sec" id="s13">
+    <div class="sec-head"><span class="step-badge">13</span><div class="kicker" style="margin:0">The bench</div></div>
+    <h2>Substitutions &amp; injuries — the manager's clock</h2>
+    <p class="lead">Three layers answer three questions: <b>when</b> the board goes up (urgency), <b>who</b> crosses the line (scoring), and the <b>swap itself</b> (the pass). Deciding and acting stay two steps — a change never stops the match; it waits for the ball to be dead.</p>
+
+    <div class="grid g3">
+      <div class="card"><h3><span class="ico" style="background:rgba(239,106,94,.15)">⏰</span>Urgency — when</h3>
+        <p>One continuous pressure per side: the scoreline, the legs, the trouble on the pitch, and the manager's own temperament. A quiet game changes on the plan (“around the hour”); a game that has gone wrong changes when it goes wrong.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(242,193,78,.15)">🎖️</span>Scoring — who</h3>
+        <p>Sub-off / sub-in fit, star protection (a key man on a booking), tactical need — ranked, capped per pass.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(90,169,230,.15)">🏥</span>Medical — forced</h3>
+        <p>The in-match injury roll runs in <i>any</i> playing period: first check 3–8 minutes in, then every 6–14. Replacements wait for dead balls like every other change; the physio does not come on while the game is going.</p></div>
+    </div>
+    <div class="note">🎬 <b>The 12-second cutscene:</b> a change plays out as a <code>SubstitutionBreak</code> — men walking on and off along the touchline, the board up, the clock stopped. Like the goal celebration, it is deliberately outside the state machine and outside the RNG stream, so it can never disturb calibrated rolls.</div>
+  </section>
+
+  <!-- ================= STEP 14 ================= -->
+  <section class="sec" id="s14">
+    <div class="sec-head"><span class="step-badge">14</span><div class="kicker" style="margin:0">Full time</div></div>
+    <h2>Result &amp; ratings — what the whistle produces</h2>
+    <p class="lead">After the last tick, <code>build_result</code> assembles everything the league pipeline consumes — and the rating pass turns raw stat lines into honest 1.0–10.0 marks.</p>
+
+    <div class="diag">
+      <svg viewBox="0 0 940 190">
+        <defs><marker id="ah14" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#8fa89a"/></marker></defs>
+        <rect x="10" y="60" width="180" height="60" rx="10" class="node-box"/>
+        <text x="100" y="84" text-anchor="middle" class="node-txt">stat line</text>
+        <text x="100" y="101" text-anchor="middle" class="node-sub">per position group</text>
+        <rect x="240" y="60" width="190" height="60" rx="10" class="node-box alt"/>
+        <text x="335" y="84" text-anchor="middle" class="node-txt">performance value</text>
+        <text x="335" y="101" text-anchor="middle" class="node-sub">goal-denominated, per role</text>
+        <rect x="480" y="60" width="190" height="60" rx="10" class="node-box gold"/>
+        <text x="575" y="84" text-anchor="middle" class="node-txt">standardise vs scale</text>
+        <text x="575" y="101" text-anchor="middle" class="node-sub">population mean &amp; spread</text>
+        <rect x="720" y="60" width="200" height="60" rx="10" class="node-box"/>
+        <text x="820" y="84" text-anchor="middle" class="node-txt">one shape curve → 1–10</text>
+        <text x="820" y="101" text-anchor="middle" class="node-sub">catastrophes applied after</text>
+        <line x1="190" y1="90" x2="240" y2="90" class="arrow"/>
+        <line x1="430" y1="90" x2="480" y2="90" class="arrow"/>
+        <line x1="670" y1="90" x2="720" y2="90" class="arrow"/>
+        <text x="470" y="160" text-anchor="middle" class="lbl g">the rating never reads ability or reputation — a player has a good rating because the match produced a good stat line for him</text>
+      </svg>
+      <div class="diag-title">Three moving parts and nothing else: performance value → scale → shape</div>
+    </div>
+
+    <div class="grid g3">
+      <div class="card"><h3><span class="ico" style="background:rgba(61,220,132,.15)">📦</span>MatchResultRaw</h3>
+        <p>Score, added time, tally, weather/pitch, penalty shootout record, standard of football, per-team final squads and tactics — mapped back to home/away by team id, not field position.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(242,193,78,.15)">🎞️</span>HighlightSelector</h3>
+        <p>The near-misses worth keeping and which provisional chance clips to hold — one call decides both, so a marker on the timeline never points into a grey zone.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(239,106,94,.15)">💥</span>Blowout guard</h3>
+        <p>A result the squads say is impossible is dumped under <code>match-logs</code> for inspection — the engine's own tripwire against calibration regressions.</p></div>
+    </div>
+  </section>
+
+  <!-- ================= NUMBERS ================= -->
+  <section class="sec" id="numbers">
+    <div class="kicker">Reference</div>
+    <h2>Numbers &amp; constants — the engine's calibration surface</h2>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>Number</th><th>Value</th><th>Notes</th></tr>
+        <tr><td>Tick length</td><td class="num">10 ms</td><td>100 ticks = 1 s of match time; ~6M full updates per release match.</td></tr>
+        <tr><td>Half / match / extra period</td><td class="num">45′ · 90′ · 15′</td><td>Debug builds shrink to 5′ / 10′ / 100 s so tests stay fast (<code>clock.rs</code>).</td></tr>
+        <tr><td>Full : light tick ratio</td><td class="num">1 : 1</td><td>Parity alternation; light ticks skip player AI except goalkeepers during shots.</td></tr>
+        <tr><td>Position recording</td><td class="num">30 ms cadence</td><td>Replay sample every 3 ticks, on a cursor that survives half-restarts.</td></tr>
+        <tr><td>Coach eval / tactical refresh</td><td class="num">5 s / 10–25 ticks</td><td>Adaptive tactical cadence with a 40-tick transition window.</td></tr>
+        <tr><td>Grid unit</td><td class="num">1 u = 0.125 m</td><td>Horizontal plane only; vertical axis is metric — deliberately split.</td></tr>
+        <tr><td>Claim / loose claim / kickable</td><td class="num">12 u · 5 u · 15 u</td><td>First touch, fifty-fifty, and the kick gate that killed phantom passes.</td></tr>
+        <tr><td>Aerial claim ceiling</td><td class="num">2.8 m</td><td>Below this, a lofted delivery must be won in the air.</td></tr>
+        <tr><td>Celebration / substitution cutscenes</td><td class="num">45–75 s · ~12 s</td><td>Outside the state machine and the RNG stream — they cannot disturb calibrated rolls.</td></tr>
+        <tr><td>Assist window</td><td class="num">600 ticks ≈ 6 s</td><td>Plus a same-possession rule — the goal-kick “assist” for a 30 s solo run is excluded.</td></tr>
+        <tr><td>Home arousal</td><td class="num">+0.050 / −0.029 × edge</td><td>Re-titrated across multiple 400-match sweeps to land the real ~45/25/30 split.</td></tr>
+        <tr><td>State machines</td><td class="num">GK 16 · DF 22 · MF 21 · FW 19</td><td>78 states, compact stable ids embedded in replays.</td></tr>
+        <tr><td>Rating range</td><td class="num">1.0 – 10.0</td><td>Stat-line only — never ability or reputation.</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <!-- ================= DIAGNOSTICS ================= -->
+  <section class="sec" id="diagnostics">
+    <div class="kicker">Observability</div>
+    <h2>Diagnostics — the engine watches itself</h2>
+    <p class="lead">The engine ships with a permanent debug arsenal, most of it behind the <code>match-logs</code> feature and env flags — not because anything is broken, but because a football simulator's regressions are invisible in a final score.</p>
+    <div class="grid g3">
+      <div class="card"><h3><span class="ico" style="background:rgba(61,220,132,.15)">⏱️</span>PhaseProf</h3>
+        <p>Env-gated per-phase timing (<code>OF_PHASE_PROF=1</code>): tick-context, ball, players, dispatch, tactical, coach, light. Thread-local accumulators sum per worker under rayon.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(90,169,230,.15)">🧪</span>Censuses</h3>
+        <p>Heatmaps, defensive-shape spacing, box episodes, possession geography, duel gates, loose-chase samples — the numbers that prove the football looks like football.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(242,193,78,.15)">🔎</span>Teleport probe</h3>
+        <p>A whole-tick relocation census: every checkpoint between phases closes the window on the function above it — any ball movement it books was a <i>write</i>, not physics.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(239,106,94,.15)">🕸️</span>Transition graph</h3>
+        <p>Audits the state machines' reachability: every transition recorded, dead ends and invariant violations reported — a player state machine that cannot be exited is a bug the scoreboard would never show.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(180,140,232,.15)">🎯</span>Calibration harness</h3>
+        <p>Seeded 400-fixture sweeps, A/B controls like <code>home_flat</code>, and per-arm goal-gap measurement — the titrations that keep every constant honest.</p></div>
+      <div class="card"><h3><span class="ico" style="background:rgba(41,209,194,.15)">🩺</span>Frame traces</h3>
+        <p>On-demand ball/keeper traces around specific moments (a skied ball crossing a height, a save, a restart) — the frame-level evidence behind every ordering fix in this report.</p></div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <p>Generated from the Open Football source — <span class="file inline">src/core/src/match/engine/</span> (421 files). All constants, phase names and ordering guarantees are quoted from the engine's own code and doc-comments.
+    Key files: <span class="file inline">engine/engine/mod.rs</span> · <span class="file inline">engine/engine/run/lifecycle.rs</span> · <span class="file inline">engine/engine/tick/driver.rs</span> · <span class="file inline">ball/ball/tick.rs</span> · <span class="file inline">player/strategies/processor.rs</span></p>
+  </footer>
+
+</div>
+</main>
+
+<script>
+  // scrollspy
+  const links = [...document.querySelectorAll('nav a')];
+  const secs = links.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+  const spy = new IntersectionObserver(es => {
+    es.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.toggle('active', l.getAttribute('href') === '#' + e.target.id));
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  secs.forEach(s => spy.observe(s));
+
+  // animated phase walkthrough on the full-tick pipeline
+  const stages = [...document.querySelectorAll('#tickPipe .tick-stage')];
+  let idx = 0;
+  function paint(){
+    stages.forEach((s, i) => {
+      s.classList.toggle('hi', i === idx);
+      s.classList.toggle('dim', i !== idx && Math.abs(i - idx) <= 2);
+    });
+    idx = (idx + 1) % stages.length;
+  }
+  let timer = null;
+  const box = document.getElementById('tickPipe');
+  if (stages.length) {
+    paint();
+    timer = setInterval(paint, 2600);
+    box.addEventListener('mouseenter', () => clearInterval(timer));
+    box.addEventListener('mouseleave', () => { timer = setInterval(paint, 2600); });
+  }
+</script>
+</body>
+</html>

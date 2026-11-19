@@ -3,6 +3,7 @@
 //! the shot never reaches the check, no defender is ever in the lane, or
 //! the roll simply fails. `match-logs` only.
 
+use crate::r#match::defenders::states::DefenderState;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// `try_block_shot` reached with a live shot in flight.
@@ -50,6 +51,8 @@ pub static SHOTS_STRUCK: AtomicU64 = AtomicU64::new(0);
 /// Opposition outfielders goal-side of the ball at the strike,
 /// summed over `SHOTS_STRUCK`.
 pub static GOALSIDE_AT_STRIKE: AtomicU64 = AtomicU64::new(0);
+static STRUCK_BY_BAND: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
+static GOALSIDE_BY_BAND: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
 /// Of those, the ones also within 30u of the ball's line to goal —
 /// i.e. actually in a position to get a body in the way.
 pub static GOALSIDE_NEAR_LINE: AtomicU64 = AtomicU64::new(0);
@@ -65,11 +68,12 @@ pub static SHOT_RANGE_X100: AtomicU64 = AtomicU64::new(0);
 pub static DEF_DEPTH_X100: AtomicU64 = AtomicU64::new(0);
 
 /// Histogram of which `DefenderState` the defending back line is in
-/// at the moment a shot is struck, indexed by the enum's discriminant
-/// (21 variants). Without this the depth number says the line did not
-/// drop but not WHY — and the answer decides whether the fix belongs
-/// in a state's steering target or in the state selection above it.
-pub static DEF_STATE_AT_STRIKE: [AtomicU64; 21] = [const { AtomicU64::new(0) }; 21];
+/// at the moment a shot is struck, indexed by the enum's discriminant.
+/// Without this the depth number says the line did not drop but not WHY
+/// — and the answer decides whether the fix belongs in a state's steering
+/// target or in the state selection above it.
+pub static DEF_STATE_AT_STRIKE: [AtomicU64; DefenderState::SLOTS] =
+    [const { AtomicU64::new(0) }; DefenderState::SLOTS];
 
 /// How close the nearest defending outfielder is to the SHOOTER when
 /// he strikes it, banded in metres: `<1 | 1-2 | 2-3 | 3-5 | 5-8 | 8+`.
@@ -247,7 +251,7 @@ impl BlockDiag {
     }
 
     /// Per-state counts, in discriminant order.
-    pub fn defender_state_snapshot() -> [u64; 21] {
+    pub fn defender_state_snapshot() -> [u64; DefenderState::SLOTS] {
         std::array::from_fn(|i| DEF_STATE_AT_STRIKE[i].load(Ordering::Relaxed))
     }
 
@@ -283,6 +287,10 @@ impl BlockDiag {
     pub fn note_strike(goalside: u64, near_line: u64, shot_range: f32, def_depth: f32) {
         SHOTS_STRUCK.fetch_add(1, Ordering::Relaxed);
         GOALSIDE_AT_STRIKE.fetch_add(goalside, Ordering::Relaxed);
+        let metres = shot_range.max(0.0) * 0.125;
+        let band = [6.0, 11.0, 16.5, 22.0, 30.0].iter().position(|edge| metres < *edge).unwrap_or(5);
+        STRUCK_BY_BAND[band].fetch_add(1, Ordering::Relaxed);
+        GOALSIDE_BY_BAND[band].fetch_add(goalside, Ordering::Relaxed);
         GOALSIDE_NEAR_LINE.fetch_add(near_line, Ordering::Relaxed);
         SHOT_RANGE_X100.fetch_add((shot_range.max(0.0) * 100.0) as u64, Ordering::Relaxed);
         DEF_DEPTH_X100.fetch_add((def_depth.max(0.0) * 100.0) as u64, Ordering::Relaxed);
@@ -290,6 +298,17 @@ impl BlockDiag {
 
     /// `(shots_struck, goalside_per_shot, near_line_per_shot,
     ///   mean_shot_range, mean_defender_depth)`
+    /// `(shots struck, goal-side men summed)` by shot distance: under 6,
+    /// 11, 16.5, 22 and 30 m, and beyond.
+    pub fn strike_bands() -> [(u64, u64); 6] {
+        std::array::from_fn(|b| {
+            (
+                STRUCK_BY_BAND[b].load(Ordering::Relaxed),
+                GOALSIDE_BY_BAND[b].load(Ordering::Relaxed),
+            )
+        })
+    }
+
     pub fn strike_snapshot() -> (u64, f32, f32, f32, f32) {
         let n = SHOTS_STRUCK.load(Ordering::Relaxed);
         if n == 0 {
@@ -323,6 +342,9 @@ impl BlockDiag {
             &SHOT_RANGE_X100,
             &DEF_DEPTH_X100,
         ] {
+            c.store(0, Ordering::Relaxed);
+        }
+        for c in STRUCK_BY_BAND.iter().chain(&GOALSIDE_BY_BAND) {
             c.store(0, Ordering::Relaxed);
         }
         for c in &NEAREST_DEF_AT_STRIKE {

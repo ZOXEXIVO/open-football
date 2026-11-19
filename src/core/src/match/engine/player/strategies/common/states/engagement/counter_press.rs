@@ -1,5 +1,6 @@
-//! The second after the ball is taken off a player: he goes straight back
-//! at whoever has it, or he lets the team's shape deal with it.
+//! The second after the ball is taken off a player: he, and each team-mate
+//! near enough to join him, goes straight back at whoever has it, or lets
+//! the team's shape deal with it.
 //!
 //! The pressing state does the work once he is in it: it closes the
 //! carrier, takes a loose ball he is first to, and tackles, which is where
@@ -10,7 +11,15 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::state::PlayerState;
+use crate::r#match::player::strategies::players::ops::defending::pressure::PressUnit;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer};
+
+/// A ball his side has just lost: when, and whether it was taken off him.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LostBall {
+    pub at: u64,
+    pub himself: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CounterPressCall {
@@ -43,15 +52,17 @@ impl CounterPress {
         (attitude * (0.5 + press_intensity) * legs * player.injury_handicap()).clamp(0.0, 1.0)
     }
 
-    /// What a player who lost the ball at `lost_at` does now. The further
-    /// away the carrier, the more urge it takes to go.
+    /// What a player whose side has `lost` the ball does now. The further
+    /// away the carrier, the more urge it takes to go. How closely he
+    /// follows the plan's press scales it, and a team-mate joining the man
+    /// who lost it goes as far as he presses with his team.
     pub fn call(
         player: &MatchPlayer,
-        lost_at: u64,
+        lost: LostBall,
         context: &MatchContext,
         tick_context: &GameTickContext,
     ) -> CounterPressCall {
-        if context.current_tick().saturating_sub(lost_at) > Self::WINDOW_TICKS
+        if context.current_tick().saturating_sub(lost.at) > Self::WINDOW_TICKS
             || matches!(player.state, PlayerState::Injured | PlayerState::Recovering)
             || player.off_pitch
             || tick_context.ball.restart_taker.is_some()
@@ -76,7 +87,13 @@ impl CounterPress {
         let gap = (tick_context.positions.players.position(carrier) - player.position).norm();
         let press = context.tactical_for_team(player.team_id).press_intensity;
         let need = Self::MIN_URGE + (1.0 - Self::MIN_URGE) * gap / Self::RANGE;
-        if Self::urge(player, press) >= need {
+        let unit = if lost.himself {
+            1.0
+        } else {
+            PressUnit::compliance(player, press)
+        };
+        let urge = Self::urge(player, press) * player.adherence.press * unit;
+        if urge >= need {
             CounterPressCall::Press(pressing)
         } else {
             CounterPressCall::LetGo

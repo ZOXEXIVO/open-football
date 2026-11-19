@@ -6,11 +6,11 @@
 //! metres apart are doing completely different jobs. The holder screens
 //! and recycles; the regista beside him hits the pass that beats the
 //! line; the eight runs past both of them into the box. The engine had
-//! none of that. `MidfielderStrategies::process` dispatches every
+//! none of that. `MidfielderStrategies::process` dispatched every
 //! midfielder — the anchor, the deep playmaker, the box-to-box eight,
 //! the number ten and the wide man — into **one identical decision
-//! tree**, and nothing anywhere in `midfielders/` reads
-//! `is_attacking_midfielder()` or the player's slot at all.
+//! tree**, and nothing in `midfielders/` read `is_attacking_midfielder()`
+//! or the player's slot at all.
 //!
 //! `PlayerRole` exists (`club::team::tactics::instructions`) and carries
 //! `DeepLyingPlaymaker`, `Regista`, `AdvancedPlaymaker`, `Mezzala`,

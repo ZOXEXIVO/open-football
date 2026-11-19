@@ -11,8 +11,7 @@ use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use core::utils::FormattingUtils;
 use core::{
-    ContractBonusType, ContractClauseType, ContractType, Player, PlayerSquadStatus,
-    PlayerStatusType, SimulatorData,
+    ContractBonusType, ContractClauseType, ContractType, Player, PlayerStatusType, SimulatorData,
 };
 use serde::Deserialize;
 
@@ -256,15 +255,9 @@ fn build_contract_detail(
         ContractType::Loan => i18n.t("contract_type_loan"),
     };
 
-    let squad_status = match contract.squad_status {
-        PlayerSquadStatus::KeyPlayer => i18n.t("squad_key_player"),
-        PlayerSquadStatus::FirstTeamRegular => i18n.t("squad_first_team_regular"),
-        PlayerSquadStatus::FirstTeamSquadRotation => i18n.t("squad_rotation"),
-        PlayerSquadStatus::MainBackupPlayer => i18n.t("squad_backup_player"),
-        PlayerSquadStatus::HotProspectForTheFuture => i18n.t("squad_hot_prospect"),
-        PlayerSquadStatus::DecentYoungster => i18n.t("squad_decent_youngster"),
-        PlayerSquadStatus::NotNeeded => i18n.t("squad_not_needed"),
-        _ => "-",
+    let squad_status = match contract.squad_status.i18n_key() {
+        "" => "-",
+        key => i18n.t(key),
     };
 
     let transfer_status = if contract.is_transfer_listed {

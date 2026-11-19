@@ -26,6 +26,8 @@
 //!   reversal or a write.
 //! * [`goal_kick_diag`] — where a goal kick's wait goes, what the keeper
 //!   does while it waits, and how it is put back into play.
+//! * [`delivery_diag`] — every cross from its strike to its first contact
+//!   and its end, and where corners, throw-ins and own goals come from.
 
 #[cfg(feature = "match-logs")]
 pub mod arrival_diag;
@@ -33,6 +35,8 @@ pub mod arrival_diag;
 pub mod assist_diag;
 #[cfg(feature = "match-logs")]
 pub mod block_diag;
+#[cfg(feature = "match-logs")]
+pub mod delivery_diag;
 #[cfg(feature = "match-logs")]
 pub mod flight_diag;
 #[cfg(feature = "match-logs")]

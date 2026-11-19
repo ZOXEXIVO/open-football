@@ -204,6 +204,7 @@ pub use player::{
     RetirementReason,
     RivalThreatResponse,
     RoleFamiliarity,
+    RoleLevels,
     RoleStatusEventContext,
     RoleStatusKind,
     SeasonOutcomeContext,
@@ -276,14 +277,12 @@ pub use staff::contract as staff_contract_mod;
 
 // Team exports (except conflicting modules)
 pub use team::{
-    Achievement, AchievementType, CoachingPhilosophy, FacilityQuality, FormationChange,
-    GoalkeepingGains, IndividualTrainingPlan, ManagerTalkResult, ManagerTalkType, MatchHistory,
-    MatchHistoryItem, MatchOutcome, MatchResultInfo, MatchTacticType, MentalGains,
+    Achievement, AchievementType, CoachingPhilosophy, FacilityQuality, GoalkeepingGains, IndividualTrainingPlan, ManagerTalkResult, ManagerTalkType, MatchHistory,
+    MatchHistoryItem, MatchOutcome, MatchResultInfo, MatchTacticType, MentalGains, FormationFamiliarity,
     PeriodizationPhase, PhysicalGains, PlayerBehaviourResult, PlayerRelationshipChangeResult,
-    RecommendationCategory, RecommendationPriority, ReputationLevel, ReputationRequirements,
+    ReputationLevel, ReputationRequirements,
     ReputationTrend, RotationPreference, SeasonRecord, SkillType, SpecialInstruction,
-    SquadAnalysis, TACTICS_POSITIONS, TacticSelectionReason, TacticalDecisionEngine,
-    TacticalDecisionResult, TacticalFocus, TacticalRecommendation, TacticalStyle, Tactics,
+    TACTICS_POSITIONS, TacticSelectionReason, TacticalFocus, TacticalStyle, Tactics,
     TacticsSelector, Team, TeamBehaviour, TeamBehaviourResult, TeamBuilder, TeamCollection,
     TeamContext, TeamReputation, TeamResult, TeamTraining, TeamTrainingResult, TeamType,
     TechnicalGains, TrainingEffects, TrainingFacilities, TrainingFocus, TrainingIntensity,

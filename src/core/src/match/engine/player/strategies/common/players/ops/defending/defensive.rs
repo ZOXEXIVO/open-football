@@ -85,9 +85,6 @@ const DANGEROUS_RUN_ANGLE: f32 = 0.5;
 /// to stop two defenders taking the same man. 60u = 7.5 m: close enough
 /// to actually be a challenge, wide enough that "he's got him" is true.
 const ENGAGEMENT_DISTANCE: f32 = 60.0;
-/// Minimum spacing between defenders marking different opponents (~4 m).
-#[allow(dead_code)]
-const MIN_MARKING_SEPARATION: f32 = 32.0;
 
 // Role assignment thresholds
 /// Beyond this the second defender is too far from the carrier to be
@@ -197,24 +194,6 @@ impl<'p> DefensiveOperationsImpl<'p> {
         }
     }
 
-    /// Find the own team's defensive line position — single-pass, zero allocation
-    pub fn find_own_defensive_line(&self) -> f32 {
-        let (sum, count) = self
-            .ctx
-            .players()
-            .teammates()
-            .defenders()
-            .filter(|p| PitchPresence::is_playing(p.position))
-            .map(|p| p.position.x)
-            .fold((0.0f32, 0u32), |(s, c), x| (s + x, c + 1));
-
-        if count == 0 {
-            self.ctx.context.field_size.width as f32 / 2.0
-        } else {
-            sum / count as f32
-        }
-    }
-
     /// Check if there's exploitable space behind opponent defense
     pub fn check_space_behind_defense(&self, defensive_line: f32) -> bool {
         let player_x = self.ctx.player.position.x;
@@ -267,38 +246,6 @@ impl<'p> DefensiveOperationsImpl<'p> {
         (self.ctx.player.position.x - avg_defender_x).abs() < 5.0
             && self.ctx.ball().distance() > 200.0
             && !self.ctx.team().is_control_ball()
-    }
-
-    /// Check if should mark an opponent
-    pub fn should_mark_opponent(&self, opponent: &MatchPlayerLite, marking_distance: f32) -> bool {
-        let distance = (opponent.position - self.ctx.player.position).magnitude();
-
-        if distance > marking_distance {
-            return false;
-        }
-
-        // Mark if opponent is in dangerous position
-        let opponent_distance_to_goal =
-            (opponent.position - self.ctx.ball().direction_to_own_goal()).magnitude();
-        let own_distance_to_goal =
-            (self.ctx.player.position - self.ctx.ball().direction_to_own_goal()).magnitude();
-
-        // Opponent is closer to our goal than we are
-        opponent_distance_to_goal < own_distance_to_goal + 10.0
-    }
-
-    /// Get the nearest opponent to mark
-    pub fn find_opponent_to_mark(&self, max_distance: f32) -> Option<MatchPlayerLite> {
-        self.ctx
-            .players()
-            .opponents()
-            .nearby(max_distance)
-            .filter(|opp| self.should_mark_opponent(opp, max_distance))
-            .min_by(|a, b| {
-                let dist_a = a.distance(self.ctx);
-                let dist_b = b.distance(self.ctx);
-                dist_a.total_cmp(&dist_b)
-            })
     }
 
     /// True when this attacker is sitting beyond the opposing defensive
@@ -455,18 +402,6 @@ impl<'p> DefensiveOperationsImpl<'p> {
             .filter(|d| d.id != my_id)
             .any(|d| (d.position - carrier.position).norm_squared() < my_dist_sq);
         !closer
-    }
-
-    /// Calculate optimal covering position
-    pub fn calculate_covering_position(&self) -> Vector3<f32> {
-        let goal_position = self.ctx.ball().direction_to_own_goal();
-        let ball_position = self.ctx.tick_context.positions.ball.position;
-
-        // Position between ball and goal
-        let to_ball = ball_position - goal_position;
-        let covering_distance = to_ball.magnitude() * 0.3; // 30% of the way from goal to ball
-
-        goal_position + to_ball.normalize() * covering_distance
     }
 
     /// Check if in dangerous defensive position (near own goal)
@@ -666,16 +601,6 @@ impl<'p> DefensiveOperationsImpl<'p> {
             score += 150.0;
         }
 
-        // Running toward goal
-        let velocity = opponent.velocity(self.ctx);
-        if velocity.norm() > 2.0 {
-            let to_goal = (own_goal - opponent.position).normalize();
-            let alignment = velocity.normalize().dot(&to_goal);
-            if alignment > 0.5 {
-                score += alignment * 50.0;
-            }
-        }
-
         // Close to ball (potential receiver)
         let ball_distance =
             (opponent.position - self.ctx.tick_context.positions.ball.position).magnitude();
@@ -684,63 +609,4 @@ impl<'p> DefensiveOperationsImpl<'p> {
         score
     }
 
-    /// Check if engaging this opponent would leave a dangerous space uncovered
-    pub fn would_leave_space_uncovered(&self, target_opponent: &MatchPlayerLite) -> bool {
-        let own_goal = self.ctx.ball().direction_to_own_goal();
-        let my_pos = self.ctx.player.position;
-
-        // Find other dangerous opponents near our current position
-        let dangerous_nearby = self
-            .ctx
-            .players()
-            .opponents()
-            .nearby(40.0)
-            .filter(|opp| {
-                opp.id != target_opponent.id && {
-                    let distance_to_goal = (opp.position - own_goal).magnitude();
-                    let my_distance_to_goal = (my_pos - own_goal).magnitude();
-                    // Opponent is in a more dangerous position than where we are
-                    distance_to_goal < my_distance_to_goal
-                }
-            })
-            .count();
-
-        // If there are multiple dangerous opponents nearby and no other defender covering
-        if dangerous_nearby >= 2 {
-            // Check if other defenders are available to cover
-            let covering_defenders = self
-                .ctx
-                .players()
-                .teammates()
-                .defenders()
-                .filter(|d| {
-                    d.id != self.ctx.player.id && (d.position - my_pos).norm_squared() < 50.0 * 50.0
-                })
-                .count();
-
-            return covering_defenders < dangerous_nearby;
-        }
-
-        false
-    }
-
-    /// Get the number of defenders currently engaging opponents within a distance
-    pub fn count_engaging_defenders(&self, radius: f32) -> usize {
-        let radius_sq = radius * radius;
-        self.ctx
-            .players()
-            .teammates()
-            .defenders()
-            .filter(|d| {
-                d.id != self.ctx.player.id && {
-                    // Check if this defender is close to any opponent
-                    self.ctx
-                        .players()
-                        .opponents()
-                        .nearby(ENGAGEMENT_DISTANCE)
-                        .any(|opp| (d.position - opp.position).norm_squared() < radius_sq)
-                }
-            })
-            .count()
-    }
 }

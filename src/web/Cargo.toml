@@ -28,12 +28,12 @@ chrono = "0.4.45"
 itertools = "0.15.0"
 askama = "0.16.1"
 askama_web = { version = "0.16.0", features = ["axum-0.8"] }
-rust-embed = "8.13"
+rust-embed = "8.14"
 mime_guess = "2.0.5"
 flate2 = "1.1.11"
 rayon = "1.12.0"
 hostname = "0.4.2"
-sysinfo = { version = "0.40.1", features = ["system"] }
+sysinfo = { version = "0.40.4", features = ["system"] }
 wincode = "0.6.3"
 serde-wincode = "0.1.2"
 

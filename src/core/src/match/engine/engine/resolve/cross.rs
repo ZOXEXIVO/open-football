@@ -1,7 +1,7 @@
-//! **The open-play cross contest** — the sibling of
-//! [`corner`](super::corner), and for the same reason: a cross is aimed
-//! at a patch of the box rather than at a pair of feet, so it needs its
-//! own resolution rather than the pass machinery's.
+//! **The cross contest** — every lofted delivery into the box, a corner's
+//! included. A cross is aimed at a patch of the box rather than at a pair
+//! of feet, so it needs its own resolution rather than the pass
+//! machinery's.
 //!
 //! Win rates here are deliberately low. Real football completes roughly a
 //! quarter of open-play crosses, and only a fraction of those become
@@ -11,7 +11,7 @@ use crate::r#match::PassOriginRestart;
 use crate::r#match::engine::ball::ball::AerialReach;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::block_diag::BlockDiag;
-use crate::r#match::engine::ball::ball::{Ball, DeliveryIntent, PlayerReach};
+use crate::r#match::engine::ball::ball::{Ball, DeliveryIntent, FlightProtection, PlayerReach};
 use crate::r#match::engine::ball::events::BallEvent;
 use crate::r#match::engine::engine::*;
 use crate::r#match::engine::events::EventCollection;
@@ -19,8 +19,15 @@ use crate::r#match::engine::player::events::players::PlayerEventDispatcher;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::psychology::lapse::lapse_diag;
 use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
-use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::state::PlayerState;
+use crate::r#match::goalkeepers::states::common::KeeperAerialClaim;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::{
+    DefenderCensus, HeaderBooking, HeaderRule,
+};
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::forward_census::FwdHeaderRule;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::keeper_census::{ClaimEnd, ClaimSite};
 use crate::r#match::player::strategies::passing::CrossType;
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::CrossDiag;
@@ -38,9 +45,7 @@ use std::sync::atomic::Ordering;
 /// best defender's SCORE, and `def_score` falls back to 0.30 when nobody
 /// is contesting — so a cross into an empty six-yard box was still
 /// cleared, by nobody, off nothing. That is the reported *"the ball
-/// bounces off an invisible object"* in its purest form, and
-/// `resolve_corner_contest` has kept the clearer's index to avoid exactly
-/// it since its own hooked-behind branch existed.
+/// bounces off an invisible object"* in its purest form.
 #[derive(Clone, Copy)]
 enum CrossClearer {
     /// Close enough to head the ball where it is.
@@ -55,14 +60,84 @@ enum CrossClearer {
 }
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
+    /// A cross a team-mate played first is the crosser's completion,
+    /// credited here because the ball that saw it keeps no stat lines.
+    pub(in crate::r#match::engine::engine) fn credit_completed_cross(field: &mut MatchField) {
+        let Some(crosser) = field.ball.completed_cross.take() else {
+            return;
+        };
+        #[cfg(feature = "match-logs")]
+        if let Some((kind, slot)) = field.ball.delivery_identity {
+            field.ball.delivery_tally.booked_completed[kind][slot] += 1;
+        }
+        if let Some(player) = field.get_player_mut(crosser) {
+            player.statistics.add_cross_completed();
+        }
+    }
+
+    /// The defender the contest has given a cross to: a header played now
+    /// when he is on it and it is not delivered to him, an award either way.
+    #[cfg(feature = "match-logs")]
+    fn note_defensive_header(
+        field: &MatchField,
+        context: &mut MatchContext,
+        clearer: CrossClearer,
+        best_def: Option<usize>,
+        delivered: bool,
+    ) {
+        let tick = context.current_tick();
+        let census = context.defender_census.get_mut();
+        match clearer {
+            CrossClearer::OnIt if delivered => {
+                if let Some(d) = best_def {
+                    census.note_award(field.players[d].id, tick);
+                }
+            }
+            CrossClearer::OnIt => {
+                if let Some(d) = best_def {
+                    let p = &field.players[d];
+                    census.note_award(p.id, tick);
+                    DefenderCensus::note_header(
+                        HeaderRule::CrossContest,
+                        p,
+                        false,
+                        HeaderBooking::Clearance,
+                    );
+                }
+            }
+            CrossClearer::Coming(d) => census.note_award(field.players[d].id, tick),
+            CrossClearer::Nobody => {}
+        }
+    }
+
+    /// Who the won defensive header is delivered to: the man coming onto
+    /// it, or the man already on it who goes up for it in his own read —
+    /// told so here, so he is up when the ball comes off his head. `None`
+    /// is a header played on the spot by the man on it, or nobody's.
+    fn staged_clearer(
+        field: &mut MatchField,
+        clearer: CrossClearer,
+        best_def: Option<usize>,
+    ) -> Option<usize> {
+        let d = match clearer {
+            CrossClearer::Coming(d) => d,
+            CrossClearer::OnIt => best_def.filter(|d| field.players[*d].plays_his_own_header())?,
+            CrossClearer::Nobody => return None,
+        };
+        if field.players[d].plays_his_own_header() {
+            field.players[d].on_aerial_award();
+        }
+        Some(d)
+    }
+
     /// Who actually heads a cross the attackers did not win, and whether
     /// the ball is already on him. See [`CrossClearer`].
     ///
-    /// The reach test is `PlayerReach::can_strike(.., aerial = true)` and
-    /// nothing of this module's own: `KICKABLE_DISTANCE` across the grass
-    /// and the man's own jumping ceiling up it, which is the engine's
-    /// single answer to "may he play this ball". A second opinion here is
-    /// how the two would drift.
+    /// The reach test is `PlayerReach::can_head`: the clearance is a
+    /// header, and a head reaches 0.75 m across the grass where a boot
+    /// reaches 1.9. `OF_CROSS_HEAD_ARRIVAL=off` measures it against the
+    /// boot's reach (`PlayerReach::can_strike(.., aerial = true)`), as
+    /// before.
     ///
     /// `OF_CROSS_CLEAR_FLAT` restores the pre-fix arm by answering
     /// [`CrossClearer::OnIt`] to everything — debug infrastructure, do not
@@ -71,10 +146,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         if MatchContext::cross_clear_flat() {
             return CrossClearer::OnIt;
         }
-        match best_def {
-            Some(d) if PlayerReach::can_strike(&field.ball, &field.players[d], true) => {
-                CrossClearer::OnIt
+        let on_it = |d: usize| {
+            if MatchContext::cross_head_arrival_off() {
+                PlayerReach::can_strike(&field.ball, &field.players[d], true)
+            } else {
+                PlayerReach::can_head(field.ball.position, &field.players[d])
             }
+        };
+        match best_def {
+            Some(d) if on_it(d) => CrossClearer::OnIt,
             Some(d) => CrossClearer::Coming(d),
             None => CrossClearer::Nobody,
         }
@@ -199,13 +279,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// quarter of open-play crosses, and only a fraction of those become
     /// attempts, which is why crossing is a low-percentage way to attack
     /// even though every team does it.
-    pub(in crate::r#match::engine::engine) fn resolve_cross_contest(
+    pub(crate) fn resolve_cross_contest(
         field: &mut MatchField,
         context: &mut MatchContext,
         events: &mut EventCollection,
     ) {
         let ball = &field.ball;
-        if ball.cross_contest_resolved {
+        if ball.cross_contest_resolved || ball.aerial_decided {
             return;
         }
         // Only once the delivery has left the crosser and is genuinely in
@@ -293,6 +373,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut gk_coming = false;
 
         for (i, p) in field.players.iter().enumerate() {
+            // A man down injured, or getting up from a challenge, contests
+            // nothing — a keeper's claim least of all: he is lying where he
+            // went down.
+            if !p.can_play_ball() {
+                continue;
+            }
             // …and by where his run takes him by then, not where he stands:
             // a man already running onto it is priced at his arrival.
             let to_drop = (drop - p.position).xy();
@@ -328,15 +414,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 // the header. One who stayed
                 // home takes what drops near him — a keeper on his line
                 // does not command a ball at the back post.
-                let coming = matches!(
-                    p.state,
-                    PlayerState::Goalkeeper(
-                        GoalkeeperState::Catching
-                            | GoalkeeperState::Jumping
-                            | GoalkeeperState::ComingOut
-                            | GoalkeeperState::Punching
-                    )
-                );
+                let coming = p.claim_intent.is_some();
                 gk_coming = coming;
                 gk_command = if coming {
                     Self::KEEPER_CLAIM_FLOOR + raw * Self::KEEPER_CLAIM_SPAN
@@ -376,6 +454,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             field.ball.cross_contest_resolved = true;
             return;
         };
+        field.ball.aerial_decided = true;
+        #[cfg(feature = "match-logs")]
+        context
+            .defender_census
+            .get_mut()
+            .note_flight_decided(field.ball.last_release_tick, false);
 
         // An unmarked header is rare; an empty box is not a free goal
         // either, because the keeper is still there.
@@ -402,7 +486,38 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let shape = if gk_coming { 1.0 } else { gk_claim_edge };
         let gk_claim = (gk_command * shape * (1.0 + context.conditions.goalkeeper_claim_cross))
             .clamp(0.0, 0.95);
-        if gk_idx.is_some() && context.rng.bernoulli(gk_claim) {
+        let gk_wins = gk_idx.is_some() && context.rng.bernoulli(gk_claim);
+        #[cfg(feature = "match-logs")]
+        if let Some(k) = gk_idx {
+            let tick = context.current_tick();
+            context.keeper_census.get_mut().claim_roll(
+                field.players[k].id,
+                ClaimSite::Contest,
+                tick,
+            );
+        }
+        // A keeper who came for it: beaten to it, the delivery is the
+        // headers'; first to it, what he chose to do with it is decided now,
+        // once, and carried out when it reaches him.
+        if gk_coming && let Some(k) = gk_idx {
+            if !gk_wins {
+                field.players[k].on_claim_lost();
+                #[cfg(feature = "match-logs")]
+                context
+                    .keeper_census
+                    .get_mut()
+                    .claim_end(field.players[k].id, ClaimEnd::Lost);
+            } else {
+                if corner {
+                    Self::note_corner_routine(field, context, att_team, 0.0);
+                }
+                #[cfg(feature = "match-logs")]
+                crate::mid_run_diag::CROSS_CONTEST_GK.fetch_add(1, Ordering::Relaxed);
+                Self::reserve_claim(field, context, k);
+                field.ball.cross_contest_resolved = true;
+                return;
+            }
+        } else if gk_wins {
             if corner {
                 Self::note_corner_routine(field, context, att_team, 0.0);
             }
@@ -423,7 +538,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // branch's own comment says it is handing over to.
             // `OF_CROSS_CLEAR_FLAT` restores the old arm.
             let on_it = MatchContext::cross_clear_flat()
-                || gk_idx.is_some_and(|k| PlayerReach::can_possess(&field.ball, &field.players[k]));
+                || gk_idx.is_some_and(|k| {
+                    KeeperAerialClaim::contest_reach(&field.players[k], field.ball.position)
+                });
             // Booked either way, with `deferred` carrying which: the gap is
             // the geometry at the CONTEST, and that is the before/after
             // quantity. See `BlockDiag::CHANNELS`.
@@ -438,6 +555,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 );
             }
             if !on_it {
+                // The delivery carries on to him, reserved for nobody.
+                field.ball.pass_target_player_id = None;
                 field.ball.cross_contest_resolved = true;
                 return;
             }
@@ -531,6 +650,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // relocations were a VERTICAL snap: the ball dropping to
             // 2.5 m from wherever the delivery had climbed to, which is
             // the most visible axis there is.
+            #[cfg(feature = "match-logs")]
+            {
+                let tick = context.current_tick();
+                context.forward_census.get_mut().note_award(
+                    field.players[att_idx].id,
+                    FwdHeaderRule::CrossContest,
+                    tick,
+                );
+            }
             Self::deliver_to_winner(
                 field,
                 att_idx,
@@ -583,6 +711,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 // clear branch below is the same rule and carries the
                 // measurement. See `BlockDiag::CHANNELS`.
                 let clearer = Self::cross_clearer(field, best_def);
+                let staged = Self::staged_clearer(field, clearer, best_def);
+                #[cfg(feature = "match-logs")]
+                Self::note_defensive_header(field, context, clearer, best_def, staged.is_some());
                 #[cfg(feature = "match-logs")]
                 BlockDiag::note_contact(
                     3,
@@ -593,17 +724,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     AerialReach::HIGHEST,
                     !matches!(clearer, CrossClearer::OnIt),
                 );
-                match clearer {
-                    CrossClearer::OnIt => {
-                        if let Some(d) = best_def {
-                            events.add_ball_event(BallEvent::HeadedClear(
-                                field.players[d].id,
-                                ball_pos,
-                            ));
-                        }
-                        Self::hook_it_behind(field, ball_pos, attacked_goal)
-                    }
-                    CrossClearer::Coming(d) => Self::deliver_to_winner(
+                match (staged, clearer) {
+                    (Some(d), _) => Self::deliver_to_winner(
                         field,
                         d,
                         attacked_goal,
@@ -613,10 +735,19 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                         false,
                         4,
                     ),
+                    (None, CrossClearer::OnIt) => {
+                        if let Some(d) = best_def {
+                            events.add_ball_event(BallEvent::HeadedClear(
+                                field.players[d].id,
+                                ball_pos,
+                            ));
+                        }
+                        Self::hook_it_behind(field, ball_pos, attacked_goal)
+                    }
                     // Nobody is there to hook it anywhere. The delivery
                     // carries on, which is what a cross that beat the
                     // whole defence does.
-                    CrossClearer::Nobody => {}
+                    (None, _) => {}
                 }
                 // Out through the shared cleanup below rather than
                 // straight back: `hook_it_behind` drops the stale aim
@@ -630,8 +761,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
 
             // ── THE CLEAR IS A CONTESTED HEADER, NOT A FREE KICK ─────
-            // 210u (26 m) flat was a clean defensive exit on every one
-            // of the ~29 headed clears a match, which made the aerial
+            // 210u (26 m) flat was a clean defensive exit on every
+            // headed clear, which made the aerial
             // route a possession furnace: the side whose decisions
             // favour crossing (high `heading` targets) burned attacks
             // into guaranteed clean exits, and the 6:18 heading pin
@@ -671,6 +802,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // quantity, and `deferred` is the share that no longer turn
             // the ball here at all.
             let clearer = Self::cross_clearer(field, best_def);
+            let staged = Self::staged_clearer(field, clearer, best_def);
+            #[cfg(feature = "match-logs")]
+            Self::note_defensive_header(field, context, clearer, best_def, staged.is_some());
             let heading_it = match clearer {
                 CrossClearer::OnIt => best_def,
                 CrossClearer::Coming(d) => Some(d),
@@ -688,8 +822,27 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 AerialReach::HIGHEST,
                 !matches!(clearer, CrossClearer::OnIt),
             );
-            match clearer {
-                CrossClearer::OnIt => {
+            match (staged, clearer) {
+                // He is a stride away, or goes up for it in his own read.
+                // The delivery comes to him and the clearance is struck
+                // when it gets there, through the same machinery the
+                // attacking branch has used since the corner teleport was
+                // removed.
+                (Some(d), _) => Self::deliver_to_winner(
+                    field,
+                    d,
+                    attacked_goal,
+                    crosser,
+                    Self::CROSS_DROP_BEHIND,
+                    DeliveryIntent::Cleared {
+                        range: clear_range,
+                        apex: CLEAR_APEX_METRES,
+                        turn,
+                    },
+                    false,
+                    3,
+                ),
+                (None, CrossClearer::OnIt) => {
                     // He heads it away, and is credited with having done
                     // it — see [`BallEvent::HeadedClear`].
                     if let Some(d) = best_def {
@@ -715,30 +868,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                         turn,
                     );
                     b.current_owner = None;
-                    b.flags.in_flight_state = 1;
+                    b.flags.in_flight_state = FlightProtection::for_launch(b.velocity, b.position.z);
                 }
-                // He is a stride away. The delivery flies to him and the
-                // clearance is struck when it gets there, through the same
-                // machinery the attacking branch has used since the corner
-                // teleport was removed.
-                CrossClearer::Coming(d) => Self::deliver_to_winner(
-                    field,
-                    d,
-                    attacked_goal,
-                    crosser,
-                    Self::CROSS_DROP_BEHIND,
-                    DeliveryIntent::Cleared {
-                        range: clear_range,
-                        apex: CLEAR_APEX_METRES,
-                        turn,
-                    },
-                    false,
-                    3,
-                ),
                 // Nobody to head it. The cross beat the whole defence and
                 // carries on — a ball nobody can reach is not cleared by
                 // thin air.
-                CrossClearer::Nobody => {}
+                (None, _) => {}
             }
         }
 

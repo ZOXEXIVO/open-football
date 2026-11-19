@@ -1,5 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition, DefenderRead};
 use crate::r#match::player::strategies::common::states::LooseBallChase;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -20,12 +20,10 @@ impl StateProcessingHandler for DefenderTakeBallState {
                 DefenderState::Running,
             ));
         }
-        // Somebody else has it. Running handles teammate/opponent
-        // ownership — hand off there instead of duplicating the dispatch.
+        // Somebody else has it: the chase is over, and the read says what
+        // comes next.
         if ctx.ball().is_owned() && !ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Running,
-            ));
+            return Some(DefenderRead::change(ctx));
         }
 
         // Ball is loose: commit. No distance cap, no teammate yield, no
@@ -183,6 +181,6 @@ impl StateProcessingHandler for DefenderTakeBallState {
         // **chasing loose balls**". A defender sprinting for a fifty-fifty
         // is the same action as anyone else sprinting for it; nothing
         // about his shirt number makes it a jog.
-        DefenderCondition::with_velocity(ActivityIntensity::VeryHigh).process(ctx);
+        DefenderCondition::new(ActivityIntensity::VeryHigh).process(ctx);
     }
 }

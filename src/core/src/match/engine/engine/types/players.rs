@@ -2,7 +2,7 @@
 //! `id -> index` lookup table the hot loops read.
 
 use crate::PlayerPositionType;
-use crate::r#match::{MatchPlayer, MatchSquad};
+use crate::r#match::{MatchPlayer, MatchSquad, PlayerSide};
 
 /// Compact player entry for fast iteration in hot loops
 #[derive(Clone, Copy)]
@@ -77,6 +77,8 @@ impl MatchPlayerCollection {
         }
     }
 
+    /// Both squads' players, each on the end his side kicks off from: the
+    /// first squad on the left.
     pub fn from_squads(home_squad: &MatchSquad, away_squad: &MatchSquad) -> Self {
         let mut players = Vec::with_capacity(48);
         let mut entries = Vec::with_capacity(44);
@@ -108,6 +110,14 @@ impl MatchPlayerCollection {
             players.push(p.clone());
         }
 
+        for p in &mut players {
+            p.side = Some(if p.team_id == home_squad.team_id {
+                PlayerSide::Left
+            } else {
+                PlayerSide::Right
+            });
+        }
+
         let mut collection = MatchPlayerCollection {
             players,
             id_slots: [(0, PLAYER_SLOT_EMPTY); PLAYER_SLOT_TABLE_SIZE],
@@ -115,6 +125,16 @@ impl MatchPlayerCollection {
         };
         collection.rebuild_slots();
         collection
+    }
+
+    /// The sides change ends, as the field's players do.
+    pub fn change_ends(&mut self) {
+        for p in &mut self.players {
+            p.side = p.side.map(|side| match side {
+                PlayerSide::Left => PlayerSide::Right,
+                PlayerSide::Right => PlayerSide::Left,
+            });
+        }
     }
 
     pub fn by_id(&self, player_id: u32) -> Option<&MatchPlayer> {

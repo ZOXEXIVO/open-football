@@ -120,9 +120,14 @@ impl LeagueResult {
         let final_away_tactic = result.details.as_ref().and_then(|d| d.final_away_tactic);
         let tactic_summary = result.details.as_ref().map(|d| {
             (
-                d.starting_home_tactic,
-                d.starting_away_tactic,
-                d.shape_change_minute,
+                (
+                    d.starting_home_tactic,
+                    d.coach_home.first_shape_change_minute(),
+                ),
+                (
+                    d.starting_away_tactic,
+                    d.coach_away.first_shape_change_minute(),
+                ),
             )
         });
         let home_starting_eleven = result
@@ -166,7 +171,7 @@ impl LeagueResult {
         .with_starting_eleven(home_starting_eleven)
         .with_substitutes_used(home_substitutes_used)
         .with_fixture(Arc::clone(&match_id), result.league_id, kickoff);
-        if let Some((start, _, change_minute)) = tactic_summary {
+        if let Some(((start, change_minute), _)) = tactic_summary {
             home_item = home_item.with_tactic_summary(start, final_home_tactic, change_minute);
         }
         home_team.match_history.add(home_item);
@@ -187,7 +192,7 @@ impl LeagueResult {
         .with_starting_eleven(away_starting_eleven)
         .with_substitutes_used(away_substitutes_used)
         .with_fixture(match_id, result.league_id, kickoff);
-        if let Some((_, start, change_minute)) = tactic_summary {
+        if let Some((_, (start, change_minute))) = tactic_summary {
             away_item = away_item.with_tactic_summary(start, final_away_tactic, change_minute);
         }
         away_team.match_history.add(away_item);

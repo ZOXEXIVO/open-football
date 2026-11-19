@@ -1,6 +1,7 @@
 use crate::r#match::engine::ball::ball::HandlingVerdict;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperDelivery, KeeperFeetDecision,
+    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperDelivery, KeeperFeetDecision,
+    KeeperRead, ReadLevel,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
@@ -48,6 +49,10 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
                 GoalkeeperState::Standing,
             ));
         }
+        // …and a shot at his goal is the save model's, live or settled.
+        if KeeperRead::shot_at_his_goal(ctx) {
+            return KeeperRead::from(ctx, ReadLevel::Possession).go();
+        }
 
         // 2. Are hands legal on THIS ball? Covers the area (it may have
         // rolled out of the box while we were closing on it), the
@@ -91,35 +96,8 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
             return None;
         }
 
-        // 4. Attempt to pick up the ball.
-        //
-        // A ball he ALREADY OWNS is not a claim he can fumble — it is
-        // sitting still under his own boot, and bending down to take it is
-        // not a skill test. The base rate is for a ball he is meeting;
-        // for one he is standing on it is near-certain, and only a keeper
-        // with genuinely poor handling makes a mess of it.
-        //
-        // ⚠ **THE MEETING RATE WAS A FLAT 0.9**, whoever he was and
-        // whatever the ball was doing — so a keeper strolling onto a ball
-        // trickling across his own six-yard box with nobody within thirty
-        // metres fumbled one in ten. That is not a thing that happens, and
-        // it is the wrong shape as well as the wrong number: what makes a
-        // gather hard is a man on you and pace on the ball, and both are
-        // already measured here. `KeeperFeetDecision::pressure` is the
-        // engine's own reading of how closed down he is; the speed bar is
-        // the same 2.0 u/tick every keeper state calls a driven ball.
-        // Unpressured and slow, this is essentially certain; pressed, with
-        // it coming at him quickly and poor hands, it is nearer four in
-        // five — which is where the fumbles a match should come from.
-        let handling = (ctx.player.skills.goalkeeping.handling / 20.0).clamp(0.0, 1.0);
-        let pickup_chance = if ctx.player.has_ball(ctx) {
-            (0.97 + handling * 0.03).min(1.0)
-        } else {
-            let press = KeeperFeetDecision::pressure(ctx);
-            let pace = (ball_speed / 2.0).clamp(0.0, 1.0);
-            (0.995 - press * 0.10 - pace * 0.08 - (1.0 - handling) * 0.06).clamp(0.70, 0.999)
-        };
-        let pickup_success = ctx.context.rng.unit_f32() < pickup_chance;
+        // 4. Attempt to pick up the ball. See [`KeeperBallClaim::gather_odds`].
+        let pickup_success = ctx.context.rng.unit_f32() < KeeperBallClaim::gather_odds(ctx);
         if pickup_success {
             // Pickup is successful
             let mut state_change =
@@ -150,16 +128,15 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
             // away and barely moving. A keeper who cannot get his hands
             // cleanly round a ball at his feet does not leave them; he
             // reaches for it again, and if a man is on him he goes
-            // through it with his body, which is what `KeeperSmother`
-            // is for and `Catching` is the door to.
+            // through it with his body. Both are the read's: a loose ball
+            // still at his feet brings him straight back here, and a man
+            // on it is the smother.
             //
             // The branch above already handles the same failure on a ball
             // he owns, and handles it exactly this way — on his feet. The
             // two halves of one fumble disagreeing about whether he ends
             // up on the floor is the whole of the defect.
-            Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Catching,
-            ))
+            KeeperRead::from(ctx, ReadLevel::Possession).go()
         }
     }
 

@@ -1,116 +1,27 @@
+use crate::r#match::common_states::ShapeTempo;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, DefenderCondition, Interception,
+    ActivityIntensity, DefenderCondition, DefenderRead, DefensiveSlot,
 };
 use crate::r#match::{
-    ConditionContext, MATCH_TIME_MS, PlayerDistanceFromPosition, StateChangeResult,
-    StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+    ConditionContext, MATCH_TIME_MS, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
-/// How close an assigned man has to be before a recovering defender
-/// abandons the run to his slot and goes to him instead (~19 m). Same
-/// figure `running` uses, so a duty means the same thing in every state
-/// that holds it.
-const MARK_RECOVERY_DISTANCE: f32 = 150.0;
-
-const CLOSE_TO_POSITION_DISTANCE: f32 = 10.0;
-const BALL_INTERCEPTION_DISTANCE: f32 = 30.0;
-
+/// **The recovery run with the opposition on the ball**, or the ball loose:
+/// back to his slot at full effort, taking the carrier on the way if he
+/// becomes the man for him.
 #[derive(Default, Clone)]
 pub struct DefenderTrackingBackState {}
 
 impl StateProcessingHandler for DefenderTrackingBackState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // A player who has won the ball is not doing this any more.
-        //
-        // Nothing here asked whether HE had it, so a defender who
-        // intercepted or was simply the nearest body when it arrived
-        // carried on with an off-ball job while holding it — the same
-        // fixed point `Defender: Marking` was measured freezing on
-        // (99% of its stuck ticks with the owner 250-plus AI ticks into
-        // the state). `Running` is where a defender's on-ball decisions
-        // live, and this is the hand-off `DefenderStandingState` has
-        // always made.
-        if ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Running,
-            ));
-        }
-
-        // Take ball only if best positioned — prevents swarming
-        if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::TakeBall,
-            ));
-        }
-
-        // DUTY BEFORE POSITION — see the note in `returning`. A recovery
-        // run with a man assigned is a run at that man, and this state is
-        // literally the hard sprint back into shape, so it is the last
-        // place the assignment should be dropped.
-        if let Some(man) = ctx.team().my_mark()
-            && (man.position - ctx.player.position).magnitude() < MARK_RECOVERY_DISTANCE
-        {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Marking,
-            ));
-        }
-
-        // Check if the defender has reached their starting position
-        if ctx.player().distance_from_position() < CLOSE_TO_POSITION_DISTANCE {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Standing,
-            ));
-        }
-
-        // Check if the ball is close and moving towards the player
-        if Interception::is_available(ctx)
-            && ctx.ball().distance() < BALL_INTERCEPTION_DISTANCE
-            && ctx.ball().is_towards_player()
-        {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Intercepting,
-            ));
-        }
-
-        // If the team is losing and there's little time left, consider a
-        // more aggressive stance. Window = the final ~1/15 of the match
-        // (~6 min at full length) — the previous `- 300` subtracted 300
-        // MILLISECONDS, so the branch effectively never fired.
-        if ctx.team().is_loosing()
-            && ctx.context.total_match_time > MATCH_TIME_MS - MATCH_TIME_MS / 15
-        {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Pressing,
-            ));
-        }
-
-        // If the player is tired, switch to a less demanding state
-        if ctx.player().is_tired() {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::HoldingLine,
-            ));
-        }
-
-        // If the ball is on the team's own side, prioritize defensive positioning
-        if ctx.ball().on_own_side() {
-            match ctx.player().position_to_distance() {
-                PlayerDistanceFromPosition::Big => None, // Continue tracking back
-                PlayerDistanceFromPosition::Medium => Some(StateChangeResult::with_defender_state(
-                    DefenderState::HoldingLine,
-                )),
-                PlayerDistanceFromPosition::Small => Some(StateChangeResult::with_defender_state(
-                    DefenderState::Standing,
-                )),
-            }
-        } else {
-            None // Continue tracking back if the ball is on the opponent's side
-        }
+        DefenderRead::recovering(ctx, DefenderState::TrackingBack)
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        let station = ctx.team().my_anchor();
+        let station = DefensiveSlot::point(ctx);
         let distance_from_start = (ctx.player.position - station).magnitude();
 
         // Calculate urgency based on game situation
@@ -145,12 +56,10 @@ impl StateProcessingHandler for DefenderTrackingBackState {
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
-        // Tracking back is a hard recovery run to get goal-side — high
-        // intensity (the player is literally running back, not jogging).
-        // Tracks a MOVING MAN, so the cap has to match the run he is
-        // tracking — see the note in `defenders/states/marking`. `High`
-        // (0.78) against an attacker's `VeryHigh` (0.95) is a marker
-        // forbidden to keep up by the movement layer.
-        DefenderCondition::with_velocity(ActivityIntensity::VeryHigh).process(ctx);
+        // Tracking back is a hard recovery run to his place in the shape —
+        // high intensity (the player is literally running back, not
+        // jogging).
+        DefenderCondition::new(ShapeTempo::declared(&ctx, ActivityIntensity::VeryHigh))
+            .process(ctx);
     }
 }
