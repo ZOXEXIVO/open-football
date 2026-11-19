@@ -9,10 +9,12 @@ use std::io::Read;
 use std::sync::LazyLock;
 use sysinfo::{CpuRefreshKind, RefreshKind, System};
 
-// Include the CSS hash to force recompilation when CSS files change
-// This ensures rust-embed picks up the updated styles.min.css
-// Also provides CSS_VERSION for cache-busting query params
+// Provides CSS_VERSION for cache-busting query params.
 include!(concat!(env!("OUT_DIR"), "/css_hash.rs"));
+
+pub const STYLES_BUNDLE_PATH: &str = "static/css/styles.min.css";
+
+pub const STYLES_BUNDLE: &str = include_str!(concat!(env!("OUT_DIR"), "/styles.min.css"));
 
 // Whether `build.rs` managed to stage the WebAssembly match viewer into
 // `assets/static/viewer/`, and a hash of the wasm it staged. Both come from the
@@ -87,6 +89,14 @@ fn asset_response(path: &str, data: Cow<'static, [u8]>, gzipped: bool) -> Respon
 /// header, `curl` without `--compressed`) gets it inflated here rather than a
 /// 404 for a file that is demonstrably in the binary.
 fn embedded_asset(path: &str, headers: &HeaderMap) -> Option<Response> {
+    if path == STYLES_BUNDLE_PATH {
+        return Some(asset_response(
+            path,
+            Cow::Borrowed(STYLES_BUNDLE.as_bytes()),
+            false,
+        ));
+    }
+
     if let Some(content) = Assets::get(path) {
         return Some(asset_response(path, content.data, false));
     }
@@ -181,6 +191,19 @@ mod tests {
             .headers()
             .get(header::CONTENT_ENCODING)
             .and_then(|value| value.to_str().ok())
+    }
+
+    /// The page links `/static/css/styles.min.css?v=...`; a 404 there leaves the
+    /// whole site unstyled.
+    #[test]
+    fn serves_the_stylesheet_bundle_the_page_links() {
+        let response = serve(&format!("/{STYLES_BUNDLE_PATH}"), HeaderMap::new());
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("text/css"))
+        );
     }
 
     /// The match viewer is the only asset stored solely compressed, so it is

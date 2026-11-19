@@ -15,18 +15,13 @@ fn main() {
         .join("assets")
         .join("static")
         .join("css");
-    let output_file = css_dir.join("styles.min.css");
+    let output_file = Path::new(&out_dir).join("styles.min.css");
 
-    // Watched file by file, never as a directory. `styles.min.css` is written
-    // back into `css_dir` a few lines below, and cargo takes a watched
-    // directory's timestamp to be the newest timestamp anywhere inside it — so
-    // watching the folder made this script dirty the moment it finished
-    // running. Every `cargo build` from then on re-ran it, recompiled `web` and
-    // re-linked the binary under fat LTO: two minutes to produce byte-identical
-    // output. The inputs are the two files in `css_files`, and they are all
-    // this needs to know about.
-    //
-    // Also watch the build script itself.
+    // Watched file by file, never as a directory: a watched directory's
+    // timestamp is the newest one anywhere inside it, so any write beside the
+    // inputs dirtied this script again and cost a fat-LTO relink for
+    // byte-identical output. The inputs are the files in `css_files` and
+    // `versioned_css_files`, plus the build script itself.
     println!(
         "cargo:rerun-if-changed={}",
         Path::new(&manifest_dir).join("build.rs").display()
@@ -96,7 +91,12 @@ fn main() {
         }
     }
 
-    // Write the combined CSS file
+    // The bundle lives in `OUT_DIR`, which cargo caches together with this
+    // script's "already ran" fingerprint, and the binary includes it from
+    // there. Written into the gitignored `assets/` tree instead, a build that
+    // reuses a cached `target/` against a fresh checkout (CI) skips this script
+    // and embeds an `assets/` with no bundle in it, while `CSS_VERSION` still
+    // advertises one.
     if let Err(e) = write_if_changed(&output_file, combined_css.as_bytes()) {
         println!("cargo:warning=Failed to write combined CSS: {}", e);
     } else {
