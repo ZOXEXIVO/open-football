@@ -226,6 +226,7 @@ impl SimulatorData {
         data.seed_player_assurance();
         data.seed_player_anchors();
         data.seed_player_football();
+        data.seed_player_development();
         data.seed_player_nationality_continents();
         data.rebuild_market_map();
         data.bootstrap_market_ledgers();

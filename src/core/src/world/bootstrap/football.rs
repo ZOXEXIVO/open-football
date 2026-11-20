@@ -1,17 +1,18 @@
-//! Every player's football absorbed — the minutes that open the
-//! match-learned share of his ceilings — set from the seasons he arrives
-//! with, or from his place in the side he plays for.
+//! Every player of the opening world starts with the career he has had:
+//! the football he has banked, from the seasons he arrives with or from his
+//! place in the side, then his timing and his blueprint.
 
+use crate::Player;
 use crate::PlayerFieldPositionGroup;
+use crate::club::player::development::SquadRole;
 use crate::world::SimulatorData;
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 
 impl SimulatorData {
-    /// Seed every rostered player's football absorbed once, at world
-    /// construction: from his two most recent recorded seasons where he has
-    /// them, else from his ability rank in his position group. Free agents
-    /// are seeded from a recorded career only; a player created during play
+    /// Bank every rostered player's football once, at world construction:
+    /// from every season of his record where he has one, else from his
+    /// ability rank in his position group. A player created during play
     /// starts empty.
     pub(in crate::world) fn seed_player_football(&mut self) {
         let opening = self.date.date();
@@ -39,27 +40,62 @@ impl SimulatorData {
                         })
                         .collect();
                     for (player, &(group, ca)) in team.players.players.iter_mut().zip(&places) {
-                        if player.seed_football_from_career(opening) {
-                            continue;
-                        }
-                        let Some(group) = group else { continue };
-                        let rank = places
-                            .iter()
-                            .filter(|&&(g, c)| g == Some(group) && c > ca)
-                            .count();
-                        player.seed_football_from_role(group, rank, plays_friendlies);
+                        let role = group.map(|group| {
+                            let rank = places
+                                .iter()
+                                .filter(|&&(g, c)| g == Some(group) && c > ca)
+                                .count();
+                            SquadRole::of(rank, group.typical_starters(), plays_friendlies)
+                        });
+                        player.seed_football(opening, role);
                     }
                 }
             });
-        for player in &mut self.free_agents {
-            player.seed_football_from_career(opening);
+    }
+
+    /// The free agents a world opens with, given the football and the
+    /// development their records imply. They join the pool after the clubs
+    /// are seeded, so the club passes never see them.
+    pub fn admit_opening_free_agents(&mut self, players: Vec<Player>) {
+        let opening = self.date.date();
+        for mut player in players {
+            player.seed_football(opening, None);
+            player.seed_development(opening);
+            self.free_agents.push(player);
         }
+    }
+}
+
+impl SimulatorData {
+    /// Give every player of the opening world the development state his
+    /// record implies: rostered players and academy boys.
+    pub(in crate::world) fn seed_player_development(&mut self) {
+        let opening = self.date.date();
+        self.continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .for_each(|country| {
+                for club in &mut country.clubs {
+                    for player in club
+                        .teams
+                        .iter_mut()
+                        .flat_map(|t| t.players.players.iter_mut())
+                    {
+                        player.seed_development(opening);
+                    }
+                    for player in club.academy.players.players.iter_mut() {
+                        player.seed_development(opening);
+                    }
+                }
+            });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::development::SquadRole;
+    use crate::club::player::maturation::MaturationGroup;
     use crate::club::player::statistics::{PlayerStatistics, PlayerStatisticsHistoryItem};
     use crate::league::Season;
     use crate::shared::fullname::FullName;
@@ -111,14 +147,44 @@ mod tests {
         }
     }
 
+    fn banked(p: &Player) -> f32 {
+        p.development.football.share()
+    }
+
     #[test]
-    fn a_regular_of_his_last_two_seasons_opens_the_world_fully_exposed() {
+    fn a_regular_on_the_worlds_first_day() {
         let mut p = player(PlayerPositionType::MidfielderCenter);
-        p.statistics_history.items.push(season(2019, 0));
-        p.statistics_history.items.push(season(2024, 30));
-        p.statistics_history.items.push(season(2025, 30));
-        assert!(p.seed_football_from_career(opening()));
-        assert_eq!(p.load.match_exposure(), 1.0);
+        p.birth_date = NaiveDate::from_ymd_opt(2001, 3, 1).unwrap();
+        for year in 2021..=2025 {
+            p.statistics_history.items.push(season(year, 30));
+        }
+        p.seed_football(opening(), None);
+        for family in MaturationGroup::ALL {
+            if family == MaturationGroup::Goalkeeping {
+                continue;
+            }
+            let share = p.development.football.of(family);
+            assert!(share >= 0.999, "{family:?} banked {share:.3}");
+        }
+    }
+
+    #[test]
+    fn a_third_keeper_who_has_never_played() {
+        let mut keeper = player(PlayerPositionType::Goalkeeper);
+        keeper.birth_date = NaiveDate::from_ymd_opt(2002, 3, 1).unwrap();
+        keeper.seed_football(
+            opening(),
+            Some(SquadRole::of(
+                2,
+                PlayerFieldPositionGroup::Goalkeeper.typical_starters(),
+                false,
+            )),
+        );
+        assert!(
+            banked(&keeper) < 0.2,
+            "third-choice keeper banked {:.3}",
+            banked(&keeper)
+        );
     }
 
     #[test]
@@ -128,25 +194,20 @@ mod tests {
         let mut split = player(PlayerPositionType::Striker);
         split.statistics_history.items.push(season(2025, 12));
         split.statistics_history.items.push(season(2025, 8));
-        whole.seed_football_from_career(opening());
-        split.seed_football_from_career(opening());
-        assert!((whole.load.football_absorbed - split.load.football_absorbed).abs() < 1e-3);
+        whole.seed_football(opening(), None);
+        split.seed_football(opening(), None);
+        assert!((banked(&whole) - banked(&split)).abs() < 1e-4);
     }
 
     #[test]
-    fn a_player_with_no_record_is_seeded_by_his_place_in_the_side() {
-        let mut third_keeper = player(PlayerPositionType::Goalkeeper);
-        assert!(!third_keeper.seed_football_from_career(opening()));
-        third_keeper.seed_football_from_role(PlayerFieldPositionGroup::Goalkeeper, 2, false);
-        let exposure = third_keeper.load.match_exposure();
-        assert!(
-            (exposure - 0.1).abs() < 0.01,
-            "third-choice keeper reads {exposure}"
-        );
-
-        let mut youth_regular = player(PlayerPositionType::Striker);
-        youth_regular.seed_football_from_role(PlayerFieldPositionGroup::Forward, 0, true);
-        assert!((youth_regular.load.match_exposure() - 0.5).abs() < 0.01);
+    fn a_youth_league_regular_banks_half_a_regulars_football() {
+        let mut senior = player(PlayerPositionType::Striker);
+        let mut youth = player(PlayerPositionType::Striker);
+        senior.birth_date = NaiveDate::from_ymd_opt(2008, 3, 1).unwrap();
+        youth.birth_date = senior.birth_date;
+        senior.seed_football(opening(), Some(SquadRole::of(0, 2, false)));
+        youth.seed_football(opening(), Some(SquadRole::of(0, 2, true)));
+        assert!((banked(&youth) - banked(&senior) * 0.5).abs() < 0.01);
     }
 
     #[test]
@@ -169,6 +230,6 @@ mod tests {
             15,
             None,
         );
-        assert_eq!(intake.load.match_exposure(), 0.0);
+        assert_eq!(banked(&intake), 0.0);
     }
 }

@@ -1,3 +1,4 @@
+use crate::club::player::development::SessionWork;
 use crate::club::player::language::Language;
 use crate::club::player::training::result::PlayerTrainingResult;
 use crate::club::staff::CoachPlayerBond;
@@ -193,7 +194,7 @@ impl TeamTraining {
                 .staffs
                 .training_coach_for(&team.team_type, player.position().position_group());
             let mut r = PlayerTraining::train(player, coach, session, date, facility_quality);
-            r.effects.scale_gains(chem_factor);
+            r.effects.work.scale_quality(chem_factor);
             // Coach-player bond gates absorption per polish task #4 —
             // spec multiplier `0.90 + training_receptiveness * 0.20`
             // clamped to 0.90..1.10. Applied at the team layer (not
@@ -207,7 +208,9 @@ impl TeamTraining {
             // credibility) so the overlap is ~3% of the multiplier band
             // — small enough to live with for the cleaner caller API.
             let bond = CoachPlayerBond::build(player, coach, today);
-            r.effects.scale_gains(TrainingBondGate::multiplier(&bond));
+            r.effects
+                .work
+                .scale_quality(TrainingBondGate::multiplier(&bond));
 
             // Tactical-shape sessions additionally scale by the
             // player's belief in the plan (polish task #5). A player
@@ -215,7 +218,8 @@ impl TeamTraining {
             // does extracts a small extra gain.
             if is_tactical_session {
                 r.effects
-                    .scale_gains(TrainingBondGate::tactical_familiarity_multiplier(&bond));
+                    .work
+                    .scale_quality(TrainingBondGate::tactical_familiarity_multiplier(&bond));
             }
             results.push(r);
         }
@@ -830,10 +834,9 @@ pub enum TrainingType {
     TransitionPlay,
     SetPiecesDefensive,
 
-    // Mental Training
-    Concentration,
+    // Unit and mental training
+    Defending,
     DecisionMaking,
-    Leadership,
 
     // Goalkeeper Training (focus_positions = [Goalkeeper])
     GoalkeeperTraining,
@@ -883,6 +886,84 @@ pub enum PeriodizationPhase {
     MidSeason,   // Maintenance and tactical focus
     LateSeason,  // Managing fatigue, focus on recovery
     OffSeason,   // Rest and light maintenance
+}
+
+/// Each unit's own craft on a training day: keepers in goal, defenders
+/// defending, midfielders on the ball, attackers shooting, and on the eve of
+/// a match the wide players crossing.
+struct UnitWork;
+
+impl UnitWork {
+    const KEEPERS: [PlayerPositionType; 1] = [PlayerPositionType::Goalkeeper];
+    const DEFENDERS: [PlayerPositionType; 8] = [
+        PlayerPositionType::Sweeper,
+        PlayerPositionType::DefenderLeft,
+        PlayerPositionType::DefenderCenterLeft,
+        PlayerPositionType::DefenderCenter,
+        PlayerPositionType::DefenderCenterRight,
+        PlayerPositionType::DefenderRight,
+        PlayerPositionType::WingbackLeft,
+        PlayerPositionType::WingbackRight,
+    ];
+    const MIDFIELDERS: [PlayerPositionType; 6] = [
+        PlayerPositionType::DefensiveMidfielder,
+        PlayerPositionType::MidfielderLeft,
+        PlayerPositionType::MidfielderCenterLeft,
+        PlayerPositionType::MidfielderCenter,
+        PlayerPositionType::MidfielderCenterRight,
+        PlayerPositionType::MidfielderRight,
+    ];
+    const ATTACKERS: [PlayerPositionType; 7] = [
+        PlayerPositionType::AttackingMidfielderLeft,
+        PlayerPositionType::AttackingMidfielderCenter,
+        PlayerPositionType::AttackingMidfielderRight,
+        PlayerPositionType::ForwardLeft,
+        PlayerPositionType::ForwardCenter,
+        PlayerPositionType::ForwardRight,
+        PlayerPositionType::Striker,
+    ];
+    const WIDE: [PlayerPositionType; 10] = [
+        PlayerPositionType::DefenderLeft,
+        PlayerPositionType::DefenderRight,
+        PlayerPositionType::WingbackLeft,
+        PlayerPositionType::WingbackRight,
+        PlayerPositionType::MidfielderLeft,
+        PlayerPositionType::MidfielderRight,
+        PlayerPositionType::AttackingMidfielderLeft,
+        PlayerPositionType::AttackingMidfielderRight,
+        PlayerPositionType::ForwardLeft,
+        PlayerPositionType::ForwardRight,
+    ];
+
+    fn sessions(day: Weekday, eve_of_match: bool) -> Vec<TrainingSession> {
+        let intensity = if eve_of_match {
+            TrainingIntensity::Light
+        } else {
+            TrainingIntensity::Moderate
+        };
+        let midfield = match day {
+            Weekday::Mon | Weekday::Thu => TrainingType::Passing,
+            Weekday::Tue | Weekday::Fri => TrainingType::BallControl,
+            _ => TrainingType::DecisionMaking,
+        };
+        let block = |session_type, focus: &[PlayerPositionType]| TrainingSession {
+            session_type,
+            intensity: intensity.clone(),
+            duration_minutes: 30,
+            focus_positions: focus.to_vec(),
+            participants: vec![],
+        };
+        let mut sessions = vec![
+            block(TrainingType::GoalkeeperTraining, &Self::KEEPERS),
+            block(TrainingType::Defending, &Self::DEFENDERS),
+            block(midfield, &Self::MIDFIELDERS),
+            block(TrainingType::Shooting, &Self::ATTACKERS),
+        ];
+        if eve_of_match {
+            sessions.push(block(TrainingType::Crossing, &Self::WIDE));
+        }
+        sessions
+    }
 }
 
 impl WeeklyTrainingPlan {
@@ -972,6 +1053,31 @@ impl WeeklyTrainingPlan {
         philosophy: &CoachingPhilosophy,
         congested: bool,
     ) -> Vec<TrainingSession> {
+        let mut sessions = Self::team_sessions_for_day(
+            day,
+            next_match,
+            previous_match,
+            phase,
+            philosophy,
+            congested,
+        );
+        let md_plus = previous_match.map(|m| Self::weekday_distance(m, day));
+        let md_minus = next_match.map(|m| Self::weekday_distance(day, m));
+        if Some(day) != next_match && md_plus != Some(1) {
+            sessions.extend(UnitWork::sessions(day, md_minus == Some(1)));
+        }
+        sessions
+    }
+
+    /// The whole squad's sessions for `day`.
+    fn team_sessions_for_day(
+        day: Weekday,
+        next_match: Option<Weekday>,
+        previous_match: Option<Weekday>,
+        phase: PeriodizationPhase,
+        philosophy: &CoachingPhilosophy,
+        congested: bool,
+    ) -> Vec<TrainingSession> {
         // Match day itself — no training session.
         if Some(day) == next_match {
             return vec![];
@@ -1013,6 +1119,13 @@ impl WeeklyTrainingPlan {
                 },
                 TrainingSession {
                     session_type: TrainingType::Passing,
+                    intensity: TrainingIntensity::Light,
+                    duration_minutes: 30,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+                TrainingSession {
+                    session_type: TrainingType::BallControl,
                     intensity: TrainingIntensity::Light,
                     duration_minutes: 30,
                     focus_positions: vec![],
@@ -1061,7 +1174,7 @@ impl WeeklyTrainingPlan {
 
         // Otherwise — at least 3 days from any match — run the main
         // physical / tactical load week, dampened in congested periods.
-        Self::main_load_sessions(day, phase, philosophy, congested)
+        Self::main_load_sessions(day, phase, philosophy, congested, true)
     }
 
     /// Whole-day distance between two weekdays in the forward direction
@@ -1122,7 +1235,7 @@ impl WeeklyTrainingPlan {
             } else {
                 sessions.insert(
                     day,
-                    Self::main_load_sessions(day, phase, philosophy, congested),
+                    Self::main_load_sessions(day, phase, philosophy, congested, true),
                 );
             }
         }
@@ -1174,6 +1287,32 @@ impl WeeklyTrainingPlan {
         philosophy: &CoachingPhilosophy,
         congested: bool,
     ) -> Vec<TrainingSession> {
+        let mut sessions = Self::team_sessions_for_real_date(
+            today,
+            previous_match,
+            next_match,
+            phase,
+            philosophy,
+            congested,
+        );
+        let match_day = Some(today) == next_match || Some(today) == previous_match;
+        let day_after = previous_match.is_some_and(|d| (today - d).num_days() == 1);
+        let eve = next_match.is_some_and(|d| (d - today).num_days() == 1);
+        if !match_day && !day_after {
+            sessions.extend(UnitWork::sessions(today.weekday(), eve));
+        }
+        sessions
+    }
+
+    /// The whole squad's sessions for `today`.
+    fn team_sessions_for_real_date(
+        today: NaiveDate,
+        previous_match: Option<NaiveDate>,
+        next_match: Option<NaiveDate>,
+        phase: PeriodizationPhase,
+        philosophy: &CoachingPhilosophy,
+        congested: bool,
+    ) -> Vec<TrainingSession> {
         if Some(today) == next_match || Some(today) == previous_match {
             return vec![];
         }
@@ -1218,6 +1357,13 @@ impl WeeklyTrainingPlan {
                     focus_positions: vec![],
                     participants: vec![],
                 },
+                TrainingSession {
+                    session_type: TrainingType::BallControl,
+                    intensity: TrainingIntensity::Light,
+                    duration_minutes: 30,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
             ];
         }
         if md_minus == Some(1) {
@@ -1256,18 +1402,22 @@ impl WeeklyTrainingPlan {
                 },
             ];
         }
-        // 3+ days from any match - run the main load.
-        Self::main_load_sessions(today.weekday(), phase, philosophy, congested)
+        // 3+ days from any match - run the main load. Strength and agility
+        // work take turns week by week.
+        let strength_week = today.iso_week().week() % 2 == 1;
+        Self::main_load_sessions(today.weekday(), phase, philosophy, congested, strength_week)
     }
 
     /// Default load week — used when no fixture is within ±2 days. The
     /// `congested` flag drops Speed / Pressing in favour of technical
-    /// work to protect a tired squad.
+    /// work to protect a tired squad. In season an uncongested week holds
+    /// one strength or agility block, on its first main-load day.
     fn main_load_sessions(
         day: Weekday,
         phase: PeriodizationPhase,
         philosophy: &CoachingPhilosophy,
         congested: bool,
+        strength_week: bool,
     ) -> Vec<TrainingSession> {
         let base = match phase {
             PeriodizationPhase::PreSeason => TrainingIntensity::High,
@@ -1323,30 +1473,59 @@ impl WeeklyTrainingPlan {
                     focus_positions: vec![],
                     participants: vec![],
                 },
-                TrainingSession {
-                    session_type: TrainingType::GoalkeeperTraining,
-                    intensity: TrainingIntensity::Moderate,
-                    duration_minutes: 45,
-                    focus_positions: vec![PlayerPositionType::Goalkeeper],
-                    participants: vec![],
-                },
-            ],
+            ]
+            .into_iter()
+            .chain(
+                (!congested
+                    && matches!(
+                        phase,
+                        PeriodizationPhase::EarlySeason
+                            | PeriodizationPhase::MidSeason
+                            | PeriodizationPhase::LateSeason
+                    ))
+                .then(|| {
+                    [
+                        TrainingSession {
+                            session_type: if strength_week {
+                                TrainingType::Strength
+                            } else {
+                                TrainingType::Agility
+                            },
+                            intensity: TrainingIntensity::Moderate,
+                            duration_minutes: 30,
+                            focus_positions: vec![],
+                            participants: vec![],
+                        },
+                        TrainingSession {
+                            session_type: TrainingType::Endurance,
+                            intensity: base.clone(),
+                            duration_minutes: 30,
+                            focus_positions: vec![],
+                            participants: vec![],
+                        },
+                    ]
+                })
+                .into_iter()
+                .flatten(),
+            )
+            .collect(),
             Weekday::Wed => vec![
                 TrainingSession {
                     session_type: TrainingType::Positioning,
                     intensity: TrainingIntensity::Moderate,
-                    duration_minutes: 75,
+                    duration_minutes: 60,
                     focus_positions: vec![],
                     participants: vec![],
                 },
                 TrainingSession {
-                    session_type: TrainingType::Shooting,
+                    session_type: if congested {
+                        TrainingType::BallControl
+                    } else {
+                        TrainingType::Speed
+                    },
                     intensity: TrainingIntensity::Moderate,
-                    duration_minutes: 45,
-                    focus_positions: vec![
-                        PlayerPositionType::Striker,
-                        PlayerPositionType::ForwardCenter,
-                    ],
+                    duration_minutes: 30,
+                    focus_positions: vec![],
                     participants: vec![],
                 },
                 TrainingSession {
@@ -1378,13 +1557,6 @@ impl WeeklyTrainingPlan {
                     intensity: TrainingIntensity::Moderate,
                     duration_minutes: 60,
                     focus_positions: vec![],
-                    participants: vec![],
-                },
-                TrainingSession {
-                    session_type: TrainingType::GoalkeeperTraining,
-                    intensity: TrainingIntensity::Moderate,
-                    duration_minutes: 45,
-                    focus_positions: vec![PlayerPositionType::Goalkeeper],
                     participants: vec![],
                 },
             ],
@@ -1434,10 +1606,9 @@ impl WeeklyTrainingPlan {
 
 #[derive(Debug, Clone)]
 pub struct TrainingEffects {
-    pub physical_gains: PhysicalGains,
-    pub technical_gains: TechnicalGains,
-    pub mental_gains: MentalGains,
-    pub goalkeeping_gains: GoalkeepingGains,
+    /// What the session practised, and how well: repetitions per attribute
+    /// and their quality. The player's development decides what it does.
+    pub work: SessionWork,
     /// Net change to in-match condition. Positive = costs condition,
     /// negative = recovery. Applied after clamping.
     pub fatigue_change: f32,
@@ -1453,183 +1624,6 @@ pub struct TrainingEffects {
     /// real match-tempo work gains a lot.
     pub readiness_change: f32,
 }
-
-impl TrainingEffects {
-    /// Multiply all skill gains by `factor`. Fatigue / injury_risk /
-    /// morale are left alone — they're driven by intensity & session
-    /// type, not dressing-room chemistry.
-    pub fn scale_gains(&mut self, factor: f32) {
-        let f = factor.max(0.0);
-        let p = &mut self.physical_gains;
-        p.stamina *= f;
-        p.strength *= f;
-        p.pace *= f;
-        p.agility *= f;
-        p.balance *= f;
-        p.jumping *= f;
-        p.natural_fitness *= f;
-        let t = &mut self.technical_gains;
-        t.first_touch *= f;
-        t.passing *= f;
-        t.crossing *= f;
-        t.dribbling *= f;
-        t.finishing *= f;
-        t.heading *= f;
-        t.tackling *= f;
-        t.technique *= f;
-        t.marking *= f;
-        t.long_shots *= f;
-        t.free_kicks *= f;
-        t.corners *= f;
-        t.penalty_taking *= f;
-        let m = &mut self.mental_gains;
-        m.concentration *= f;
-        m.decisions *= f;
-        m.positioning *= f;
-        m.teamwork *= f;
-        m.vision *= f;
-        m.work_rate *= f;
-        m.leadership *= f;
-        m.composure *= f;
-        m.anticipation *= f;
-        m.bravery *= f;
-        m.off_the_ball *= f;
-        let g = &mut self.goalkeeping_gains;
-        g.handling *= f;
-        g.reflexes *= f;
-        g.one_on_ones *= f;
-        g.aerial_reach *= f;
-        g.command_of_area *= f;
-        g.communication *= f;
-        g.rushing_out *= f;
-        g.punching *= f;
-        g.kicking *= f;
-        g.throwing *= f;
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct PhysicalGains {
-    pub stamina: f32,
-    pub strength: f32,
-    pub pace: f32,
-    pub agility: f32,
-    pub balance: f32,
-    pub jumping: f32,
-    pub natural_fitness: f32,
-}
-
-impl PhysicalGains {
-    pub fn total(&self) -> f32 {
-        self.stamina
-            + self.strength
-            + self.pace
-            + self.agility
-            + self.balance
-            + self.jumping
-            + self.natural_fitness
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct TechnicalGains {
-    pub first_touch: f32,
-    pub passing: f32,
-    pub crossing: f32,
-    pub dribbling: f32,
-    pub finishing: f32,
-    pub heading: f32,
-    pub tackling: f32,
-    pub technique: f32,
-    pub marking: f32,
-    pub long_shots: f32,
-    pub free_kicks: f32,
-    pub corners: f32,
-    pub penalty_taking: f32,
-}
-
-impl TechnicalGains {
-    pub fn total(&self) -> f32 {
-        self.first_touch
-            + self.passing
-            + self.crossing
-            + self.dribbling
-            + self.finishing
-            + self.heading
-            + self.tackling
-            + self.technique
-            + self.marking
-            + self.long_shots
-            + self.free_kicks
-            + self.corners
-            + self.penalty_taking
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct MentalGains {
-    pub concentration: f32,
-    pub decisions: f32,
-    pub positioning: f32,
-    pub teamwork: f32,
-    pub vision: f32,
-    pub work_rate: f32,
-    pub leadership: f32,
-    pub composure: f32,
-    pub anticipation: f32,
-    pub bravery: f32,
-    pub off_the_ball: f32,
-}
-
-impl MentalGains {
-    pub fn total(&self) -> f32 {
-        self.concentration
-            + self.decisions
-            + self.positioning
-            + self.teamwork
-            + self.vision
-            + self.work_rate
-            + self.leadership
-            + self.composure
-            + self.anticipation
-            + self.bravery
-            + self.off_the_ball
-    }
-}
-
-/// Goalkeeping-specific session gains. Until this existed, senior GK
-/// skills could only move through the weekly development tick — clubs
-/// had GK coaches on staff but no session that used them.
-#[derive(Debug, Clone, Default)]
-pub struct GoalkeepingGains {
-    pub handling: f32,
-    pub reflexes: f32,
-    pub one_on_ones: f32,
-    pub aerial_reach: f32,
-    pub command_of_area: f32,
-    pub communication: f32,
-    pub rushing_out: f32,
-    pub punching: f32,
-    pub kicking: f32,
-    pub throwing: f32,
-}
-
-impl GoalkeepingGains {
-    pub fn total(&self) -> f32 {
-        self.handling
-            + self.reflexes
-            + self.one_on_ones
-            + self.aerial_reach
-            + self.command_of_area
-            + self.communication
-            + self.rushing_out
-            + self.punching
-            + self.kicking
-            + self.throwing
-    }
-}
-
-// ============== Individual Player Training Plans ==============
 
 #[derive(Debug, Clone)]
 pub struct IndividualTrainingPlan {
@@ -1850,5 +1844,259 @@ mod bond_consumer_tests {
         assert!(!TrainingBondGate::is_tactical(&TrainingType::Shooting));
         assert!(!TrainingBondGate::is_tactical(&TrainingType::BallControl));
         assert!(!TrainingBondGate::is_tactical(&TrainingType::Endurance));
+    }
+}
+
+#[cfg(test)]
+mod unit_week_tests {
+    //! The training week by unit: every training day but the day after a
+    //! match gives each unit its own craft.
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::development::SkillKey;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositions, PlayerSkills,
+        PlayerTraining, StaffStub,
+    };
+
+    fn philosophy() -> CoachingPhilosophy {
+        CoachingPhilosophy {
+            tactical_focus: TacticalFocus::Balanced,
+            training_intensity: TrainingIntensityPreference::Medium,
+            youth_focus: false,
+            rotation_preference: RotationPreference::Moderate,
+        }
+    }
+
+    /// Every session a player of `position` attends between `from` and `to`
+    /// (exclusive) for a club playing on `fixtures`.
+    fn attended(
+        position: PlayerPositionType,
+        fixtures: &[NaiveDate],
+        from: NaiveDate,
+        to: NaiveDate,
+    ) -> Vec<TrainingSession> {
+        let mut out = Vec::new();
+        let mut day = from;
+        while day < to {
+            let previous = fixtures.iter().filter(|d| **d <= day).max().copied();
+            let next = fixtures.iter().filter(|d| **d > day).min().copied();
+            let this_week = fixtures
+                .iter()
+                .filter(|d| (**d - day).num_days().abs() <= 3)
+                .count() as u8;
+            for session in WeeklyTrainingPlan::sessions_for_date(
+                day,
+                previous,
+                next,
+                this_week,
+                PeriodizationPhase::MidSeason,
+                &philosophy(),
+            ) {
+                if session.focus_positions.is_empty() || session.focus_positions.contains(&position)
+                {
+                    out.push(session);
+                }
+            }
+            day = day.succ_opt().unwrap();
+        }
+        out
+    }
+
+    fn saturdays(weeks: i64) -> Vec<NaiveDate> {
+        let first = NaiveDate::from_ymd_opt(2026, 10, 3).unwrap();
+        (0..=weeks).map(|w| first + Duration::weeks(w)).collect()
+    }
+
+    fn one_week(position: PlayerPositionType) -> Vec<TrainingSession> {
+        let fixtures = saturdays(1);
+        attended(
+            position,
+            &fixtures,
+            fixtures[0].succ_opt().unwrap(),
+            fixtures[1],
+        )
+    }
+
+    fn count(sessions: &[TrainingSession], kind: TrainingType) -> usize {
+        sessions.iter().filter(|s| s.session_type == kind).count()
+    }
+
+    #[test]
+    fn a_keepers_one_match_week() {
+        let week = one_week(PlayerPositionType::Goalkeeper);
+        assert!(count(&week, TrainingType::GoalkeeperTraining) >= 4);
+    }
+
+    #[test]
+    fn a_defenders_one_match_week() {
+        let week = one_week(PlayerPositionType::DefenderCenter);
+        assert!(count(&week, TrainingType::Defending) >= 2);
+    }
+
+    #[test]
+    fn a_wingers_one_match_week() {
+        let week = one_week(PlayerPositionType::AttackingMidfielderRight);
+        assert!(count(&week, TrainingType::Shooting) >= 1);
+        assert!(count(&week, TrainingType::Crossing) >= 1);
+    }
+
+    #[test]
+    fn a_midfielders_one_match_week() {
+        let week = one_week(PlayerPositionType::MidfielderCenter);
+        let craft = count(&week, TrainingType::Passing)
+            + count(&week, TrainingType::BallControl)
+            + count(&week, TrainingType::DecisionMaking);
+        assert!(
+            craft >= 4,
+            "a central midfielder had {craft} sessions of his craft"
+        );
+    }
+
+    #[test]
+    fn a_congested_week_still_has_unit_work() {
+        let saturday = NaiveDate::from_ymd_opt(2026, 10, 3).unwrap();
+        let fixtures = [
+            saturday,
+            saturday + Duration::days(4),
+            saturday + Duration::days(7),
+        ];
+        for (position, crafts) in [
+            (
+                PlayerPositionType::Goalkeeper,
+                &[TrainingType::GoalkeeperTraining][..],
+            ),
+            (
+                PlayerPositionType::DefenderCenter,
+                &[TrainingType::Defending][..],
+            ),
+            (
+                PlayerPositionType::MidfielderCenter,
+                &[
+                    TrainingType::Passing,
+                    TrainingType::BallControl,
+                    TrainingType::DecisionMaking,
+                ][..],
+            ),
+            (PlayerPositionType::Striker, &[TrainingType::Shooting][..]),
+        ] {
+            let week = attended(
+                position,
+                &fixtures,
+                saturday.succ_opt().unwrap(),
+                fixtures[2],
+            );
+            assert!(
+                week.iter().any(|s| crafts.contains(&s.session_type)),
+                "{position:?} had no session of his craft in a congested week"
+            );
+        }
+    }
+
+    #[test]
+    fn strength_in_season() {
+        for weeks in [1, 2] {
+            let fixtures = saturdays(weeks);
+            let last_week = attended(
+                PlayerPositionType::MidfielderCenter,
+                &fixtures,
+                fixtures[weeks as usize - 1].succ_opt().unwrap(),
+                fixtures[weeks as usize],
+            );
+            assert!(
+                count(&last_week, TrainingType::Strength)
+                    + count(&last_week, TrainingType::Agility)
+                    >= 1
+            );
+        }
+    }
+
+    /// Over two ordinary one-match weeks a player of every exact position
+    /// attends a session practising each attribute his position's ability
+    /// scoring weights above the mean.
+    #[test]
+    fn every_position_every_relied_on_attribute() {
+        use PlayerPositionType::*;
+        let coach = StaffStub::build();
+        let fixtures = saturdays(2);
+        let mut missing = Vec::new();
+        for position in [
+            Goalkeeper,
+            Sweeper,
+            DefenderLeft,
+            DefenderCenter,
+            DefenderRight,
+            DefensiveMidfielder,
+            WingbackLeft,
+            WingbackRight,
+            MidfielderLeft,
+            MidfielderCenter,
+            MidfielderRight,
+            AttackingMidfielderLeft,
+            AttackingMidfielderCenter,
+            AttackingMidfielderRight,
+            ForwardLeft,
+            ForwardCenter,
+            ForwardRight,
+            Striker,
+        ] {
+            let player = PlayerBuilder::new()
+                .id(1)
+                .full_name(FullName::new("Unit".to_string(), "Week".to_string()))
+                .birth_date(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::flat_for_ability(100))
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .build()
+                .unwrap();
+            let sessions = attended(
+                position,
+                &fixtures,
+                fixtures[0].succ_opt().unwrap(),
+                fixtures[2],
+            );
+            let at = NaiveDate::from_ymd_opt(2026, 10, 10)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap();
+            let mut practised = [0.0f32; 50];
+            for session in &sessions {
+                let work = PlayerTraining::train(&player, &coach, session, at, 0.5)
+                    .effects
+                    .work;
+                for (i, p) in practised.iter_mut().enumerate() {
+                    *p += work.reps(SkillKey::ALL[i]);
+                }
+            }
+            let prices = PlayerSkills::ability_weights(position);
+            let priced: Vec<usize> = (0..50).filter(|i| prices[*i] > 0.0).collect();
+            let mean = priced.iter().map(|i| prices[*i]).sum::<f32>() / priced.len() as f32;
+            for i in priced {
+                if prices[i] > mean && practised[i] <= 0.0 {
+                    missing.push(format!(
+                        "{position:?}: {:?} (weight {:.3} over a mean of {mean:.3})",
+                        SkillKey::ALL[i],
+                        prices[i]
+                    ));
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "never practised:
+{}",
+            missing.join(
+                "
+"
+            )
+        );
     }
 }

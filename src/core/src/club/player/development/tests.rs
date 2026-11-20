@@ -1,20 +1,15 @@
 use super::ceilings::PositionalSkillCeilings;
-use super::coaching::CoachingEffect;
-use super::modifiers::*;
-use super::position_weights::*;
-use super::rolls::FixedRolls;
 use super::skills_array::*;
+use super::work::SessionWork;
 
 use crate::club::player::builder::PlayerBuilder;
-use crate::club::player::condition::load::REGULAR_STOCK;
+use crate::club::player::maturation::MaturationGroup;
 use crate::club::player::player::Player;
 use crate::club::player::position::{PlayerPosition, PlayerPositions};
 use crate::shared::fullname::FullName;
 use crate::{PersonAttributes, PlayerAttributes, PlayerPositionType, PlayerSkills};
 use chrono::Duration;
 use chrono::NaiveDate;
-
-// ── Test helpers ──────────────────────────────────────────────────────
 
 fn d(y: i32, m: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, day).unwrap()
@@ -133,6 +128,63 @@ fn make_player(
         .unwrap()
 }
 
+/// Every family's football banked: a regular whose ceilings move with his
+/// age alone.
+fn regular(player: &mut Player) {
+    for family in MaturationGroup::ALL {
+        player.development.football.set(family, 1.0);
+    }
+}
+
+fn passing_work(reps: f32) -> SessionWork {
+    let mut work = SessionWork::default();
+    work.practise(SkillKey::Passing, reps);
+    work
+}
+
+// ── The read ──────────────────────────────────────────────────────
+
+/// A season of football far below him reads as football he has outgrown,
+/// and a year without any as no fitting football; neither is a view until a
+/// season he was followed through is behind it.
+#[test]
+fn the_read_tells_outgrown_football_from_none() {
+    use super::football::MatchFootball;
+    let born = d(2004, 3, 1);
+    let mut player = make_player(
+        born,
+        PlayerPositionType::MidfielderCenter,
+        baseline_skills(),
+        150,
+        person_pro(14.0, 14.0),
+    );
+    player.player_attributes.current_ability = 120;
+    let mut idle = player.clone();
+    let start = d(2026, 7, 6);
+    assert!(!player.development.ledger.read(start).known);
+    for week in 0..56 {
+        let date = start + Duration::days(week * 7);
+        player.bank_football(
+            &MatchFootball {
+                minutes: 90.0,
+                standard: 0.2,
+                slot: PlayerPositionType::MidfielderCenter,
+                season_rating: 0.0,
+                season_games: 0,
+            },
+            date,
+        );
+        idle.process_development(date);
+    }
+    let today = start + Duration::days(56 * 7);
+    let played = player.development.ledger.read(today);
+    assert!(played.known && played.outgrown > 0.5, "{played:?}");
+    assert!(played.short_of_fitting_football());
+    let none = idle.development.ledger.read(today);
+    assert!(none.known && none.fitting_minutes == 0.0, "{none:?}");
+    assert!(none.short_of_fitting_football());
+}
+
 // ── Round-trip ────────────────────────────────────────────────────
 
 #[test]
@@ -148,9 +200,9 @@ fn skill_array_round_trip_preserves_all_fields() {
     // as a stale default rather than a coincidence.
     let mut tagged = [0.0f32; SKILL_COUNT];
     for (i, v) in tagged.iter_mut().enumerate() {
-        *v = 1.0 + (i as f32) * 0.1; // 1.0, 1.1, 1.2, ... 5.9
+        *v = 1.0 + (i as f32) * 0.1;
     }
-    write_skills_back(&mut p, &tagged);
+    write_array_into(&mut p.skills, &tagged);
 
     let round_tripped = skills_to_array(&p);
     for i in 0..SKILL_COUNT {
@@ -169,1225 +221,219 @@ fn skill_count_matches_enum() {
     assert_eq!(SkillKey::GkThrowing as usize + 1, SKILL_COUNT);
 }
 
-// ── Pure helper checks ────────────────────────────────────────────
+// ── The work rule ─────────────────────────────────────────────────
 
+/// The same sessions teach a professional, ambitious player more.
 #[test]
-fn workload_growth_modifier_drops_with_fatigue() {
-    let fresh = DevelopmentModifiers::workload_growth_modifier(100, 0);
-    let drained = DevelopmentModifiers::workload_growth_modifier(35, 8000);
-    assert!(
-        fresh > drained,
-        "fresh {} should exceed drained {}",
-        fresh,
-        drained
-    );
-    assert!(drained <= 0.7);
-    assert!(fresh >= 0.99);
-}
-
-#[test]
-fn match_readiness_multiplier_scales_inside_band() {
-    assert!(
-        DevelopmentModifiers::match_readiness_multiplier(0.0)
-            < DevelopmentModifiers::match_readiness_multiplier(20.0)
-    );
-    assert!((DevelopmentModifiers::match_readiness_multiplier(20.0) - 1.10).abs() < 1e-4);
-    assert!((DevelopmentModifiers::match_readiness_multiplier(0.0) - 0.90).abs() < 1e-4);
-}
-
-#[test]
-fn skill_gap_factor_is_zero_at_or_above_ceiling() {
-    assert_eq!(DevelopmentModifiers::skill_gap_factor(20.0, 15.0), 0.05);
-    assert_eq!(DevelopmentModifiers::skill_gap_factor(15.0, 15.0), 0.05);
-    assert!(DevelopmentModifiers::skill_gap_factor(5.0, 15.0) > 0.5);
-}
-
-#[test]
-fn defensive_midfielder_uses_midfielder_dev_weights() {
-    // This pins the deliberate divergence from
-    // PlayerPositionType::position_group(): for development the DM is
-    // a midfielder, not a defender.
-    assert_eq!(
-        pos_group_from(PlayerPositionType::DefensiveMidfielder),
-        PosGroup::Midfielder
-    );
-}
-
-// ── Position-specific ceilings ────────────────────────────────────
-
-#[test]
-fn striker_finishing_ceiling_exceeds_tackling_ceiling() {
-    // Verify the position weights produce the expected ceiling shape.
-    let w = position_dev_weights(PosGroup::Forward);
-    assert!(w[SK_FINISHING] > w[SK_TACKLING]);
-    assert!(w[SK_FINISHING] >= 1.4);
-    assert!(w[SK_TACKLING] <= 0.5);
-}
-
-#[test]
-fn defender_marking_grows_faster_than_finishing() {
-    let w = position_dev_weights(PosGroup::Defender);
-    assert!(w[SK_MARKING] > w[SK_FINISHING]);
-    assert!(w[SK_TACKLING] > w[SK_FINISHING]);
-}
-
-// ── Behavioral tests using the deterministic roll seam ────────────
-
-fn high_roll() -> FixedRolls {
-    FixedRolls(1.0)
-}
-
-#[test]
-fn young_professional_grows_more_than_low_professionalism_peer() {
-    let birth = d(2008, 1, 1); // age ~17 on 2025-06-01
-    let now = d(2025, 6, 1);
-    let pa = 170u8;
-
-    let mut pro = make_player(
-        birth,
-        PlayerPositionType::Striker,
-        baseline_skills(),
-        pa,
-        person_pro(18.0, 16.0),
-    );
-    let mut sloth = make_player(
-        birth,
-        PlayerPositionType::Striker,
-        baseline_skills(),
-        pa,
-        person_pro(4.0, 6.0),
-    );
-    // Same starting CA so the gap factor is identical.
-    sloth.skills.mental.work_rate = 6.0;
-    sloth.skills.mental.determination = 6.0;
-
-    let pre_pro_finishing = pro.skills.technical.finishing;
-    let pre_sloth_finishing = sloth.skills.technical.finishing;
-
-    let coach = CoachingEffect::neutral();
-    pro.process_development_with(now, 5000, &coach, 0.5, &mut high_roll());
-    sloth.process_development_with(now, 5000, &coach, 0.5, &mut high_roll());
-
-    let pro_gain = pro.skills.technical.finishing - pre_pro_finishing;
-    let sloth_gain = sloth.skills.technical.finishing - pre_sloth_finishing;
-    assert!(
-        pro_gain > sloth_gain,
-        "pro_gain={}, sloth_gain={}",
-        pro_gain,
-        sloth_gain
-    );
-}
-
-#[test]
-fn old_player_declines_physically_but_can_still_grow_mentally() {
-    // 36-year-old with neutral coaching, same fixed roll for both
-    // categories. Mental should still nudge up, physical should fall.
-    let now = d(2025, 6, 1);
-    let birth = d(1989, 1, 1); // 36
-    let mut p = make_player(
-        birth,
-        PlayerPositionType::DefenderCenter,
-        baseline_skills(),
-        150,
-        person_pro(15.0, 12.0),
-    );
-    let pre_pace = p.skills.physical.pace;
-    let pre_leadership = p.skills.mental.leadership;
-
-    let coach = CoachingEffect::neutral();
-    // Use the midpoint roll so the band is interpreted at its center —
-    // physical at 36 is unambiguously negative; mental at 36 is around 0.
-    p.process_development_with(now, 5000, &coach, 0.5, &mut FixedRolls(0.5));
-
-    assert!(
-        p.skills.physical.pace <= pre_pace,
-        "old pace should not grow: pre={}, post={}",
-        pre_pace,
-        p.skills.physical.pace
-    );
-    // Leadership has a +3 peak offset so a 36yo is effectively 33 for it.
-    assert!(
-        p.skills.mental.leadership >= pre_leadership,
-        "leadership should hold or grow: pre={}, post={}",
-        pre_leadership,
-        p.skills.mental.leadership
-    );
-}
-
-#[test]
-fn injured_player_skips_development_entirely() {
-    let mut p = make_player(
-        d(2008, 1, 1),
-        PlayerPositionType::Striker,
-        baseline_skills(),
-        170,
-        person_pro(18.0, 16.0),
-    );
-    p.player_attributes.is_injured = true;
-    p.player_attributes.injury_days_remaining = 30;
-
-    let snapshot = skills_to_array(&p);
-    let coach = CoachingEffect::neutral();
-    p.process_development_with(d(2025, 6, 1), 8000, &coach, 0.6, &mut high_roll());
-
-    let after = skills_to_array(&p);
-    for i in 0..SKILL_COUNT {
-        assert!(
-            (snapshot[i] - after[i]).abs() < 1e-6,
-            "injured player skill {} changed: {} -> {}",
-            i,
-            snapshot[i],
-            after[i]
-        );
-    }
-}
-
-#[test]
-fn recovering_player_only_gains_mental() {
-    let mut p = make_player(
-        d(2008, 1, 1),
-        PlayerPositionType::Striker,
-        baseline_skills(),
-        170,
-        person_pro(18.0, 16.0),
-    );
-    p.player_attributes.recovery_days_remaining = 14;
-    // is_injured is already false (Default), so this puts the player in
-    // the recovery phase.
-
-    let pre_finishing = p.skills.technical.finishing;
-    let pre_pace = p.skills.physical.pace;
-    let pre_decisions = p.skills.mental.decisions;
-
-    let coach = CoachingEffect::neutral();
-    p.process_development_with(d(2025, 6, 1), 8000, &coach, 0.6, &mut high_roll());
-
-    assert_eq!(
-        p.skills.technical.finishing, pre_finishing,
-        "recovering player should not gain technical"
-    );
-    assert_eq!(
-        p.skills.physical.pace, pre_pace,
-        "recovering player should not gain physical"
-    );
-    assert!(
-        p.skills.mental.decisions >= pre_decisions,
-        "recovering player can still gain mental"
-    );
-}
-
-#[test]
-fn fatigued_jaded_player_grows_less_than_fresh_peer() {
-    let birth = d(2006, 1, 1); // ~19yo
-    let now = d(2025, 6, 1);
-    let pa = 170u8;
-
-    let mut fresh = make_player(
-        birth,
-        PlayerPositionType::Striker,
-        baseline_skills(),
-        pa,
-        person_pro(15.0, 14.0),
-    );
-    let mut drained = make_player(
-        birth,
-        PlayerPositionType::Striker,
-        baseline_skills(),
-        pa,
-        person_pro(15.0, 14.0),
-    );
-    drained.player_attributes.condition = 3500;
-    drained.player_attributes.jadedness = 8000;
-    drained.skills.physical.match_readiness = 5.0;
-
-    let pre_fresh = fresh.skills.technical.finishing;
-    let pre_drained = drained.skills.technical.finishing;
-
-    let coach = CoachingEffect::neutral();
-    fresh.process_development_with(now, 5000, &coach, 0.5, &mut high_roll());
-    drained.process_development_with(now, 5000, &coach, 0.5, &mut high_roll());
-
-    let fresh_gain = fresh.skills.technical.finishing - pre_fresh;
-    let drained_gain = drained.skills.technical.finishing - pre_drained;
-    assert!(
-        fresh_gain > drained_gain,
-        "fresh {} should grow more than drained {}",
-        fresh_gain,
-        drained_gain
-    );
-}
-
-#[test]
-fn deterministic_seeded_rolls_produce_stable_output() {
-    let now = d(2025, 6, 1);
-    let coach = CoachingEffect::neutral();
-    let mut p1 = make_player(
-        d(2007, 1, 1),
-        PlayerPositionType::MidfielderCenter,
-        baseline_skills(),
-        160,
-        person_pro(15.0, 12.0),
-    );
-    let mut p2 = make_player(
-        d(2007, 1, 1),
-        PlayerPositionType::MidfielderCenter,
-        baseline_skills(),
-        160,
-        person_pro(15.0, 12.0),
-    );
-
-    p1.process_development_with(now, 6000, &coach, 0.4, &mut FixedRolls(0.5));
-    p2.process_development_with(now, 6000, &coach, 0.4, &mut FixedRolls(0.5));
-
-    let a = skills_to_array(&p1);
-    let b = skills_to_array(&p2);
-    for i in 0..SKILL_COUNT {
-        assert!(
-            (a[i] - b[i]).abs() < 1e-6,
-            "deterministic skill {} differed: {} vs {}",
-            i,
-            a[i],
-            b[i]
-        );
-    }
-}
-
-#[test]
-fn goalkeeping_skills_use_later_peak_curve() {
-    // At age 30, a GK should still gain on goalkeeping skills, while
-    // an outfield 30yo's physical skills are flat or declining.
-    let coach = CoachingEffect::neutral();
-    let now = d(2025, 6, 1);
-
-    let mut gk = make_player(
-        d(1995, 1, 1), // 30
-        PlayerPositionType::Goalkeeper,
-        gk_skills(),
-        160,
-        person_pro(15.0, 12.0),
-    );
-    let pre_handling = gk.skills.goalkeeping.handling;
-    gk.process_development_with(now, 6000, &coach, 0.4, &mut FixedRolls(0.7));
-    assert!(
-        gk.skills.goalkeeping.handling > pre_handling,
-        "30yo GK handling should still grow: pre={} post={}",
-        pre_handling,
-        gk.skills.goalkeeping.handling
-    );
-
-    let mut out = make_player(
-        d(1995, 1, 1), // 30
-        PlayerPositionType::Striker,
-        baseline_skills(),
-        160,
-        person_pro(15.0, 12.0),
-    );
-    let pre_pace = out.skills.physical.pace;
-    out.process_development_with(now, 6000, &coach, 0.4, &mut FixedRolls(0.5));
-    assert!(
-        out.skills.physical.pace <= pre_pace,
-        "30yo outfield pace should not grow: pre={} post={}",
-        pre_pace,
-        out.skills.physical.pace
-    );
-}
-
-// ── Maturity / overload regression suite ──────────────────────────────
-//
-// These tests exist because the previous tick gave the manager an
-// implicit shortcut: pin a 14-year-old high-PA prospect to the senior
-// XI, win the league reputation lottery, hire an elite coach, and the
-// kid would touch world-class CA inside two seasons. The new tick uses
-// load + maturity + soft per-week caps so that
-//   * the curve under 16 is restrained on its own,
-//   * exposure that overshoots the optimal monthly minute band turns
-//     negative,
-//   * a youth at the wrong level (overmatched in a top league) learns
-//     less, not more,
-//   * stacked positive multipliers can't compound past a soft cap, and
-//   * the step-up bonus does not fire for under-16s and is tiny for 17s.
-//
-// Each test below pins one of these guarantees so a future tweak that
-// re-opens the shortcut fails loudly.
-
-fn make_player_with_load(
-    birth: NaiveDate,
-    pos: PlayerPositionType,
-    skills: PlayerSkills,
-    pa: u8,
-    person: PersonAttributes,
-    minutes_30: f32,
-    load_30: f32,
-    load_7: f32,
-    condition: i16,
-    jadedness: i16,
-) -> Player {
-    let mut p = make_player(birth, pos, skills, pa, person);
-    p.player_attributes.condition = condition;
-    p.player_attributes.jadedness = jadedness;
-    p.load.minutes_last_30 = minutes_30;
-    p.load.physical_load_30 = load_30;
-    p.load.physical_load_7 = load_7;
-    p
-}
-
-fn run_weekly_ticks(
-    p: &mut Player,
-    start: NaiveDate,
-    weeks: u32,
-    league_rep: u16,
-    coach: &CoachingEffect,
-    club_rep: f32,
-) {
-    for w in 0..weeks {
-        let now = start + Duration::weeks(w as i64);
-        p.process_development_with(now, league_rep, coach, club_rep, &mut FixedRolls(1.0));
-    }
-}
-
-#[test]
-fn forced_14yo_in_top_first_team_only_drifts_up_over_a_season() {
-    // Pinned 14-year-old playing senior matches every week at an elite
-    // club, top-five league reputation, with the best coach the system
-    // can produce. Even with every multiplier on his side he must not
-    // turn into a senior star inside one season.
-    let start = d(2025, 7, 1);
-    let birth = d(2011, 1, 1); // 14
-    let pa = 190u8;
-
-    let mut p = make_player_with_load(
-        birth,
-        PlayerPositionType::Striker,
-        baseline_skills(),
-        pa,
-        person_pro(18.0, 18.0),
-        // Senior schedule load: ~360 mins/30d (pinned starter), heavy
-        // 1300-unit chronic load and a recent 350-unit week.
-        360.0,
-        1300.0,
-        350.0,
-        7000,
-        5000,
-    );
-
-    let initial_ca = p.player_attributes.current_ability;
-    let initial_finishing = p.skills.technical.finishing;
-    let initial_pa = p.player_attributes.potential_ability;
-
-    let coach = CoachingEffect::from_scores(20, 20, 20, 20, 1.0);
-
-    // 40 weeks ≈ a full domestic season.
-    run_weekly_ticks(&mut p, start, 40, 9000, &coach, 0.95);
-
-    let ca_gain = p.player_attributes.current_ability as i32 - initial_ca as i32;
-    let finishing_gain = p.skills.technical.finishing - initial_finishing;
-
-    // Tight bounds — a forced 14yo in the senior first team must not
-    // jump CA into the senior-star band over a season.
-    assert!(
-        ca_gain <= 15,
-        "forced 14yo gained {} CA in a season — should be tightly bounded",
-        ca_gain
-    );
-    assert!(
-        finishing_gain < 1.5,
-        "forced 14yo gained {} finishing in a season — should drip, not flow",
-        finishing_gain
-    );
-    // PA must NOT be raised by routine development. The biological
-    // ceiling is set at intake; a manager's selection choice can't
-    // shift it.
-    assert_eq!(
-        p.player_attributes.potential_ability, initial_pa,
-        "PA was raised during weekly development — must stay at its biological ceiling"
-    );
-}
-
-#[test]
-fn forced_14yo_with_extreme_overload_grows_less_than_managed_peer() {
-    // Two 14-year-old prospects, identical PA, identical setup. The
-    // overloaded one is being pushed past the burn-out band; the managed
-    // one is on a youth-appropriate schedule. Over a season the managed
-    // peer must end up with more skill growth.
-    let start = d(2025, 7, 1);
-    let birth = d(2011, 1, 1);
-    let pa = 190u8;
-    let coach = CoachingEffect::from_scores(20, 20, 20, 20, 1.0);
-
-    // Overloaded: 1800 mins/30d, drained, jaded, deep load.
-    let mut overloaded = make_player_with_load(
-        birth,
-        PlayerPositionType::Striker,
-        baseline_skills(),
-        pa,
-        person_pro(18.0, 18.0),
-        1800.0,
-        2000.0,
-        650.0,
-        4500,
-        8500,
-    );
-    overloaded.load.recovery_debt = 500.0;
-    let pre_over = overloaded.skills.technical.finishing;
-
-    // Managed: 200 mins/30d, fresh, low jadedness.
-    let mut managed = make_player_with_load(
-        birth,
-        PlayerPositionType::Striker,
-        baseline_skills(),
-        pa,
-        person_pro(18.0, 18.0),
-        200.0,
-        300.0,
-        100.0,
-        9500,
-        1500,
-    );
-    let pre_man = managed.skills.technical.finishing;
-
-    run_weekly_ticks(&mut overloaded, start, 40, 9000, &coach, 0.95);
-    run_weekly_ticks(&mut managed, start, 40, 9000, &coach, 0.95);
-
-    let overloaded_gain = overloaded.skills.technical.finishing - pre_over;
-    let managed_gain = managed.skills.technical.finishing - pre_man;
-
-    assert!(
-        managed_gain > overloaded_gain,
-        "managed 14yo finishing gain {} should beat overloaded peer {}",
-        managed_gain,
-        overloaded_gain
-    );
-}
-
-#[test]
-fn controlled_minutes_help_17yo_but_overload_penalises_him() {
-    // 17yo benefits from controlled senior minutes; the same 17yo on
-    // an extreme schedule grows less. This is the band-shape test for
-    // the 16-17 age tier — `senior_exposure_multiplier` peaks inside
-    // 300..900 mins/30d and falls past it.
-    let start = d(2025, 7, 1);
-    let birth = d(2008, 1, 1); // 17
-    let pa = 175u8;
-    let coach = CoachingEffect::from_scores(15, 15, 15, 15, 0.6);
-
-    let mut controlled = make_player_with_load(
-        birth,
-        PlayerPositionType::MidfielderCenter,
-        baseline_skills(),
-        pa,
-        person_pro(15.0, 14.0),
-        600.0, // sweet spot for 16-17
-        700.0,
-        180.0,
-        9200,
-        2000,
-    );
-    let pre_controlled = controlled.skills.technical.passing;
-
-    let mut overloaded = make_player_with_load(
-        birth,
-        PlayerPositionType::MidfielderCenter,
-        baseline_skills(),
-        pa,
-        person_pro(15.0, 14.0),
-        1700.0, // way past the 16-17 hard cap
-        2400.0,
-        650.0,
-        4500,
-        8500,
-    );
-    overloaded.load.recovery_debt = 600.0;
-    let pre_overloaded = overloaded.skills.technical.passing;
-
-    run_weekly_ticks(&mut controlled, start, 30, 6000, &coach, 0.6);
-    run_weekly_ticks(&mut overloaded, start, 30, 6000, &coach, 0.6);
-
-    let controlled_gain = controlled.skills.technical.passing - pre_controlled;
-    let overloaded_gain = overloaded.skills.technical.passing - pre_overloaded;
-
-    assert!(
-        controlled_gain > overloaded_gain,
-        "controlled 17yo passing gain {} should beat overloaded peer {}",
-        controlled_gain,
-        overloaded_gain
-    );
-}
-
-#[test]
-fn well_managed_19yo_still_develops_well() {
-    // The 18-21 age tier is the main acceleration window. A 19yo with
-    // appropriate minutes and a strong coach must actually move the
-    // needle — the new restraint on under-16s should not silently drag
-    // adult development too.
-    let start = d(2025, 7, 1);
-    let birth = d(2006, 1, 1); // 19
-    let pa = 175u8;
-    let coach = CoachingEffect::from_scores(18, 18, 18, 18, 0.6);
-
-    let mut p = make_player_with_load(
-        birth,
-        PlayerPositionType::MidfielderCenter,
-        baseline_skills(),
-        pa,
-        person_pro(15.0, 14.0),
-        600.0, // sweet spot for 18-21
-        700.0,
-        160.0,
-        9200,
-        2500,
-    );
-    let pre = p.skills.technical.passing;
-
-    run_weekly_ticks(&mut p, start, 30, 7000, &coach, 0.7);
-
-    let gain = p.skills.technical.passing - pre;
-    assert!(
-        gain > 0.4,
-        "well-managed 19yo passing gained {} in 30 weeks — should be a real bump",
-        gain
-    );
-}
-
-#[test]
-fn step_up_bonus_does_not_fire_for_under_16s_and_is_tiny_for_17s() {
-    // Two pairs (15yo and 17yo). Each pair is identical except that the
-    // transferee is inside the settlement window after a move to a much
-    // bigger club. For under-16s the step_up_age_factor is 0 — the
-    // bonus must NOT leak into growth. For 17yo the factor is 0.20 and
-    // the raw multiplier ceilings at 1.25, so the maximum amplification
-    // a 17yo can absorb is ~1.05 — small but non-zero.
-    let start = d(2025, 7, 1);
-    let coach = CoachingEffect::neutral();
-
-    fn pair(birth: NaiveDate, pa: u8, start: NaiveDate, coach: &CoachingEffect) -> (f32, f32) {
-        let mut control = make_player_with_load(
-            birth,
+fn a_professional_takes_in_more_of_the_same_work() {
+    let today = d(2026, 9, 1);
+    let gain = |character: f32| {
+        let mut p = make_player(
+            d(2004, 3, 1),
             PlayerPositionType::MidfielderCenter,
             baseline_skills(),
-            pa,
-            person_pro(15.0, 14.0),
-            200.0,
-            250.0,
-            80.0,
-            9500,
-            1500,
+            160,
+            person_pro(character, character),
         );
-        let mut transferee = make_player_with_load(
-            birth,
+        regular(&mut p);
+        p.draw_blueprint(today);
+        let before = p.skills.technical.passing;
+        for day in 0..10 {
+            p.on_training_session(&passing_work(0.06), today + Duration::days(day));
+        }
+        p.skills.technical.passing - before
+    };
+    let (pro, lax) = (gain(18.0), gain(4.0));
+    assert!(pro > lax * 1.3, "professional {pro:.3}, lax {lax:.3}");
+}
+
+/// A drained, jaded body takes in less of the same session.
+#[test]
+fn a_tired_player_takes_in_less() {
+    let today = d(2026, 9, 1);
+    let gain = |tired: bool| {
+        let mut p = make_player(
+            d(2004, 3, 1),
             PlayerPositionType::MidfielderCenter,
             baseline_skills(),
-            pa,
-            person_pro(15.0, 14.0),
-            200.0,
-            250.0,
-            80.0,
-            9500,
-            1500,
+            160,
+            person_pro(12.0, 12.0),
         );
-        transferee.player_attributes.world_reputation = 1000;
-        transferee.last_transfer_date = Some(start);
-
-        let pre_control = control.skills.technical.passing;
-        let pre_transferee = transferee.skills.technical.passing;
-
-        // High-rep destination club so the step-up math wants to fire.
-        run_weekly_ticks(&mut control, start, 8, 9000, coach, 0.95);
-        run_weekly_ticks(&mut transferee, start, 8, 9000, coach, 0.95);
-
-        (
-            control.skills.technical.passing - pre_control,
-            transferee.skills.technical.passing - pre_transferee,
-        )
-    }
-
-    // 15yo: bonus completely stripped — gains must be equal within float
-    // noise.
-    let (c15, t15) = pair(d(2010, 1, 1), 180, start, &coach);
-    assert!(
-        (c15 - t15).abs() < 0.01,
-        "step-up bonus leaked to a 15yo: control={} transferee={}",
-        c15,
-        t15
-    );
-
-    // 17yo: bonus is dampened to 20% of raw. Raw multiplier ceilings at
-    // 1.25, so the most a 17yo can ever pick up is ~1.05× — a tiny
-    // bump, never the senior 1.25× shortcut. Verify the transferee
-    // gains *no more than* 1.05 of the control's gain.
-    let (c17, t17) = pair(d(2008, 1, 1), 180, start, &coach);
-    assert!(
-        t17 >= c17 - 0.001,
-        "17yo transferee should not lose ground: control={} transferee={}",
-        c17,
-        t17
-    );
-    let max_ratio = 1.05;
-    assert!(
-        t17 <= c17 * max_ratio + 0.005,
-        "17yo step-up bonus too big: control={} transferee={} (cap {}×)",
-        c17,
-        t17,
-        max_ratio
-    );
+        regular(&mut p);
+        p.draw_blueprint(today);
+        if tired {
+            p.player_attributes.condition = 4500;
+            p.player_attributes.jadedness = 7000;
+        }
+        let before = p.skills.technical.passing;
+        p.on_training_session(&passing_work(0.06), today);
+        p.skills.technical.passing - before
+    };
+    let (fresh, tired) = (gain(false), gain(true));
+    assert!(fresh > tired * 1.3, "fresh {fresh:.4}, tired {tired:.4}");
 }
 
+/// Two seasons of the richest work never take ability past potential:
+/// not the stored digit, and not the attributes the match engine reads.
 #[test]
-fn pa_does_not_increase_during_normal_development() {
-    // Run a high-PA young player through a season's worth of ticks at
-    // every plausible setup. The biological ceiling (PA) must not move.
-    let start = d(2025, 7, 1);
-    let birth = d(2008, 1, 1); // 17
-    let initial_pa = 180u8;
-    let coach = CoachingEffect::from_scores(20, 20, 20, 20, 1.0);
-
-    let mut p = make_player_with_load(
-        birth,
+fn work_never_takes_ability_past_potential() {
+    let pa = 110u8;
+    let mut p = make_player(
+        d(2001, 1, 1),
         PlayerPositionType::Striker,
         baseline_skills(),
-        initial_pa,
+        pa,
         person_pro(18.0, 18.0),
-        700.0,
-        900.0,
-        220.0,
-        9500,
-        2000,
     );
-
-    run_weekly_ticks(&mut p, start, 50, 8000, &coach, 0.85);
-
-    assert_eq!(
-        p.player_attributes.potential_ability, initial_pa,
-        "PA drifted from {} to {} — weekly development must not raise the ceiling",
-        initial_pa, p.player_attributes.potential_ability
-    );
-    // CA must remain ≤ PA after the tick clamps it.
-    assert!(
-        p.player_attributes.current_ability <= p.player_attributes.potential_ability,
-        "CA {} exceeded PA {} after development",
-        p.player_attributes.current_ability,
-        p.player_attributes.potential_ability
-    );
-}
-
-#[test]
-fn under_16_physical_growth_capped_far_below_adult_peer() {
-    // A 14yo and a 19yo, both starting at the same physical baseline,
-    // both elite-PA, both well-managed. The 14yo's pace must end up
-    // gaining a small fraction of what the 19yo gains.
-    let start = d(2025, 7, 1);
-    let pa = 185u8;
-    let coach = CoachingEffect::from_scores(20, 20, 20, 20, 1.0);
-
-    let mut young = make_player_with_load(
-        d(2011, 1, 1), // 14
-        PlayerPositionType::ForwardLeft,
-        baseline_skills(),
-        pa,
-        person_pro(15.0, 14.0),
-        200.0,
-        250.0,
-        80.0,
-        9500,
-        1500,
-    );
-    let pre_young = young.skills.physical.pace;
-
-    let mut prime = make_player_with_load(
-        d(2006, 1, 1), // 19
-        PlayerPositionType::ForwardLeft,
-        baseline_skills(),
-        pa,
-        person_pro(15.0, 14.0),
-        600.0,
-        700.0,
-        160.0,
-        9500,
-        2000,
-    );
-    let pre_prime = prime.skills.physical.pace;
-
-    run_weekly_ticks(&mut young, start, 30, 6000, &coach, 0.6);
-    run_weekly_ticks(&mut prime, start, 30, 6000, &coach, 0.6);
-
-    let young_gain = young.skills.physical.pace - pre_young;
-    let prime_gain = prime.skills.physical.pace - pre_prime;
-
-    assert!(
-        young_gain * 3.0 < prime_gain,
-        "14yo pace gain {} too close to 19yo {} — physical maturity gate not biting",
-        young_gain,
-        prime_gain
-    );
-}
-
-// ── Full-pipeline regression ──────────────────────────────────────────
-//
-// The handcrafted-load tests above pin the development tick in
-// isolation: they set `load.minutes_last_30`, `physical_load_30`, and
-// `physical_load_7` directly. That keeps the unit tests fast and
-// surgical, but it doesn't exercise the path where `on_match_exertion`
-// feeds those exact fields. The tests below run a 14yo through a
-// season of 90-minute starts via `on_match_exertion`, with daily decay
-// in between, and call `process_development_with` weekly. That's the
-// real pipeline a force-selected kid would travel through, and it
-// catches integration-level mistuning that unit tests can't see.
-
-fn simulate_weekly(
-    p: &mut Player,
-    start: NaiveDate,
-    weeks: u32,
-    minutes_per_week: f32,
-    league_rep: u16,
-    coach: &CoachingEffect,
-    club_rep: f32,
-) {
-    for w in 0..weeks {
-        let match_day = start + Duration::weeks(w as i64);
-        // Age the rolling windows day-by-day across the week leading
-        // into the match. The first iteration seeds the decay clock.
-        for offset in 0..7 {
-            let day = match_day - Duration::days(6 - offset);
-            p.load.daily_decay(day);
-        }
-        if minutes_per_week > 0.0 {
-            p.on_match_exertion_minutes_only(minutes_per_week, match_day, false);
-        }
-        p.process_development_with(match_day, league_rep, coach, club_rep, &mut FixedRolls(1.0));
+    let start = d(2025, 8, 1);
+    p.draw_blueprint(start);
+    regular(&mut p);
+    let mut work = SessionWork::default();
+    for key in [
+        SkillKey::Finishing,
+        SkillKey::Passing,
+        SkillKey::Decisions,
+        SkillKey::Composure,
+        SkillKey::OffTheBall,
+        SkillKey::Pace,
+    ] {
+        work.practise(key, 0.2);
     }
-}
-
-#[test]
-fn forced_14yo_full_pipeline_load_climbs_and_skill_gain_stays_bounded() {
-    // Drive the 14yo through 16 weeks of 90-min senior starts via
-    // `on_match_exertion`. The rolling windows must climb (load,
-    // jadedness, recovery debt) and the per-skill gain must stay
-    // bounded — the senior-exposure penalty + youth maturity gate +
-    // weekly cap together must prevent a manager-pinned kid from
-    // becoming a senior star inside a season.
-    let start = d(2025, 7, 1);
-    let birth = d(2011, 1, 1); // 14
-    let pa = 190u8;
-    let coach = CoachingEffect::from_scores(20, 20, 20, 20, 1.0);
-
-    let mut p = make_player(
-        birth,
-        PlayerPositionType::MidfielderCenter,
-        baseline_skills(),
-        pa,
-        person_pro(18.0, 18.0),
-    );
-    let initial_passing = p.skills.technical.passing;
-    let initial_jad = p.player_attributes.jadedness;
-
-    simulate_weekly(&mut p, start, 16, 90.0, 9000, &coach, 0.95);
-
-    // Load and fatigue accumulated through the live pipeline.
-    assert!(
-        p.load.minutes_last_30 > 200.0,
-        "minutes window did not accumulate: {}",
-        p.load.minutes_last_30
-    );
-    assert!(
-        p.load.physical_load_30 > 200.0,
-        "physical load did not accumulate: {}",
-        p.load.physical_load_30
-    );
-    assert!(
-        p.player_attributes.jadedness as i32 > initial_jad as i32,
-        "jadedness did not rise: pre={} post={}",
-        initial_jad,
-        p.player_attributes.jadedness
-    );
-
-    // Skill gains stay bounded — the youth-pipeline guards bite even
-    // with full senior minutes flowing through `on_match_exertion`.
-    let passing_gain = p.skills.technical.passing - initial_passing;
-    assert!(
-        passing_gain < 1.0,
-        "forced 14yo gained {} passing through the live pipeline — should drip, not flow",
-        passing_gain
-    );
-}
-
-#[test]
-fn managed_cameo_pipeline_outgrows_overloaded_full_start_pipeline() {
-    // Same starting 14yo prospect, two pipelines: one gets a controlled
-    // 30-minute cameo every other week, the other gets pinned to 90
-    // minutes every week. Run both through the live `on_match_exertion`
-    // + decay + development tick stack — the managed peer must end up
-    // with more skill growth despite playing fewer minutes.
-    let start = d(2025, 7, 1);
-    let birth = d(2011, 1, 1); // 14
-    let pa = 190u8;
-    let coach = CoachingEffect::from_scores(20, 20, 20, 20, 1.0);
-
-    let mut managed = make_player(
-        birth,
-        PlayerPositionType::MidfielderCenter,
-        baseline_skills(),
-        pa,
-        person_pro(18.0, 18.0),
-    );
-    let mut overloaded = make_player(
-        birth,
-        PlayerPositionType::MidfielderCenter,
-        baseline_skills(),
-        pa,
-        person_pro(18.0, 18.0),
-    );
-
-    let pre_managed = managed.skills.technical.passing;
-    let pre_over = overloaded.skills.technical.passing;
-
-    // Managed: alternating cameo / rest weeks. The pattern lives in a
-    // closure so simulate_weekly's straight-line cadence isn't bent
-    // out of shape just for this test.
-    let weeks = 24u32;
-    for w in 0..weeks {
-        let match_day = start + Duration::weeks(w as i64);
-        for offset in 0..7 {
-            let day = match_day - Duration::days(6 - offset);
-            managed.load.daily_decay(day);
-            overloaded.load.daily_decay(day);
+    for day in 0..730 {
+        let today = start + Duration::days(day);
+        p.on_training_session(&work, today);
+        if day % 7 == 0 {
+            p.process_development(today);
         }
-        if w % 2 == 0 {
-            managed.on_match_exertion_minutes_only(30.0, match_day, false);
-        }
-        overloaded.on_match_exertion_minutes_only(90.0, match_day, false);
-        managed.process_development_with(match_day, 9000, &coach, 0.95, &mut FixedRolls(1.0));
-        overloaded.process_development_with(match_day, 9000, &coach, 0.95, &mut FixedRolls(1.0));
     }
-
-    let managed_gain = managed.skills.technical.passing - pre_managed;
-    let over_gain = overloaded.skills.technical.passing - pre_over;
+    assert_eq!(p.player_attributes.potential_ability, pa);
+    assert!(p.player_attributes.current_ability <= pa);
     assert!(
-        managed_gain > over_gain,
-        "managed cameo gain {} should beat overloaded pinned gain {}",
-        managed_gain,
-        over_gain
+        p.skills
+            .calculate_ability_for_position(PlayerPositionType::Striker)
+            <= pa,
+        "the attributes score past PA {pa}"
     );
 }
 
-// ── Initial CA > PA invariant ─────────────────────────────────────────
-//
-// PA is the biological ceiling: a single development tick (or any
-// number of them) must never raise it. In particular, a player who
-// arrives with CA above PA — the kind of state a legacy save or a
-// hand-rolled fixture might produce — gets CA clamped down, not PA
-// pulled up to match. The generators in
-// `core::club::player::generators::generator` and
-// `database::generators::player` already normalise via
-// `pa.max(ca)` at intake; the test below pins the *runtime* clamp on
-// the development tick so the invariant survives even when the input
-// is broken.
-
+/// A player hydrated with CA above PA is clamped down, and PA stays.
 #[test]
-fn initial_ca_above_pa_clamps_ca_down_and_does_not_raise_pa() {
+fn ca_above_pa_is_clamped_down_not_pa_raised() {
     let now = d(2025, 6, 1);
     let mut p = make_player(
-        d(2007, 1, 1), // 18
+        d(2007, 1, 1),
         PlayerPositionType::Striker,
         baseline_skills(),
         140,
         person_pro(15.0, 12.0),
     );
-    // Force the bad input. Generators prevent this at intake — we are
-    // exercising the development tick's runtime clamp, not the
-    // generation path.
-    p.player_attributes.potential_ability = 140;
     p.player_attributes.current_ability = 160;
-
-    let coach = CoachingEffect::neutral();
-    p.process_development_with(now, 6000, &coach, 0.5, &mut FixedRolls(0.5));
-
-    assert_eq!(
-        p.player_attributes.potential_ability, 140,
-        "PA was raised to swallow an initial CA > PA — must remain the biological ceiling",
-    );
-    assert!(
-        p.player_attributes.current_ability <= p.player_attributes.potential_ability,
-        "CA {} must be clamped down to PA {} after the tick",
-        p.player_attributes.current_ability,
-        p.player_attributes.potential_ability,
-    );
+    p.process_development(now);
+    assert_eq!(p.player_attributes.potential_ability, 140);
+    assert!(p.player_attributes.current_ability <= 140);
 }
-
-#[test]
-fn coaching_effect_amplifies_growth() {
-    let now = d(2025, 6, 1);
-    let mut weak = make_player(
-        d(2007, 1, 1),
-        PlayerPositionType::MidfielderCenter,
-        baseline_skills(),
-        160,
-        person_pro(15.0, 12.0),
-    );
-    let mut strong = make_player(
-        d(2007, 1, 1),
-        PlayerPositionType::MidfielderCenter,
-        baseline_skills(),
-        160,
-        person_pro(15.0, 12.0),
-    );
-
-    let no_coach = CoachingEffect::neutral();
-    let elite = CoachingEffect::from_scores(20, 20, 20, 20, 1.0);
-
-    let pre_weak = weak.skills.technical.passing;
-    let pre_strong = strong.skills.technical.passing;
-
-    weak.process_development_with(now, 6000, &no_coach, 0.4, &mut high_roll());
-    strong.process_development_with(now, 6000, &elite, 0.4, &mut high_roll());
-
-    let weak_gain = weak.skills.technical.passing - pre_weak;
-    let strong_gain = strong.skills.technical.passing - pre_strong;
-    assert!(
-        strong_gain > weak_gain,
-        "elite coach gain {} should exceed neutral coach gain {}",
-        strong_gain,
-        weak_gain
-    );
-}
-
-// ── Freeze-not-cut ceilings ───────────────────────────────────────────
-//
-// Real-world imports legitimately carry skills above the PA×dev-weight
-// ceiling (a forward's concentration, a target man's heading). The old
-// `min(skill_ceiling)` clamp confiscated those points on the first tick
-// with a positive roll — a silent world-wide CA cut in week one of every
-// save. Ceilings must gate growth, never take what a player already has.
-
-#[test]
-fn skills_above_dev_ceiling_freeze_instead_of_being_cut() {
-    let now = d(2025, 9, 1);
-    let birth = d(1998, 1, 1); // 27 — technical/mental bands are positive
-    let mut s = baseline_skills();
-    // Forward dev weight for concentration is 0.6 → ceiling ≈ 13 × 0.6 = 7.8
-    // for PA 130. Same idea for marking (weight 0.35 → ≈ 4.6).
-    s.mental.concentration = 14.0;
-    s.technical.marking = 9.0;
-    let mut p = make_player(
-        birth,
-        PlayerPositionType::Striker,
-        s,
-        130,
-        person_pro(12.0, 12.0),
-    );
-
-    let coach = CoachingEffect::neutral();
-    p.process_development_with(now, 6000, &coach, 0.5, &mut FixedRolls(1.0));
-
-    assert!(
-        (p.skills.mental.concentration - 14.0).abs() < 1e-3,
-        "above-ceiling skill must freeze, got {}",
-        p.skills.mental.concentration
-    );
-    assert!(
-        (p.skills.technical.marking - 9.0).abs() < 1e-3,
-        "above-ceiling low-weight skill must freeze, got {}",
-        p.skills.technical.marking
-    );
-}
-
-// ── Coach decline protection (was inverted) ───────────────────────────
-
-#[test]
-fn elite_coach_slows_veteran_decline_more_than_bad_coach() {
-    let birth = d(1991, 3, 1); // 34 all season — physical band negative
-    let elite = CoachingEffect::from_scores(19, 19, 19, 19, 0.9);
-    let bad = CoachingEffect::from_scores(2, 2, 2, 2, 0.0);
-
-    let mut with_elite = make_player(
-        birth,
-        PlayerPositionType::Striker,
-        baseline_skills(),
-        150,
-        person_pro(10.0, 10.0),
-    );
-    let mut with_bad = make_player(
-        birth,
-        PlayerPositionType::Striker,
-        baseline_skills(),
-        150,
-        person_pro(10.0, 10.0),
-    );
-
-    let start = d(2025, 6, 1);
-    for week in 0..26 {
-        let now = start + Duration::weeks(week);
-        with_elite.process_development_with(now, 6000, &elite, 0.5, &mut FixedRolls(0.0));
-        with_bad.process_development_with(now, 6000, &bad, 0.5, &mut FixedRolls(0.0));
-    }
-
-    assert!(
-        with_elite.skills.physical.pace > with_bad.skills.physical.pace + 0.02,
-        "elite coaching must preserve veteran pace better: elite={}, bad={}",
-        with_elite.skills.physical.pace,
-        with_bad.skills.physical.pace
-    );
-}
-
-// ── Veteran physical decline magnitude (FM parity) ────────────────────
 
 #[test]
 fn veteran_pace_declines_noticeably_over_a_season() {
-    let birth = d(1992, 1, 1); // 33 at season start
     let mut p = make_player(
-        birth,
+        d(1992, 1, 1),
         PlayerPositionType::Striker,
         baseline_skills(),
         160,
         person_pro(10.0, 10.0),
     );
     let pre_pace = p.skills.physical.pace;
-
-    let coach = CoachingEffect::neutral();
     let start = d(2025, 8, 1);
     for week in 0..52 {
-        let now = start + Duration::weeks(week);
-        p.process_development_with(now, 6000, &coach, 0.5, &mut FixedRolls(0.5));
+        p.process_development(start + Duration::weeks(week));
     }
-
     let loss = pre_pace - p.skills.physical.pace;
     assert!(
-        loss > 0.3,
-        "a 33-year-old must lose visible pace over a season, lost only {:.2}",
-        loss
-    );
-    assert!(
-        loss < 2.5,
-        "decline should be gradual, not a cliff: lost {:.2}",
-        loss
+        loss > 0.3 && loss < 2.5,
+        "a 33-year-old loses pace gradually over a season, lost {loss:.2}"
     );
 }
 
-// ── CA budget: PA bounds what the match engine reads ──────────────────
-
+/// Work stops at an attribute's ceiling and never takes back what he has.
 #[test]
-fn recomputed_ca_from_skills_never_exceeds_pa() {
-    // Not just the stored digit — the position-weighted skill average
-    // itself must stop at PA, or "CA 110" players quietly play like 125s.
-    let birth = d(2001, 1, 1); // 24 — plenty of growth bands active
-    let pa = 110u8;
+fn skills_above_their_ceiling_freeze_instead_of_being_cut() {
+    let now = d(2025, 9, 1);
     let mut p = make_player(
-        birth,
+        d(1998, 1, 1),
         PlayerPositionType::Striker,
         baseline_skills(),
-        pa,
-        person_pro(18.0, 18.0),
+        130,
+        person_pro(12.0, 12.0),
     );
-
-    let elite = CoachingEffect::from_scores(20, 20, 20, 20, 1.0);
-    let start = d(2025, 8, 1);
-    for week in 0..104 {
-        let now = start + Duration::weeks(week);
-        p.process_development_with(now, 9000, &elite, 0.9, &mut FixedRolls(1.0));
-    }
-
-    let recomputed = p
-        .skills
-        .calculate_ability_for_position(PlayerPositionType::Striker);
-    assert!(
-        recomputed <= pa,
-        "skills drifted past PA: recomputed CA {} > PA {}",
-        recomputed,
-        pa
-    );
-    assert!(p.player_attributes.current_ability <= pa);
+    p.draw_blueprint(now);
+    p.skills.mental.concentration = 16.0;
+    p.skills.technical.marking = 16.0;
+    let ceilings = PositionalSkillCeilings::for_player(&p, 27.7);
+    assert!(ceilings.get(SkillKey::Concentration) < 16.0);
+    assert!(ceilings.get(SkillKey::Marking) < 16.0);
+    let mut work = SessionWork::default();
+    work.practise(SkillKey::Concentration, 0.3);
+    work.practise(SkillKey::Marking, 0.3);
+    p.on_training_session(&work, now);
+    assert_eq!(p.skills.mental.concentration, 16.0);
+    assert_eq!(p.skills.technical.marking, 16.0);
 }
 
-// ── Friendlies are never worse than sitting idle ──────────────────────
-
-#[test]
-fn friendly_only_play_is_not_worse_than_no_play() {
-    let none = DevelopmentModifiers::official_match_bonus(0, 0);
-    let friendly_only = DevelopmentModifiers::official_match_bonus(0, 6);
-    let official_only = DevelopmentModifiers::official_match_bonus(6, 0);
-    assert!(
-        friendly_only >= none,
-        "a preseason of friendlies ({}) must not develop a player slower than not playing ({})",
-        friendly_only,
-        none
-    );
-    assert!(
-        official_only > friendly_only,
-        "competitive football must outrank friendlies"
-    );
-}
-
-// ── Maturation: potential says where, not when ────────────────────
-//
-// The live symptom these pin: a seventeen-year-old with no career
-// appearances, loaned abroad, playing at a settled senior standard from
-// his first match — because the per-skill ceiling read potential alone
-// and let an academy grow him a finished professional's mind.
+// ── Ceilings by age ───────────────────────────────────────────────
 
 #[test]
 fn teenage_ceiling_holds_the_mind_back_but_not_the_body() {
-    let mut boy = make_player(
-        d(2009, 1, 1),
-        PlayerPositionType::MidfielderCenter,
-        baseline_skills(),
-        180,
-        PersonAttributes::default(),
-    );
-    // A regular, so the ceilings differ by age alone.
-    boy.load.football_absorbed = REGULAR_STOCK;
-    let young = PositionalSkillCeilings::for_player(&boy, 17.5);
-    let peak = PositionalSkillCeilings::for_player(&boy, 28.5);
-
-    let mind_young = young.get(SkillKey::Decisions);
-    let mind_peak = peak.get(SkillKey::Decisions);
-    let body_young = young.get(SkillKey::Pace);
-    let body_peak = peak.get(SkillKey::Pace);
-
-    // Maturity is a share of ability: at 17 his mind holds the decisions
-    // of a player of 0.55 of his potential, points short of his peak's.
-    assert!(
-        mind_peak - mind_young >= 4.0,
-        "a 17-year-old's decision-making ceiling must sit far below his peak — \
-         {mind_young} vs {mind_peak}"
-    );
-    // The body is much closer to finished than the mind at the same age.
-    let mind_share = mind_young / mind_peak;
-    let body_share = body_young / body_peak;
-    assert!(
-        body_share > mind_share,
-        "legs mature before the head — body at {body_share:.2} of peak, \
-         mind at {mind_share:.2}"
-    );
-}
-
-/// Ceilings gate growth, they never confiscate. An existing save whose
-/// teenager is already above the new age ceiling keeps every point.
-#[test]
-fn age_ceiling_never_cuts_what_a_player_already_has() {
+    // A central midfielder whose decision-making is among his strengths.
     let mut skills = baseline_skills();
-    skills.mental.decisions = 17.0;
-    let prodigy = make_player(
+    skills.mental.decisions *= 1.2;
+    let mut boy = make_player(
         d(2009, 1, 1),
         PlayerPositionType::MidfielderCenter,
         skills,
         180,
         PersonAttributes::default(),
     );
-    let ceilings = PositionalSkillCeilings::for_player(&prodigy, 17.5);
-    let ceiling = ceilings.get(SkillKey::Decisions);
+    regular(&mut boy);
+    let young = PositionalSkillCeilings::for_player(&boy, 17.5);
+    let peak = PositionalSkillCeilings::for_player(&boy, 28.5);
+    let (mind_young, mind_peak) = (
+        young.get(SkillKey::Decisions),
+        peak.get(SkillKey::Decisions),
+    );
+    let (body_young, body_peak) = (young.get(SkillKey::Pace), peak.get(SkillKey::Pace));
+    assert!(
+        mind_peak - mind_young >= 4.0,
+        "a 17-year-old's decision-making ceiling must sit far below his peak — {mind_young} vs {mind_peak}"
+    );
+    assert!(
+        body_young / body_peak > mind_young / mind_peak,
+        "legs mature before the head"
+    );
+}
+
+/// An existing teenager already above his age's ceiling keeps every point.
+#[test]
+fn age_ceiling_never_cuts_what_a_player_already_has() {
+    let mut prodigy = make_player(
+        d(2009, 1, 1),
+        PlayerPositionType::MidfielderCenter,
+        baseline_skills(),
+        180,
+        PersonAttributes::default(),
+    );
+    prodigy.draw_blueprint(d(2026, 7, 1));
+    prodigy.skills.mental.decisions = 17.0;
+    let ceiling = PositionalSkillCeilings::for_player(&prodigy, 17.5).get(SkillKey::Decisions);
     assert!(
         ceiling < 17.0,
         "the age ceiling should sit below his current 17.0"
     );
-    // This is the contract every caller applies (`ceiling.max(current)`):
-    // the effective bound is his existing level, so he freezes, not falls.
     assert_eq!(ceiling.max(17.0), 17.0);
 }
 
-/// A keeper's craft matures latest of all — the reported player was a
-/// seventeen-year-old goalkeeper.
+/// A keeper's craft matures latest of all.
 #[test]
 fn teenage_keeper_cannot_reach_a_senior_handling_ceiling() {
-    // PA kept clear of the absolute 20.0 clamp: a keeper's handling
-    // weight would otherwise peg both ends at 20 and hide the curve.
     let mut boy = make_player(
         d(2009, 1, 1),
         PlayerPositionType::Goalkeeper,
@@ -1395,8 +441,7 @@ fn teenage_keeper_cannot_reach_a_senior_handling_ceiling() {
         120,
         PersonAttributes::default(),
     );
-    // A regular, so the ceilings differ by age alone.
-    boy.load.football_absorbed = REGULAR_STOCK;
+    regular(&mut boy);
     let young = PositionalSkillCeilings::for_player(&boy, 17.5).get(SkillKey::GkHandling);
     let peak = PositionalSkillCeilings::for_player(&boy, 33.5).get(SkillKey::GkHandling);
     assert!(
@@ -1405,80 +450,77 @@ fn teenage_keeper_cannot_reach_a_senior_handling_ceiling() {
     );
 }
 
-/// Diagnostic: the per-skill ceiling a given potential allows at each
-/// age, so a calibration pass can see the maturation curve in real
-/// attribute points rather than as a ratio.
-///
-/// `cargo test -p core --lib dump_maturation_ceilings -- --ignored --nocapture`
-#[test]
-#[ignore]
-fn dump_maturation_ceilings() {
-    let cm = make_player(
-        d(2009, 1, 1),
-        PlayerPositionType::MidfielderCenter,
-        baseline_skills(),
-        160,
-        PersonAttributes::default(),
-    );
-    println!("PA 160 central midfielder — ceiling by age");
-    println!(
-        "{:>4} {:>10} {:>10} {:>10}",
-        "age", "decisions", "passing", "pace"
-    );
-    for age in [16u32, 17, 19, 21, 24, 28, 31] {
-        let c = PositionalSkillCeilings::for_player(&cm, age as f32 + 0.5);
-        println!(
-            "{:>4} {:>10.2} {:>10.2} {:>10.2}",
-            age,
-            c.get(SkillKey::Decisions),
-            c.get(SkillKey::Passing),
-            c.get(SkillKey::Pace),
+// ── Football that fits ────────────────────────────────────────────
+
+/// A season of thirty full matches at `lift` above his own standard, read
+/// before each match.
+fn a_season_at(mut boy: Player, lift: f32) -> Player {
+    use super::football::{FootballFit, MatchFootball};
+    let start = d(2026, 8, 3);
+    for week in 0..30 {
+        let own = FootballFit::own_standard(boy.player_attributes.current_ability);
+        boy.bank_football(
+            &MatchFootball {
+                minutes: 90.0,
+                standard: own + lift,
+                slot: PlayerPositionType::MidfielderCenter,
+                season_rating: 0.0,
+                season_games: 0,
+            },
+            start + Duration::days(week * 7),
         );
     }
+    boy
 }
 
-/// Diagnostic: what the maturation curve allows a genuine wonderkid.
-/// The question it answers — does an age term flatten young stars into
-/// their peers, or does potential still separate them?
-///
-/// `cargo test -p core --lib dump_wonderkid_ceilings -- --ignored --nocapture`
+fn sixteen_year_old() -> Player {
+    make_player(
+        d(2010, 3, 1),
+        PlayerPositionType::MidfielderCenter,
+        baseline_skills(),
+        150,
+        person_pro(12.0, 12.0),
+    )
+}
+
 #[test]
-#[ignore]
-fn dump_wonderkid_ceilings() {
-    let star = make_player(
-        d(2009, 1, 1),
-        PlayerPositionType::MidfielderLeft,
-        baseline_skills(),
-        190,
-        PersonAttributes::default(),
+fn youth_football_suits_a_boy() {
+    let boy = a_season_at(sixteen_year_old(), 0.0);
+    let fit = boy.development.ledger.this_season().mean_fit();
+    assert!(
+        fit > 0.999,
+        "football at his own standard fitted him {fit:.3}"
     );
-    let ordinary = make_player(
-        d(2009, 1, 1),
-        PlayerPositionType::MidfielderLeft,
-        baseline_skills(),
-        120,
-        PersonAttributes::default(),
+}
+
+#[test]
+fn overmatched() {
+    let (own, above) = (
+        a_season_at(sixteen_year_old(), 0.0),
+        a_season_at(sixteen_year_old(), 0.25),
     );
-    for (label, p) in [
-        ("PA 190 wonderkid", &star),
-        ("PA 120 squad player", &ordinary),
-    ] {
-        println!("\n{label} — wide midfielder");
-        println!(
-            "{:>4} {:>9} {:>9} {:>7} {:>9} {:>9}",
-            "age", "dribbling", "technique", "pace", "decisions", "composure"
-        );
-        for age in [17u32, 19, 21, 24, 28] {
-            let c = PositionalSkillCeilings::for_player(p, age as f32 + 0.5);
-            println!(
-                "{:>4} {:>9.2} {:>9.2} {:>7.2} {:>9.2} {:>9.2}",
-                age,
-                c.get(SkillKey::Dribbling),
-                c.get(SkillKey::Technique),
-                c.get(SkillKey::Pace),
-                c.get(SkillKey::Decisions),
-                c.get(SkillKey::Composure),
-            );
-        }
-    }
+    let (a, b) = (
+        own.development.football.share(),
+        above.development.football.share(),
+    );
+    assert!(
+        b < a,
+        "senior football far above him banked {b:.4}, his own standard {a:.4}"
+    );
+}
+
+#[test]
+fn football_at_an_older_age_banks_less() {
+    let boy = a_season_at(sixteen_year_old(), 0.0);
+    let mut man = sixteen_year_old();
+    man.birth_date = d(1998, 3, 1);
+    let man = a_season_at(man, 0.0);
+    let (young, older) = (
+        boy.development.football.share(),
+        man.development.football.share(),
+    );
+    assert!(
+        older < young,
+        "a season at 28 banked {older:.4}, at 16 {young:.4}"
+    );
 }

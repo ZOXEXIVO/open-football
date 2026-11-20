@@ -13,6 +13,7 @@ use crate::Person;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::player::ability::ReputationStanding;
 use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::player::development::MatchFootball;
 use crate::club::player::mind::{CompetitiveMatchRead, CompetitiveMind};
 use crate::club::player::player::Player;
 use crate::{
@@ -70,6 +71,7 @@ impl Player {
             .unwrap_or_default();
         self.record_match_appearance(o);
         self.record_match_stats(o, &home_slug);
+        self.develop_from_match(o);
         // Cup appearances land in the per-competition buckets; rebuild the
         // rolled-up aggregate before the event pass reads it for
         // milestones (first-club goal, appearance / goal milestones, …).
@@ -92,6 +94,22 @@ impl Player {
     /// A defeat by this many goals or more is a heavy one — the news desk's
     /// line too.
     const HEAVY_DEFEAT_MARGIN: u8 = 3;
+
+    /// The football of this match reaches his development: its minutes, the
+    /// standard it was played at, the slot he filled, and the season he has
+    /// had going into it.
+    fn develop_from_match(&mut self, o: &MatchOutcome<'_>) {
+        let mut official = self.statistics.clone();
+        official.merge_from(&self.cup_statistics);
+        let football = MatchFootball {
+            minutes: o.stats.minutes_played as f32,
+            standard: o.standard_of_football,
+            slot: o.slot.unwrap_or_else(|| self.position()),
+            season_rating: official.average_rating_realistic(self.position().position_group()),
+            season_games: official.total_games(),
+        };
+        self.bank_football(&football, o.date);
+    }
 
     /// Hand the match to the competitive mind before its episodes are
     /// filed, so the step he took up to play it is staged for them.

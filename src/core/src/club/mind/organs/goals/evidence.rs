@@ -172,6 +172,8 @@ impl GoalEvidence {
     pub const NO_LONGER_IMPROVING: u64 = 1 << 32;
     /// The coaching here cannot take a player of his level further.
     pub const COACHING_CEILING: u64 = 1 << 33;
+    /// His football has not been at a standard that develops him.
+    pub const NO_FITTING_FOOTBALL: u64 = 1 << 40;
 
     // ── The international game ──────────────────────────────────
     /// A major tournament is close enough to matter.
@@ -322,6 +324,7 @@ mod tests {
             GoalEvidence::A_YOUNGSTER_IS_COMING,
             GoalEvidence::NO_LONGER_IMPROVING,
             GoalEvidence::COACHING_CEILING,
+            GoalEvidence::NO_FITTING_FOOTBALL,
             GoalEvidence::TOURNAMENT_YEAR,
             GoalEvidence::NATIONAL_SNUB,
             GoalEvidence::LOST_HIS_ADVOCATE,

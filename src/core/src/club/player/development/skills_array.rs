@@ -71,6 +71,59 @@ pub enum SkillKey {
 }
 
 impl SkillKey {
+    pub const ALL: [SkillKey; SKILL_COUNT] = [
+        SkillKey::Corners,
+        SkillKey::Crossing,
+        SkillKey::Dribbling,
+        SkillKey::Finishing,
+        SkillKey::FirstTouch,
+        SkillKey::FreeKicks,
+        SkillKey::Heading,
+        SkillKey::LongShots,
+        SkillKey::LongThrows,
+        SkillKey::Marking,
+        SkillKey::Passing,
+        SkillKey::PenaltyTaking,
+        SkillKey::Tackling,
+        SkillKey::Technique,
+        SkillKey::Aggression,
+        SkillKey::Anticipation,
+        SkillKey::Bravery,
+        SkillKey::Composure,
+        SkillKey::Concentration,
+        SkillKey::Decisions,
+        SkillKey::Determination,
+        SkillKey::Flair,
+        SkillKey::Leadership,
+        SkillKey::OffTheBall,
+        SkillKey::Positioning,
+        SkillKey::Teamwork,
+        SkillKey::Vision,
+        SkillKey::WorkRate,
+        SkillKey::Acceleration,
+        SkillKey::Agility,
+        SkillKey::Balance,
+        SkillKey::Jumping,
+        SkillKey::NaturalFitness,
+        SkillKey::Pace,
+        SkillKey::Stamina,
+        SkillKey::Strength,
+        SkillKey::MatchReadiness,
+        SkillKey::GkAerialReach,
+        SkillKey::GkCommandOfArea,
+        SkillKey::GkCommunication,
+        SkillKey::GkEccentricity,
+        SkillKey::GkFirstTouch,
+        SkillKey::GkHandling,
+        SkillKey::GkKicking,
+        SkillKey::GkOneOnOnes,
+        SkillKey::GkPassing,
+        SkillKey::GkPunching,
+        SkillKey::GkReflexes,
+        SkillKey::GkRushingOut,
+        SkillKey::GkThrowing,
+    ];
+
     pub const fn idx(self) -> usize {
         self as usize
     }
@@ -214,10 +267,6 @@ pub(super) fn skills_to_array(player: &Player) -> [f32; SKILL_COUNT] {
         g.rushing_out,
         g.throwing,
     ]
-}
-
-pub(super) fn write_skills_back(player: &mut Player, arr: &[f32; SKILL_COUNT]) {
-    write_array_into(&mut player.skills, arr);
 }
 
 /// Write the flat array into a standalone `PlayerSkills` — used by the

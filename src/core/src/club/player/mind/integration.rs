@@ -11,6 +11,7 @@ use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::core::player::{
     ManagerPromise, ManagerPromiseKind, TransferRequestReason,
 };
+use crate::club::player::development::DevelopmentRead;
 use crate::club::player::mind::{
     ActorRef, CareerArc, EpisodeKind, FactClaim, GoalBlocker, GoalBridge, GoalEvidence, GoalKind,
     GoalOrigin, GoalStatus, MindClock, MindSituation, RecallCue, SpellChange,
@@ -1344,6 +1345,123 @@ fn a_player_who_is_still_improving_wants_none_of_it() {
         0.0,
         "nobody improving under a coach wants a different one"
     );
+}
+
+#[test]
+fn a_prospect_with_no_football_wants_games_not_a_coach() {
+    let start = Fixture::date(2030, 1, 1);
+    let mut p = Fixture::player();
+
+    // Twenty, at a club whose coaches are below him, and a year with
+    // barely a match at a standard that would teach him anything.
+    let benched = MindSituation {
+        age: 20,
+        ambition: 16.0,
+        professionalism: 15.0,
+        days_at_club: 500,
+        starter_ratio: 0.05,
+        expected_start_share: 0.3,
+        manager: ActorRef::staff(COACH),
+        own_level: 110,
+        coaching_ceiling: 6.0,
+        club_reputation: 0.55,
+        development: DevelopmentRead {
+            known: true,
+            gain: 0.5,
+            fitting_minutes: 240.0,
+            outgrown: 0.0,
+        },
+        ..MindSituation::neutral()
+    };
+    Weeks::run(&mut p, &benched, 40, start);
+
+    assert!(p.mind.career.feels_stalled());
+    let loan = p
+        .mind
+        .goals()
+        .get(GoalKind::GoOutOnLoan)
+        .expect("he wants games");
+    assert!(loan.evidence.contains(GoalEvidence::NO_FITTING_FOOTBALL));
+    assert_eq!(
+        p.mind.pressure_of(GoalKind::WorkWithABetterCoach),
+        0.0,
+        "his record says it is the football, not the coaching"
+    );
+}
+
+#[test]
+fn a_regular_who_has_outgrown_his_coaches_wants_a_better_one() {
+    let start = Fixture::date(2030, 1, 1);
+    let mut p = Fixture::player();
+
+    let stalled = MindSituation {
+        age: 22,
+        ambition: 16.0,
+        professionalism: 15.0,
+        days_at_club: 500,
+        starter_ratio: 0.8,
+        expected_start_share: 0.6,
+        manager: ActorRef::staff(COACH),
+        own_level: 150,
+        coaching_ceiling: 7.0,
+        club_reputation: 0.55,
+        development: DevelopmentRead {
+            known: true,
+            gain: 0.5,
+            fitting_minutes: 2900.0,
+            outgrown: 0.05,
+        },
+        ..MindSituation::neutral()
+    };
+    Weeks::run(&mut p, &stalled, 40, start);
+
+    let goal = p
+        .mind
+        .goals()
+        .get(GoalKind::WorkWithABetterCoach)
+        .expect("a season of his football and still flat: it is the coaching");
+    assert!(p.mind.pressure_of(GoalKind::WorkWithABetterCoach) > 0.0);
+    assert!(goal.evidence.contains(GoalEvidence::COACHING_CEILING));
+    assert!(!goal.evidence.contains(GoalEvidence::NO_FITTING_FOOTBALL));
+}
+
+#[test]
+fn a_veteran_forms_no_want_about_his_development() {
+    let start = Fixture::date(2030, 1, 1);
+    let mut p = Fixture::player();
+
+    let ageing = MindSituation {
+        age: 34,
+        ambition: 16.0,
+        professionalism: 15.0,
+        days_at_club: 900,
+        starter_ratio: 0.7,
+        expected_start_share: 0.6,
+        manager: ActorRef::staff(COACH),
+        own_level: 150,
+        coaching_ceiling: 7.0,
+        development: DevelopmentRead {
+            known: true,
+            gain: -8.0,
+            fitting_minutes: 2500.0,
+            outgrown: 0.0,
+        },
+        ..MindSituation::neutral()
+    };
+    let mut day = start;
+    for week in 0..40u16 {
+        day += Duration::days(7);
+        let ctx = p.mind_context(day, Some(CLUB));
+        let falling = MindSituation {
+            own_level: (150 - week / 2) as u8,
+            ..ageing
+        };
+        p.mind.tick_with(&ctx, &falling);
+    }
+
+    for kind in [GoalKind::KeepImproving, GoalKind::WorkWithABetterCoach] {
+        assert_eq!(p.mind.pressure_of(kind), 0.0, "{kind:?}");
+    }
 }
 
 // ── Three ways to be a long-serving player ────────────────────────

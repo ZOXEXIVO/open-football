@@ -1,4 +1,5 @@
 use crate::Goalkeeping;
+use crate::club::player::development::PlayerDevelopment;
 use crate::club::player::interaction::ManagerInteractionLog;
 use crate::club::player::language::{Language, PlayerLanguage};
 use crate::club::player::load::PlayerLoad;
@@ -954,7 +955,7 @@ impl PlayerGenerator {
         let salary = 500 + (rep_factor * 5000.0) as u32;
         let contract = PlayerClubContract::new_youth(salary, expiration);
 
-        Player {
+        let mut player = Player {
             id: next_player_id(),
             full_name,
             birth_date,
@@ -1053,6 +1054,7 @@ impl PlayerGenerator {
             retired: false,
             international_retired: false,
             load: PlayerLoad::new(),
+            development: PlayerDevelopment::default(),
             pending_contract_ask: None,
             pending_pre_contract: None,
             last_intl_caps_paid: 0,
@@ -1068,7 +1070,9 @@ impl PlayerGenerator {
             made_senior_debut: false,
             awards_count: Default::default(),
             release_reason: None,
-        }
+        };
+        player.begin_development(now);
+        player
     }
 
     /// Per-player group bias: randomly tilts the balance between technical, mental, physical.

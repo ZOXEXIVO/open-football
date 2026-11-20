@@ -117,8 +117,8 @@ pub use club::{
     DomesticCupOverride,
     FacilityLevel,
     FacilityQuality,
+    FormationFamiliarity,
     Goalkeeping,
-    GoalkeepingGains,
     HappinessEvent,
     HappinessEventCause,
     HappinessEventChangeKind,
@@ -169,13 +169,11 @@ pub use club::{
     MatchResultInfo,
     MatchSelectionContext,
     MatchTacticType,
-    FormationFamiliarity,
     MediaFanEventContext,
     MediaFanEventKind,
     MediaFanSource,
     Mental,
     MentalFocusType,
-    MentalGains,
     MentorshipType,
     NationalTeamEventContext,
     NationalTeamEventKind,
@@ -184,6 +182,7 @@ pub use club::{
     NewSigningThreatContext,
     NewSigningThreatReason,
     OutgoingTransfersResponsibility,
+    PathwayStage,
     PeriodizationPhase,
     // Person exports
     Person,
@@ -194,7 +193,6 @@ pub use club::{
     PersonalAdaptationKind,
     Physical,
     PhysicalFocusType,
-    PhysicalGains,
     // Player exports
     Player,
     PlayerAcceptance,
@@ -222,7 +220,6 @@ pub use club::{
     PlayerMailboxResult,
     PlayerMessage,
     PlayerMessageType,
-    PathwayStage,
     PlayerPlan,
     PlayerPlanRole,
     PlayerPosition,
@@ -351,7 +348,6 @@ pub use club::{
     TeammateConflictReason,
     Technical,
     TechnicalFocusType,
-    TechnicalGains,
     TrainingEffects,
     // Phase 1-11: structured event-context payloads
     TrainingEventContext,
@@ -434,9 +430,13 @@ pub use crate::r#match::engine::ball::ball::strike_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::teleport;
 #[cfg(feature = "match-logs")]
-pub use crate::r#match::engine::player::events::gk_claim::gk_claim_diag;
+pub use crate::r#match::engine::engine::shot_gate_stats;
 #[cfg(feature = "match-logs")]
-pub use crate::r#match::engine::psychology::lapse::lapse_diag;
+pub use crate::r#match::engine::engine::stuck_exit_stats;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::engine::tackle_stats;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::player::events::gk_claim::gk_claim_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::events::players::key_pass_diag;
 #[cfg(feature = "match-logs")]
@@ -444,13 +444,9 @@ pub use crate::r#match::engine::player::events::players::save_accounting_stats;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::events::players::shot_accuracy_diag;
 #[cfg(feature = "match-logs")]
-pub use crate::r#match::engine::engine::shot_gate_stats;
-#[cfg(feature = "match-logs")]
-pub use crate::r#match::engine::engine::stuck_exit_stats;
-#[cfg(feature = "match-logs")]
-pub use crate::r#match::engine::engine::tackle_stats;
-#[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::strategies::processor::chase_diag;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::psychology::lapse::lapse_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::heatmap as heatmap_diag;
 #[cfg(feature = "match-logs")]

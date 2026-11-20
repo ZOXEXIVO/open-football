@@ -104,17 +104,6 @@ pub struct AdaptationConfig {
     /// Promise horizon (days) for any loan move (always implicit).
     pub loan_promise_horizon_days: i64,
 
-    // ── Step-up development multiplier ──────────────────────────
-    /// Player's `world_reputation` to club rep gap below which no
-    /// development bonus applies. Above it, gap_factor scales linearly.
-    pub step_up_dev_min_gap: f32,
-    /// Reputation gap normaliser — `gap / this` clamped to
-    /// `step_up_dev_max_gap_factor` gives the size of the bonus.
-    pub step_up_dev_gap_normaliser: f32,
-    pub step_up_dev_max_gap_factor: f32,
-    /// Multiplier ceiling — final result is clamped to `[1.0, this]`.
-    pub step_up_dev_multiplier_ceiling: f32,
-
     // ── Integration tick ─────────────────────────────────────────
     /// Adaptability + professionalism, both 0–20, summed and divided by 40
     /// gives `pull_toward_bonding` in [0,1]. Above this threshold the
@@ -166,11 +155,6 @@ impl Default for AdaptationConfig {
             big_money_signing_fee: 5_000_000.0,
             permanent_promise_horizon_days: 90,
             loan_promise_horizon_days: 60,
-
-            step_up_dev_min_gap: 1000.0,
-            step_up_dev_gap_normaliser: 8000.0,
-            step_up_dev_max_gap_factor: 0.25,
-            step_up_dev_multiplier_ceiling: 1.25,
 
             bonding_pull_threshold: 0.55,
             settled_pull_threshold: 0.5,
@@ -230,30 +214,6 @@ impl AdaptationConfig {
         } else {
             0
         }
-    }
-
-    /// Multiplier (≥ 1.0) applied to skill development while the player
-    /// is settling at a meaningfully bigger club. Decays over the
-    /// settlement window.
-    pub fn step_up_dev_multiplier(
-        &self,
-        days_since_transfer: Option<i64>,
-        club_rep_0_to_1: f32,
-        player_world_reputation: f32,
-    ) -> f32 {
-        let days = match days_since_transfer {
-            Some(d) if d >= 0 && d < self.settlement_window_days => d as f32,
-            _ => return 1.0,
-        };
-        let club_rep = club_rep_0_to_1 * 10000.0;
-        let gap = club_rep - player_world_reputation;
-        if gap <= self.step_up_dev_min_gap {
-            return 1.0;
-        }
-        let gap_factor =
-            (gap / self.step_up_dev_gap_normaliser).clamp(0.0, self.step_up_dev_max_gap_factor);
-        let recency = 1.0 - (days / self.settlement_window_days as f32);
-        (1.0 + gap_factor * recency).clamp(1.0, self.step_up_dev_multiplier_ceiling)
     }
 }
 
@@ -1439,22 +1399,6 @@ mod tests {
             c.permanent_promise_horizon_days
         );
         assert_eq!(c.promise_horizon_days(false, 100_000.0), 0);
-    }
-
-    #[test]
-    fn step_up_dev_multiplier_no_op_for_lateral() {
-        let c = AdaptationConfig::default();
-        // Player rep equals club rep → no bonus
-        let m = c.step_up_dev_multiplier(Some(10), 0.5, 5_000.0);
-        assert_eq!(m, 1.0);
-    }
-
-    #[test]
-    fn step_up_dev_multiplier_caps_at_ceiling() {
-        let c = AdaptationConfig::default();
-        // Massive gap, day 0 → maximum bonus, capped
-        let m = c.step_up_dev_multiplier(Some(0), 1.0, 0.0);
-        assert!(m <= c.step_up_dev_multiplier_ceiling + f32::EPSILON);
     }
 
     // ── Happiness ────────────────────────────────────────────────

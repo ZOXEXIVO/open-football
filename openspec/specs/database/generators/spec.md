@@ -165,10 +165,14 @@ unchanged.
 ### Requirement: A generated player's ability by age follows his position's maturation
 
 The age modulation of a procedurally generated player's current ability SHALL follow the share of ability his
-position's maturation families hold at his age, relative to the outfield reference the generator's age curve is set
-on:
-- a generated keeper SHALL therefore reach his peak share later, and hold it longer, than a generated outfielder;
-- a generated outfield player's ability by age SHALL move by no more than 0.03 of his role's full value at any age.
+position's maturation families hold at his age:
+- up to his peak, relative to the outfield reference the generator's age curve is set on;
+- past his peak, the share that development's ageing leaves a regular of his position at that age.
+
+A generated keeper SHALL therefore reach his peak share later, and hold it longer, than a generated outfielder. Up to
+his peak, a generated outfield player's ability by age SHALL move by no more than 0.03 of his role's full value from
+the generator's own age curve. A generated veteran's share SHALL be within 0.03 of the share a developed regular of
+the same age and position holds of his peak.
 
 #### Scenario: A 22-year-old keeper trails a 22-year-old striker
 - **WHEN** a keeper and a striker of the same role, team and age 22 are generated many times
@@ -178,9 +182,14 @@ on:
 - **WHEN** a keeper and a striker of the same role, team and age 34 are generated many times
 - **THEN** the keepers hold a larger share of their role's full ability than the strikers
 
+#### Scenario: A generated 35-year-old is still a footballer
+- **WHEN** outfield players of every role are generated at age 35 many times
+- **THEN** their mean ability is between 0.85 and 0.95 of their role's full value
+
 #### Scenario: Outfield generation barely moves
-- **WHEN** outfield players of every role are generated at every age from 17 to 36, before and after this change
-- **THEN** the mean ability at each age and role differs by no more than 0.03 of the role's full value
+- **WHEN** outfield players of every role are generated at every age from 17 to 30
+- **THEN** his position's maturation moves the mean ability at each age and role by no more than 0.03 of the role's
+  full value from what the generator's age curve alone gives
 
 ### Requirement: A generated player's age follows his squad role
 

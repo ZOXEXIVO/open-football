@@ -454,8 +454,9 @@ impl CareerMind {
             return;
         }
 
-        // Improving again answers both rungs at once.
-        if self.improvement() > 0.15 {
+        // Improving again answers both rungs at once, whether he sees it
+        // from outside or in his own record.
+        if self.improvement() > 0.15 || s.development.still_gaining() {
             organs.goals.advance(GoalKind::KeepImproving, 0.25);
             organs.goals.advance(GoalKind::WorkWithABetterCoach, 0.20);
             return;
@@ -487,8 +488,11 @@ impl CareerMind {
             return;
         }
 
+        let short_of_football = s.development.short_of_fitting_football();
         let mut evidence = GoalEvidence::of(&[GoalEvidence::NO_LONGER_IMPROVING]);
-        if shortfall > 0.15 {
+        if short_of_football {
+            evidence.insert(GoalEvidence::NO_FITTING_FOOTBALL);
+        } else if shortfall > 0.15 {
             evidence.insert(GoalEvidence::COACHING_CEILING);
         }
         if s.career_spent() > 0.4 {
@@ -502,6 +506,19 @@ impl CareerMind {
             want,
             today,
         );
+
+        // His record says it is the football, not the teaching: the wants
+        // that would get him games at his level hear it.
+        if short_of_football {
+            for kind in [GoalKind::GoOutOnLoan, GoalKind::PlayFirstTeamFootball] {
+                if organs.goals.pressure_of(kind) > 0.0 {
+                    organs
+                        .goals
+                        .pursue(kind, GoalOrigin::SelfDrive, evidence, want * 0.5, today);
+                }
+            }
+            return;
+        }
 
         // Rung two. He has decided *why* he is not improving, and it is
         // the people teaching him. Still answerable in place — a club

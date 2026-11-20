@@ -138,6 +138,7 @@ pub use player::{
     NegativeHappiness,
     NewSigningThreatContext,
     NewSigningThreatReason,
+    PathwayStage,
     PersonalAdaptationEventContext,
     PersonalAdaptationKind,
     Physical,
@@ -166,7 +167,6 @@ pub use player::{
     PlayerMailboxResult,
     PlayerMessage,
     PlayerMessageType,
-    PathwayStage,
     PlayerPlan,
     PlayerPlanRole,
     PlayerPosition,
@@ -277,17 +277,16 @@ pub use staff::contract as staff_contract_mod;
 
 // Team exports (except conflicting modules)
 pub use team::{
-    Achievement, AchievementType, CoachingPhilosophy, FacilityQuality, GoalkeepingGains, IndividualTrainingPlan, ManagerTalkResult, ManagerTalkType, MatchHistory,
-    MatchHistoryItem, MatchOutcome, MatchResultInfo, MatchTacticType, MentalGains, FormationFamiliarity,
-    PeriodizationPhase, PhysicalGains, PlayerBehaviourResult, PlayerRelationshipChangeResult,
-    ReputationLevel, ReputationRequirements,
-    ReputationTrend, RotationPreference, SeasonRecord, SkillType, SpecialInstruction,
-    TACTICS_POSITIONS, TacticSelectionReason, TacticalFocus, TacticalStyle, Tactics,
-    TacticsSelector, Team, TeamBehaviour, TeamBehaviourResult, TeamBuilder, TeamCollection,
-    TeamContext, TeamReputation, TeamResult, TeamTraining, TeamTrainingResult, TeamType,
-    TechnicalGains, TrainingEffects, TrainingFacilities, TrainingFocus, TrainingIntensity,
-    TrainingIntensityPreference, TrainingSchedule, TrainingSession, TrainingType, TransferItem,
-    Transfers, WeeklyTrainingPlan,
+    Achievement, AchievementType, CoachingPhilosophy, FacilityQuality, FormationFamiliarity,
+    IndividualTrainingPlan, ManagerTalkResult, ManagerTalkType, MatchHistory, MatchHistoryItem,
+    MatchOutcome, MatchResultInfo, MatchTacticType, PeriodizationPhase, PlayerBehaviourResult,
+    PlayerRelationshipChangeResult, ReputationLevel, ReputationRequirements, ReputationTrend,
+    RotationPreference, SeasonRecord, SkillType, SpecialInstruction, TACTICS_POSITIONS,
+    TacticSelectionReason, TacticalFocus, TacticalStyle, Tactics, TacticsSelector, Team,
+    TeamBehaviour, TeamBehaviourResult, TeamBuilder, TeamCollection, TeamContext, TeamReputation,
+    TeamResult, TeamTraining, TeamTrainingResult, TeamType, TrainingEffects, TrainingFacilities,
+    TrainingFocus, TrainingIntensity, TrainingIntensityPreference, TrainingSchedule,
+    TrainingSession, TrainingType, TransferItem, Transfers, WeeklyTrainingPlan,
 };
 // Also export context module for those who want to import from it
 pub use team::behaviour;

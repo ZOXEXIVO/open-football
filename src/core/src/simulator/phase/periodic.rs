@@ -1,4 +1,3 @@
-use crate::club::player::development::CoachingEffect;
 use crate::context::SimulationContext;
 use crate::continent::{ContinentAwardOutcome, ContinentResult};
 use crate::country::CountryResult;
@@ -104,21 +103,19 @@ impl PeriodicPasses {
         ApproachPass::apply_free_agent_market_bumps_batch(data, &bumps, today);
     }
 
-    /// Unattached players still age. A light weekly development tick with
-    /// no club environment (neutral coach, league rep 0) keeps pool
-    /// veterans declining and pool youngsters ticking over, instead of
-    /// every free agent being frozen in time until someone signs them.
+    /// Unattached players still age: the same weekly tick as everyone's.
+    /// With no club there is no session and no match, so nothing grows
+    /// but a body still maturing.
     fn free_agent_development(data: &mut SimulatorData) {
         let _phase = PerformanceProfiler::phase_scope("C5_free_agent_development", 0);
         if !SimulationContext::new(data.date).is_week_beginning() {
             return;
         }
-        let neutral_coach = CoachingEffect::neutral();
         let today = data.date.date();
         data.free_agents
             .par_iter_mut()
             .filter(|p| !p.retired)
-            .for_each(|p| p.process_development(today, 0, &neutral_coach, 0.0));
+            .for_each(|p| p.process_development(today));
     }
 
     /// Season-start career-history snapshot, fanned out across countries

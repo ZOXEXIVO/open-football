@@ -1497,19 +1497,6 @@ impl Player {
         );
     }
 
-    /// Development multiplier applied when a player has just stepped up to
-    /// a better club. Training alongside higher-calibre teammates and
-    /// absorbing a new tactical culture accelerates growth — but only
-    /// while there's still catching up to do. The effect fades over the
-    /// settlement window and is proportional to the rep gap.
-    pub fn step_up_development_multiplier(&self, now: NaiveDate, club_rep_0_to_1: f32) -> f32 {
-        AdaptationConfig::default().step_up_dev_multiplier(
-            self.days_since_transfer(now),
-            club_rep_0_to_1,
-            self.player_attributes.world_reputation as f32,
-        )
-    }
-
     /// Weekly integration tick. During the settlement window the player
     /// either bonds with the squad or feels isolated, depending on language
     /// fluency, personality, and age. Runs for ~24 weeks after a transfer so

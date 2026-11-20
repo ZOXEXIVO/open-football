@@ -46,5 +46,10 @@ deunicode = "1.6"
 # world is iteration-order-independent, so FxHash is a safe drop-in.
 rustc-hash = "2.1.3"
 
+[dev-dependencies]
+# The career tests check their database reference tables against the shipped
+# database itself.
+flate2 = "1.1.11"
+
 [lints]
 workspace = true

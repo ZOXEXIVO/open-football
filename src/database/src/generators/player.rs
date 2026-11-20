@@ -767,9 +767,14 @@ impl AbilityTarget {
         (Self::age_factor(age) * held).min(1.0)
     }
 
-    /// Age curve applied to target CA. Skills don't fully bloom until the
-    /// mid-twenties; older players retain most CA but slowly decline.
+    /// Age curve applied to target CA: skills don't fully bloom until the
+    /// mid-twenties, and past the peak a player holds what development's
+    /// ageing leaves an outfield regular of his age.
     fn age_factor(age: u32) -> f32 {
+        Self::growing(age) * SkillMaturation::outfield_aged_share(age as f32 + 0.5)
+    }
+
+    fn growing(age: u32) -> f32 {
         match age {
             0..=16 => 0.55,
             17 => 0.62,
@@ -779,13 +784,7 @@ impl AbilityTarget {
             21 => 0.91,
             22 => 0.95,
             23 => 0.98,
-            24..=30 => 1.00,
-            31 => 0.97,
-            32 => 0.94,
-            33 => 0.90,
-            34 => 0.85,
-            35 => 0.80,
-            _ => 0.72,
+            _ => 1.00,
         }
     }
 }
@@ -3406,6 +3405,33 @@ mod generator_validation_tests {
         );
     }
 
+    /// A generated 35-year-old is still a footballer: across the outfield
+    /// roles he holds 0.85 to 0.95 of his role's full value.
+    #[test]
+    fn a_generated_35_year_old_is_still_a_footballer() {
+        use PlayerPositionType::*;
+        let roles = [
+            DefenderCenter,
+            DefenderLeft,
+            WingbackLeft,
+            DefensiveMidfielder,
+            MidfielderCenter,
+            MidfielderLeft,
+            AttackingMidfielderCenter,
+            ForwardLeft,
+            Striker,
+        ];
+        let mean = roles
+            .iter()
+            .map(|r| AbilityTarget::position_factor(35, *r))
+            .sum::<f32>()
+            / roles.len() as f32;
+        assert!(
+            (0.85..=0.95).contains(&mean),
+            "a generated 35-year-old holds {mean:.3}"
+        );
+    }
+
     /// Outfield generation barely moves: for every outfield role the
     /// generator picks and every age, the factor stays within 0.03 of the
     /// outfield curve it was written on.
@@ -3428,7 +3454,7 @@ mod generator_validation_tests {
             ForwardCenter,
             Striker,
         ] {
-            for age in 17..=36 {
+            for age in 17..=30 {
                 let (before, after) = (
                     AbilityTarget::age_factor(age),
                     AbilityTarget::position_factor(age, position),

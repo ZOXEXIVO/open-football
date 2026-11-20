@@ -73,3 +73,31 @@ his situation. Each SHALL leave his dream unchanged.
 
 - **WHEN** a 20-year-old reaching for the top goes out on loan to play
 - **THEN** his plan is the loan and his dream is unchanged
+
+### Requirement: A stalled player reads what is holding him back
+
+When a player concludes he has stopped improving, the want he forms SHALL follow the cause his own development record
+shows:
+- little football at a standard that fits him: his wants for first-team football and for a loan SHALL gain that as
+  evidence;
+- coaching below what a player of his level needs: his want for a better coach SHALL form, as it does today;
+- neither: only the want to keep improving SHALL form.
+
+The read SHALL hold only what a player can know about himself: whether he is still gaining, how much football he has
+had at a fitting standard, and whether he has outgrown the football he is given. It SHALL NOT carry his potential.
+
+A player who is winding down SHALL form none of these wants.
+
+#### Scenario: A prospect with no football
+- **WHEN** an ambitious 20-year-old who has stopped improving played under 300 minutes of fitting football last season
+- **THEN** his want to go out on loan gains evidence, and his want for a better coach does not form from the stall
+  alone
+
+#### Scenario: A regular who has outgrown his coaches
+- **WHEN** a regular who has stopped improving has had a full season of fitting football under coaches well below his
+  level
+- **THEN** his want for a better coach forms
+
+#### Scenario: A veteran
+- **WHEN** a 34-year-old's level is falling
+- **THEN** he forms no want about his development

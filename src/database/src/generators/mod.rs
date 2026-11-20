@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod blueprint_audit;
 pub mod convert;
 pub mod country_bias;
 pub mod generator;

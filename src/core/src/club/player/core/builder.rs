@@ -1,3 +1,4 @@
+use crate::club::player::development::PlayerDevelopment;
 use crate::club::player::interaction::ManagerInteractionLog;
 use crate::club::player::language::PlayerLanguage;
 use crate::club::player::load::PlayerLoad;
@@ -267,6 +268,7 @@ impl PlayerBuilder {
             retired: false,
             international_retired: false,
             load: PlayerLoad::new(),
+            development: PlayerDevelopment::default(),
             pending_contract_ask: None,
             pending_pre_contract: None,
             last_intl_caps_paid: 0,

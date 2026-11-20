@@ -144,7 +144,7 @@ impl DatabaseGenerator {
                         PlayerGenerator::generate_from_odb(r, continent_id, &country_code, data)
                     })
                     .collect();
-                simulator_data.free_agents.extend(hydrated);
+                simulator_data.admit_opening_free_agents(hydrated);
             }
         }
 

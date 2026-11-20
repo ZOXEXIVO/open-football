@@ -4,7 +4,7 @@ use crate::club::player::adaptation::PendingSigning;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::calculators::FreeAgentReleaseReason;
-use crate::club::player::development::CoachingEffect;
+use crate::club::player::development::PlayerDevelopment;
 use crate::club::player::happiness::{
     ClubMoraleContext, PlayingTimeFrustrationConfig, TeamSeasonState,
 };
@@ -322,6 +322,10 @@ pub struct Player {
     /// decisions, injury risk, and form-based morale events.
     pub load: PlayerLoad,
 
+    /// What he is growing into and what has built him so far. The only
+    /// owner of how his attributes change.
+    pub development: PlayerDevelopment,
+
     /// The player's own stated terms after turning down a proposal.
     /// Lets the next club offer converge on a deal the player would sign,
     /// rather than guessing from scratch. Cleared when a deal is accepted.
@@ -628,9 +632,6 @@ impl Player {
 
     pub fn skills(&self) -> &PlayerSkills {
         &self.skills
-    }
-    pub fn skills_mut(&mut self) -> &mut PlayerSkills {
-        &mut self.skills
     }
 
     pub fn attributes(&self) -> &PersonAttributes {
@@ -1413,6 +1414,7 @@ impl Player {
                 .average_rating_realistic(self.position().position_group()),
             position_group: self.position().position_group(),
             football_drought: self.football_drought(now),
+            development: self.development.ledger.read(now),
 
             // The calendar is filled by the caller that has the country
             // context; `u8::MAX` is "no tournament in view", which is
@@ -1620,53 +1622,18 @@ impl Player {
                 season_state,
                 club_morale_ctx,
             );
-            // Natural skill development (weekly). Build the coaching effect
-            // once per player from the club's best coach scores. League
-            // reputation prefers the TEAM's own competition (a B squad in
-            // the third division, a U18 side in youth football) over the
-            // club's main league — development happens at the level the
-            // player actually competes at.
+            // A week passed for his development.
+            if !skip_natural_development {
+                self.process_development(now.date());
+            }
+            // The level he competes at: his team's own competition (a B
+            // squad in the third division, a U18 side in youth football)
+            // before the club's main league.
             let league_reputation = ctx
                 .team
                 .as_ref()
                 .and_then(|t| t.league_reputation)
                 .unwrap_or_else(|| ctx.club.as_ref().map(|c| c.league_reputation).unwrap_or(0));
-            // Prefer the team's own coaching staff over the club-wide
-            // bests — a U18 squad trains under its own coaches, not the
-            // first team's. Club bests still set a 60% floor: the head of
-            // coaching's standards and shared sessions reach every squad.
-            let team_coaching = ctx.team.as_ref().and_then(|t| t.coaching);
-            let coach_effect = ctx
-                .club
-                .as_ref()
-                .map(|c| {
-                    let eff = |team_score: Option<u8>, club_best: u8| -> u8 {
-                        let floor = (club_best as f32 * 0.6).round() as u8;
-                        match team_score {
-                            Some(score) => score.max(floor),
-                            None => club_best,
-                        }
-                    };
-                    CoachingEffect::from_scores(
-                        eff(team_coaching.map(|t| t.technical), c.coach_best_technical),
-                        eff(team_coaching.map(|t| t.mental), c.coach_best_mental),
-                        eff(team_coaching.map(|t| t.fitness), c.coach_best_fitness),
-                        eff(
-                            team_coaching.map(|t| t.goalkeeping),
-                            c.coach_best_goalkeeping,
-                        ),
-                        c.youth_coaching_quality,
-                    )
-                })
-                .unwrap_or_else(CoachingEffect::neutral);
-            if !skip_natural_development {
-                self.process_development(
-                    now.date(),
-                    league_reputation,
-                    &coach_effect,
-                    team_reputation,
-                );
-            }
             // Language learning when playing abroad
             let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
             self.process_language_learning(now.date(), country_code);

@@ -3,16 +3,15 @@ use crate::Player;
 use crate::club::player::condition::{
     ConditionRecoveryModel, ConditionTargetInputs, InjuryRiskInputs,
 };
-use crate::club::player::development::{PositionalSkillCeilings, SkillKey};
+use crate::club::player::development::SessionWork;
 use crate::club::player::injury::InjuryType;
 use crate::league::result::LeagueProcessAccess;
 use crate::utils::DateUtils;
 use crate::utils::random::engine::RandomEngine;
 use crate::{
-    GoalkeepingGains, HappinessEventCause, HappinessEventContext, HappinessEventScope,
-    HappinessEventSeverity, HappinessEventType, MentalGains, PhysicalGains, PlayerStatusType,
-    TechnicalGains, TrainingEffects, TrainingEventContext, TrainingEventEvidence,
-    TrainingEventReason,
+    HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
+    HappinessEventType, PlayerStatusType, TrainingEffects, TrainingEventContext,
+    TrainingEventEvidence, TrainingEventReason,
 };
 use chrono::Datelike;
 use chrono::NaiveDate;
@@ -62,10 +61,7 @@ impl PlayerTrainingResult {
         PlayerTrainingResult {
             player_id,
             effects: TrainingEffects {
-                physical_gains: PhysicalGains::default(),
-                technical_gains: TechnicalGains::default(),
-                mental_gains: MentalGains::default(),
-                goalkeeping_gains: GoalkeepingGains::default(),
+                work: SessionWork::default(),
                 fatigue_change: 0.0,
                 injury_risk: 0.0,
                 morale_change: 0.0,
@@ -96,112 +92,7 @@ impl PlayerTrainingResult {
     /// owns the data lookup and date threading.
     pub fn apply_to_player(&self, player: &mut Player, current_date: NaiveDate) {
         {
-            // Gate skill gains by ability gap: players near potential barely grow
-            let current_ability = player.player_attributes.current_ability as f32;
-            let potential_ability = player.player_attributes.potential_ability as f32;
-            let growth_factor = if potential_ability <= 0.0 {
-                0.05 // No potential set — minimal growth
-            } else {
-                // PA is the ceiling, same contract as the weekly development
-                // tick's CA budget: gains taper continuously to zero as CA
-                // approaches PA and stop entirely at/above it. A floor here
-                // would let thousands of sessions drip skills past PA and
-                // manufacture CA > PA states the development tick then
-                // freezes forever.
-                let gap_ratio = (potential_ability - current_ability) / potential_ability;
-                gap_ratio.clamp(0.0, 1.0)
-            };
-
-            // Per-skill positional ceilings — the same PA × position-weight
-            // table the weekly development tick enforces, so training can't
-            // push a skill past the profile the tick would allow. A value
-            // already above its ceiling (import, legacy state) is frozen at
-            // its current level, never cut.
-            let ceilings = PositionalSkillCeilings::for_player(
-                player,
-                DateUtils::age_in_years(player.birth_date, current_date),
-            );
-            let raise = |current: f32, gain: f32, key: SkillKey| -> f32 {
-                let ceiling = ceilings.get(key).max(current);
-                (current + gain * growth_factor)
-                    .min(ceiling)
-                    .clamp(1.0, 20.0)
-            };
-
-            let g = &self.effects.physical_gains;
-            let s = &mut player.skills.physical;
-            s.stamina = raise(s.stamina, g.stamina, SkillKey::Stamina);
-            s.strength = raise(s.strength, g.strength, SkillKey::Strength);
-            s.pace = raise(s.pace, g.pace, SkillKey::Pace);
-            s.agility = raise(s.agility, g.agility, SkillKey::Agility);
-            s.balance = raise(s.balance, g.balance, SkillKey::Balance);
-            s.jumping = raise(s.jumping, g.jumping, SkillKey::Jumping);
-            s.natural_fitness = raise(
-                s.natural_fitness,
-                g.natural_fitness,
-                SkillKey::NaturalFitness,
-            );
-
-            let g = &self.effects.technical_gains;
-            let s = &mut player.skills.technical;
-            s.first_touch = raise(s.first_touch, g.first_touch, SkillKey::FirstTouch);
-            s.passing = raise(s.passing, g.passing, SkillKey::Passing);
-            s.crossing = raise(s.crossing, g.crossing, SkillKey::Crossing);
-            s.dribbling = raise(s.dribbling, g.dribbling, SkillKey::Dribbling);
-            s.finishing = raise(s.finishing, g.finishing, SkillKey::Finishing);
-            s.heading = raise(s.heading, g.heading, SkillKey::Heading);
-            s.tackling = raise(s.tackling, g.tackling, SkillKey::Tackling);
-            s.technique = raise(s.technique, g.technique, SkillKey::Technique);
-            s.marking = raise(s.marking, g.marking, SkillKey::Marking);
-            s.long_shots = raise(s.long_shots, g.long_shots, SkillKey::LongShots);
-            s.free_kicks = raise(s.free_kicks, g.free_kicks, SkillKey::FreeKicks);
-            s.corners = raise(s.corners, g.corners, SkillKey::Corners);
-            s.penalty_taking = raise(s.penalty_taking, g.penalty_taking, SkillKey::PenaltyTaking);
-
-            let g = &self.effects.mental_gains;
-            let s = &mut player.skills.mental;
-            s.concentration = raise(s.concentration, g.concentration, SkillKey::Concentration);
-            s.decisions = raise(s.decisions, g.decisions, SkillKey::Decisions);
-            s.positioning = raise(s.positioning, g.positioning, SkillKey::Positioning);
-            s.teamwork = raise(s.teamwork, g.teamwork, SkillKey::Teamwork);
-            s.vision = raise(s.vision, g.vision, SkillKey::Vision);
-            s.work_rate = raise(s.work_rate, g.work_rate, SkillKey::WorkRate);
-            s.leadership = raise(s.leadership, g.leadership, SkillKey::Leadership);
-            s.composure = raise(s.composure, g.composure, SkillKey::Composure);
-            s.anticipation = raise(s.anticipation, g.anticipation, SkillKey::Anticipation);
-            s.bravery = raise(s.bravery, g.bravery, SkillKey::Bravery);
-            s.off_the_ball = raise(s.off_the_ball, g.off_the_ball, SkillKey::OffTheBall);
-
-            let g = &self.effects.goalkeeping_gains;
-            let s = &mut player.skills.goalkeeping;
-            s.handling = raise(s.handling, g.handling, SkillKey::GkHandling);
-            s.reflexes = raise(s.reflexes, g.reflexes, SkillKey::GkReflexes);
-            s.one_on_ones = raise(s.one_on_ones, g.one_on_ones, SkillKey::GkOneOnOnes);
-            s.aerial_reach = raise(s.aerial_reach, g.aerial_reach, SkillKey::GkAerialReach);
-            s.command_of_area = raise(
-                s.command_of_area,
-                g.command_of_area,
-                SkillKey::GkCommandOfArea,
-            );
-            s.communication = raise(s.communication, g.communication, SkillKey::GkCommunication);
-            s.rushing_out = raise(s.rushing_out, g.rushing_out, SkillKey::GkRushingOut);
-            s.punching = raise(s.punching, g.punching, SkillKey::GkPunching);
-            s.kicking = raise(s.kicking, g.kicking, SkillKey::GkKicking);
-            s.throwing = raise(s.throwing, g.throwing, SkillKey::GkThrowing);
-
-            // Recalculate current_ability from actual skill values, weighted
-            // by the player's primary position. Using the position-weighted
-            // path keeps natural development and training in agreement —
-            // both feed back through the same ability function so neither
-            // path can quietly contradict the other's growth gate. Clamped
-            // to PA like the development tick stores it: legacy players
-            // hydrated with over-ceiling skill profiles must not have their
-            // CA digit re-inflated past PA every session.
-            let position = player.position();
-            player.player_attributes.current_ability = player
-                .skills
-                .calculate_ability_for_position(position)
-                .min(player.player_attributes.potential_ability);
+            player.on_training_session(&self.effects.work, current_date);
 
             // Update rolling training performance (exponential moving average)
             // Alpha = 0.3 for first 5 sessions (fast warmup), then 0.15 (slower, more stable)
@@ -719,6 +610,7 @@ mod potential_ceiling_tests {
 
     use super::*;
     use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::development::SkillKey;
     use crate::club::player::position::{PlayerPosition, PlayerPositions};
     use crate::shared::fullname::FullName;
     use crate::{PersonAttributes, PlayerAttributes, PlayerPositionType, PlayerSkills};
@@ -748,23 +640,23 @@ mod potential_ceiling_tests {
             .unwrap()
     }
 
+    fn work(reps: &[(SkillKey, f32)]) -> SessionWork {
+        let mut work = SessionWork::default();
+        for (key, r) in reps {
+            work.practise(*key, *r);
+        }
+        work
+    }
+
     fn session_with_gains(player_id: u32) -> PlayerTrainingResult {
         PlayerTrainingResult::new(
             player_id,
             TrainingEffects {
-                physical_gains: PhysicalGains {
-                    stamina: 0.5,
-                    ..Default::default()
-                },
-                technical_gains: TechnicalGains {
-                    passing: 0.5,
-                    ..Default::default()
-                },
-                mental_gains: MentalGains {
-                    concentration: 0.5,
-                    ..Default::default()
-                },
-                goalkeeping_gains: GoalkeepingGains::default(),
+                work: work(&[
+                    (SkillKey::Stamina, 0.5),
+                    (SkillKey::Passing, 0.5),
+                    (SkillKey::Concentration, 0.5),
+                ]),
                 fatigue_change: 0.0,
                 injury_risk: 0.0,
                 morale_change: 0.0,
@@ -829,9 +721,9 @@ mod potential_ceiling_tests {
 
     #[test]
     fn training_respects_positional_skill_ceiling() {
-        // A striker's tackling ceiling is PA-derived × 0.35 — far below
-        // his flat skill baseline here, so tackling must freeze while a
-        // normally-weighted skill still grows.
+        // A striker whose blueprint makes little of his tackling: once
+        // tackling sits above what the blueprint sizes it to, a session
+        // freezes it while the rest of him still grows.
         let attrs = PlayerAttributes {
             current_ability: 80,
             potential_ability: 160,
@@ -854,19 +746,13 @@ mod potential_ceiling_tests {
             .player_attributes(attrs)
             .build()
             .unwrap();
+        p.skills.technical.tackling = 3.0;
+        p.draw_blueprint(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
+        p.skills.technical.tackling = 12.0;
 
         let tackling_before = p.skills.technical.tackling;
         let effects = TrainingEffects {
-            physical_gains: PhysicalGains {
-                stamina: 0.5,
-                ..Default::default()
-            },
-            technical_gains: TechnicalGains {
-                tackling: 0.5,
-                ..Default::default()
-            },
-            mental_gains: MentalGains::default(),
-            goalkeeping_gains: GoalkeepingGains::default(),
+            work: work(&[(SkillKey::Stamina, 0.5), (SkillKey::Tackling, 0.5)]),
             fatigue_change: 0.0,
             injury_risk: 0.0,
             morale_change: 0.0,

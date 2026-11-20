@@ -79,7 +79,7 @@ impl PlayerSkills {
 
     /// Continuous score for fitting. Keeping the unclamped value prevents
     /// endpoint plateaus from flattening a CA-200 player to all twenties.
-    fn ability_score_for_position(&self, position: PlayerPositionType) -> f32 {
+    pub(crate) fn ability_score_for_position(&self, position: PlayerPositionType) -> f32 {
         let weights = AbilityWeights::for_position(position);
         let total: f32 = weights.iter().sum();
         let average: f32 = self

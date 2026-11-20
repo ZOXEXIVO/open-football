@@ -153,8 +153,8 @@ tick alone understates growth: training contributes about a fifth of it.
   the share of each maturation family that only matches build
   (`SkillMaturation::match_share`: mental 0.15, goalkeeping 0.12, technical
   0.08, strength/stamina 0.03, speed 0) opens with
-  `PlayerLoad::match_exposure`, the last 30 days' minutes against a weekly
-  starter's, friendlies and youth or reserve league games at half. A regular
+  the football the player has banked for his career (`BankedFootball`), each
+  match credited by how well its standard fits him. A regular
   who loses his place keeps what he built. The senior-minute bands the tick
   rates were rescaled to that 30-day window (a weekly start holds ~380; the
   old adult bands began at 600 and ran to 3000), and a cup-only player's

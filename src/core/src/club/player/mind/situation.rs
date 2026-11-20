@@ -21,6 +21,7 @@
 use super::organs::memory::ActorRef;
 use crate::PlayerFieldPositionGroup;
 use crate::club::CareerRunway;
+use crate::club::player::development::DevelopmentRead;
 use crate::club::player::transfer::stage::LevelFloor;
 use crate::transfers::squad::LevelBand;
 
@@ -186,6 +187,8 @@ pub struct MindSituation {
     /// without a first-team shirt the stuck-career machinery already
     /// reads. 0 is a man who is playing.
     pub football_drought: f32,
+    /// What his own development record tells him.
+    pub development: DevelopmentRead,
 
     // ── His country ─────────────────────────────────────────────
     /// Months until his nation's next major tournament. `u8::MAX` when
@@ -257,6 +260,7 @@ impl MindSituation {
             recent_rating: 0.0,
             position_group: PlayerFieldPositionGroup::Midfielder,
             football_drought: 0.0,
+            development: DevelopmentRead::default(),
             months_to_tournament: u8::MAX,
             national_standing: NationalStanding::Unknown,
             days_to_main_window_close: u16::MAX,

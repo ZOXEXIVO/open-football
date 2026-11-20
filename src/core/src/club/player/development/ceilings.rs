@@ -1,16 +1,14 @@
-//! Position-weighted per-skill ceilings derived from PA — the exact
-//! table the weekly development tick uses for its growth gate, exposed
-//! so the daily training path can honour the same contract instead of
-//! clamping only at the absolute 20.0. Ceilings gate growth, never cut:
+//! Per-attribute ceilings: the player's own blueprint sized to the share of
+//! his potential his age and football let him hold. Ceilings gate growth,
+//! never cut:
 //! callers must lift the ceiling to the pre-gain value when a skill
 //! already sits above it (imports, legacy states).
 
-use super::position_weights::{pos_group_from, position_dev_weights};
+use super::blueprint::SkillBlueprint;
 use super::skills_array::{
-    SK_ACCELERATION, SK_AGILITY, SK_BALANCE, SK_JUMPING, SK_NATURAL_FITNESS, SK_PACE, SKILL_COUNT,
-    SkillCategory, SkillKey, skill_category,
+    SK_ACCELERATION, SK_AGILITY, SK_BALANCE, SK_JUMPING, SK_MATCH_READINESS, SK_NATURAL_FITNESS,
+    SK_PACE, SKILL_COUNT, SkillCategory, SkillKey, skill_category,
 };
-use crate::PlayerSkills;
 use crate::club::player::maturation::{MaturationGroup, SkillMaturation};
 use crate::club::player::player::Player;
 
@@ -51,23 +49,80 @@ impl PositionalSkillCeilings {
     /// developer, a regular who lost his place — keeps every point he has
     /// and simply stops gaining until his age, or his football, catches up.
     pub fn for_player(player: &Player, age: f32) -> Self {
+        Self::sized(player, age, &Self::held_shares(player, age))
+    }
+
+    /// The ceilings training and a growing body can reach on their own: those
+    /// of a player who has banked no football. Only matches build the rest.
+    pub fn without_football(player: &Player, age: f32) -> Self {
+        Self::sized(player, age, &Self::unplayed_shares(player, age))
+    }
+
+    fn sized(player: &Player, age: f32, held: &[f32; MaturationGroup::COUNT]) -> Self {
+        Self::sized_where(
+            player,
+            age,
+            held,
+            &player.development.weights(player),
+            |_| true,
+        )
+    }
+
+    /// Ceilings of the attributes `wanted` picks, from `weights`; the rest
+    /// read zero. A family's level is solved only if one of its attributes
+    /// is wanted. Past his peak each attribute holds its own share of what
+    /// ageing leaves, as he keeps his body.
+    pub(super) fn sized_where(
+        player: &Player,
+        age: f32,
+        held: &[f32; MaturationGroup::COUNT],
+        weights: &[f32; SKILL_COUNT],
+        wanted: impl Fn(usize) -> bool,
+    ) -> Self {
         let position = player.position();
-        let weights = position_dev_weights(pos_group_from(position));
         let potential = player.player_attributes.potential_ability as f32;
-        let unplayed = 1.0 - player.load.match_exposure();
+        let maturity_age = player.development.age(age);
+        let keep = player.ageing_keep();
         let mut levels = [None; MaturationGroup::COUNT];
-        let mut arr = [1.0f32; SKILL_COUNT];
+        let mut arr = [0.0f32; SKILL_COUNT];
         for i in 0..SKILL_COUNT {
-            let group = Self::maturation_group(i);
-            let level = *levels[group as usize].get_or_insert_with(|| {
-                let held_share = SkillMaturation::ratio(age, group)
-                    * (1.0 - SkillMaturation::match_share(group) * unplayed);
-                let held = (potential * held_share).round() as u8;
-                PlayerSkills::shaped_skill_level(position, held, &weights)
+            if weights[i] <= 0.0 || !wanted(i) {
+                continue;
+            }
+            let group = Self::maturation_group(i) as usize;
+            let level = *levels[group].get_or_insert_with(|| {
+                SkillBlueprint::level(position, potential * held[group], weights)
             });
-            arr[i] = (level * weights[i]).clamp(1.0, 20.0);
+            let aged = SkillMaturation::aged_attribute(maturity_age, i, keep);
+            arr[i] = (level * weights[i] * aged).clamp(1.0, 20.0);
         }
         PositionalSkillCeilings { arr }
+    }
+
+    /// The share of his eventual ability each maturation family holds at
+    /// `age`: its maturity at his own pace of maturing, less the part only
+    /// matches build in proportion to the football he has not had.
+    pub(crate) fn held_shares(player: &Player, age: f32) -> [f32; MaturationGroup::COUNT] {
+        let age = player.development.age(age);
+        let football = &player.development.football;
+        MaturationGroup::ALL.map(|group| {
+            SkillMaturation::ratio(age, group)
+                * (1.0 - SkillMaturation::match_share(group) * (1.0 - football.of(group)))
+        })
+    }
+
+    /// The held share of a player with no football banked.
+    pub(crate) fn unplayed_shares(player: &Player, age: f32) -> [f32; MaturationGroup::COUNT] {
+        let age = player.development.age(age);
+        MaturationGroup::ALL.map(|group| {
+            SkillMaturation::ratio(age, group) * (1.0 - SkillMaturation::match_share(group))
+        })
+    }
+
+    /// Match readiness sits in the attribute array and is a condition: no
+    /// development rule reads it.
+    pub(crate) fn is_condition(idx: usize) -> bool {
+        idx == SK_MATCH_READINESS
     }
 
     pub fn get(&self, key: SkillKey) -> f32 {

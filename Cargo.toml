@@ -17,6 +17,7 @@ members = [
 # by the same code whether it ends up in an SVG or on the pitch.
 exclude = [
     ".dev/careers",
+    ".dev/growth",
     ".dev/match",
     ".dev/mind",
     ".dev/simulate",

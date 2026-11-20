@@ -2311,6 +2311,7 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
                 standard_of_football: details.standard_of_football,
                 penalties_saved: details.penalties_saved_by(pid),
                 penalties_missed: details.penalties_missed_by(pid),
+                slot: played_slot,
             });
             coach_observations.push(CoachObservationBuilder::build(
                 player,
@@ -2378,6 +2379,7 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
             standard_of_football: details.standard_of_football,
             penalties_saved: 0,
             penalties_missed: 0,
+            slot: None,
         }
         .big_match_kind();
 

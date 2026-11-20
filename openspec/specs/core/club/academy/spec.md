@@ -28,15 +28,37 @@ The academy SHALL generate new youth players once per year, sized by recruitment
 
 ### Requirement: Academy development ceilings are sized like first-team ceilings
 
-An academy player's attribute ceilings SHALL be the ceilings first-team development would set for him: from his
-potential, his position's development weights, his families' maturity at his fractional age and his match exposure.
-They SHALL replace the flat age cap. An attribute already above its ceiling SHALL keep its value and SHALL NOT gain
-further until the ceiling rises past it.
+An academy player's attribute ceilings SHALL be the ceilings development sets any player: from his potential, his
+blueprint, his families' maturity at his own pace of maturing and the football he has banked. An attribute already
+above its ceiling SHALL keep its value and SHALL NOT gain further until the ceiling rises past it.
 
 #### Scenario: An 18-year-old academy keeper cannot outgrow the first team's ceiling
 - **WHEN** a PA 150 keeper of 18 trains in the academy for a season
-- **THEN** none of his goalkeeping attributes rises above the first-team ceiling for his age and his match exposure
+- **THEN** none of his goalkeeping attributes rises above the ceiling a first-team keeper of his age, timing and
+  banked football would have
 
 #### Scenario: A graduate keeps what he built
 - **WHEN** an academy player whose attribute already sits above his new ceiling is checked against it
 - **THEN** the attribute keeps its value rather than being cut to the ceiling
+
+### Requirement: Academy training is work for the player's own development
+
+Each week the academy SHALL report its sessions to each of its players as work, by development phase, and SHALL NOT
+change any attribute itself. It SHALL apply no growth caps, ceilings or random growth spurts of its own. The week's
+work SHALL include games, banked as football at the academy's own standard.
+
+The phases SHALL keep their emphasis: ball mastery in the foundation phase, the position's craft and reading of the
+game from the development phase, and physical work added in the professional phase.
+
+#### Scenario: A boy banks football in the academy
+- **WHEN** a 15-year-old spends a season in an academy
+- **THEN** he ends it with more football banked than he started with
+
+#### Scenario: Moving up changes nothing by itself
+- **WHEN** a 16-year-old is promoted from the academy to a youth squad and does the same session at the same quality
+  the week before and the week after
+- **THEN** it moves his attributes by the same amounts
+
+#### Scenario: A better academy, more growth
+- **WHEN** two identical 14-year-olds spend a season at academies of the highest and the lowest level
+- **THEN** the first gains more

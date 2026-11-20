@@ -3,6 +3,7 @@
 //! Constructed by callers (league/match-result pipeline, transfer
 //! pipeline) and handed to the player one outcome at a time.
 
+use crate::PlayerPositionType;
 use crate::club::board::mandate::SigningMandate;
 use chrono::NaiveDate;
 
@@ -111,6 +112,9 @@ pub struct MatchOutcome<'a> {
     /// Spot-kicks he failed to score, in play and in a shoot-out — see
     /// `MatchResultRaw::penalties_missed_by`.
     pub penalties_missed: u8,
+    /// The slot he started in, from the kickoff squad. `None` for a
+    /// substitute and wherever the caller does not resolve it.
+    pub slot: Option<PlayerPositionType>,
 }
 
 impl<'a> MatchOutcome<'a> {

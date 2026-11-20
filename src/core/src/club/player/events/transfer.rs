@@ -19,7 +19,6 @@ use crate::club::player::calculators::WageCalculator;
 use crate::club::player::contract::contract::{
     ContractBonus, ContractClause, ContractClauseType, is_inert_bonus, is_inert_clause,
 };
-use crate::club::player::load::PlayerLoad;
 use crate::club::player::mind::SpellChange;
 use crate::club::player::player::{Player, SellOnObligation};
 use crate::club::staff::perception::PotentialEstimator;
@@ -457,9 +456,10 @@ impl Player {
             self.statuses.remove(s);
         }
         self.happiness = PlayerHappiness::new();
-        self.load = PlayerLoad::new();
-        // A promise was made by the previous club's staff and its baseline
-        // was read off the ledger just wiped above; it cannot be judged here.
+        // His load record is his own: the minutes, the physical load, the
+        // recovery he owes and his form travel with him.
+        // A promise was made by the previous club's staff; it cannot be
+        // judged here.
         self.promises.clear();
         // Squad social view belongs to the previous club's roster; the
         // new club's weekly pre-tick will rebuild it on its next Monday.

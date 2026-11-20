@@ -1,0 +1,26 @@
+[package]
+name = "dev_growth"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Development census: follows every player of a stubbed world for several
+# seasons and reports how ability and attributes move by position, age,
+# football played and place, beside the shipped database as loaded. Read-only
+# over the world, so a run is a measurement and never a cause.
+#
+# Defaults to `match-stub`: four seasons on the real engine cost days.
+core = { path = "../../src/core" }
+database = { path = "../../src/database" }
+chrono = "0.4"
+log = "0.4"
+env_logger = "0.11"
+mimalloc = "0.1"
+
+[features]
+default = ["match-stub"]
+match-stub = ["core/match-stub"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 16

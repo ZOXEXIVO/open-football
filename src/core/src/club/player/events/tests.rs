@@ -8,9 +8,9 @@
 
 use super::types::{MatchOutcome, MatchParticipation, MatchTeamRef};
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
-use crate::club::player::mind::KickoffMind;
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::condition::InjuryRiskInputs;
+use crate::club::player::mind::KickoffMind;
 use crate::club::player::player::Player;
 use crate::league::Season;
 use crate::r#match::engine::result::PlayerMatchEndStats;
@@ -143,6 +143,7 @@ fn outcome<'a>(
         standard_of_football: MatchStandard::CALIBRATION,
         penalties_saved: 0,
         penalties_missed: 0,
+        slot: None,
         won_tie: won,
         match_season_year: 0,
         date: d(2026, 9, 1),
@@ -468,6 +469,7 @@ fn borrowed_appearance_books_to_secondary_team_not_home() {
         standard_of_football: MatchStandard::CALIBRATION,
         penalties_saved: 0,
         penalties_missed: 0,
+        slot: None,
         won_tie: false,
         match_season_year: 2026,
         date: d(2026, 9, 1),
@@ -526,6 +528,7 @@ fn home_appearance_books_to_player_statistics() {
         standard_of_football: MatchStandard::CALIBRATION,
         penalties_saved: 0,
         penalties_missed: 0,
+        slot: None,
         won_tie: false,
         match_season_year: 2026,
         date: d(2026, 9, 1),
@@ -6959,16 +6962,31 @@ fn a_clean_sheet_lifts_a_defender_but_not_a_forward() {
         let mut p = build_player(position, PersonAttributes::default());
         p.made_senior_debut = true;
         let s = stats(6.8, 0, 0, 0, group);
-        let o = outcome(&s, 6.8, false, false, false, false, 1, 0, MatchParticipation::Starter);
+        let o = outcome(
+            &s,
+            6.8,
+            false,
+            false,
+            false,
+            false,
+            1,
+            0,
+            MatchParticipation::Starter,
+        );
         p.on_match_played(&o);
         p.mind.competitive.self_belief()
     };
     assert!(
-        belief_after_shut_out(PlayerPositionType::DefenderCenter, PlayerFieldPositionGroup::Defender)
-            > 0.0
+        belief_after_shut_out(
+            PlayerPositionType::DefenderCenter,
+            PlayerFieldPositionGroup::Defender
+        ) > 0.0
     );
     assert_eq!(
-        belief_after_shut_out(PlayerPositionType::Striker, PlayerFieldPositionGroup::Forward),
+        belief_after_shut_out(
+            PlayerPositionType::Striker,
+            PlayerFieldPositionGroup::Forward
+        ),
         0.0
     );
 }
@@ -6978,7 +6996,17 @@ fn a_heavy_defeat_without_an_error_is_not_a_costly_error() {
     let mut p = build_player(PlayerPositionType::Goalkeeper, PersonAttributes::default());
     p.made_senior_debut = true;
     let s = stats(4.6, 0, 0, 0, PlayerFieldPositionGroup::Goalkeeper);
-    let o = outcome(&s, 4.6, false, false, false, false, 0, 4, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        4.6,
+        false,
+        false,
+        false,
+        false,
+        0,
+        4,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert!(!remembers(&p, EpisodeKind::CostlyError));
     assert!(remembers(&p, EpisodeKind::HeavyDefeat));
@@ -6986,11 +7014,24 @@ fn a_heavy_defeat_without_an_error_is_not_a_costly_error() {
 
 #[test]
 fn an_own_goal_is_a_costly_error() {
-    let mut p = build_player(PlayerPositionType::DefenderCenter, PersonAttributes::default());
+    let mut p = build_player(
+        PlayerPositionType::DefenderCenter,
+        PersonAttributes::default(),
+    );
     p.made_senior_debut = true;
     let mut s = stats(5.8, 0, 0, 0, PlayerFieldPositionGroup::Defender);
     s.own_goals = 1;
-    let o = outcome(&s, 5.8, false, false, false, false, 1, 1, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        5.8,
+        false,
+        false,
+        false,
+        false,
+        1,
+        1,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert!(remembers(&p, EpisodeKind::CostlyError));
     assert!(p.mind.competitive.self_belief() < 0.0);
@@ -7026,17 +7067,33 @@ fn a_missed_kick_in_a_lost_shootout_is_remembered() {
 #[test]
 fn a_missed_penalty_in_a_win_is_not_decisive() {
     assert!(!missed_penalty_is_decisive(3, 1, true));
-    assert!(!missed_penalty_is_decisive(1, 1, true), "his side won the shoot-out");
+    assert!(
+        !missed_penalty_is_decisive(1, 1, true),
+        "his side won the shoot-out"
+    );
 }
 
 #[test]
 fn an_outfield_error_that_costs_a_goal_is_remembered() {
-    let mut p = build_player(PlayerPositionType::DefenderCenter, PersonAttributes::default());
+    let mut p = build_player(
+        PlayerPositionType::DefenderCenter,
+        PersonAttributes::default(),
+    );
     p.made_senior_debut = true;
     let mut s = stats(6.1, 0, 0, 0, PlayerFieldPositionGroup::Defender);
     s.errors_leading_to_shot = 1;
     s.errors_leading_to_goal = 1;
-    let o = outcome(&s, 6.1, false, false, false, false, 1, 1, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        6.1,
+        false,
+        false,
+        false,
+        false,
+        1,
+        1,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert!(remembers(&p, EpisodeKind::CostlyError));
     assert!(p.mind.competitive.self_belief() < 0.0);
@@ -7047,7 +7104,17 @@ fn a_penalty_save_is_remembered() {
     let mut p = build_player(PlayerPositionType::Goalkeeper, PersonAttributes::default());
     p.made_senior_debut = true;
     let s = stats(7.0, 0, 0, 0, PlayerFieldPositionGroup::Goalkeeper);
-    let mut o = outcome(&s, 7.0, false, false, false, false, 1, 1, MatchParticipation::Starter);
+    let mut o = outcome(
+        &s,
+        7.0,
+        false,
+        false,
+        false,
+        false,
+        1,
+        1,
+        MatchParticipation::Starter,
+    );
     o.penalties_saved = 1;
     p.on_match_played(&o);
     assert!(remembers(&p, EpisodeKind::PenaltySaved));
@@ -7070,7 +7137,17 @@ fn a_match_teaches_the_standard_it_was_played_at() {
     p.made_senior_debut = true;
     p.mind.competitive.seed_assurance(0.50);
     let s = stats(6.8, 0, 0, 0, PlayerFieldPositionGroup::Goalkeeper);
-    let mut o = outcome(&s, 6.8, false, false, false, false, 1, 1, MatchParticipation::Starter);
+    let mut o = outcome(
+        &s,
+        6.8,
+        false,
+        false,
+        false,
+        false,
+        1,
+        1,
+        MatchParticipation::Starter,
+    );
     o.standard_of_football = 0.70;
     p.on_match_played(&o);
     assert!(p.mind.competitive.assurance() > 0.50);
@@ -7114,6 +7191,7 @@ fn ordinary_match_at(is_friendly: bool, stats: &PlayerMatchEndStats) -> MatchOut
         standard_of_football: MatchStandard::CALIBRATION,
         penalties_saved: 0,
         penalties_missed: 0,
+        slot: None,
         won_tie: false,
         match_season_year: 2026,
         date: d(2026, 9, 1),

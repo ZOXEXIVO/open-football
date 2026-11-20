@@ -21,6 +21,7 @@
 use crate::PlayerFieldPositionGroup;
 use crate::PlayerHappiness;
 use crate::club::person::Person;
+use crate::club::player::development::Mentoring;
 use crate::club::player::language::Language;
 use crate::club::player::traits::PlayerTrait;
 use crate::club::{
@@ -363,7 +364,12 @@ impl MentorshipProcessor {
                 }
             } else {
                 // Healthy mentoring — drift personality and bond.
-                Self::nudge_personality_step(mentee, mentor_prof, mentor_amb, mentor_det, step);
+                mentee.on_mentored(&Mentoring {
+                    professionalism: mentor_prof,
+                    ambition: mentor_amb,
+                    determination: mentor_det,
+                    step,
+                });
                 mentee.relations.update_with_type(
                     mentor_ids[i],
                     bond_mag,
@@ -451,34 +457,6 @@ impl MentorshipProcessor {
             .wrapping_add(date.num_days_from_ce() as u64);
         let frac = ((h >> 13) as u32 as f32) / (u32::MAX as f32);
         frac.clamp(0.0, 0.999)
-    }
-
-    /// Nudge the mentee's personality toward the mentor's values with an
-    /// explicit step size. Caller scales by compatibility tier and HoY factor.
-    fn nudge_personality_step(
-        mentee: &mut Player,
-        mentor_prof: f32,
-        mentor_amb: f32,
-        mentor_det: f32,
-        step: f32,
-    ) {
-        let drift = |current: f32, target: f32| -> f32 {
-            let delta = target - current;
-            if delta.abs() < 0.05 {
-                0.0
-            } else {
-                delta.signum() * step
-            }
-        };
-
-        let cur = &mut mentee.attributes;
-        cur.professionalism =
-            (cur.professionalism + drift(cur.professionalism, mentor_prof)).clamp(0.0, 20.0);
-        cur.ambition = (cur.ambition + drift(cur.ambition, mentor_amb)).clamp(0.0, 20.0);
-
-        let det_now = mentee.skills.mental.determination;
-        let det_new = det_now + drift(det_now, mentor_det);
-        mentee.skills.mental.determination = det_new.clamp(0.0, 20.0);
     }
 }
 

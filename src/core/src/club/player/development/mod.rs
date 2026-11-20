@@ -1,58 +1,50 @@
-//! Player skill development system.
+//! A player's development, owned in one place. Training, matches, the academy
+//! and mentoring report work; one rule turns it into attribute change:
+//! progress along his blueprint, at his plasticity, as much as he takes in,
+//! slowed as an attribute nears its ceiling and held inside his potential.
+//! Ceilings are his potential shared out by his blueprint, at the share his
+//! age holds; sessions and maturation fill them to what a player without
+//! football holds, and only matches, banked per family for his career by how
+//! well their standard fits him, open the rest. The weekly tick matures a
+//! growing body, takes what an ageing one no longer sustains and the edge an
+//! idle one loses. The ledger records every change by source for the census
+//! and for the narrow read the mind takes of him.
 //!
-//! Key principles:
-//! 1. Position-aware: skills relevant to the player's position develop faster
-//!    and have a higher ceiling. Irrelevant skills stay low.
-//! 2. Age curve: physical skills peak 24-28, decline from ~30; mental skills
-//!    can grow into the 30s; technical skills plateau in the late 20s.
-//! 3. Personality: professionalism, ambition, determination drive growth rate.
-//! 4. Match experience: playing competitive matches accelerates development.
-//! 5. Potential ceiling: PA gates maximum achievable level; per-skill ceilings
-//!    based on PA x position weight create realistic skill profiles.
-//! 6. Workload: tired, jaded or injured players don't grow normally.
-//!
-//! ## Testing seam
-//!
-//! The public entry point [`Player::process_development`] uses the global
-//! thread-local RNG, which makes results irreproducible. The internal
-//! [`Player::process_development_with`] variant accepts any [`RollSource`]
-//! so tests can drive a deterministic stream of rolls and assert on stable
-//! outputs.
-//!
-//! ## Submodule layout
-//!
-//! - [`skills_array`]: `SkillKey`, flat-array indexes, `SkillCategory`,
-//!   and the round-trip helpers between `Player.skills` and `[f32; 50]`.
-//! - [`position_weights`]: position grouping and per-position skill weights
-//!   that drive both ceilings and growth rates.
-//! - [`age_curve`]: age-band growth/decline rates and per-skill peak offsets.
-//! - [`modifiers`]: independent multipliers (personality, match experience,
-//!   workload, etc.) and the [`FitnessState`] gate.
-//! - [`rolls`]: deterministic [`RollSource`] seam used by the tick.
-//! - [`coaching`]: [`CoachingEffect`] — per-category coach effectiveness.
-//! - [`tick`]: weekly development tick; wires everything together into the
-//!   `Player::process_development[_with]` impls.
-//!
-//! [`Player::process_development`]: crate::club::player::Player::process_development
-//! [`Player::process_development_with`]: crate::club::player::Player::process_development_with
+//! - [`blueprint`]: the profile a player develops toward, drawn once.
+//! - [`ceilings`]: per-attribute ceilings at an age, with and without football.
+//! - [`work`]: `SessionWork` and the growth rule.
+//! - [`session`], [`football`], [`mentoring`]: what each kind of work does.
+//! - [`tick`], [`layoff`]: time without work.
+//! - [`timing`]: how early or late his body matures.
+//! - [`ledger`]: change by source, and `DevelopmentRead`.
 
-mod age_curve;
+mod blueprint;
 mod ceilings;
-mod coaching;
-mod maturity;
-mod modifiers;
-mod position_weights;
-mod rolls;
+mod football;
+mod layoff;
+mod ledger;
+mod mentoring;
+mod session;
 mod skills_array;
+mod state;
 mod tick;
+mod timing;
+mod work;
 
+pub use blueprint::SkillBlueprint;
 pub use ceilings::PositionalSkillCeilings;
-pub use coaching::CoachingEffect;
-pub use modifiers::FitnessState;
-pub use rolls::{FixedRolls, RollSource, ThreadRolls};
+pub use football::{BankedFootball, FootballFit, MatchFootball, SquadRole};
+pub use layoff::Layoff;
+pub use ledger::{DevelopmentRead, GrowthLedger, GrowthSource, SeasonGrowth};
+pub use mentoring::Mentoring;
 pub use skills_array::{SkillCategory, SkillKey};
+pub use state::PlayerDevelopment;
+pub use timing::MaturationTiming;
+pub use work::SessionWork;
 
 #[cfg(test)]
 mod career_tests;
+#[cfg(test)]
+mod layering;
 #[cfg(test)]
 mod tests;

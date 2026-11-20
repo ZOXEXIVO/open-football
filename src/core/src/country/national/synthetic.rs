@@ -6,6 +6,7 @@
 
 use super::NationalTeam;
 use super::types::{NationalSelectionPolicy, NationalTeamLevel, SQUAD_SIZE, SYNTHETIC_POSITIONS};
+use crate::club::player::development::PlayerDevelopment;
 use crate::club::player::interaction::ManagerInteractionLog;
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::mind::PlayerMind;
@@ -140,7 +141,7 @@ impl NationalTeam {
 
         let position_level = (skill_factor * 20.0) as u8;
 
-        Player {
+        let mut player = Player {
             id,
             full_name: FullName::with_full(
                 format!("NT{}", seed_offset),
@@ -287,6 +288,7 @@ impl NationalTeam {
             retired: false,
             international_retired: false,
             load: PlayerLoad::new(),
+            development: PlayerDevelopment::default(),
             pending_contract_ask: None,
             pending_pre_contract: None,
             last_intl_caps_paid: 0,
@@ -301,6 +303,8 @@ impl NationalTeam {
             made_senior_debut: true,
             awards_count: Default::default(),
             release_reason: None,
-        }
+        };
+        player.begin_development(now);
+        player
     }
 }
