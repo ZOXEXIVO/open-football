@@ -18,8 +18,8 @@ use super::reason::CoachDecisionReason;
 use super::standing::{StandingOutcome, StandingRead, StandingRung};
 use super::strategy::CoachStrategy;
 use crate::club::staff::CoachProfile;
-use crate::utils::DateUtils;
-use crate::{Player, PlayerSquadStatus, Staff};
+use crate::club::staff::perception::PotentialEstimator;
+use crate::{Player, Staff};
 use chrono::NaiveDate;
 
 /// Read-only inputs the engine needs to assess a player for selection.
@@ -153,13 +153,8 @@ impl<'a> CoachDecisionEngine<'a> {
             reasons.push(CoachDecisionReason::RoleMismatch);
         }
 
-        let development_priority = AssessmentMath::development_priority(
-            player,
-            ctx,
-            self.profile,
-            self.owning_roster
-                .is_none_or(|ids| ids.contains(&player.id)),
-        );
+        let development_priority =
+            AssessmentMath::development_priority(player, ctx, self.profile);
         if development_priority >= 0.6 {
             reasons.push(CoachDecisionReason::DevelopmentPathway);
         }
@@ -615,38 +610,14 @@ impl AssessmentMath {
         m.big_match_trust
     }
 
+    /// How much a coach wants to bring a man on: the growth the staff
+    /// believe is left in him, as far as this coach has the patience for it.
     fn development_priority(
         player: &Player,
         ctx: &CoachSelectionContext<'_>,
         profile: &CoachProfile,
-        owns_player: bool,
     ) -> f32 {
-        let age = DateUtils::age(player.birth_date, ctx.date);
-        let age_bucket = if age <= 19 {
-            1.0
-        } else if age <= 22 {
-            0.7
-        } else if age <= 25 {
-            0.3
-        } else {
-            0.0
-        };
-        let status = player
-            .contract
-            .as_ref()
-            .map(|c| c.squad_status.clone())
-            .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
-        let status_bump = if !owns_player {
-            0.0
-        } else {
-            match status {
-                PlayerSquadStatus::HotProspectForTheFuture => 0.25,
-                PlayerSquadStatus::DecentYoungster => 0.10,
-                PlayerSquadStatus::FirstTeamSquadRotation => 0.05,
-                _ => 0.0,
-            }
-        };
-        (age_bucket + status_bump) * profile.development_patience()
+        PotentialEstimator::believed_growth(player, ctx.date) * profile.development_patience()
     }
 
     fn push_form_reasons(

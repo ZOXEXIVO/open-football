@@ -18,7 +18,7 @@ use crate::r#match::engine::environment::{Pitch, Weather};
 use crate::r#match::engine::teamplay::coach::CoachRecord;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
-use crate::r#match::squad::OmittedPlayer;
+use crate::r#match::squad::{OmittedPlayer, SelectionReading};
 use crate::r#match::{MatchSquad, RecordingArtifacts, ResultMatchPositionData};
 use crate::{MatchTacticType, PlayerPositionType};
 use rustc_hash::FxHashMap;
@@ -322,6 +322,8 @@ pub struct FieldSquad {
     /// narrating it — see `Player::on_match_overlooked`.
     #[serde(default)]
     pub overlooked: Vec<u32>,
+    #[serde(default)]
+    pub selection: SelectionReading,
     /// Slot each starter was assigned at kickoff. Drives the post-
     /// match coach-memory observation's `role_fit` reading so a
     /// player pressed into an emergency role (e.g. a midfielder
@@ -349,6 +351,7 @@ impl FieldSquad {
             substitutes_used: Vec::new(),
             selection_omissions: Vec::new(),
             overlooked: Vec::new(),
+            selection: Default::default(),
             starter_slots: Vec::new(),
         }
     }
@@ -361,6 +364,7 @@ impl FieldSquad {
             substitutes_used: Vec::new(),
             selection_omissions: squad.selection_omissions.clone(),
             overlooked: squad.overlooked.clone(),
+            selection: squad.selection,
             starter_slots: squad
                 .main_squad
                 .iter()

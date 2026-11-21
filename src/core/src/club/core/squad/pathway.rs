@@ -907,51 +907,24 @@ impl Club {
         self.board.on_mandate_closed(outcome);
     }
 
-    /// A player has been sold. The man behind him moves up a rung — the
-    /// succession the club was holding him for.
-    pub fn on_asset_sold(&mut self, player_id: u32, date: NaiveDate) {
+    /// A first choice's shirt has come free and `heir` now holds it: he
+    /// moves up a rung of the pathway with it.
+    pub(in crate::club::core) fn promote_into_the_shirt(&mut self, heir: u32, date: NaiveDate) {
         let club_id = self.id;
-        let Some(group) = self
-            .teams
-            .iter()
-            .flat_map(|t| t.players.iter())
-            .find(|p| p.id == player_id)
-            .map(|p| p.position().position_group())
-        else {
-            return;
-        };
-        // The best man at the position the club already reads as a
-        // successor — a rung below the first team, not another starter. A
-        // staged loan is a decision in flight, so a sale elsewhere does
-        // not quietly un-stage him.
-        let heir = self
-            .teams
-            .teams
-            .iter()
-            // Senior sides only: the shirt that just came free is a
-            // senior one, and the man who inherits it is the one already
-            // in the building's senior queue, not a boy in an age-group
-            // side who has never been near it.
-            .filter(|t| t.team_type.is_own_team())
-            .flat_map(|t| t.players.iter())
-            .filter(|p| {
-                p.id != player_id
-                    && p.contract.is_some()
-                    && !p.is_on_loan()
-                    && p.position().position_group() == group
-                    && !p.pathway_stage().is_terminal()
-                    && !matches!(
-                        p.pathway_stage(),
-                        PathwayStage::Starter | PathwayStage::Core | PathwayStage::LoanOut
-                    )
-            })
-            .max_by_key(|p| AbilityEstimator::observable_level(p))
-            .map(|p| p.id);
-        let Some(heir) = heir else {
-            return;
-        };
         for team in self.teams.teams.iter_mut() {
             if let Some(player) = team.players.find_mut(heir) {
+                // A man already read as a starter has no rung to climb, and
+                // a staged loan is a decision in flight that a sale
+                // elsewhere does not quietly undo.
+                let stage = player.pathway_stage();
+                if stage.is_terminal()
+                    || matches!(
+                        stage,
+                        PathwayStage::Starter | PathwayStage::Core | PathwayStage::LoanOut
+                    )
+                {
+                    break;
+                }
                 let from = player.plan.as_ref().map(|p| p.stage);
                 let to = from.unwrap_or(PathwayStage::Prospect).promoted();
                 let fresh = player.default_plan(PlayerPlanRole::CompeteForStarting, to, date);
@@ -1037,6 +1010,7 @@ impl Club {
 mod tests {
     use super::*;
     use crate::academy::ClubAcademy;
+    use crate::club::core::squad::{DepartedPlayer, DepartureKind};
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::league::Season;
     use crate::shared::Location;
@@ -1112,6 +1086,16 @@ mod tests {
                 .contract(Some(contract))
                 .build()
                 .unwrap()
+        }
+
+        /// The first team's coach draws his plan, the player is sold, and
+        /// the club is told.
+        fn sell(club: &mut Club, player_id: u32) {
+            club.teams.teams[0].revise_coach_squad_plan(Self::date(), None);
+            let departed =
+                DepartedPlayer::read(club, player_id, DepartureKind::Sold, Self::date()).unwrap();
+            club.teams.teams[0].players.take_player(&player_id);
+            club.on_player_departed(&departed);
         }
 
         fn club(players: Vec<Player>) -> Club {
@@ -1464,7 +1448,7 @@ mod tests {
         let heir_before = club.teams.teams[0].players.find(2).unwrap().pathway_stage();
         assert_eq!(heir_before, PathwayStage::Rotation, "precondition");
 
-        club.on_asset_sold(1, Fx::date());
+        Fx::sell(&mut club, 1);
 
         let heir_after = club.teams.teams[0].players.find(2).unwrap().pathway_stage();
         assert_ne!(
@@ -1694,8 +1678,8 @@ mod tests {
     fn a_sale_with_nobody_behind_him_promotes_nobody() {
         let mut club = Fx::club(vec![Fx::player(1, 140, 28)]);
         club.review_pathways(Fx::date());
-        club.on_asset_sold(1, Fx::date());
-        assert!(club.teams.teams[0].players.find(1).is_some());
+        Fx::sell(&mut club, 1);
+        assert!(club.teams.teams[0].players.is_empty());
     }
 
     /// The board kept him off a listing nobody answered because it plays

@@ -264,6 +264,7 @@ impl PlayerBuilder {
             promises: Vec::new(),
             interactions: ManagerInteractionLog::new(),
             pending_signing: None,
+            matchday_assignment: None,
             generated: self.generated.unwrap_or(false),
             retired: false,
             international_retired: false,

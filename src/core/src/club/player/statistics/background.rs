@@ -24,10 +24,110 @@
 //!     outshines the current one draws star treatment from teammates
 //!     ([`MatchExperienceBackground::aura_over`]).
 
-use crate::Player;
+use super::ledger::PlayerStatCompetitionKind;
+use super::types::{PlayerStatistics, RatingLedger};
 use crate::league::Season;
-use chrono::NaiveDate;
+use crate::{Player, PlayerFieldPositionGroup};
+use chrono::{Datelike, NaiveDate};
 use rustc_hash::FxHashMap;
+
+/// League football a player has behind him over this season and the last,
+/// as a market reads it. The last season counts whole while this one is
+/// empty, fades as this one fills, and fades again the longer he has gone
+/// without a match.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FootballRecord {
+    /// Appearances, one off the bench counted as part of one.
+    pub appearances: f32,
+    pub goals: f32,
+    pub assists: f32,
+    rating_points: f32,
+    rating_weight: f32,
+}
+
+impl FootballRecord {
+    /// What coming off the bench counts for beside a start.
+    const SUBSTITUTE_APPEARANCE: f32 = 0.35;
+    /// Appearances that fill a season.
+    pub const FULL_SEASON: f32 = 30.0;
+    /// Days without a match that a close season explains.
+    const FRESH_DAYS: f32 = 90.0;
+    /// Days without a match after which last season says nothing.
+    const STALE_DAYS: f32 = 365.0;
+
+    /// This season's football alone, at every club he has played it for.
+    pub fn this_season(player: &Player) -> Self {
+        let mut this = FootballRecord::default();
+        this.add(&player.statistics, 1.0);
+        for spell in player
+            .statistics_history
+            .current
+            .iter()
+            .filter(|e| e.departed_date.is_some())
+        {
+            this.add(&spell.statistics, 1.0);
+        }
+        this
+    }
+
+    pub fn of(player: &Player, date: NaiveDate) -> Self {
+        let history = &player.statistics_history;
+        let mut this = Self::this_season(player);
+
+        let league = |kind: PlayerStatCompetitionKind| kind == PlayerStatCompetitionKind::League;
+        let last_year = history
+            .season_ledger
+            .iter()
+            .filter(|row| league(row.competition_kind))
+            .map(|row| row.season_start_year)
+            .max()
+            .filter(|year| i32::from(*year) + 2 >= date.year());
+        let Some(last_year) = last_year else {
+            return this;
+        };
+
+        let filling = (1.0 - this.appearances / Self::FULL_SEASON).clamp(0.0, 1.0);
+        let idle = f32::from(player.player_attributes.days_since_last_match);
+        let fresh = 1.0
+            - ((idle - Self::FRESH_DAYS) / (Self::STALE_DAYS - Self::FRESH_DAYS)).clamp(0.0, 1.0);
+        let weight = filling * fresh;
+        for row in history
+            .season_ledger
+            .iter()
+            .filter(|row| row.season_start_year == last_year && league(row.competition_kind))
+        {
+            this.add(&row.statistics, weight);
+        }
+        this
+    }
+
+    fn add(&mut self, stats: &PlayerStatistics, weight: f32) {
+        let (points, rated) = RatingLedger::weighted(stats);
+        self.appearances += weight
+            * (f32::from(stats.played)
+                + f32::from(stats.played_subs) * Self::SUBSTITUTE_APPEARANCE);
+        self.goals += weight * f32::from(stats.goals);
+        self.assists += weight * f32::from(stats.assists);
+        self.rating_points += weight * points;
+        self.rating_weight += weight * rated;
+    }
+
+    /// How far above the ordinary for his position his football has been,
+    /// in rating points, read with the caution a small sample asks for.
+    pub fn rating_edge(&self, position: PlayerFieldPositionGroup) -> f32 {
+        if self.rating_weight <= 0.0 {
+            return 0.0;
+        }
+        let raw = self.rating_points / self.rating_weight;
+        let reliability = self.rating_weight / (self.rating_weight + RatingLedger::RELIABILITY_GAMES);
+        (raw - RatingLedger::neutral(position)) * reliability
+    }
+
+    /// How much weight a rate per appearance deserves on this much football.
+    pub fn confidence(&self) -> f32 {
+        self.appearances / (self.appearances + RatingLedger::RELIABILITY_GAMES)
+    }
+}
 
 /// One closed season-spell slice used while aggregating the background.
 struct SpellSlice<'p> {

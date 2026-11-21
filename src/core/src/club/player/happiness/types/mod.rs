@@ -425,8 +425,6 @@ mod tests {
             SelectionOmissionReason::TeammatePreferredOnFitness,
             SelectionOmissionReason::TeammatePreferredOnTrust,
             SelectionOmissionReason::TeammatePreferredForTacticalBalance,
-            SelectionOmissionReason::YouthDevelopmentRotation,
-            SelectionOmissionReason::CupRotation,
             SelectionOmissionReason::LowMatchImportanceRotation,
             SelectionOmissionReason::SquadStatusMismatch,
             SelectionOmissionReason::ManagerDoesNotTrustPlayer,

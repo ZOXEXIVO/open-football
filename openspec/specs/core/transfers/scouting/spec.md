@@ -82,3 +82,38 @@ A club with a live negotiation for a player SHALL keep its file on him until the
 #### Scenario: A negotiation holds the file open
 - **WHEN** a club's standing no longer fits a player it is in live talks for
 - **THEN** its file on him stays until the talks resolve
+
+### Requirement: The desk keeps names behind every starter the club may lose
+For each first-choice player the club may lose, the recruitment desk SHALL hold a short standing list of players who
+could take his shirt at his level, kept current by the same weekly reading as the rest of its files. A starter is one
+the club may lose when any of these holds, each adding to one continuous likelihood: the club has put him on the
+market, he has asked to leave, another club has approached for him, his contract is running down, his age is near
+the point his position declines, or his level stands well above the club's own.
+
+The names SHALL be players the club could plausibly sign: within reach of its standing and of the fee the starter
+would bring. The list SHALL be judged against the starter himself, not against the division's standard.
+
+#### Scenario: A star other clubs want
+- **WHEN** a club's best midfielder has drawn two approaches this season and stands well above the club's level
+- **THEN** the desk holds names of midfielders near his level whom the club could sign with his fee
+
+#### Scenario: A settled regular
+- **WHEN** a 26-year-old first choice has a long contract, no suitors and no wish to leave
+- **THEN** the desk holds no list behind him
+
+#### Scenario: Out of reach
+- **WHEN** a player at the starter's level would never join a club of this standing
+- **THEN** he is not on the list, however good a replacement he would be
+
+### Requirement: A vacancy with names behind it does not start from nothing
+When a vacancy opens for a shirt the desk holds names behind, those names SHALL be the search's first candidates and
+the scouting already done on them SHALL count. The club SHALL be able to approach the best of them without repeating
+the observation a new search needs. A vacancy with no names behind it SHALL go through the ordinary search.
+
+#### Scenario: Ready on the day
+- **WHEN** a club sells a starter it held three scouted names behind
+- **THEN** it can make its first approach within days, not after a fresh round of scouting
+
+#### Scenario: A sale nobody saw coming
+- **WHEN** a settled regular is sold to an offer the club could not refuse and the desk held no list
+- **THEN** the search runs as any new search does, at the vacancy's urgency

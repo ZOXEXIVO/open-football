@@ -20,6 +20,7 @@ exclude = [
     ".dev/growth",
     ".dev/match",
     ".dev/mind",
+    ".dev/selection",
     ".dev/simulate",
     ".dev/squads",
     ".dev/transfers",
@@ -27,7 +28,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "1.8.390"
+version = "1.8.490"
 
 authors = ["Artemov Ivan (ZOXEXIVO) <zoxexivo@gmail.com>"]
 edition = "2024"

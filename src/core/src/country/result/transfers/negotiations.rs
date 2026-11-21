@@ -10,7 +10,6 @@ use crate::club::news::affairs::ClubAffair;
 use crate::club::player::events::transfer_social::{
     TransferContinentalPath, TransferInterestSignal,
 };
-use crate::club::staff::perception::AbilityEstimator;
 use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection, SquadEvidenceContext};
 use crate::transfers::Appraisal;
 use crate::transfers::MarketMap;
@@ -43,7 +42,7 @@ use crate::transfers::loan::guard::{LoanAssetGuard, LoanBorrowerProfile, LoanGua
 use crate::transfers::pipeline::LoanOutReason;
 use crate::transfers::pipeline::approach::ApproachPass;
 use crate::transfers::pipeline::trace::TransferTrace;
-use crate::transfers::squad::ledger::ReplacementScarcity;
+use crate::transfers::squad::ledger::{FreshIncome, ReplacementScarcity};
 use crate::transfers::squad::ledger::{LedgerContext, LedgerPressure};
 use crate::transfers::squad::plan::{BriefTier, PlanningCadence};
 use crate::transfers::value::PlayerValuationCalculator;
@@ -307,6 +306,7 @@ impl NegotiationPass {
                         ),
                         personal_terms: n.current_offer.personal_terms.clone(),
                         foreign_seller_importance: n.foreign_seller_importance,
+                        foreign_seller_cover: n.foreign_seller_cover,
                         foreign_seller_floor: n.foreign_seller_floor,
                         foreign_seller_finances: n.foreign_seller_finances,
                         staged_stance: n.staged_stance,
@@ -647,75 +647,6 @@ impl NegotiationPass {
         )
     }
 
-    /// True when the selling club's own watchlist carries a name at the
-    /// departing player's position that the fee on the table would fund.
-    ///
-    /// Reads the seller's board, not the world: a club is only comforted by
-    /// a replacement it has actually identified. A club with no brief and no
-    /// board has no successor by construction, which is the honest reading —
-    /// it has not thought about it.
-    fn seller_has_successor(country: &Country, neg_data: &NegotiationData) -> bool {
-        let Some(selling_club) = country
-            .clubs
-            .iter()
-            .find(|c| c.id == neg_data.selling_club_id)
-        else {
-            return false;
-        };
-        let Some(group) = selling_club
-            .teams
-            .main()
-            .or_else(|| selling_club.teams.teams.first())
-            .and_then(|team| {
-                team.players
-                    .players
-                    .iter()
-                    .find(|p| p.id == neg_data.player_id)
-                    .map(|p| p.position().position_group())
-            })
-        else {
-            return false;
-        };
-        // A name it could buy with the fee …
-        if selling_club
-            .transfer_plan
-            .watchlist
-            .iter()
-            .any(|e| e.position_group == group && e.estimated_value <= neg_data.offer_amount)
-        {
-            return true;
-        }
-        // … or one it already has. A club that has been bringing a
-        // successor through does not price the hole he is about to fill,
-        // and the watchlist is blind to him because it only holds men
-        // the club does not own. This is the succession half of a
-        // trading club's model: sell at peak, promote the heir.
-        let level = selling_club
-            .teams
-            .iter()
-            .flat_map(|team| team.players.iter())
-            .find(|p| p.id == neg_data.player_id)
-            .map(AbilityEstimator::observable_level)
-            .unwrap_or(0);
-        selling_club
-            .teams
-            .iter()
-            .flat_map(|team| team.players.iter())
-            .filter(|p| {
-                p.id != neg_data.player_id
-                    && p.contract.is_some()
-                    && !p.is_on_loan()
-                    && p.position().position_group() == group
-                    && p.pathway_stage().is_first_team()
-            })
-            .any(|p| AbilityEstimator::observable_level(p) + Self::SUCCESSOR_GAP >= level)
-    }
-
-    /// Observable points a man already in the building may sit behind
-    /// the one being sold and still count as his successor. Roughly one
-    /// season of a prospect's development.
-    const SUCCESSOR_GAP: u8 = 12;
-
     /// Live rival bids on one player, and the highest of them.
     ///
     /// Read from the negotiation table rather than tracked separately: the
@@ -1034,21 +965,45 @@ impl NegotiationPass {
             buyer_transfer_budget,
         } = Self::seller_position(country, neg_data, round, date);
         // every domestic sale and priced ordinary business out of reach.
-        if neg_data.selling_country_id.is_none() && !neg_data.is_loan {
-            let marketed = country
+        let deadline_window = PlanningCadence::deadline_window(country, date);
+        let mut seller_holds_him = false;
+        if !neg_data.is_loan {
+            let seller = country
                 .clubs
                 .iter()
-                .find(|c| c.id == neg_data.selling_club_id)
+                .find(|c| c.id == neg_data.selling_club_id);
+            let marketed = seller
                 .map(|c| c.transfer_plan.is_marketed(neg_data.player_id))
                 .unwrap_or(false);
-            if !neg_data.player_is_available && !marketed {
-                let has_successor = Self::seller_has_successor(country, neg_data);
+            // At home the seller is read live; abroad, as it stood when
+            // the approach was made.
+            let cover = match neg_data.selling_country_id {
+                None => seller.map(|c| {
+                    c.seller_cover(
+                        neg_data.player_id,
+                        neg_data.offer_amount,
+                        deadline_window.days_left,
+                    )
+                }),
+                Some(_) => neg_data.foreign_seller_cover,
+            };
+            if let Some(cover) = cover
+                && !neg_data.player_is_available
+                && !marketed
+            {
                 seller_reservation += ReplacementScarcity::lift(
-                    has_successor,
+                    cover.readiness,
                     importance,
-                    PlanningCadence::deadline_window(country, date).pressure(),
+                    deadline_window.pressure(),
                 );
+                let forced = Self::player_is_forcing_it(country, neg_data);
+                seller_holds_him = cover.declines(deadline_window.days_left, ratio, forced);
             }
+            seller_reservation += Self::fresh_income_lift(country, neg_data);
+        }
+        if seller_holds_him {
+            Self::seller_declines_for_the_window(country, neg_data, neg_id, outcomes);
+            return;
         }
 
         seller_reservation = seller_reservation.clamp(0.55, 1.55);
@@ -2242,6 +2197,66 @@ impl NegotiationPass {
 
     /// He said no. Record the rejection, remember the interest it proves,
     /// and let the buyer's shortlist move on.
+    /// He is not for sale this window: the club has nobody to replace him
+    /// and no time to find somebody. The player hears the club turned the
+    /// approach down, which is what the club's desk reads when it
+    /// prepares for the buyer's return.
+    fn seller_declines_for_the_window(
+        country: &mut Country,
+        neg_data: &NegotiationData,
+        neg_id: u32,
+        outcomes: &mut NegotiationOutcomes,
+    ) {
+        if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+            negotiation.reject_with_reason(NegotiationRejectionReason::PlayerTooImportant);
+        }
+        NegotiationPass::notify_player_stage(
+            country,
+            outcomes,
+            neg_data,
+            TransferInterestStage::BidRejected,
+            TransferInterestSource::RejectedBid,
+            true,
+        );
+        ApproachPass::on_negotiation_resolved(
+            country,
+            neg_data.buying_club_id,
+            neg_data.player_id,
+            false,
+        );
+    }
+
+    /// The player has asked to go: a club cannot hold a man who is forcing
+    /// a move.
+    fn player_is_forcing_it(country: &Country, neg_data: &NegotiationData) -> bool {
+        country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.selling_club_id)
+            .and_then(|club| {
+                club.teams
+                    .iter()
+                    .find_map(|t| t.players.find(neg_data.player_id))
+            })
+            .is_some_and(|p| p.statuses.has(PlayerStatusType::Req))
+            || neg_data
+                .staged_stance
+                .as_ref()
+                .is_some_and(|stance| stance.requested)
+    }
+
+    /// What the buyer has banked this window, against the price.
+    fn fresh_income_lift(country: &Country, neg_data: &NegotiationData) -> f64 {
+        let Some(buyer) = country.clubs.iter().find(|c| c.id == neg_data.buying_club_id) else {
+            return 0.0;
+        };
+        FreshIncome::lift(
+            buyer.transfer_plan.fees_received_this_window,
+            neg_data.asking_price,
+            buyer.transfer_plan.vacancies.iter().any(|v| v.read),
+        )
+    }
+
     fn seller_rejects(
         country: &mut Country,
         neg_data: &NegotiationData,
@@ -4108,6 +4123,7 @@ mod development_pathway_protection_tests {
                 loan_future_fee: None,
                 personal_terms: None,
                 foreign_seller_importance: None,
+                foreign_seller_cover: None,
                 foreign_seller_floor: None,
                 mandate: None,
                 foreign_seller_finances: None,
@@ -4419,6 +4435,7 @@ mod seller_fee_floor_tests {
                 loan_future_fee: None,
                 personal_terms: None,
                 foreign_seller_importance: None,
+                foreign_seller_cover: None,
                 foreign_seller_floor: None,
                 mandate: None,
                 foreign_seller_finances: None,
@@ -5058,6 +5075,7 @@ mod saga_visibility_tests {
                 loan_future_fee: None,
                 personal_terms: None,
                 foreign_seller_importance: None,
+                foreign_seller_cover: None,
                 foreign_seller_floor: None,
                 mandate: None,
                 foreign_seller_finances: None,
@@ -5792,6 +5810,7 @@ mod medical_stage_tests {
                 loan_future_fee: None,
                 personal_terms: None,
                 foreign_seller_importance: None,
+                foreign_seller_cover: None,
                 foreign_seller_floor: None,
                 mandate: None,
                 foreign_seller_finances: None,

@@ -582,7 +582,11 @@ impl TransferMotive {
     /// costing a flavour quietly.
     pub fn from_key(key: &str) -> Self {
         match key {
-            "signing_reason_formation_gap" => TransferMotive::FormationGap,
+            // A man bought to take the shirt of one who left fills the hole
+            // his leaving made.
+            "signing_reason_formation_gap" | "signing_reason_replacement" => {
+                TransferMotive::FormationGap
+            }
             // A squad investment is the same story from the reader's side
             // — the club went out and bought somebody better than what it
             // had. What separates it from an ordinary upgrade (it filled no

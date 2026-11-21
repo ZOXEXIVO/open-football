@@ -50,6 +50,8 @@ pub enum SellMotive {
     SurplusByPlan,
     /// He wants to go.
     PlayerPushing,
+    /// The staff who work with him have advised moving him on.
+    StaffAdvice,
     /// The club's own pathway has him down as a fee. The one motive
     /// that is a DECISION rather than a circumstance — a trading club
     /// sells its best player on purpose, at the top of his curve, and
@@ -101,6 +103,8 @@ pub struct AssetRow {
     /// What is left of the fee the club paid for him on its own books —
     /// [`crate::Player::book_value`]. Zero for everyone it did not buy.
     pub book_value: f64,
+    /// The staff who work with him have advised moving him on.
+    pub advised_to_move_on: bool,
 }
 
 impl AssetRow {
@@ -216,10 +220,10 @@ impl ReplacementScarcity {
     /// longer time to find one.
     pub const DEADLINE_LIFT: f64 = 0.15;
 
-    /// The seller's reservation lift. `has_successor` is whether the club's
-    /// own watchlist carries a name at the same position it could fund with
-    /// this fee; `importance` is the seller-side 0..1 read of what the
-    /// player is to the side; `deadline_pressure` is 0..1 from
+    /// The seller's reservation lift. `readiness` is how ready the club is
+    /// to replace him (`Club::replacement_readiness`); `importance` is the
+    /// seller-side 0..1 read of what the player is to the side;
+    /// `deadline_pressure` is 0..1 from
     /// [`crate::transfers::deal::auction::DeadlineWindow`].
     ///
     /// Scaled by importance because scarcity is about the HOLE he leaves:
@@ -231,12 +235,34 @@ impl ReplacementScarcity {
     /// entirely for a player the club has already decided to sell (listed,
     /// requested, marketed on its own ledger): a decision to sell is a
     /// decision that the hole is acceptable.
-    pub fn lift(has_successor: bool, importance: f32, deadline_pressure: f32) -> f64 {
-        if has_successor {
+    pub fn lift(readiness: f32, importance: f32, deadline_pressure: f32) -> f64 {
+        let weight = (importance.clamp(0.0, 1.0) * (1.0 - readiness.clamp(0.0, 1.0))) as f64;
+        (Self::MAX_LIFT + Self::DEADLINE_LIFT * deadline_pressure as f64) * weight
+    }
+}
+
+/// A buyer that has just banked a fee is asked for more.
+///
+/// The seller knows what the buyer took in this window and prices the call
+/// accordingly: by how large those fees are against the price, with less for
+/// each further multiple, and more when the buyer is replacing a man it sold.
+pub struct FreshIncome;
+
+impl FreshIncome {
+    /// Fees under this share of the price change nothing.
+    const UNNOTICED: f64 = 0.25;
+    /// The most the seller's reservation rises.
+    const MOST: f64 = 0.15;
+    /// How much more a buyer replacing a man it sold is asked.
+    const REPLACING: f64 = 1.5;
+
+    pub fn lift(received: f64, asking: f64, replacing: bool) -> f64 {
+        if asking <= 0.0 {
             return 0.0;
         }
-        let weight = importance.clamp(0.0, 1.0) as f64;
-        (Self::MAX_LIFT + Self::DEADLINE_LIFT * deadline_pressure as f64) * weight
+        let fresh = (received.max(0.0) / asking - Self::UNNOTICED).max(0.0);
+        let replacing = if replacing { Self::REPLACING } else { 1.0 };
+        Self::MOST * (1.0 - (-fresh).exp()) * replacing
     }
 }
 
@@ -354,6 +380,9 @@ impl AssetLedger {
     /// carrying a man on its books at twice what the market will pay has a
     /// reason not to market him at all.
     const BOOK_LOSS_WEIGHT: f32 = 0.35;
+    /// What the advice of the staff who work with a man adds to his
+    /// readiness: under the bar on its own.
+    const STAFF_ADVICE: f32 = 0.30;
     /// Longest sell list the club carries. A window is a few decisions, and
     /// a club marketing a dozen players is in a fire sale, not a plan.
     const MAX_ENTRIES: usize = 6;
@@ -609,6 +638,13 @@ impl AssetLedger {
             };
             score.add(push_term, SellMotive::PlayerPushing);
 
+            // ── His own department says it is time ──
+            // A motive, not a verdict: it needs another reason beside it
+            // before the club answers a call.
+            if row.advised_to_move_on {
+                score.add(Self::STAFF_ADVICE, SellMotive::StaffAdvice);
+            }
+
             if score.total <= 0.0 {
                 continue;
             }
@@ -663,6 +699,7 @@ mod asking_price_tests {
                 unsellable: false,
                 loans_used: 0,
                 book_value: 0.0,
+                advised_to_move_on: false,
                 stage: PathwayStage::Starter,
                 verdict_multiple: None,
             }
@@ -807,6 +844,7 @@ mod sell_list_tests {
                 unsellable: false,
                 loans_used: 0,
                 book_value: 0.0,
+                advised_to_move_on: false,
                 stage: PathwayStage::Starter,
                 verdict_multiple: None,
             }
@@ -914,6 +952,31 @@ mod sell_list_tests {
     }
 
     #[test]
+    fn his_departments_advice_counts_toward_a_listing_and_does_not_make_one_alone() {
+        let build = |row: AssetRow| {
+            AssetLedger::build(&[row], &Fx::ctx(), &ClubBoard::new(), Fx::date())
+        };
+        // A third keeper deep in the queue: not marketed for that alone.
+        let mut third = Fx::settled_core(27);
+        third.group = PlayerFieldPositionGroup::Goalkeeper;
+        third.asset_class = SquadAssetClass::RotationUseful;
+        third.group_rank = 3;
+        assert!(build(third).is_empty());
+
+        let mut advised = third;
+        advised.advised_to_move_on = true;
+        let list = build(advised);
+        assert_eq!(list.len(), 1, "with his own department saying so, he is");
+        assert_eq!(list[0].motive, SellMotive::StaffAdvice);
+
+        // The advice about a man the club has every reason to keep changes
+        // nothing.
+        let mut number_one = Fx::settled_core(27);
+        number_one.advised_to_move_on = true;
+        assert!(build(number_one).is_empty());
+    }
+
+    #[test]
     fn a_sell_list_never_grows_into_a_fire_sale() {
         let rows: Vec<AssetRow> = (1..=20)
             .map(|i| {
@@ -960,6 +1023,7 @@ mod sell_at_peak_tests {
                 unsellable: false,
                 loans_used: 0,
                 book_value: 0.0,
+                advised_to_move_on: false,
                 stage,
                 verdict_multiple: None,
             }
@@ -1036,5 +1100,37 @@ mod sell_at_peak_tests {
         let done = AssetLedger::asking_for(&Fx::row(PathwayStage::MoveOn), Fx::appetite());
         assert!(peak > held);
         assert!(done < held);
+    }
+}
+
+#[cfg(test)]
+mod seller_answer_tests {
+    use super::*;
+
+    #[test]
+    fn a_ready_seller_asks_nothing_extra_and_an_unready_one_asks_more_as_the_window_closes() {
+        assert_eq!(ReplacementScarcity::lift(1.0, 0.9, 0.0), 0.0, "an heir in the building");
+        let three_weeks = ReplacementScarcity::lift(0.0, 0.9, 0.0);
+        let deadline = ReplacementScarcity::lift(0.0, 0.9, 1.0);
+        assert!(three_weeks >= 0.15, "clearly more than his value: {three_weeks}");
+        assert!(deadline > three_weeks);
+        let mut previous = ReplacementScarcity::lift(0.0, 0.9, 0.5);
+        for step in 1..=20 {
+            let now = ReplacementScarcity::lift(step as f32 / 20.0, 0.9, 0.5);
+            assert!(now < previous, "readiness at {step}/20 asks less");
+            previous = now;
+        }
+        assert!(ReplacementScarcity::lift(0.0, 0.2, 0.0) < three_weeks, "a squad man less");
+    }
+
+    #[test]
+    fn a_buyer_flush_with_a_record_sale_is_quoted_more_and_a_small_sale_changes_nothing() {
+        let asking = 30_000_000.0;
+        let record = FreshIncome::lift(100_000_000.0, asking, false);
+        assert!(record > 0.1, "{record}");
+        assert_eq!(FreshIncome::lift(2_000_000.0, asking, false), 0.0);
+        assert_eq!(FreshIncome::lift(0.0, asking, false), 0.0);
+        assert!(FreshIncome::lift(100_000_000.0, asking, true) > record, "replacing a man it sold");
+        assert!(FreshIncome::lift(1_000_000_000.0, asking, false) <= 0.15, "saturating");
     }
 }

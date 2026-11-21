@@ -1,4 +1,5 @@
 use crate::club::SquadDepartures;
+use crate::club::core::{DepartedPlayer, DepartureKind};
 use crate::club::player::calculators::{FreeAgentReleaseReason, WageCalculator};
 use crate::club::player::mind::SpellChange;
 use crate::club::player::transfer::ReleaseContext;
@@ -92,7 +93,14 @@ impl SimulatorData {
                     if leaving.is_empty() {
                         continue;
                     }
+                    let mut departures: Vec<DepartedPlayer> = Vec::with_capacity(leaving.len());
                     for player_id in leaving {
+                        departures.extend(DepartedPlayer::read(
+                            club,
+                            player_id,
+                            DepartureKind::Released,
+                            date,
+                        ));
                         let cause = SquadDepartures::release_cause(club, player_id);
                         SquadDepartures::notify(club, player_id, cause, date);
                     }
@@ -210,6 +218,9 @@ impl SimulatorData {
                                 released_in_country.push(p);
                             }
                         }
+                    }
+                    for departed in &departures {
+                        club.on_player_departed(departed);
                     }
                 }
                 country.transfer_market.transfer_history.extend(new_history);

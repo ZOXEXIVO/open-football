@@ -632,6 +632,7 @@ mod tests {
         TransferNeedReason::CheapReinforcement,
         TransferNeedReason::InjuryCoverLoan,
         TransferNeedReason::OpportunisticLoanUpgrade,
+        TransferNeedReason::Replacement,
     ];
 
     const RELEASE_REASONS: &[FreeAgentReleaseReason] = &[

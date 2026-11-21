@@ -101,6 +101,18 @@ impl PotentialEstimator {
     /// packages) get a potential proxy without ever touching the hidden
     /// biological PA. Prefer scout-assessed values when a dossier
     /// exists; this is the fallback.
+    /// How far the staff believe a man will go beyond what he is, 0..1:
+    /// the growth they can see in him against [`Self::BELIEF_SCALE`]
+    /// levels.
+    pub fn believed_growth(player: &Player, date: NaiveDate) -> f32 {
+        let level = Self::visible_ability(player);
+        let ceiling = Self::observable_ceiling(player, date);
+        (f32::from(ceiling.saturating_sub(level)) / Self::BELIEF_SCALE).clamp(0.0, 1.0)
+    }
+
+    /// Believed growth, in levels, at which the staff's belief is whole.
+    const BELIEF_SCALE: f32 = 25.0;
+
     pub fn observable_ceiling(player: &Player, date: NaiveDate) -> u8 {
         let visible_ca = Self::visible_ability(player);
         let age = DateUtils::age(player.birth_date, date);

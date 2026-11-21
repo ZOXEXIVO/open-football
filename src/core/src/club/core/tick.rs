@@ -11,7 +11,6 @@ use crate::club::ClubResult;
 use crate::club::board::FfpStatus;
 use crate::club::news::ClubAffair;
 use crate::context::GlobalContext;
-use crate::shared::{Currency, CurrencyValue};
 
 use super::boardroom::LeagueStanding;
 
@@ -134,7 +133,8 @@ impl Club {
                         staff_q.coach_fitness,
                         staff_q.coach_goalkeeping,
                     )
-                    .with_pathway_reputation(self.academy.pathway_reputation);
+                    .with_pathway_reputation(self.academy.pathway_reputation)
+                    .with_development_lean(self.philosophy.development_lean());
 
                 if let Some(prev) = preserved {
                     next = next
@@ -281,6 +281,12 @@ impl Club {
             self.review_goalkeeping_department(date);
         }
 
+        self.judge_key_departures(date);
+
+        // After every weekly and monthly move between the squads, so
+        // tomorrow's sides are read off the rosters as they now stand.
+        self.assign_matchday_sides(date);
+
         // Season start: reset player states and graduate academy players
         let season = ctx
             .country
@@ -288,21 +294,12 @@ impl Club {
             .map(|c| c.season_dates)
             .unwrap_or_default();
         if ctx.simulation.is_season_start(&season) {
-            // Sync budgets from board targets to finance system
-            if let Some(targets) = &self.board.season_targets {
-                self.finance.transfer_budget = Some(CurrencyValue {
-                    amount: targets.adjusted_transfer_budget() as f64,
-                    currency: Currency::Usd,
-                });
-                self.finance.wage_budget = Some(CurrencyValue {
-                    amount: targets.adjusted_wage_budget() as f64,
-                    currency: Currency::Usd,
-                });
-            }
             // A new campaign's trading starts from nothing, and so do the
-            // board's one-shot guards on the money it may move.
+            // board's one-shot guards on the money it may move. The
+            // budgets are then the board's new mandate and nothing else.
             self.finance.season_fees.reset();
             self.board.budget_moves.on_new_season();
+            self.recompute_budgets();
 
             self.reset_for_new_season();
             let (academy_transfers, released_players) = self.process_academy_graduations(date);

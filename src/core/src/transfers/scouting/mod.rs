@@ -251,7 +251,9 @@ impl ScoutingPass {
                     TransferNeedPriority::Important => 1,
                     TransferNeedPriority::Optional => 2,
                 };
-                priority_order(&a.priority).cmp(&priority_order(&b.priority))
+                priority_order(&a.priority)
+                    .cmp(&priority_order(&b.priority))
+                    .then_with(|| b.urgency.total_cmp(&a.urgency))
             });
 
             let mut scout_idx = 0;

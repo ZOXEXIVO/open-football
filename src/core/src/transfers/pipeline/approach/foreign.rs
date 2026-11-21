@@ -13,6 +13,8 @@
 //! seller-side facts staged here because the buying country's resolver cannot
 //! reach back over the border to recompute them.
 
+use crate::transfers::value::PlayerValuationCalculator;
+use crate::club::core::SellerCover;
 use crate::transfers::gate::build::Suitor;
 use crate::transfers::loan::LoanAssetGuard;
 use crate::transfers::pipeline::approach::ApproachPass;
@@ -81,6 +83,8 @@ struct ResolvedNeg {
     /// importance-driven seller reservation as a domestic one,
     /// instead of a flat mid-range constant.
     foreign_seller_importance: f32,
+    /// The seller's cover for him, read with his club in scope.
+    foreign_seller_cover: SellerCover,
     foreign_seller_floor: f64,
     /// The buyer's own ceiling for this deal and the tier of the
     /// request it answers — see the domestic action.
@@ -384,6 +388,18 @@ impl ForeignApproachPass {
         // assessment already derived it from the seller's squad-status
         // and position rank.
         let foreign_seller_importance = assessment.diagnostics.importance;
+        // How ready the seller is to replace him, read now for the same
+        // reason: abroad, the resolver cannot see the selling club.
+        let seller_days_left =
+            TransferWindowManager::for_country(sell_country.id, &sell_country.code, date)
+                .current_window_dates(sell_country.id, date)
+                .map(|(_, closes)| (closes - date).num_days());
+        // The fee is not known yet; what the seller's own books value him
+        // at is what any name behind him is weighed against.
+        let (seller_league_rep, seller_club_rep) =
+            PlayerValuationCalculator::seller_context_from_club(sell_club);
+        let his_value = player.value(date, seller_league_rep, seller_club_rep);
+        let foreign_seller_cover = sell_club.seller_cover(player.id, his_value, seller_days_left);
         // The seller's books, staged now: at resolution time this club
         // sits inside another country's borrow, so the windfall model
         // could not otherwise ask what the fee is worth to him.
@@ -436,6 +452,7 @@ impl ForeignApproachPass {
             buyer,
             StagedSellerFacts {
                 seller_importance: foreign_seller_importance,
+                seller_cover: foreign_seller_cover,
                 seller_finances: foreign_seller_finances,
                 stance: staged_stance,
                 sporting_drop: staged_sporting_drop,
@@ -549,7 +566,7 @@ impl ForeignApproachPass {
             asking_price.amount,
             request,
             player_age,
-            date,
+            MarketCadence::is_mid_season_window_for(&buy_country.code, date),
             buy_club.finance.balance.balance,
             &buy_club.philosophy,
             &prospect_ctx,
@@ -624,6 +641,7 @@ impl ForeignApproachPass {
         } = buyer;
         let StagedSellerFacts {
             seller_importance: foreign_seller_importance,
+            seller_cover: foreign_seller_cover,
             seller_finances: foreign_seller_finances,
             stance: staged_stance,
             sporting_drop: staged_sporting_drop,
@@ -753,6 +771,7 @@ impl ForeignApproachPass {
             brief_tier: action.brief_tier,
             is_unsolicited,
             foreign_seller_importance,
+            foreign_seller_cover,
             foreign_seller_finances,
             staged_stance,
             staged_sporting_drop,
@@ -904,6 +923,7 @@ impl ForeignApproachPass {
                     negotiation.selling_league_reputation = action.selling_league_reputation;
                     negotiation.player_stage_inclination = action.player_stage_inclination;
                     negotiation.foreign_seller_importance = Some(action.foreign_seller_importance);
+                    negotiation.foreign_seller_cover = Some(action.foreign_seller_cover);
                     negotiation.foreign_seller_floor = Some(action.foreign_seller_floor);
                     negotiation.foreign_seller_finances = Some(action.foreign_seller_finances);
                     negotiation.staged_stance = Some(action.staged_stance);
@@ -1024,6 +1044,7 @@ struct ForeignBuyer<'a> {
 /// these exist at all, and why retiring them is its own step.
 struct StagedSellerFacts {
     seller_importance: f32,
+    seller_cover: SellerCover,
     seller_finances: (i64, i64, i64),
     stance: PlayerStance,
     sporting_drop: f32,

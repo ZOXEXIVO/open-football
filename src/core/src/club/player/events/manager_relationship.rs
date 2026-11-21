@@ -38,7 +38,7 @@ use crate::{
     InjuryRecoveryEventContext, InjuryRecoveryEvidence, InjuryRecoveryStage, ManagerCriticismReason,
     ManagerInteractionEventContext, ManagerInteractionTone, ManagerInteractionTopic,
     MatchSelectionContext, NewSigningThreatContext, NewSigningThreatReason, PlayerAcceptance,
-    PlayerSquadStatus, PrivateTalkReason, PrivateTalkRequestContext, RivalThreatResponse,
+    PlayerSquadStatus, PlayerStatusType, PrivateTalkReason, PrivateTalkRequestContext, RivalThreatResponse,
     RelationshipChange, RelationshipEvent, RoleStatusEventContext, RoleStatusKind,
     SelectionDecisionScope, SelectionOmissionReason, SelectionRole,
     SubstitutionFrustrationContext, SubstitutionFrustrationKind, SupportEventContext,
@@ -133,6 +133,11 @@ impl Player {
     pub fn on_told_where_he_stands(&mut self, _date: NaiveDate, role: PlannedRole) {
         const COOLDOWN_DAYS: u16 = 180;
         if !role.is_exit_path() {
+            return;
+        }
+        // A man who asked to go and is put up for sale has been given
+        // what he asked for.
+        if role == PlannedRole::ShopWindow && self.statuses.has(PlayerStatusType::Req) {
             return;
         }
         if self
@@ -925,7 +930,7 @@ impl Player {
             1.0
         };
         let prof_dampen = scaling::criticism_dampener(self.attributes.professionalism);
-        let magnitude = base * amb_mul * influence_signal * prof_dampen;
+        let magnitude = base * amb_mul * influence_signal * prof_dampen * ctx.weight;
 
         let happiness_ctx = HappinessEventContext::new(
             HappinessEventCause::LeadershipDispute,
@@ -1056,9 +1061,7 @@ impl Player {
                 | SelectionOmissionReason::FatigueManagement
                 | SelectionOmissionReason::ReturningFromInjury
                 | SelectionOmissionReason::DisciplinarySelection
-                | SelectionOmissionReason::YouthDevelopmentRotation
                 | SelectionOmissionReason::NewcomerStillIntegrating
-                | SelectionOmissionReason::CupRotation
                 | SelectionOmissionReason::LowMatchImportanceRotation
         ) {
             return;
@@ -1228,7 +1231,7 @@ impl Player {
         } else {
             1.0
         };
-        let magnitude = base * amb_mul * prior_concern_mul;
+        let magnitude = base * amb_mul * prior_concern_mul * ctx.weight;
 
         let happiness_ctx = HappinessEventContext::new(
             HappinessEventCause::ReputationAdmiration,

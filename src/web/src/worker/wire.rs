@@ -14,6 +14,7 @@ use core::club::player::mind::KickoffMind;
 use core::club::player::traits::PlayerTrait;
 use core::r#match::{
     CoachCard, FixtureContext, Match, MatchPlayer, MatchSquad, OmittedPlayer, PlayerSide,
+    SelectionReading,
 };
 use core::{
     FormationFamiliarity, PersonAttributes, PlayerAttributes, PlayerPositionType, PlayerSkills,
@@ -35,6 +36,8 @@ pub struct SquadWire {
     pub penalty_taker_id: Option<u32>,
     pub free_kick_taker_id: Option<u32>,
     pub selection_omissions: Vec<OmittedPlayer>,
+    #[serde(default)]
+    pub selection: SelectionReading,
     /// The head coach's card, so a remote match is managed by the same
     /// coach as a local one.
     pub coach_card: Option<CoachCard>,
@@ -197,6 +200,7 @@ impl SquadWire {
             penalty_taker_id: s.penalty_taker_id,
             free_kick_taker_id: s.free_kick_taker_id,
             selection_omissions: s.selection_omissions.clone(),
+            selection: s.selection,
             coach_card: s.coach_card,
             familiarity: s.familiarity,
         }
@@ -214,6 +218,7 @@ impl SquadWire {
             penalty_taker_id,
             free_kick_taker_id,
             selection_omissions,
+            selection,
             coach_card,
             familiarity,
         } = self;
@@ -238,6 +243,7 @@ impl SquadWire {
             substitutes: subs,
             selection_omissions,
             overlooked: Vec::new(),
+            selection,
             // The substitution memory store stays club-side: distributed
             // match runs score changes without it.
             coach_snapshot: None,
@@ -349,6 +355,7 @@ mod tests {
             free_kick_taker_id: None,
             selection_omissions: Vec::new(),
             overlooked: Vec::new(),
+            selection: Default::default(),
             coach_snapshot: None,
             coach_card,
             familiarity: None,

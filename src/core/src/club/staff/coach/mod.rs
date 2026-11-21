@@ -19,11 +19,13 @@
 
 pub mod assessment;
 pub mod bond;
+pub mod chart;
 pub mod dossier;
 pub mod engine;
 pub mod intent;
 pub mod plan;
 pub mod reason;
+pub mod shares;
 pub mod snapshot;
 pub mod standing;
 pub mod strategy;
@@ -49,7 +51,9 @@ pub use intent::PlayerMatchIntent;
 pub use memory::{
     CoachMatchObservation, CoachMemory, CoachMemoryFlags, CoachMemoryStore, MemoryEngine,
 };
-pub use plan::{CoachSquadPlan, PlannedRole, PlayerPlanEntry, SquadDepthRanks};
+pub use chart::{ChartPlace, ShirtDepth, SquadDepthChart};
+pub use plan::{CoachSquadPlan, PlanReading, PlannedRole, PlayerPlanEntry};
+pub use shares::{PlanFloor, PlanFloorKind, ShareClimate, ShirtCandidate, ShirtShares};
 pub use reason::CoachDecisionReason;
 pub use snapshot::CoachMatchSnapshot;
 pub use standing::{

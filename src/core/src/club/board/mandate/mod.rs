@@ -101,6 +101,13 @@ impl MandatePurpose {
             | TransferNeedReason::InjuryCoverLoan
             | TransferNeedReason::LoanToFillSquad => MandatePurpose::Cover,
             TransferNeedReason::ExperiencedHead => MandatePurpose::Rotation,
+            // Bought to take the shirt of the man who left it.
+            TransferNeedReason::Replacement => match request.promised_status {
+                PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular => {
+                    MandatePurpose::Starter
+                }
+                _ => MandatePurpose::Rotation,
+            },
             TransferNeedReason::FormationGap
             | TransferNeedReason::QualityUpgrade
             | TransferNeedReason::StaffRecommendation

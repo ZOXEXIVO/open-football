@@ -1,6 +1,6 @@
 use crate::Country;
 use crate::continent::{CompetitionTier, Continent};
-use crate::league::League;
+use crate::league::{League, TableLine};
 use std::cmp::Reverse;
 
 /// A run of final-table places that feeds one continental competition:
@@ -92,6 +92,26 @@ impl ContinentalQualification {
             CompetitionTier::CopaLibertadores => Some(32),
             _ => None,
         }
+    }
+
+    /// The lines the continent's competitions draw across each country's
+    /// qualifying top flight, by league id: the last place of every band.
+    pub fn table_lines(continent: &Continent) -> Vec<(u32, Vec<TableLine>)> {
+        Self::ranked_countries(continent)
+            .iter()
+            .enumerate()
+            .filter_map(|(rank, country)| {
+                let league = Self::qualifying_league(country)?;
+                let lines = Self::tiers(continent)
+                    .iter()
+                    .filter_map(|tier| {
+                        Self::band(tier, rank)
+                            .map(|(skip, take)| TableLine::below(skip + take, tier.table_weight()))
+                    })
+                    .collect();
+                Some((league.id, lines))
+            })
+            .collect()
     }
 
     /// Every band the given league's table carries. Empty unless the

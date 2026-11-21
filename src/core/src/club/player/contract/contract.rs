@@ -668,11 +668,11 @@ impl PlayerClubContract {
     /// Fraction of the per-match loan fee the borrowing club banks when the
     /// loanee comes off the bench rather than starting. A start pays the full
     /// `loan_match_fee`; a cameo pays this share. Keeping the bulk of the money
-    /// on the start is what points the incentive — and the match-day selection
-    /// nudge that mirrors it — at *starting* the player, not just dressing him.
-    /// Shared by the post-match settlement (`process_loan_match_fees`) and the
-    /// selection scorer (`ScoringEngine::loan_match_fee_pull`) so the payout and
-    /// the pull to play him never drift apart.
+    /// on the start is what points the incentive at *starting* the player, not
+    /// just dressing him. Read by the post-match settlement
+    /// (`process_loan_match_fees`) and by the floor the fee sets under his
+    /// planned share (`PlanFloor`), so the payout and the plan never drift
+    /// apart.
     pub const LOAN_SUB_FEE_FRACTION: f32 = 0.4;
 
     /// Money the borrowing club earns for fielding this loanee in one official

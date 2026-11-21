@@ -14,17 +14,16 @@
 use crate::club::staff::{CoachDecisionEngine, CoachDecisionReason, CoachSelectionContext};
 use crate::club::{PlayerFieldPositionGroup, PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
-use crate::utils::DateUtils;
 use crate::{
     MatchSelectionContext, Player, PlayerSquadStatus, PlayerStatusType, SelectionComparison,
     SelectionDecisionScope, SelectionOmissionReason, SelectionRole, Tactics,
 };
 use chrono::NaiveDate;
 
-use super::helpers;
+use super::helpers::SlotFit;
 use super::model::MatchSelectionGameModel;
 use super::scoring::{ScoringEngine, SlotScoreBreakdown};
-use super::{DomesticCupContext, SelectionCompetition};
+use super::SelectionCompetition;
 use crate::HappinessEventType;
 
 /// Output of the omissions builder — one entry per important
@@ -46,9 +45,8 @@ pub(crate) struct OmissionBuilder<'a> {
     pub date: NaiveDate,
     pub is_friendly: bool,
     pub match_importance: f32,
-    /// Present only for domestic cup ties — gates `CupRotation` so a
-    /// league dead rubber doesn't borrow the cup-rotation copy.
-    pub cup: Option<&'a DomesticCupContext>,
+    /// How far football owed could move a shirt in this fixture.
+    pub room: f32,
     /// Coach decision engine for the selecting side — used to enrich
     /// the chosen omission reason with the coach-memory read where it
     /// outweighs the raw factor-gap fallback.
@@ -60,9 +58,8 @@ pub(crate) struct OmissionBuilder<'a> {
     /// reach the new variants instead of falling back to a generic
     /// quality / tactical mismatch line.
     pub game_model: Option<&'a MatchSelectionGameModel>,
-    /// Young players groomed behind an aging incumbent — mirrors the
-    /// scoring context so the omission explanation and the selection
-    /// itself agree on who the succession heirs are.
+    /// The men the coach's plan is grooming behind an incumbent — the
+    /// same list the selection itself read.
     pub succession_heirs: &'a [u32],
 }
 
@@ -119,7 +116,7 @@ impl<'a> OmissionBuilder<'a> {
                 SelectionDecisionScope::LeftOutOfMatchdaySquad
             };
 
-            let role = preferred_role(player, self.tactics);
+            let role = RoleReading::preferred_role(player, self.tactics);
             let comparison = self.build_comparison(player, &starter_players, &bench_players);
             let reason = self.choose_reason(player, scope, comparison.as_ref());
 
@@ -215,7 +212,7 @@ impl<'a> OmissionBuilder<'a> {
         starters: &[&Player],
         bench: &[&Player],
     ) -> Option<SelectionComparison> {
-        let preferred_pos = best_natural_position(omitted, self.tactics);
+        let preferred_pos = RoleReading::best_natural_position(omitted, self.tactics);
         let slot_pos = preferred_pos?;
         let slot_group = slot_pos.position_group();
 
@@ -248,7 +245,7 @@ impl<'a> OmissionBuilder<'a> {
         Some(SelectionComparison {
             selected_player_id: rival.id,
             selected_was_starter: was_starter,
-            slot: Some(coarse_role(slot_pos)),
+            slot: Some(RoleReading::coarse_role(slot_pos)),
             selected_score: rival_breakdown.total(),
             omitted_score: omitted_breakdown.total(),
             top_factors,
@@ -288,13 +285,9 @@ impl<'a> OmissionBuilder<'a> {
             date: self.date,
             is_friendly: self.is_friendly,
             match_importance: self.match_importance,
-            policy: super::SelectionPolicy::from_context(&super::SelectionContext {
-                date: self.date,
-                is_friendly: self.is_friendly,
-                match_importance: self.match_importance,
-                ..Default::default()
-            }),
-            cup: self.cup,
+            stakes: self.match_importance,
+            room: self.room,
+            bench_size: self.substitutes.len(),
             coach: self.coach,
             competition: self.competition,
             game_model: self.game_model,
@@ -319,7 +312,7 @@ impl<'a> OmissionBuilder<'a> {
         scope: SelectionDecisionScope,
         comparison: Option<&SelectionComparison>,
     ) -> SelectionOmissionReason {
-        if best_natural_position(omitted, self.tactics).is_none() {
+        if RoleReading::best_natural_position(omitted, self.tactics).is_none() {
             return SelectionOmissionReason::NoNaturalRoleInFormation;
         }
         if omitted.player_attributes.is_in_recovery() {
@@ -339,16 +332,6 @@ impl<'a> OmissionBuilder<'a> {
             return SelectionOmissionReason::FatigueManagement;
         }
         if matches!(scope, SelectionDecisionScope::Rotation) {
-            // CupRotation is reserved for actual domestic cup ties — a
-            // low-importance league fixture (dead rubber, congestion) reads
-            // as LowMatchImportanceRotation instead.
-            if self.cup.is_some() {
-                let age = DateUtils::age(omitted.birth_date, self.date);
-                if age <= 21 {
-                    return SelectionOmissionReason::YouthDevelopmentRotation;
-                }
-                return SelectionOmissionReason::CupRotation;
-            }
             return SelectionOmissionReason::LowMatchImportanceRotation;
         }
         // Coach memory pass — a sustained-poor-form / low-tactical-
@@ -361,10 +344,12 @@ impl<'a> OmissionBuilder<'a> {
         {
             use crate::SelectionScoreFactor as F;
             return match top {
-                F::ManagerPlan => SelectionOmissionReason::SquadStatusMismatch,
-                F::PlayingTimeCommitment | F::LoanAgreement => {
-                    SelectionOmissionReason::LowMatchImportanceRotation
+                // The rival was owed football. A man who expects to start
+                // hears it as a slight; anyone else as the squad being used.
+                F::ManagerPlan if Self::expects_to_start(omitted) => {
+                    SelectionOmissionReason::SquadStatusMismatch
                 }
+                F::ManagerPlan => SelectionOmissionReason::LowMatchImportanceRotation,
                 F::PerceivedQuality => SelectionOmissionReason::TeammatePreferredOnAbility,
                 F::MatchReadiness => SelectionOmissionReason::TeammatePreferredOnFitness,
                 F::Fatigue => SelectionOmissionReason::TeammatePreferredOnFitness,
@@ -374,15 +359,10 @@ impl<'a> OmissionBuilder<'a> {
                 }
                 F::CoachRelationship => SelectionOmissionReason::TeammatePreferredOnTrust,
                 F::Newcomer => SelectionOmissionReason::NewcomerStillIntegrating,
-                F::SquadStatus => SelectionOmissionReason::SquadStatusMismatch,
                 F::ForceSelection => SelectionOmissionReason::ManagerDoesNotTrustPlayer,
                 F::TrainingImpression => SelectionOmissionReason::PoorRecentForm,
                 F::Cohesion => SelectionOmissionReason::TacticalMismatch,
                 F::Reputation => SelectionOmissionReason::TeammatePreferredOnAbility,
-                F::YouthPreference => SelectionOmissionReason::YouthDevelopmentRotation,
-                F::ClubPhilosophy => SelectionOmissionReason::TacticalMismatch,
-                F::DevelopmentMinutes => SelectionOmissionReason::LowMatchImportanceRotation,
-                F::CupOpportunity => SelectionOmissionReason::CupRotation,
                 F::InjuryRisk => SelectionOmissionReason::FitnessProtection,
                 F::OpponentMatchup => SelectionOmissionReason::OpponentMatchupMismatch,
                 F::RoleDutyFit => SelectionOmissionReason::PositionFitIssue,
@@ -438,8 +418,8 @@ impl<'a> OmissionBuilder<'a> {
     /// in / the read doesn't yield a strong-enough negative signal.
     fn coach_memory_reason(&self, omitted: &Player) -> Option<SelectionOmissionReason> {
         let coach = self.coach?;
-        let slot = best_natural_position(omitted, self.tactics)?;
-        let natural_role_fit = (helpers::position_fit_score(omitted, slot) / 20.0).clamp(0.0, 1.0);
+        let slot = RoleReading::best_natural_position(omitted, self.tactics)?;
+        let natural_role_fit = (SlotFit::position_fit_score(omitted, slot) / 20.0).clamp(0.0, 1.0);
         let coach_ctx = CoachSelectionContext {
             date: self.date,
             match_importance: self.match_importance,
@@ -509,51 +489,56 @@ impl OmissionReasonMap {
     }
 }
 
-/// Find the best position in the formation for a player. `None` if
-/// none of the formation slots match the player's known positions —
-/// signals "no natural role" to the reason chooser.
-pub(crate) fn best_natural_position(
-    player: &Player,
-    tactics: &Tactics,
-) -> Option<PlayerPositionType> {
-    let mut best: Option<(PlayerPositionType, u8)> = None;
-    for &pos in tactics.positions() {
-        let level = player.positions.get_level(pos);
-        if level == 0 {
-            continue;
-        }
-        match best {
-            Some((_, lvl)) if lvl >= level => {}
-            _ => best = Some((pos, level)),
-        }
-    }
-    best.map(|(p, _)| p)
-}
+/// The role a player is read in, for what an omission says about him.
+struct RoleReading;
 
-/// Map a fine-grained `PlayerPositionType` to the coarse
-/// render-friendly `SelectionRole` used in the comparison line.
-fn coarse_role(pos: PlayerPositionType) -> SelectionRole {
-    use PlayerPositionType::*;
-    match pos {
-        Goalkeeper => SelectionRole::Goalkeeper,
-        DefenderCenter | DefenderCenterLeft | DefenderCenterRight => SelectionRole::CentreBack,
-        DefenderLeft | DefenderRight | WingbackLeft | WingbackRight => SelectionRole::Fullback,
-        DefensiveMidfielder => SelectionRole::DefensiveMidfielder,
-        MidfielderCenter | MidfielderCenterLeft | MidfielderCenterRight => {
-            SelectionRole::CentralMidfielder
+impl RoleReading {
+    /// Find the best position in the formation for a player. `None` if
+    /// none of the formation slots match the player's known positions —
+    /// signals "no natural role" to the reason chooser.
+    fn best_natural_position(
+        player: &Player,
+        tactics: &Tactics,
+    ) -> Option<PlayerPositionType> {
+        let mut best: Option<(PlayerPositionType, u8)> = None;
+        for &pos in tactics.positions() {
+            let level = player.positions.get_level(pos);
+            if level == 0 {
+                continue;
+            }
+            match best {
+                Some((_, lvl)) if lvl >= level => {}
+                _ => best = Some((pos, level)),
+            }
         }
-        AttackingMidfielderCenter => SelectionRole::AttackingMidfielder,
-        AttackingMidfielderLeft | AttackingMidfielderRight | MidfielderLeft | MidfielderRight => {
-            SelectionRole::Winger
-        }
-        Striker | ForwardCenter | ForwardLeft | ForwardRight => SelectionRole::Striker,
-        _ => SelectionRole::Other,
+        best.map(|(p, _)| p)
     }
-}
 
-fn preferred_role(player: &Player, tactics: &Tactics) -> SelectionRole {
-    if let Some(pos) = best_natural_position(player, tactics) {
-        return coarse_role(pos);
+    /// Map a fine-grained `PlayerPositionType` to the coarse
+    /// render-friendly `SelectionRole` used in the comparison line.
+    fn coarse_role(pos: PlayerPositionType) -> SelectionRole {
+        use PlayerPositionType::*;
+        match pos {
+            Goalkeeper => SelectionRole::Goalkeeper,
+            DefenderCenter | DefenderCenterLeft | DefenderCenterRight => SelectionRole::CentreBack,
+            DefenderLeft | DefenderRight | WingbackLeft | WingbackRight => SelectionRole::Fullback,
+            DefensiveMidfielder => SelectionRole::DefensiveMidfielder,
+            MidfielderCenter | MidfielderCenterLeft | MidfielderCenterRight => {
+                SelectionRole::CentralMidfielder
+            }
+            AttackingMidfielderCenter => SelectionRole::AttackingMidfielder,
+            AttackingMidfielderLeft | AttackingMidfielderRight | MidfielderLeft | MidfielderRight => {
+                SelectionRole::Winger
+            }
+            Striker | ForwardCenter | ForwardLeft | ForwardRight => SelectionRole::Striker,
+            _ => SelectionRole::Other,
+        }
     }
-    coarse_role(player.position())
+
+    fn preferred_role(player: &Player, tactics: &Tactics) -> SelectionRole {
+        if let Some(pos) = Self::best_natural_position(player, tactics) {
+            return Self::coarse_role(pos);
+        }
+        Self::coarse_role(player.position())
+    }
 }

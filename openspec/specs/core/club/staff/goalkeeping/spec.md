@@ -52,3 +52,57 @@ authority, as with its other advice.
 #### Scenario: No protection without cover
 - **WHEN** the same keeper is shaken but no other fit senior keeper is available
 - **THEN** the department does not advise withholding him
+
+### Requirement: The keeper room counts every keeper who can play for the club
+The goalkeeping department SHALL rank every goalkeeper who can play for the club this season, a keeper the club has
+borrowed included. A borrowed keeper SHALL take his place in the declared order on his level like any other, and
+SHALL be left out of the succession and heir readings, which concern the keepers the club owns. A keeper the club has
+lent out SHALL NOT be ranked.
+
+#### Scenario: A borrowed number one
+- **WHEN** a club borrows a goalkeeper clearly better than the best one it owns
+- **THEN** the borrowed keeper is declared number one and the owned keeper deputy
+
+#### Scenario: Succession looks past him
+- **WHEN** the same club's department plans who follows its ageing owned keeper
+- **THEN** the borrowed keeper is not named as heir
+
+### Requirement: The declared order holds in every competition
+The department's declared order, its live nomination and its advice to rest a shaken keeper SHALL reach the
+selection of every competitive first-team fixture: league, domestic cup and continental.
+
+#### Scenario: A continental tie
+- **WHEN** a club plays a continental tie
+- **THEN** its selection is given the same declared order as its league fixture that week
+
+### Requirement: The deputy's competition is declared once
+At the start of a season, and again when the declared order changes, the club SHALL declare which competition, if
+any, belongs to the deputy and the last round in which he keeps the shirt. How far the declaration reaches SHALL be
+the manager's own tendency: some hand back the gloves for the late rounds, some let the deputy play the final. The
+declaration SHALL be the only source of the deputy's cup football; no other part of the club decides it again match
+by match. A deputy too far below the number one for the standard of the competition SHALL NOT be given one.
+
+#### Scenario: Declared for the season
+- **WHEN** a club declares the domestic cup as its deputy's up to the semi-final
+- **THEN** the deputy starts every domestic cup tie up to and including the semi-final and the number one starts the final
+
+#### Scenario: A manager who lets him finish
+- **WHEN** another club's manager declares the cup as the deputy's to the end
+- **THEN** the deputy starts the final
+
+#### Scenario: A deputy who is not ready
+- **WHEN** a club's second keeper is a 17-year-old far below first-team standard
+- **THEN** no competition is declared as his and the number one plays the cup
+
+### Requirement: The department's recruitment advice reaches the recruitment desk
+When the department advises signing a credible deputy, a keeper for the future or an experienced third, or advises
+moving a keeper on, the club's recruitment brief and its sell list SHALL read that advice at their next review. The
+brief SHALL open a goalkeeper search shaped by the advice, and the sell list SHALL count the advice as a motive.
+
+#### Scenario: No credible deputy
+- **WHEN** the department advises that the club has no deputy fit to play if the number one is injured
+- **THEN** the next recruitment review opens a search for a goalkeeper of deputy standard
+
+#### Scenario: Time to move him on
+- **WHEN** the department advises moving a surplus keeper on
+- **THEN** the next squad review counts that toward listing him

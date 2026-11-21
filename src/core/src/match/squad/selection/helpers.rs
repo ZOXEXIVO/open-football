@@ -1,10 +1,8 @@
+use crate::club::staff::perception::AbilityEstimator;
 use crate::club::{PlayerFieldPositionGroup, PlayerPositionType, RoleFamiliarity};
-use crate::utils::DateUtils;
 use crate::{Player, PlayerPreferredFoot, PlayerStatusType, TacticalStyle, Tactics};
-use chrono::NaiveDate;
 
 pub const DEFAULT_SQUAD_SIZE: usize = 11;
-pub const DEFAULT_BENCH_SIZE: usize = 7;
 
 /// A call-up must be close to the receiving team's playing level. Academy
 /// form and potential cannot replace the visible skills needed at that level.
@@ -43,67 +41,6 @@ impl CallUpReadiness {
     pub(crate) fn meets_level(player: &Player, roster: &[&Player], band: u8) -> bool {
         Self::reference(player, roster)
             .is_some_and(|level| Self::level(player).saturating_add(band) >= level)
-    }
-}
-
-/// Succession-heir identification: for each position group whose best
-/// available player is inside the late-career window, the strongest
-/// credible young player in the same group is the heir the coach
-/// deliberately gives minutes behind the veteran. Feeds the coach
-/// engine's `SuccessionPlanning` selection read — previously the heir
-/// list was always empty at every production call site.
-pub(crate) struct SuccessionHeirs;
-
-impl SuccessionHeirs {
-    const HEIR_MAX_AGE: u8 = 23;
-    /// Credibility floor relative to the incumbent — a kid at half the
-    /// veteran's level isn't a succession plan, he's a hope.
-    const HEIR_MIN_CA_RATIO: f32 = 0.6;
-
-    /// Age from which the coach starts grooming a successor — a year
-    /// or so before the scorer's hard late-career thresholds, because
-    /// the plan starts before the cliff.
-    fn grooming_age(group: PlayerFieldPositionGroup) -> u8 {
-        match group {
-            PlayerFieldPositionGroup::Goalkeeper => 36,
-            PlayerFieldPositionGroup::Defender => 33,
-            PlayerFieldPositionGroup::Midfielder => 32,
-            PlayerFieldPositionGroup::Forward => 31,
-        }
-    }
-
-    /// At most one heir per position group, by current ability.
-    pub(crate) fn identify(available: &[&Player], date: NaiveDate) -> Vec<u32> {
-        let groups = [
-            PlayerFieldPositionGroup::Goalkeeper,
-            PlayerFieldPositionGroup::Defender,
-            PlayerFieldPositionGroup::Midfielder,
-            PlayerFieldPositionGroup::Forward,
-        ];
-        let mut heirs: Vec<u32> = Vec::new();
-        for group in groups {
-            let incumbent = available
-                .iter()
-                .filter(|p| p.position().position_group() == group)
-                .max_by_key(|p| p.player_attributes.current_ability);
-            let Some(incumbent) = incumbent else { continue };
-            if DateUtils::age(incumbent.birth_date, date) < Self::grooming_age(group) {
-                continue;
-            }
-            let floor =
-                incumbent.player_attributes.current_ability as f32 * Self::HEIR_MIN_CA_RATIO;
-            let heir = available
-                .iter()
-                .filter(|p| p.id != incumbent.id)
-                .filter(|p| p.position().position_group() == group)
-                .filter(|p| DateUtils::age(p.birth_date, date) <= Self::HEIR_MAX_AGE)
-                .filter(|p| p.player_attributes.current_ability as f32 >= floor)
-                .max_by_key(|p| p.player_attributes.current_ability);
-            if let Some(h) = heir {
-                heirs.push(h.id);
-            }
-        }
-        heirs
     }
 }
 
@@ -252,133 +189,135 @@ impl KeeperAvailability {
     }
 }
 
-pub fn is_adjacent_group(a: PlayerFieldPositionGroup, b: PlayerFieldPositionGroup) -> bool {
-    a.is_adjacent_to(b)
-}
+/// How well a player fits a shirt of the formation, and which shirt he
+/// fits best.
+pub struct SlotFit;
 
-/// Calculate how well a player fits a target position (0..20)
-///
-/// The grade is the best conversion any role the player actually holds
-/// makes into the slot ([`RoleFamiliarity::conversion`]). It used to read
-/// his *primary label* instead — the first entry of a database record
-/// ordered deepest-first — which asked the wrong question twice over: a
-/// forward listed behind a wing was judged as a midfielder filling in up
-/// front, and the conversion itself was priced from a shirt he wasn't
-/// being asked to wear.
-pub fn position_fit_score(player: &Player, slot_position: PlayerPositionType) -> f32 {
-    let converted = RoleFamiliarity::level_for_slot(&player.positions, slot_position);
-    if converted > 0.0 {
-        return converted;
+impl SlotFit {
+    pub fn is_adjacent_group(a: PlayerFieldPositionGroup, b: PlayerFieldPositionGroup) -> bool {
+        a.is_adjacent_to(b)
     }
 
-    // Nothing he plays reaches that line at all. Keep the old floor so a
-    // desperate assignment still grades above an empty shirt.
-    1.0
-}
+    /// Calculate how well a player fits a target position (0..20)
+    ///
+    /// The grade is the best conversion any role the player actually holds
+    /// makes into the slot ([`RoleFamiliarity::conversion`]). It used to read
+    /// his *primary label* instead — the first entry of a database record
+    /// ordered deepest-first — which asked the wrong question twice over: a
+    /// forward listed behind a wing was judged as a midfielder filling in up
+    /// front, and the conversion itself was priced from a shirt he wasn't
+    /// being asked to wear.
+    pub fn position_fit_score(player: &Player, slot_position: PlayerPositionType) -> f32 {
+        let converted = RoleFamiliarity::level_for_slot(&player.positions, slot_position);
+        if converted > 0.0 {
+            return converted;
+        }
 
-pub fn side_foot_bonus(player: &Player, position: PlayerPositionType) -> f32 {
-    match position {
-        PlayerPositionType::DefenderLeft
-        | PlayerPositionType::DefenderCenterLeft
-        | PlayerPositionType::WingbackLeft
-        | PlayerPositionType::MidfielderLeft
-        | PlayerPositionType::AttackingMidfielderLeft
-        | PlayerPositionType::ForwardLeft => match player.preferred_foot {
-            PlayerPreferredFoot::Left | PlayerPreferredFoot::Both => 0.45,
-            PlayerPreferredFoot::Right => -0.25,
-        },
-        PlayerPositionType::DefenderRight
-        | PlayerPositionType::DefenderCenterRight
-        | PlayerPositionType::WingbackRight
-        | PlayerPositionType::MidfielderRight
-        | PlayerPositionType::AttackingMidfielderRight
-        | PlayerPositionType::ForwardRight => match player.preferred_foot {
-            PlayerPreferredFoot::Right | PlayerPreferredFoot::Both => 0.45,
-            PlayerPreferredFoot::Left => -0.25,
-        },
-        _ => 0.0,
+        // Nothing he plays reaches that line at all. Keep the old floor so a
+        // desperate assignment still grades above an empty shirt.
+        1.0
     }
-}
 
-/// Tactical style bonus for a player in a given position
-pub fn tactical_style_bonus(
-    player: &Player,
-    position: PlayerPositionType,
-    tactics: &Tactics,
-) -> f32 {
-    let mut bonus = 0.0;
+    pub fn side_foot_bonus(player: &Player, position: PlayerPositionType) -> f32 {
+        match position {
+            PlayerPositionType::DefenderLeft
+            | PlayerPositionType::DefenderCenterLeft
+            | PlayerPositionType::WingbackLeft
+            | PlayerPositionType::MidfielderLeft
+            | PlayerPositionType::AttackingMidfielderLeft
+            | PlayerPositionType::ForwardLeft => match player.preferred_foot {
+                PlayerPreferredFoot::Left | PlayerPreferredFoot::Both => 0.45,
+                PlayerPreferredFoot::Right => -0.25,
+            },
+            PlayerPositionType::DefenderRight
+            | PlayerPositionType::DefenderCenterRight
+            | PlayerPositionType::WingbackRight
+            | PlayerPositionType::MidfielderRight
+            | PlayerPositionType::AttackingMidfielderRight
+            | PlayerPositionType::ForwardRight => match player.preferred_foot {
+                PlayerPreferredFoot::Right | PlayerPreferredFoot::Both => 0.45,
+                PlayerPreferredFoot::Left => -0.25,
+            },
+            _ => 0.0,
+        }
+    }
 
-    match tactics.tactical_style() {
-        TacticalStyle::Attacking => {
-            if position.is_forward() || position == PlayerPositionType::AttackingMidfielderCenter {
-                bonus += player.skills.technical.finishing * 0.1;
-                bonus += player.skills.mental.off_the_ball * 0.1;
+    /// Tactical style bonus for a player in a given position
+    pub fn tactical_style_bonus(
+        player: &Player,
+        position: PlayerPositionType,
+        tactics: &Tactics,
+    ) -> f32 {
+        let mut bonus = 0.0;
+
+        match tactics.tactical_style() {
+            TacticalStyle::Attacking => {
+                if position.is_forward() || position == PlayerPositionType::AttackingMidfielderCenter {
+                    bonus += player.skills.technical.finishing * 0.1;
+                    bonus += player.skills.mental.off_the_ball * 0.1;
+                }
+            }
+            TacticalStyle::Defensive => {
+                if position.is_defender() || position == PlayerPositionType::DefensiveMidfielder {
+                    bonus += player.skills.technical.tackling * 0.1;
+                    bonus += player.skills.mental.positioning * 0.1;
+                }
+            }
+            TacticalStyle::Possession => {
+                bonus += player.skills.technical.passing * 0.08;
+                bonus += player.skills.mental.vision * 0.08;
+            }
+            TacticalStyle::Counterattack => {
+                if position.is_forward() || position.is_midfielder() {
+                    bonus += player.skills.physical.pace * 0.1;
+                    bonus += player.skills.mental.off_the_ball * 0.08;
+                }
+            }
+            TacticalStyle::WingPlay | TacticalStyle::WidePlay
+                if (position == PlayerPositionType::WingbackLeft
+                    || position == PlayerPositionType::WingbackRight
+                    || position == PlayerPositionType::MidfielderLeft
+                    || position == PlayerPositionType::MidfielderRight) =>
+            {
+                bonus += player.skills.technical.crossing * 0.1;
+                bonus += player.skills.physical.pace * 0.08;
+            }
+            _ => {}
+        }
+
+        bonus
+    }
+
+    /// Find the best tactical position for a player within the formation
+    pub fn best_tactical_position(player: &Player, tactics: &Tactics) -> PlayerPositionType {
+        let player_group = player.position().position_group();
+
+        for &pos in tactics.positions() {
+            if player.positions.get_level(pos) > 0 {
+                return pos;
             }
         }
-        TacticalStyle::Defensive => {
-            if position.is_defender() || position == PlayerPositionType::DefensiveMidfielder {
-                bonus += player.skills.technical.tackling * 0.1;
-                bonus += player.skills.mental.positioning * 0.1;
+
+        for &pos in tactics.positions() {
+            if pos.position_group() == player_group && pos != PlayerPositionType::Goalkeeper {
+                return pos;
             }
         }
-        TacticalStyle::Possession => {
-            bonus += player.skills.technical.passing * 0.08;
-            bonus += player.skills.mental.vision * 0.08;
-        }
-        TacticalStyle::Counterattack => {
-            if position.is_forward() || position.is_midfielder() {
-                bonus += player.skills.physical.pace * 0.1;
-                bonus += player.skills.mental.off_the_ball * 0.08;
+
+        for &pos in tactics.positions() {
+            if pos != PlayerPositionType::Goalkeeper {
+                return pos;
             }
         }
-        TacticalStyle::WingPlay | TacticalStyle::WidePlay
-            if (position == PlayerPositionType::WingbackLeft
-                || position == PlayerPositionType::WingbackRight
-                || position == PlayerPositionType::MidfielderLeft
-                || position == PlayerPositionType::MidfielderRight) =>
-        {
-            bonus += player.skills.technical.crossing * 0.1;
-            bonus += player.skills.physical.pace * 0.08;
-        }
-        _ => {}
+
+        player.position()
     }
 
-    bonus
-}
-
-/// Find the best tactical position for a player within the formation
-pub fn best_tactical_position(player: &Player, tactics: &Tactics) -> PlayerPositionType {
-    let player_group = player.position().position_group();
-
-    for &pos in tactics.positions() {
-        if player.positions.get_level(pos) > 0 {
-            return pos;
-        }
+    pub fn pick_best_unused<'p>(available: &[&'p Player], used_ids: &[u32]) -> Option<&'p Player> {
+        available
+            .iter()
+            .filter(|p| !used_ids.contains(&p.id))
+            .max_by_key(|p| AbilityEstimator::observable_level(p))
+            .copied()
     }
-
-    for &pos in tactics.positions() {
-        if pos.position_group() == player_group && pos != PlayerPositionType::Goalkeeper {
-            return pos;
-        }
-    }
-
-    for &pos in tactics.positions() {
-        if pos != PlayerPositionType::Goalkeeper {
-            return pos;
-        }
-    }
-
-    player.position()
-}
-
-pub fn pick_best_unused<'p>(available: &[&'p Player], used_ids: &[u32]) -> Option<&'p Player> {
-    available
-        .iter()
-        .filter(|p| !used_ids.contains(&p.id))
-        .max_by(|a, b| {
-            let sa = a.player_attributes.current_ability;
-            let sb = b.player_attributes.current_ability;
-            sa.cmp(&sb)
-        })
-        .copied()
 }

@@ -21,7 +21,7 @@ use super::timing::MaturationTiming;
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::maturation::{MaturationGroup, SkillMaturation};
 use crate::club::player::player::Player;
-use crate::club::team::TeamFixtureWindow;
+use crate::club::team::{FixtureRun, TeamFixtureWindow};
 use crate::shared::fullname::FullName;
 use crate::utils::DateUtils;
 use crate::{
@@ -725,8 +725,13 @@ impl Calendar {
         };
         TeamFixtureWindow {
             refreshed: Some(today),
-            upcoming: dates(&mut (1..=35)),
-            recent: dates(&mut (0..=35).map(|back| -back)),
+            domestic: FixtureRun::dated(
+                &dates(&mut (1..=35)),
+                &dates(&mut (0..=35).map(|back| -back)),
+                0.6,
+            ),
+            continental: FixtureRun::default(),
+            development: FixtureRun::default(),
         }
     }
 

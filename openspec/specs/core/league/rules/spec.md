@@ -34,3 +34,21 @@ The league SHALL open a financial fair play case against a club when its rolling
 #### Scenario: Club already under cooldown
 - **WHEN** a club's most recently concluded financial fair play case is still inside its configured cooldown window
 - **THEN** a new case is not opened even if the club's deficit currently exceeds the warning threshold
+
+### Requirement: A suspension is served in the competitions it was given in
+A suspension SHALL belong to the family of competitions in which it was earned: a country's domestic competitions
+(its leagues, cup and play-offs) together, or continental club competitions together. It SHALL be served only by
+missing a fixture of that family, and SHALL NOT make the player ineligible for a fixture of the other. A player MAY
+hold a suspension in each family at once.
+
+#### Scenario: Sent off in a continental tie
+- **WHEN** a player is sent off in a continental tie on Wednesday and his club plays a league match on Saturday
+- **THEN** he may play on Saturday, and he misses his club's next continental tie
+
+#### Scenario: Sent off in the league
+- **WHEN** a player is sent off in a league match and his club's next fixture is a domestic cup tie
+- **THEN** he misses the cup tie and his suspension is served
+
+#### Scenario: A ban in each
+- **WHEN** a player carries a domestic suspension and a continental suspension
+- **THEN** each is served by its own next fixture

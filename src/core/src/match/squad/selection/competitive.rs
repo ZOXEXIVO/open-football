@@ -1,8 +1,9 @@
-use crate::club::staff::goalkeeping::KeeperSelectionBrief;
+use crate::club::staff::goalkeeping::{KeeperFixture, KeeperSelectionBrief};
+use crate::club::staff::perception::AbilityEstimator;
 use crate::club::staff::{CoachDecisionEngine, CoachSelectionContext, PlayerMatchIntent};
 use crate::club::{PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
-use crate::utils::DateUtils;
+use crate::utils::SlotAssignment;
 use crate::{Player, Tactics};
 use chrono::NaiveDate;
 use log::debug;
@@ -10,12 +11,14 @@ use log::debug;
 use super::balance::{BalanceSwapPass, LineupBalanceScorer, ObjectiveResolver};
 use super::bench_scenarios::{BenchScenarioPlan, BenchScenarioScorer};
 use super::helpers;
+use super::helpers::SlotFit;
+use super::lines::PitchLine;
 use super::model::{
-    EligibilityDecision, EligibilityEvaluator, MatchSelectionGameModel, MatchTypeSignal,
+    EligibilityEvaluator, MatchSelectionGameModel, MatchTypeSignal,
 };
 use super::role_duty::{OpponentMatchupScorer, RoleDutyFitScorer, TacticalDuty};
 use super::scoring::{ScoringEngine, SlotScoreBreakdown};
-use super::{CupStage, DomesticCupContext, SelectionCompetition, SelectionPolicy};
+use super::SelectionCompetition;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Ordering;
 
@@ -45,9 +48,14 @@ pub(crate) struct SelectionScoringContext<'a> {
     pub engine: &'a ScoringEngine,
     pub date: NaiveDate,
     pub is_friendly: bool,
+    /// How little room the fixture leaves: `1 - room`.
     pub match_importance: f32,
-    pub policy: SelectionPolicy,
-    pub cup: Option<&'a DomesticCupContext>,
+    /// What the fixture is worth to the side, whatever the week holds.
+    pub stakes: f32,
+    /// How far football owed may move a shirt in this fixture.
+    pub room: f32,
+    /// Substitutes the competition lets the side name.
+    pub bench_size: usize,
     /// Coach decision engine for the selecting side, when available.
     /// Absent for the legacy public scoring entry points and tests that
     /// don't build it. The slot / bench scorers fold a small coach
@@ -64,10 +72,8 @@ pub(crate) struct SelectionScoringContext<'a> {
     /// eligibility rule penalty) collapse to zero so existing legacy
     /// callers behave identically to before this layer existed.
     pub game_model: Option<&'a MatchSelectionGameModel>,
-    /// Young players groomed behind an aging incumbent in their
-    /// position group (see `SuccessionHeirs`). Feeds the coach
-    /// engine's `SuccessionPlanning` selection read. Empty when the
-    /// caller didn't compute it (legacy entry points / tests).
+    /// The men the coach's plan is grooming behind an incumbent. Feeds
+    /// the coach engine's `SuccessionPlanning` selection read.
     pub succession_heirs: &'a [u32],
     /// The goalkeeping department's word: the declared pecking order and
     /// any live request to play a particular keeper. `None` for a club that
@@ -77,6 +83,12 @@ pub(crate) struct SelectionScoringContext<'a> {
 }
 
 impl SelectionScoringContext<'_> {
+    /// The shortest bench that names a second goalkeeper.
+    const SECOND_KEEPER_BENCH: usize = 12;
+    /// What a prospect's seat is worth against a senior who would add more
+    /// to the match, in a fixture that leaves all of its room.
+    const PROSPECT_SEAT: f32 = 3.0;
+
     /// Whether `player` is a manager-pinned starter this side actually honours.
     /// Force selection is a Main-team pin for *competitive* football, so three
     /// conditions must all hold:
@@ -89,87 +101,14 @@ impl SelectionScoringContext<'_> {
         !self.is_friendly && self.engine.honor_force_selection && player.is_force_match_selection
     }
 
-    /// Domestic-cup opportunity bonus for `player`, or 0.0 outside a cup tie.
-    fn cup_opportunity(&self, player: &Player, for_starting: bool) -> f32 {
-        self.cup
-            .map(|c| {
-                self.engine
-                    .domestic_cup_opportunity_bonus(player, c, for_starting)
-            })
-            .unwrap_or(0.0)
-    }
-
-    /// Domestic-cup goalkeeper adjustment for `player`, or 0.0 outside a cup tie.
-    fn cup_goalkeeper(&self, player: &Player) -> f32 {
-        self.cup
-            .map(|c| self.engine.domestic_cup_goalkeeper_adjustment(player, c))
-            .unwrap_or(0.0)
-    }
-
     /// Bounded want-away selection nudge for `player`, 0.0 for a settled
     /// player. Soft transfer-market/psychology signal layered on top of the
     /// quality scoring — never an availability block. Applied at every
     /// selection site (XI, bench, goalkeeper) so a listed player is scored
     /// like any other rather than vanishing from the matchday squad.
     fn want_away_adjustment(&self, player: &Player) -> f32 {
-        self.engine.want_away_adjustment(
-            player,
-            self.staff,
-            self.date,
-            self.match_importance,
-            self.is_friendly,
-        )
-    }
-
-    /// Starting-XI pull from an inbound loanee's match fee — the borrowing
-    /// club's financial reason to put him in the lineup. Full-fee (starting)
-    /// pull; zero for non-loanees, fee-less loans, and friendlies. See
-    /// [`ScoringEngine::loan_match_fee_pull`].
-    fn loan_match_fee_start(&self, player: &Player) -> f32 {
         self.engine
-            .loan_match_fee_pull(player, true, self.is_friendly)
-    }
-
-    /// Future-aware pathway adjustment for a starting-XI slot. `available` is
-    /// the full pool, used for the same-role quality / successor checks.
-    fn future_pathway_start(
-        &self,
-        player: &Player,
-        slot: PlayerPositionType,
-        available: &[&Player],
-    ) -> f32 {
-        if self.staff.squad_plan.entry(player.id).is_some() {
-            return 0.0;
-        }
-        self.engine.future_pathway_adjustment(
-            player,
-            slot,
-            self.match_importance,
-            self.date,
-            self.cup,
-            available,
-            true,
-        )
-    }
-
-    /// Future-aware pathway adjustment for the bench. Deliberately passes an
-    /// empty same-role pool: the bench skips the starting gap gate so a
-    /// not-quite-ready prospect (who would lose the same-role contest for a
-    /// start) still earns a place on the matchday bench.
-    fn future_pathway_bench(&self, player: &Player) -> f32 {
-        if self.staff.squad_plan.entry(player.id).is_some() {
-            return 0.0;
-        }
-        let slot = helpers::best_tactical_position(player, self.tactics);
-        self.engine.future_pathway_adjustment(
-            player,
-            slot,
-            self.match_importance,
-            self.date,
-            self.cup,
-            &[],
-            false,
-        )
+            .want_away_adjustment(player, self.staff, self.date, self.is_friendly)
     }
 
     /// Select the best starting 11 for competitive matches.
@@ -220,7 +159,7 @@ impl SelectionScoringContext<'_> {
             used_ids.push(gk.id);
         } else {
             debug!("No goalkeeper found at all — picking any player as GK");
-            if let Some(any) = helpers::pick_best_unused(available, &used_ids) {
+            if let Some(any) = SlotFit::pick_best_unused(available, &used_ids) {
                 squad.push(MatchPlayer::from_player(
                     team_id,
                     any,
@@ -261,20 +200,16 @@ impl SelectionScoringContext<'_> {
                 .filter(|p| !p.positions.is_goalkeeper())
                 .max_by(|a, b| {
                     let score = |p: &Player| {
-                        let slot = helpers::best_tactical_position(p, self.tactics);
                         self.engine.overall_quality(
                             p,
                             self.staff,
                             self.tactics,
                             self.date,
                             self.is_friendly,
-                        ) + self
-                            .engine
-                            .development_minutes_bonus(p, self.match_importance)
-                            + self.engine.fatigue_penalty(p, self.is_friendly)
-                            + self.cup_opportunity(p, true)
-                            + self.future_pathway_start(p, slot, available)
+                        ) + self.engine.fatigue_penalty(p, self.is_friendly)
+                            * ScoringEngine::caution(self.match_importance)
                             + self.want_away_adjustment(p)
+                            + self.player_intent(p).start_adjustment()
                     };
                     score(a).partial_cmp(&score(b)).unwrap_or(Ordering::Equal)
                 })
@@ -282,7 +217,7 @@ impl SelectionScoringContext<'_> {
 
             match best {
                 Some(player) => {
-                    let pos = helpers::best_tactical_position(player, self.tactics);
+                    let pos = SlotFit::best_tactical_position(player, self.tactics);
                     squad.push(MatchPlayer::from_player(
                         team_id,
                         player,
@@ -301,16 +236,12 @@ impl SelectionScoringContext<'_> {
             let best = available
                 .iter()
                 .filter(|p| !used_ids.contains(&p.id))
-                .max_by(|a, b| {
-                    let sa = a.player_attributes.current_ability;
-                    let sb = b.player_attributes.current_ability;
-                    sa.cmp(&sb)
-                })
+                .max_by_key(|p| AbilityEstimator::observable_level(p))
                 .copied();
 
             match best {
                 Some(player) => {
-                    let pos = helpers::best_tactical_position(player, self.tactics);
+                    let pos = SlotFit::best_tactical_position(player, self.tactics);
                     debug!(
                         "Emergency fill: using {} as outfield player",
                         player.full_name
@@ -343,17 +274,6 @@ impl SelectionScoringContext<'_> {
         // progression, pressing, …) and applies same-group swaps when they
         // improve the balance more than they cost in raw slot score.
         self.apply_balance_swaps(team_id, &mut squad, &mut used_ids, available);
-
-        // STEP 5: Domestic cup rotation target. The DP optimizer pushes back
-        // toward the strongest XI when the cup opportunity bias isn't a wide
-        // enough margin to flip an individual slot. In real football, a manager
-        // who wants to rotate against weak opposition does so deliberately —
-        // they pick a deeper rotation than the per-slot score would justify.
-        // Walk the XI once and swap a handful of established starters for
-        // same-group fringe replacements, under safety constraints.
-        if let Some(cup) = self.cup {
-            self.apply_cup_rotation_target(team_id, &mut squad, &mut used_ids, available, cup);
-        }
 
         squad
     }
@@ -422,7 +342,7 @@ impl SelectionScoringContext<'_> {
                     if cand.position().position_group() != group {
                         continue;
                     }
-                    if helpers::position_fit_score(cand, slot) < COHESION_SWAP_MIN_POSITION_FIT {
+                    if SlotFit::position_fit_score(cand, slot) < COHESION_SWAP_MIN_POSITION_FIT {
                         continue;
                     }
                     let cand_base = self.starting_slot_score(cand, slot, available);
@@ -480,9 +400,7 @@ impl SelectionScoringContext<'_> {
         }
         let player_by_id: FxHashMap<u32, &Player> = available.iter().map(|p| (p.id, *p)).collect();
         let pass = BalanceSwapPass::standard();
-        let is_cup_early = matches!(self.competition, SelectionCompetition::DomesticCup { .. })
-            && self.match_importance < 0.5;
-        let allowed_loss = pass.allowed_slot_loss(self.match_importance, is_cup_early);
+        let allowed_loss = pass.allowed_slot_loss(self.room);
         let objective = ObjectiveResolver::resolve(self.game_model);
         let baseline = LineupBalanceScorer::score(squad, &player_by_id, objective);
 
@@ -551,177 +469,103 @@ impl SelectionScoringContext<'_> {
         }
     }
 
-    /// Post-assignment safe-swap pass for early/quarter cup ties. Counts
-    /// non-established starters in the XI built by the DP, and if below the
-    /// stage/opponent target, swaps established starters out one-by-one for
-    /// available non-established replacements under tight safety constraints.
-    /// Force-selected players, the goalkeeper slot, and players whose only
-    /// realistic replacement is far below them on quality all stay put.
-    fn apply_cup_rotation_target(
-        &self,
-        team_id: u32,
-        squad: &mut [MatchPlayer],
-        used_ids: &mut Vec<u32>,
-        available: &[&Player],
-        cup: &DomesticCupContext,
-    ) {
-        let stage = cup.stage();
-        let opp = cup.opponent_ratio;
-
-        // Stage / opponent → (target non-established starters, max quality
-        // gap a swap may concede). Semi and Final fall through with no pass.
-        let (target, max_gap) = match stage {
-            CupStage::Early => {
-                if opp <= 0.70 {
-                    (7usize, 5.0f32)
-                } else if opp <= 1.15 {
-                    (6, 3.5)
-                } else {
-                    (4, 2.0)
-                }
-            }
-            CupStage::Quarter => {
-                if opp <= 1.15 {
-                    (4, 2.0)
-                } else {
-                    (2, 2.0)
-                }
-            }
-            CupStage::Semi | CupStage::Final => return,
-        };
-
-        // Player lookup by id — both for re-scoring starters and for the
-        // established / force / position checks the swap loop runs.
-        let player_by_id: FxHashMap<u32, &Player> = available.iter().map(|p| (p.id, *p)).collect();
-
-        let is_non_established = |p: &Player| !self.engine.is_established(p);
-        let count_non_established = |sq: &[MatchPlayer]| -> usize {
-            sq.iter()
-                .filter(|mp| {
-                    mp.tactical_position.current_position != PlayerPositionType::Goalkeeper
-                })
-                .filter_map(|mp| player_by_id.get(&mp.id))
-                .filter(|p| is_non_established(p))
-                .count()
-        };
-
-        if count_non_established(squad) >= target {
-            return;
-        }
-
-        // Bench pool changes after each swap (the displaced starter joins the
-        // available bench but isn't a swap *candidate* — we don't want to put
-        // him back in). Limit to the size of the XI to guarantee termination.
-        for _ in 0..helpers::DEFAULT_SQUAD_SIZE {
-            if count_non_established(squad) >= target {
-                break;
-            }
-
-            // Eligible replacements: non-established, not GK, not recovering,
-            // condition >=70, currently on the bench (not in the XI).
-            let used_set: FxHashSet<u32> = used_ids.iter().copied().collect();
-            let bench_pool: Vec<&Player> = available
-                .iter()
-                .copied()
-                .filter(|p| !used_set.contains(&p.id))
-                .filter(|p| !p.positions.is_goalkeeper())
-                .filter(|p| is_non_established(p))
-                .filter(|p| !p.player_attributes.is_in_recovery())
-                .filter(|p| p.player_attributes.condition_percentage() >= 70)
-                .collect();
-
-            if bench_pool.is_empty() {
-                break;
-            }
-
-            // Best swap = the one that costs the least quality (smallest gap)
-            // while passing every safety/fit constraint. Iterate every
-            // (established starter, non-established candidate) pair.
-            let mut best: Option<(usize, &Player, f32)> = None;
-            for (idx, mp) in squad.iter().enumerate() {
-                let slot = mp.tactical_position.current_position;
-                if slot == PlayerPositionType::Goalkeeper {
-                    continue;
-                }
-                let Some(starter) = player_by_id.get(&mp.id).copied() else {
-                    continue;
-                };
-                if !self.engine.is_established(starter) {
-                    continue;
-                }
-                // Honor the manager pin: a force-selected player is never
-                // swapped out by this pass.
-                if self.engine.honor_force_selection && starter.is_force_match_selection {
-                    continue;
-                }
-
-                let starter_score = self.starting_slot_score(starter, slot, available);
-
-                for &cand in bench_pool.iter() {
-                    let fit = helpers::position_fit_score(cand, slot);
-                    // "0.70 fit" on a 0..20 level scale: a level-14 specialist
-                    // at the slot, or a same-group player whose proximity
-                    // multiplier × primary level lands at or above 14.
-                    if fit < 14.0 {
-                        continue;
-                    }
-                    let cand_score = self.starting_slot_score(cand, slot, available);
-                    let gap = starter_score - cand_score;
-                    if gap > max_gap {
-                        continue;
-                    }
-                    // Smallest gap wins (least quality conceded).
-                    if best.map(|(_, _, g)| gap < g).unwrap_or(true) {
-                        best = Some((idx, cand, gap));
-                    }
-                }
-            }
-
-            let Some((idx, new_player, _)) = best else {
-                break;
-            };
-            let old_id = squad[idx].id;
-            let slot = squad[idx].tactical_position.current_position;
-            used_ids.retain(|id| *id != old_id);
-            used_ids.push(new_player.id);
-            squad[idx] =
-                MatchPlayer::from_player(team_id, new_player, slot, false, Some(self.date));
-        }
-    }
-
-    /// Select substitutes for competitive matches.
+    /// The bench, in the order a manager fills it: one goalkeeper, a man
+    /// for each line of the team on the pitch, a prospect's seat when the
+    /// fixture leaves room for one, and the rest on what they would add to
+    /// the match and the football the plan owes them.
     pub(crate) fn select_substitutes(
         &self,
         team_id: u32,
         remaining: &[&Player],
     ) -> Vec<MatchPlayer> {
-        let mut subs: Vec<MatchPlayer> = Vec::with_capacity(helpers::DEFAULT_BENCH_SIZE);
+        let size = self.bench_size;
+        let mut subs: Vec<MatchPlayer> = Vec::with_capacity(size);
         let mut used_ids: Vec<u32> = Vec::new();
-
-        // 1. Backup goalkeeper
-        if let Some(gk) = self.pick_best_goalkeeper(remaining, &used_ids, false) {
+        let seat = |subs: &mut Vec<MatchPlayer>, used: &mut Vec<u32>, player: &Player| {
+            let pos = if player.positions.is_goalkeeper() {
+                PlayerPositionType::Goalkeeper
+            } else {
+                SlotFit::best_tactical_position(player, self.tactics)
+            };
             subs.push(MatchPlayer::from_player(
                 team_id,
-                gk,
-                PlayerPositionType::Goalkeeper,
+                player,
+                pos,
                 false,
                 Some(self.date),
             ));
-            used_ids.push(gk.id);
+            used.push(player.id);
+        };
+        // A second goalkeeper is named only where the bench is long
+        // enough to afford one.
+        let outfield_seat = |p: &Player| {
+            size >= Self::SECOND_KEEPER_BENCH || !p.positions.is_goalkeeper()
+        };
+
+        // 1. The goalkeeper.
+        if size > 0
+            && let Some(gk) = self.pick_best_goalkeeper(remaining, &used_ids, false)
+        {
+            seat(&mut subs, &mut used_ids, gk);
         }
 
         // 1b. Manager-pinned overflow. A force-selected player the XI had no
-        // room for (more pins than slots) still belongs in the eighteen, ahead
-        // of ordinary squad members — so bench him before the role-coverage and
-        // fill passes get to choose. Runs after the backup keeper so the
-        // structural keeper slot is never lost to the pins. No-op outside the
-        // overflow case, in friendlies, and for non-Main squads.
+        // room for (more pins than slots) still belongs in the squad, ahead
+        // of ordinary squad members. Runs after the keeper so his seat is
+        // never lost to the pins. No-op outside the overflow case, in
+        // friendlies, and for non-Main squads.
         self.place_forced_substitutes(team_id, &mut subs, &mut used_ids, remaining);
 
-        // 2. Role coverage. Real benches are selected for match options, not just
-        // broad DEF/MID/FWD buckets.
+        // 2. Cover for each line of the team on the pitch. A versatile man
+        // already seated covers every line he plays.
+        let by_id: FxHashMap<u32, &Player> = remaining.iter().map(|p| (p.id, *p)).collect();
+        for line in PitchLine::on_the_pitch(self.tactics) {
+            if subs.len() >= size {
+                break;
+            }
+            let covered = used_ids
+                .iter()
+                .filter_map(|id| by_id.get(id))
+                .any(|p| !p.positions.is_goalkeeper() && line.is_covered_by(p));
+            if covered {
+                continue;
+            }
+            let cover = remaining
+                .iter()
+                .copied()
+                .filter(|p| !used_ids.contains(&p.id) && !p.positions.is_goalkeeper())
+                .filter(|p| line.is_covered_by(p))
+                .max_by(|a, b| self.bench_value(a).total_cmp(&self.bench_value(b)));
+            if let Some(player) = cover {
+                seat(&mut subs, &mut used_ids, player);
+            }
+        }
+
+        // 3. A prospect's seat. A man on a development role in the plan is
+        // named ahead of a senior who adds more to this match by as much
+        // as the fixture leaves room for it: nothing in a must-win.
+        if subs.len() < size {
+            let best = |prospects: bool| {
+                remaining
+                    .iter()
+                    .copied()
+                    .filter(|p| !used_ids.contains(&p.id) && !p.positions.is_goalkeeper())
+                    .filter(|p| self.player_intent(p).development == prospects)
+                    .map(|p| (p, self.bench_value(p)))
+                    .max_by(|a, b| a.1.total_cmp(&b.1))
+            };
+            if let Some((prospect, score)) = best(true)
+                && best(false)
+                    .is_none_or(|(_, senior)| score + self.room * Self::PROSPECT_SEAT >= senior)
+            {
+                seat(&mut subs, &mut used_ids, prospect);
+            }
+        }
+
+        // 4. Options for the match: a place for each kind of change the
+        // manager may want to make.
         for role in self.bench_plan() {
-            if subs.len() >= helpers::DEFAULT_BENCH_SIZE {
+            if subs.len() >= size {
                 break;
             }
 
@@ -730,81 +574,41 @@ impl SelectionScoringContext<'_> {
             // can't win the role's score and then be rejected — leaving the role
             // uncovered when a worse-rated specialist was available. When the
             // pool is thin, fall back to the best available so the bench fills.
-            let surplus = remaining.len() > helpers::DEFAULT_BENCH_SIZE;
+            let surplus = remaining.len() > size;
             let best = remaining
                 .iter()
-                .filter(|p| !used_ids.contains(&p.id))
+                .copied()
+                .filter(|p| !used_ids.contains(&p.id) && outfield_seat(p))
                 .filter(|p| !surplus || self.bench_role_fit(p, role) >= BENCH_ROLE_MIN_FIT_SURPLUS)
                 .max_by(|a, b| {
                     self.bench_role_score(a, role)
-                        .partial_cmp(&self.bench_role_score(b, role))
-                        .unwrap_or(Ordering::Equal)
-                })
-                .copied();
-
+                        .total_cmp(&self.bench_role_score(b, role))
+                });
             if let Some(player) = best {
-                let pos = helpers::best_tactical_position(player, self.tactics);
-                subs.push(MatchPlayer::from_player(
-                    team_id,
-                    player,
-                    pos,
-                    false,
-                    Some(self.date),
-                ));
-                used_ids.push(player.id);
+                seat(&mut subs, &mut used_ids, player);
             }
         }
 
-        // 3. Fill remaining with best available
-        while subs.len() < helpers::DEFAULT_BENCH_SIZE {
+        // 5. The rest on fit and football owed.
+        while subs.len() < size {
             let best = remaining
                 .iter()
-                .filter(|p| !used_ids.contains(&p.id))
+                .copied()
+                .filter(|p| !used_ids.contains(&p.id) && outfield_seat(p))
                 .max_by(|a, b| {
                     self.bench_role_score(a, BenchRole::Impact)
-                        .partial_cmp(&self.bench_role_score(b, BenchRole::Impact))
-                        .unwrap_or(Ordering::Equal)
-                })
-                .copied();
-
+                        .total_cmp(&self.bench_role_score(b, BenchRole::Impact))
+                });
             match best {
-                Some(player) => {
-                    let pos = helpers::best_tactical_position(player, self.tactics);
-                    subs.push(MatchPlayer::from_player(
-                        team_id,
-                        player,
-                        pos,
-                        false,
-                        Some(self.date),
-                    ));
-                    used_ids.push(player.id);
-                }
+                Some(player) => seat(&mut subs, &mut used_ids, player),
                 None => break,
             }
         }
 
-        // 4. Early-round cup bench guarantee. The bench should carry at least
-        // two non-established outfielders into early ties — players who can
-        // realistically come on for cameo minutes. If the bench-role scoring
-        // overweighted established Impact subs, swap the lowest-impact
-        // established outfielder for the best available non-established one.
-        if let Some(cup) = self.cup
-            && cup.stage() == CupStage::Early
-        {
-            self.ensure_non_established_bench_outfielders(
-                team_id,
-                &mut subs,
-                &mut used_ids,
-                remaining,
-                2,
-            );
-        }
-
-        // 5. Backup-goalkeeper guarantee. The keeper step (1) already benches
-        // the best available backup first, so in the normal flow this is a
-        // no-op. It backstops odd pools — and any future reordering of the
-        // steps above — so a matchday bench never goes out keeper-less while a
-        // keeper is available anywhere in the pool.
+        // 6. Backup-goalkeeper guarantee. The keeper step (1) already benches
+        // the next keeper first, so in the normal flow this is a no-op. It
+        // backstops odd pools so a matchday bench never goes out keeper-less
+        // while a keeper is available anywhere in the pool.
         self.ensure_backup_goalkeeper(team_id, &mut subs, &mut used_ids, remaining);
 
         subs
@@ -840,10 +644,10 @@ impl SelectionScoringContext<'_> {
                 .then_with(|| a.id.cmp(&b.id))
         });
         for player in forced {
-            if subs.len() >= helpers::DEFAULT_BENCH_SIZE {
+            if subs.len() >= self.bench_size {
                 break;
             }
-            let pos = helpers::best_tactical_position(player, self.tactics);
+            let pos = SlotFit::best_tactical_position(player, self.tactics);
             subs.push(MatchPlayer::from_player(
                 team_id,
                 player,
@@ -881,7 +685,7 @@ impl SelectionScoringContext<'_> {
             return;
         };
 
-        if subs.len() < helpers::DEFAULT_BENCH_SIZE {
+        if subs.len() < self.bench_size {
             subs.push(MatchPlayer::from_player(
                 team_id,
                 gk,
@@ -915,16 +719,21 @@ impl SelectionScoringContext<'_> {
     /// Index of the outfield substitute most expendable for a structural need
     /// (here: naming a backup keeper on a full bench). Force-selected players
     /// are never eligible. Among the rest the lowest `Impact` bench score wins,
-    /// but a key player (KeyPlayer / FirstTeamRegular) is only considered once
-    /// no non-key outfield substitute remains — so a fringe option is always
-    /// dropped before a senior one. Returns `None` when every bench player is
-    /// the keeper slot or force-selected.
+    /// but the plan's first choice for a shirt is only considered once nobody
+    /// else remains — so a fringe option is always dropped before a rested
+    /// regular. Returns `None` when every bench player is the keeper slot or
+    /// force-selected.
     fn lowest_value_outfield_sub(
         &self,
         subs: &[MatchPlayer],
         player_by_id: &FxHashMap<u32, &Player>,
     ) -> Option<usize> {
-        let is_key = |p: &Player| self.engine.is_established(p);
+        let is_key = |p: &Player| {
+            self.staff
+                .squad_plan
+                .entry(p.id)
+                .is_some_and(|entry| entry.place == 0 && entry.shirt.is_some())
+        };
 
         let pick = |allow_key: bool| -> Option<usize> {
             let mut best_idx: Option<usize> = None;
@@ -952,82 +761,6 @@ impl SelectionScoringContext<'_> {
         };
 
         pick(false).or_else(|| pick(true))
-    }
-
-    /// Push the bench toward `min_count` non-established outfielders. Skips
-    /// the goalkeeper slot, force-selected players, and stops once no
-    /// improvement is possible. Runs only for early-round cup ties — bench
-    /// composition for league/managed-minutes matches stays purely
-    /// score-driven.
-    fn ensure_non_established_bench_outfielders(
-        &self,
-        team_id: u32,
-        subs: &mut [MatchPlayer],
-        used_ids: &mut Vec<u32>,
-        remaining: &[&Player],
-        min_count: usize,
-    ) {
-        let player_by_id: FxHashMap<u32, &Player> = remaining.iter().map(|p| (p.id, *p)).collect();
-        let is_non_est_outfield =
-            |p: &Player| -> bool { !p.positions.is_goalkeeper() && !self.engine.is_established(p) };
-
-        for _ in 0..subs.len() {
-            let current = subs
-                .iter()
-                .filter(|mp| {
-                    mp.tactical_position.current_position != PlayerPositionType::Goalkeeper
-                })
-                .filter_map(|mp| player_by_id.get(&mp.id))
-                .filter(|p| is_non_est_outfield(p))
-                .count();
-            if current >= min_count {
-                return;
-            }
-
-            let used_set: FxHashSet<u32> = used_ids.iter().copied().collect();
-            let candidate = remaining
-                .iter()
-                .copied()
-                .filter(|p| !used_set.contains(&p.id))
-                .filter(|p| is_non_est_outfield(p))
-                .filter(|p| !p.player_attributes.is_in_recovery())
-                .max_by(|a, b| {
-                    self.bench_role_score(a, BenchRole::Impact)
-                        .partial_cmp(&self.bench_role_score(b, BenchRole::Impact))
-                        .unwrap_or(Ordering::Equal)
-                });
-            let Some(new_player) = candidate else { return };
-
-            // Drop the bench's lowest-impact established outfielder.
-            let mut drop_idx: Option<usize> = None;
-            let mut drop_score = f32::INFINITY;
-            for (i, mp) in subs.iter().enumerate() {
-                if mp.tactical_position.current_position == PlayerPositionType::Goalkeeper {
-                    continue;
-                }
-                let Some(p) = player_by_id.get(&mp.id) else {
-                    continue;
-                };
-                if !self.engine.is_established(p) {
-                    continue;
-                }
-                if self.engine.honor_force_selection && p.is_force_match_selection {
-                    continue;
-                }
-                let s = self.bench_role_score(p, BenchRole::Impact);
-                if s < drop_score {
-                    drop_score = s;
-                    drop_idx = Some(i);
-                }
-            }
-            let Some(idx) = drop_idx else { return };
-
-            let old_id = subs[idx].id;
-            used_ids.retain(|id| *id != old_id);
-            used_ids.push(new_player.id);
-            let pos = helpers::best_tactical_position(new_player, self.tactics);
-            subs[idx] = MatchPlayer::from_player(team_id, new_player, pos, false, Some(self.date));
-        }
     }
 
     fn assign_outfield_slots<'p>(
@@ -1125,73 +858,10 @@ impl SelectionScoringContext<'_> {
             })
             .collect();
 
-        // One byte per (player, mask) records the move that reached it: the
-        // slot taken, or the skip. The mask it came from follows from that,
-        // and only two rows of scores are ever live.
-        const UNREACHED: u8 = u8::MAX;
-        const SKIPPED: u8 = u8::MAX - 1;
-        let full_mask = (1usize << slot_count) - 1;
-        let states = full_mask + 1;
-        let neg_inf = f32::NEG_INFINITY;
-        let mut dp = vec![neg_inf; states];
-        let mut next = vec![neg_inf; states];
-        let mut moves = vec![UNREACHED; (pool.len() + 1) * states];
-        dp[0] = 0.0;
-
-        for i in 0..pool.len() {
-            next.fill(neg_inf);
-            let row = (i + 1) * states;
-            for mask in 0..=full_mask {
-                let current = dp[mask];
-                if !current.is_finite() {
-                    continue;
-                }
-
-                // Skip transition — suppressed for a pinned player so the DP
-                // can never leave a force-selected starter out of the XI.
-                if !must_place[i] && current > next[mask] {
-                    next[mask] = current;
-                    moves[row + mask] = SKIPPED;
-                }
-
-                for slot_idx in 0..slot_count {
-                    let bit = 1usize << slot_idx;
-                    if mask & bit != 0 {
-                        continue;
-                    }
-                    let score = score_matrix[i * slot_count + slot_idx];
-                    let new_mask = mask | bit;
-                    let candidate = current + score;
-                    if candidate > next[new_mask] {
-                        next[new_mask] = candidate;
-                        moves[row + new_mask] = slot_idx as u8;
-                    }
-                }
-            }
-            std::mem::swap(&mut dp, &mut next);
-        }
-
-        if !dp[full_mask].is_finite() {
-            return Vec::new();
-        }
-
-        let mut assigned: Vec<Option<&'p Player>> = vec![None; slot_count];
-        let mut mask = full_mask;
-        for i in (1..=pool.len()).rev() {
-            match moves[i * states + mask] {
-                UNREACHED => break,
-                SKIPPED => {}
-                slot_idx => {
-                    assigned[slot_idx as usize] = Some(pool[i - 1]);
-                    mask &= !(1usize << slot_idx);
-                }
-            }
-        }
-
-        assigned
+        SlotAssignment::solve(&score_matrix, slot_count, must_place)
             .into_iter()
             .enumerate()
-            .filter_map(|(idx, player)| player.map(|p| (slots[idx], p)))
+            .filter_map(|(idx, player)| player.map(|i| (slots[idx], pool[i])))
             .collect()
     }
 
@@ -1222,58 +892,25 @@ impl SelectionScoringContext<'_> {
             self.is_friendly,
             &[],
         );
-        b.development_minutes = self
-            .engine
-            .development_minutes_bonus(player, self.match_importance)
-            + self.policy_starting_adjustment(player);
-        b.condition_floor += self.engine.fatigue_penalty(player, self.is_friendly);
+        b.condition_floor += self.engine.fatigue_penalty(player, self.is_friendly)
+            * ScoringEngine::caution(self.match_importance);
         b.injury_risk =
             -self
                 .engine
                 .injury_risk_penalty(player, self.match_importance, self.is_friendly);
-        b.domestic_cup_opportunity = self.cup_opportunity(player, true);
-        b.future_pathway = self.future_pathway_start(player, slot, available);
         b.coach_relationship +=
             self.want_away_adjustment(player) + self.coach_starting_adjustment(player, slot);
         b.opponent_matchup = self.opponent_matchup_adjustment(player, slot);
         b.role_duty_fit = self.role_duty_adjustment(player, slot);
         b.eligibility_rule = self.eligibility_rule_penalty(player);
         b.medical_risk = self.medical_caution_adjustment(player);
-        b.loan_incentive = self.loan_match_fee_start(player);
-        let intent = self.starting_intent(player, slot, available);
-        b.manager_plan = intent.planned_start;
-        b.playing_time_commitment = intent.start_adjustment() - intent.planned_start;
+        b.football_owed = self.player_intent(player).start_adjustment();
+        let _ = available;
         b
     }
 
-    /// A development plan earns a start only while the prospect is within
-    /// reach of the best established man for the same role.
-    fn starting_intent(
-        &self,
-        player: &Player,
-        slot: PlayerPositionType,
-        available: &[&Player],
-    ) -> PlayerMatchIntent {
-        let mut intent = self.player_intent(player);
-        if intent.development {
-            let gap = self
-                .engine
-                .same_role_quality_gap(player, slot, self.date, available);
-            let tolerance = 1.5 + self.engine.profile.potential_accuracy * 2.5;
-            intent.planned_start *= (1.0 - gap / tolerance).clamp(0.0, 1.0);
-        }
-        intent
-    }
-
     pub(crate) fn player_intent(&self, player: &Player) -> PlayerMatchIntent {
-        PlayerMatchIntent::assess(
-            player,
-            self.staff,
-            self.date,
-            self.match_importance,
-            matches!(self.competition, SelectionCompetition::DomesticCup { .. }),
-            self.is_friendly,
-        )
+        PlayerMatchIntent::assess(player, self.staff, self.room)
     }
 
     /// Opponent-matchup nudge, gated by the presence of a richer game
@@ -1298,19 +935,15 @@ impl SelectionScoringContext<'_> {
         ((fit - 0.55) * 3.6).clamp(-1.8, 1.8)
     }
 
-    /// Hard / soft eligibility penalty driven by the competition rules
-    /// block of the game model. `HardBlocked` returns a large penalty
-    /// so the DP will avoid the player unless every option is blocked;
-    /// `SoftLimited` applies the spec's small penalty.
+    /// The soft eligibility limit: a man returning from injury is still
+    /// selectable, at a cost.
     fn eligibility_rule_penalty(&self, player: &Player) -> f32 {
-        let Some(model) = self.game_model else {
+        if self.game_model.is_none() {
             return 0.0;
-        };
-        match EligibilityEvaluator::evaluate(player, &model.competition_rules) {
-            EligibilityDecision::Eligible => 0.0,
-            EligibilityDecision::SoftLimited { penalty, .. } => -penalty,
-            EligibilityDecision::HardBlocked { .. } => -50.0,
         }
+        EligibilityEvaluator::returning(player)
+            .map(|penalty| -penalty)
+            .unwrap_or(0.0)
     }
 
     /// Medical-caution scaler — bumps the injury-risk penalty when the
@@ -1325,7 +958,7 @@ impl SelectionScoringContext<'_> {
             .injury_risk_penalty(player, self.match_importance, self.is_friendly);
         // Extra premium scaled by policy.medical_caution. Capped low so it
         // can shape close calls without doubling the base penalty.
-        -base * (model.coach_policy.medical_caution - 0.5).max(0.0) * 0.6
+        -base * (model.coach_tendencies.medical_caution - 0.5).max(0.0) * 0.6
     }
 
     /// Resolve the duty for a slot from the formation context. The
@@ -1357,7 +990,7 @@ impl SelectionScoringContext<'_> {
         let Some(coach) = self.coach else {
             return 0.0;
         };
-        let natural_role_fit = (helpers::position_fit_score(player, slot) / 20.0).clamp(0.0, 1.0);
+        let natural_role_fit = (SlotFit::position_fit_score(player, slot) / 20.0).clamp(0.0, 1.0);
         let coach_ctx = CoachSelectionContext {
             date: self.date,
             match_importance: self.match_importance,
@@ -1379,8 +1012,8 @@ impl SelectionScoringContext<'_> {
         let Some(coach) = self.coach else {
             return 0.0;
         };
-        let slot = helpers::best_tactical_position(player, self.tactics);
-        let natural_role_fit = (helpers::position_fit_score(player, slot) / 20.0).clamp(0.0, 1.0);
+        let slot = SlotFit::best_tactical_position(player, self.tactics);
+        let natural_role_fit = (SlotFit::position_fit_score(player, slot) / 20.0).clamp(0.0, 1.0);
         let coach_ctx = CoachSelectionContext {
             date: self.date,
             match_importance: self.match_importance,
@@ -1395,64 +1028,6 @@ impl SelectionScoringContext<'_> {
             is_succession_heir: self.succession_heirs,
         };
         coach.score_bench_role(player, &coach_ctx).adjustment
-    }
-
-    fn policy_starting_adjustment(&self, player: &Player) -> f32 {
-        let age = DateUtils::age(player.birth_date, self.date);
-        let is_key_player = self.engine.is_established(player);
-        let is_development_age = age <= 21;
-        let idle = player.player_attributes.days_since_last_match as f32;
-        // Use position-weighted physical_load so a 90-min wingback gets
-        // rotated where a 90-min keeper isn't. Falls back to minutes_last_7
-        // when the new field hasn't accumulated yet (early sim, fresh save).
-        let load = player
-            .load
-            .physical_load_7
-            .max(player.load.minutes_last_7 * 0.95);
-        let morale = player.happiness.morale;
-
-        (match self.policy {
-            SelectionPolicy::BestEleven => {
-                let experience = if age >= 24 { 0.35 } else { -0.15 };
-                let morale_bonus = ((morale - 50.0) / 50.0).clamp(-1.0, 1.0) * 0.35;
-                experience + morale_bonus
-            }
-            SelectionPolicy::StrongWithRotation => {
-                let rest_need = if load > 360.0 { -0.8 } else { 0.0 };
-                let fresh_regular = if is_key_player && idle >= 5.0 {
-                    0.35
-                } else {
-                    0.0
-                };
-                rest_need + fresh_regular
-            }
-            SelectionPolicy::ManagedMinutes => {
-                let underplayed = (idle / 18.0).min(1.0) * 0.9;
-                let fatigue = if load > 300.0 { -1.2 } else { 0.0 };
-                underplayed + fatigue
-            }
-            SelectionPolicy::CupRotation => {
-                let underplayed = (idle / 14.0).min(1.0) * 1.6;
-                let youth = if is_development_age { 0.9 } else { 0.0 };
-                let protect_star = if is_key_player && load > 180.0 {
-                    -1.4
-                } else {
-                    0.0
-                };
-                underplayed + youth + protect_star
-            }
-            SelectionPolicy::YouthDevelopment => {
-                let youth = if is_development_age {
-                    2.0
-                } else if age <= 23 {
-                    1.0
-                } else {
-                    0.0
-                };
-                let key_player_rest = if is_key_player { -1.2 } else { 0.0 };
-                youth + key_player_rest + (idle / 21.0).min(1.0)
-            }
-        }) * (1.0 - self.match_importance * 0.25)
     }
 
     fn bench_plan(&self) -> Vec<BenchRole> {
@@ -1484,33 +1059,28 @@ impl SelectionScoringContext<'_> {
         }
         roles.push(BenchRole::Striker);
         roles.push(BenchRole::Impact);
-        roles.push(match self.policy {
-            SelectionPolicy::CupRotation | SelectionPolicy::YouthDevelopment => BenchRole::Prospect,
-            _ => BenchRole::Utility,
-        });
         roles
     }
 
     fn bench_role_score(&self, player: &Player, role: BenchRole) -> f32 {
+        self.bench_value(player) + self.bench_role_fit(player, role) * 4.0
+    }
+
+    /// What a man is worth on the bench whatever he would be sent on to
+    /// do: his fit, his readiness, the coach's reading of him and the
+    /// football the plan owes him.
+    fn bench_value(&self, player: &Player) -> f32 {
         self.engine.overall_quality(
             player,
             self.staff,
             self.tactics,
             self.date,
             self.is_friendly,
-        ) + self
-            .engine
-            .development_minutes_bonus(player, self.match_importance)
-            + self.engine.fatigue_penalty(player, self.is_friendly) * 0.5
+        ) + self.engine.fatigue_penalty(player, self.is_friendly) * 0.5
             - self
                 .engine
                 .injury_risk_penalty(player, self.match_importance, self.is_friendly)
                 * 0.35
-            + self.bench_role_fit(player, role) * 4.0
-            + self.bench_policy_adjustment(player)
-            + self.cup_opportunity(player, false)
-            + self.cup_bench_unseen_bonus(player)
-            + self.future_pathway_bench(player)
             + self.want_away_adjustment(player)
             + self.coach_bench_adjustment(player)
             + self.bench_scenario_coverage_score(player)
@@ -1542,27 +1112,6 @@ impl SelectionScoringContext<'_> {
             bonus += BenchScenarioScorer::penalty_value(player) * 1.0;
         }
         bonus
-    }
-
-    /// Extra bench pull for a non-established player who hasn't featured in
-    /// this cup competition yet. Stacks on top of the regular cup opportunity
-    /// bonus so a fringe player is more likely to actually make the matchday
-    /// 18 (and thus get a cameo) on a rotation night.
-    fn cup_bench_unseen_bonus(&self, player: &Player) -> f32 {
-        let Some(cup) = self.cup else {
-            return 0.0;
-        };
-        let stage = cup.stage();
-        let weight = match stage {
-            CupStage::Early => 1.2,
-            CupStage::Quarter => 0.6,
-            _ => return 0.0,
-        };
-        if self.engine.is_established(player) {
-            return 0.0;
-        }
-        let cup_apps = player.cup_statistics.played + player.cup_statistics.played_subs;
-        if cup_apps == 0 { weight } else { 0.0 }
     }
 
     pub(crate) fn bench_role_fit(&self, player: &Player, role: BenchRole) -> f32 {
@@ -1669,39 +1218,6 @@ impl SelectionScoringContext<'_> {
                     / 80.0;
                 attacking.clamp(0.0, 1.0)
             }
-            BenchRole::Prospect => {
-                let age = DateUtils::age(player.birth_date, self.date);
-                if age <= 19 {
-                    1.0
-                } else if age <= 22 {
-                    0.65
-                } else {
-                    0.0
-                }
-            }
-        }
-    }
-
-    fn bench_policy_adjustment(&self, player: &Player) -> f32 {
-        let age = DateUtils::age(player.birth_date, self.date);
-        match self.policy {
-            SelectionPolicy::BestEleven | SelectionPolicy::StrongWithRotation => 0.0,
-            SelectionPolicy::ManagedMinutes => {
-                (player.player_attributes.days_since_last_match as f32 / 21.0).min(1.0) * 0.7
-            }
-            SelectionPolicy::CupRotation => {
-                let youth = if age <= 21 { 0.8 } else { 0.0 };
-                youth + (player.player_attributes.days_since_last_match as f32 / 14.0).min(1.0)
-            }
-            SelectionPolicy::YouthDevelopment => {
-                if age <= 21 {
-                    1.6
-                } else if age <= 23 {
-                    0.8
-                } else {
-                    0.0
-                }
-            }
         }
     }
 
@@ -1731,75 +1247,62 @@ impl SelectionScoringContext<'_> {
             })
     }
 
-    /// The goalkeeping department's contribution to a keeper's score, or
-    /// zero when the club has no department or nothing to say about him.
+    /// The goalkeeper for the fixture, or for the bench behind him.
     ///
-    /// This is the channel through which the manager listens to his
-    /// goalkeeping coach, and the only one — everything the department can
-    /// do to a team sheet passes through this one bounded, signed term.
-    fn keeper_brief_adjustment(&self, player: &Player) -> f32 {
-        self.keeper_brief
-            .map(|brief| brief.selection_adjustment(player.id, self.match_importance))
-            .unwrap_or(0.0)
-    }
-
+    /// A club with a declared order is asked for its keeper: the number
+    /// one unless the night is the deputy's by declaration, the manager
+    /// acts on a nomination, or a shaken number one is kept out of a big
+    /// night; the next man in the order when he cannot play. A club with no
+    /// order fields its best eligible keeper by what its coaches can see.
+    /// Neither weighs tiredness, football owed, the market or a loan fee.
     fn pick_best_goalkeeper<'p>(
         &self,
         available: &[&'p Player],
         used_ids: &[u32],
         for_starting: bool,
     ) -> Option<&'p Player> {
-        // In real football the #1 keeper plays everything unless injured,
-        // genuinely out of form, or the fixture is low priority (early cup
-        // rounds, dead rubbers). Injury/suspension is already filtered before
-        // we get here; poor form is baked into `goalkeeper_score` via
-        // match_readiness + condition_floor_penalty. The missing rotation
-        // trigger was fixture importance — `development_minutes_bonus` only
-        // fires when match_importance < 0.5, giving an underplayed backup a
-        // boost on cup nights but vanishing for league games, so the #1 GK
-        // isn't displaced by a workload signal that doesn't apply to keepers.
-        //
-        // The generic future-aware pathway layer is still deliberately NOT
-        // mixed in here, and for the reason it always was: keeper minutes
-        // are a single-slot, high-variance call, and an outfielder's
-        // positional-cameo nudge is the wrong instrument for the one shirt
-        // a team cannot rotate. What replaces it is a decision rather than
-        // a nudge — the goalkeeping department's brief. It carries a
-        // declared pecking order, so the number one keeps his place through
-        // the form and freshness noise this argmax used to flip on, and it
-        // carries the specialist's request to play a particular young
-        // keeper, priced high enough to seat a better man and gated hard by
-        // what is at stake so it can only ever happen in a game the club
-        // can afford. See `club::staff::goalkeeping`.
-        available
+        let keepers: Vec<&'p Player> = available
             .iter()
+            .copied()
             .filter(|p| !used_ids.contains(&p.id))
             .filter(|p| p.positions.is_goalkeeper())
-            .max_by(|a, b| {
-                let score = |p: &Player| {
-                    let management = if for_starting {
-                        self.starting_intent(p, PlayerPositionType::Goalkeeper, available)
-                            .start_adjustment()
-                            + self.coach_starting_adjustment(p, PlayerPositionType::Goalkeeper)
-                    } else {
-                        self.player_intent(p).bench_adjustment() + self.coach_bench_adjustment(p)
-                    };
-                    self.engine
-                        .goalkeeper_score(p, self.staff, self.is_friendly, self.date)
-                        + self
-                            .engine
-                            .development_minutes_bonus(p, self.match_importance)
-                        + self.cup_goalkeeper(p)
-                        + self.keeper_brief_adjustment(p)
-                        + self.want_away_adjustment(p)
-                        + management
-                        + self
-                            .engine
-                            .loan_match_fee_pull(p, for_starting, self.is_friendly)
-                };
-                score(a).partial_cmp(&score(b)).unwrap_or(Ordering::Equal)
-            })
-            .copied()
+            .collect();
+        if let Some(brief) = self.keeper_brief {
+            let eligible: Vec<u32> = keepers.iter().map(|p| p.id).collect();
+            let asked = if for_starting {
+                brief.keeper_for(&self.keeper_fixture(), &eligible)
+            } else {
+                brief.next_in_order(&eligible)
+            };
+            if let Some(keeper) = asked.and_then(|id| keepers.iter().copied().find(|p| p.id == id))
+            {
+                return Some(keeper);
+            }
+        }
+        keepers.into_iter().max_by(|a, b| {
+            let score = |p: &Player| {
+                self.engine
+                    .goalkeeper_score(p, self.staff, self.is_friendly, self.date)
+            };
+            score(a).partial_cmp(&score(b)).unwrap_or(Ordering::Equal)
+        })
+    }
+
+    fn keeper_fixture(&self) -> KeeperFixture {
+        KeeperFixture {
+            stakes: self.stakes,
+            domestic_cup_progress: match self.competition {
+                SelectionCompetition::DomesticCup {
+                    round,
+                    total_rounds,
+                    ..
+                } if total_rounds > 1 => Some(
+                    (f32::from(round.saturating_sub(1)) / f32::from(total_rounds - 1)).min(1.0),
+                ),
+                SelectionCompetition::DomesticCup { .. } => Some(1.0),
+                _ => None,
+            },
+        }
     }
 
     /// Skill-blind keeper fallback. `pick_best_goalkeeper` uses a full
@@ -1839,5 +1342,4 @@ pub(crate) enum BenchRole {
     Striker,
     Utility,
     Impact,
-    Prospect,
 }

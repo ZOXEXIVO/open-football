@@ -1,4 +1,5 @@
 use crate::PlayerFieldPositionGroup;
+use crate::club::core::SellerCover;
 use crate::club::board::mandate::SigningMandate;
 use crate::transfers::deal::offer::TransferOffer;
 use crate::transfers::deal::reason::TransferReason;
@@ -168,6 +169,8 @@ pub struct TransferNegotiation {
     /// equivalent domestic move. `None` for domestic moves, whose importance
     /// recomputes live.
     pub foreign_seller_importance: Option<f32>,
+    /// Foreign moves only: the seller's cover for him, read at creation.
+    pub foreign_seller_cover: Option<SellerCover>,
     /// Foreign moves only: the absolute floor the SELLER's own books put
     /// under the fee, captured at creation. The seller lives in another
     /// country's borrow at resolution time, so what he still carries this
@@ -323,6 +326,7 @@ impl TransferNegotiation {
             player_name: String::new(),
             selling_club_name: String::new(),
             foreign_seller_importance: None,
+            foreign_seller_cover: None,
             foreign_seller_floor: None,
             foreign_seller_finances: None,
             loan_target_profile: None,

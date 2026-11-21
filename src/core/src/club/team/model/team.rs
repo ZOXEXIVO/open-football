@@ -1,8 +1,9 @@
 use crate::HappinessEventType;
 use crate::club::news::TeamNewsroom;
 use crate::club::player::player::ManagerPromiseKind;
-use crate::club::staff::coach::PlannedRole;
 use crate::club::staff::coach::standing::StandingEvidence;
+use crate::club::staff::coach::{PlanReading, PlannedRole, ShareClimate};
+use crate::club::staff::perception::CoachProfile;
 use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::{
     Achievement, CaptaincyAssigner, ChemistryContextBuilder, CompetitionType, MatchOutcome,
@@ -175,6 +176,12 @@ impl Team {
         if ctx.simulation.is_month_beginning() {
             self.run_monthly_pass(ctx.simulation.date.date());
         }
+        // The plan is redrawn monthly, on a change of shape, and on the
+        // day a man joins or leaves.
+        self.revise_coach_squad_plan(
+            ctx.simulation.date.date(),
+            ctx.club.as_ref().map(|club| club.development_lean),
+        );
 
         if ctx.simulation.is_week_beginning() {
             self.run_weekly_pass(ctx.simulation.date.date());
@@ -245,7 +252,6 @@ impl Team {
     fn run_monthly_pass(&mut self, date: NaiveDate) {
         SquadStatusUpdater::apply(self, date);
         CaptaincyAssigner::assign(self, date);
-        self.revise_coach_squad_plan(date);
     }
 
     /// The manager's side of a promise he made and the verifier has now
@@ -317,38 +323,93 @@ impl Team {
     /// often this runs.
     const PROMISE_SETTLED_WITHIN_DAYS: u16 = 7;
 
-    /// Refresh the head coach's standing plan for this squad, and tell
-    /// anyone whose role changed.
+    /// Refresh the standing plan for this squad, and tell anyone whose role
+    /// changed.
     ///
-    /// The plan lives on the coach because it is his opinion — so a
-    /// squad with no manager in the seat simply has no plan, and every
-    /// consumer falls back to its previous behaviour.
-    fn revise_coach_squad_plan(&mut self, date: NaiveDate) {
+    /// The plan lives on the coach because it is his opinion. A side with
+    /// nobody in the seat is still picked by somebody, so its stand-in
+    /// holds a plan too; nobody is told anything on his word.
+    /// The club has put a player on the market: the plan is drawn again
+    /// for him the same day, and he is told where he now stands.
+    pub fn on_player_marketed(&mut self, player_id: u32) {
+        self.staffs.squad_planner_mut().squad_plan.remove(player_id);
+    }
+
+    /// The club has taken a player off the market, or a move for him is
+    /// agreed: the shop window is closed and he is planned for again.
+    pub fn on_player_withdrawn(&mut self, player_id: u32) {
+        self.staffs.squad_planner_mut().squad_plan.remove(player_id);
+    }
+
+    /// A listing is decided in a dozen places that hold the player and
+    /// not his team, so the team reads the decision off its own squad
+    /// each day and tells itself.
+    fn read_the_market(&mut self) {
+        let plan = &self.staffs.head_coach().squad_plan;
+        let moved: Vec<(u32, bool)> = self
+            .players
+            .iter()
+            .filter_map(|p| {
+                let in_the_window = plan.role_of(p.id)? == PlannedRole::ShopWindow;
+                let marketed = p.is_on_the_market();
+                (in_the_window != marketed).then_some((p.id, marketed))
+            })
+            .collect();
+        for (player_id, marketed) in moved {
+            if marketed {
+                self.on_player_marketed(player_id);
+            } else {
+                self.on_player_withdrawn(player_id);
+            }
+        }
+    }
+
+    pub(crate) fn revise_coach_squad_plan(&mut self, date: NaiveDate, development_lean: Option<f32>) {
+        self.read_the_market();
+        if !self
+            .staffs
+            .head_coach()
+            .squad_plan
+            .is_stale(&self.players, &self.tactics(), date)
+        {
+            return;
+        }
+        let tactics = self.tactics().into_owned();
+        let climate = ShareClimate {
+            fixtures_per_week: Self::expected_fixtures_per_week(&self.fixture_window, date),
+            rotation: CoachProfile::from_staff(self.staffs.head_coach()).rotation_tendency(),
+            development: development_lean.unwrap_or(ShareClimate::ONE_COMPETITION.development),
+            side: self.team_type.development_weight(),
+        };
         // The goalkeeping department's order, read before the coach's plan
         // is taken so the two borrows of the staff list don't overlap. Only
         // the squad that holds the plan sees it; a keeper elsewhere in the
         // club is planned for by his own side's depth chart as before.
         let keepers = self.staffs.keeper_plan().cloned();
-        let Some(coach) = self.staffs.head_coach_mut() else {
-            return;
-        };
-        if !coach.squad_plan.due_for_revision(date)
-            && self
-                .players
-                .iter()
-                .all(|p| coach.squad_plan.entry(p.id).is_some())
-        {
-            return;
-        }
+        let coach = self.staffs.squad_planner_mut();
+        let coach_id = coach.id;
+        // A manager who believes the board is behind him can afford to
+        // leave a man it wants sold out of the window; one who does not
+        // cannot.
+        let board_hold = (1.0 - coach.mind.authority.board_faith()) / 2.0;
         let mut plan = std::mem::take(&mut coach.squad_plan);
         let memory = std::mem::take(&mut coach.coach_memory);
-        let changes =
-            plan.revise_with_standing(&self.players, keepers.as_ref(), Some(&memory), date);
-        if let Some(coach) = self.staffs.head_coach_mut() {
-            coach.squad_plan = plan;
-            coach.coach_memory = memory;
+        let changes = plan.revise(&PlanReading {
+            players: &self.players,
+            tactics: &tactics,
+            keepers: keepers.as_ref(),
+            memory: Some(&memory),
+            climate,
+            coach_id,
+            board_hold,
+            today: date,
+        });
+        let coach = self.staffs.squad_planner_mut();
+        coach.squad_plan = plan;
+        coach.coach_memory = memory;
+        if coach_id == 0 {
+            return;
         }
-
         // Being told where you stand is the point of the plan. A move onto
         // an exit path is delivered as news — a player learns he is not in
         // the manager's plans, which is exactly the conversation the sim
@@ -401,6 +462,14 @@ impl Team {
     /// How long a plan role stands as an assurance before the verifier
     /// asks whether it was honoured. One transfer window.
     const PROMISE_HORIZON_DAYS: i64 = 90;
+
+    /// Competitive fixtures a week the side is living with: those of the
+    /// four weeks around today, and never fewer than one a week, which is
+    /// what a season is planned on when the calendar is empty.
+    fn expected_fixtures_per_week(window: &TeamFixtureWindow, today: NaiveDate) -> f32 {
+        const WEEKS: f32 = 4.0;
+        (f32::from(window.fixtures_within(today, 14)) / WEEKS).max(1.0)
+    }
 
     /// What each role actually commits him to.
     ///

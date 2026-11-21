@@ -566,14 +566,14 @@ impl RatingLedger {
     /// Reliability parameter for sample-size regression: the cross-over
     /// point where the weighted average and the positional neutral
     /// contribute equally. ~12 effective full-match equivalents.
-    const RELIABILITY_GAMES: f32 = 12.0;
+    pub(super) const RELIABILITY_GAMES: f32 = 12.0;
 
     /// Positional neutral baseline used by reliability regression.
     /// Numbers reflect league-average per-90 ratings for each role —
     /// keepers and defenders sit slightly under, midfielders slightly
     /// above, forwards match the league mean because finishing-driven
     /// variance averages out.
-    fn neutral(pos: PlayerFieldPositionGroup) -> f32 {
+    pub(super) fn neutral(pos: PlayerFieldPositionGroup) -> f32 {
         match pos {
             PlayerFieldPositionGroup::Goalkeeper => 6.65,
             PlayerFieldPositionGroup::Defender => 6.55,
@@ -593,7 +593,7 @@ impl RatingLedger {
 
     /// Synthesise the (rating_points, rating_weight) pair for merging
     /// when one side may be a legacy stat block whose ledger is zero.
-    fn weighted(s: &PlayerStatistics) -> (f32, f32) {
+    pub(super) fn weighted(s: &PlayerStatistics) -> (f32, f32) {
         if s.rating_weight > 0.0 {
             (s.rating_points, s.rating_weight)
         } else if s.average_rating > 0.0 {

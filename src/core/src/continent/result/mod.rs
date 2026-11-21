@@ -73,6 +73,7 @@ impl ContinentResult {
         if let Some(comp_results) = competition_results {
             self.process_competition_results(comp_results, data, result);
         }
+        self.refresh_continental_fixture_windows(data, current_date);
         drop(stage);
 
         // Phases 2/4/5/6 — continental rankings (monthly), economic zone

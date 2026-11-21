@@ -102,6 +102,8 @@
 //! pipe stdout through `grep`/`tee` into a file, which block-buffers the
 //! whole run into silence; redirect directly instead.
 
+mod replacement;
+
 use core::club::board::ChairmanAmbition;
 use core::club::board::mandate::{MandateExit, MandateOutcome, MandatePurpose};
 use core::club::board::ownership::{ClubBenefactor, OwnershipType};
@@ -140,6 +142,7 @@ use core::{
 };
 use database::{DatabaseGenerator, DatabaseLoader};
 use mimalloc::MiMalloc;
+use replacement::ReplacementCensus;
 
 /// Windows' system heap serialises concurrent alloc/free behind a global
 /// lock; under the world sim's rayon fan-out that lock dominates. Same
@@ -4968,6 +4971,9 @@ struct SimHarness {
     /// fresh plans by arrival path. Running: each is an event read the day
     /// after it happened.
     arrivals: ArrivalCensus,
+    /// What a club does after it sells a man it was picking. Running:
+    /// his planned role and the club's budget exist only the day before.
+    replacement: ReplacementCensus,
 }
 
 impl SimHarness {
@@ -4995,6 +5001,7 @@ impl SimHarness {
             stranded: StrandedCensus::default(),
             squad_shape: SquadShapeCensus::default(),
             arrivals: ArrivalCensus::default(),
+            replacement: ReplacementCensus::default(),
         };
         // Day zero: every player's starting wage, so the very first
         // window's moves already have a "before" to compare against.
@@ -5003,6 +5010,7 @@ impl SimHarness {
         harness.mandates.observe(&harness.data, 0);
         harness.stranded.observe(&harness.data, 0);
         harness.arrivals.observe(&harness.data, 0);
+        harness.replacement.observe(&harness.data, 0);
         harness
     }
 
@@ -5034,6 +5042,7 @@ impl SimHarness {
             self.stranded.observe(&self.data, day);
             self.squad_shape.observe(&self.data);
             self.arrivals.observe(&self.data, day);
+            self.replacement.observe(&self.data, day);
             if day % 25 == 0 {
                 eprintln!(
                     "  … day {day}/{days}  {}  ({:.0}s elapsed)",
@@ -5058,6 +5067,7 @@ impl SimHarness {
                 ArrivalPrinter::print(&self.arrivals);
                 StrandedPrinter::print(&self.stranded, &self.data);
                 self.squad_shape.print(&self.data);
+                self.replacement.print();
             }
         }
         let mut report = MarketCensus::collect(&self.data);
@@ -5072,6 +5082,7 @@ impl SimHarness {
         ArrivalPrinter::print(&self.arrivals);
         StrandedPrinter::print(&self.stranded, &self.data);
         self.squad_shape.print(&self.data);
+        self.replacement.print();
         eprintln!(
             "simulated {days} days in {:.1}s",
             start.elapsed().as_secs_f64()

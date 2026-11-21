@@ -145,6 +145,9 @@ impl CareerCensus {
             if let Some(before) = before.as_ref() {
                 listing_watch.on_player(p, before, &now, day, date, today, place.main_team);
             }
+            if day % 7 == 0 && place.main_team {
+                listing_watch.on_value(p, &now, date);
+            }
             census.on_player(p, &now, place, day, date, today, data);
             biographies.on_day(p, &now, place, date, yearly, today);
         });

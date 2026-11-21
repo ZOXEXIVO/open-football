@@ -1,6 +1,8 @@
+use crate::club::player::events::discipline::CompetitionFamily;
 use crate::club::staff::perception::CoachProfile;
 use crate::club::{ClubPhilosophy, PlayerPositionType, Staff};
 use crate::{MatchTacticType, Player, Team, TrainingFocus};
+use chrono::NaiveDate;
 
 use super::helpers::PlayerAvailability;
 use super::{SelectionCompetition, SelectionContext};
@@ -17,9 +19,8 @@ pub struct MatchSelectionGameModel {
     pub tactical_objective: TacticalObjective,
     pub opponent_profile: OpponentSelectionProfile,
     pub environmental_profile: EnvironmentSelectionProfile,
-    pub competition_rules: CompetitionSelectionRules,
     pub squad_state: SquadStateProfile,
-    pub coach_policy: CoachSelectionPolicy,
+    pub coach_tendencies: CoachSelectionTendencies,
 }
 
 /// Coarse fixture classification — the manager's mental category for what
@@ -378,44 +379,28 @@ impl EnvironmentSelectionProfile {
     }
 }
 
-/// Competition-imposed roster rules. Populated by the caller from the
-/// real registration tables when available; defaults keep every player
-/// eligible so legacy / test callers behave as before.
-#[derive(Debug, Clone)]
-pub struct CompetitionSelectionRules {
-    /// When `Some`, only listed player ids are registered for the comp.
-    pub registered_player_ids: Option<Vec<u32>>,
-    /// Player ids cup-tied to a previous club this season.
-    pub cup_tied_player_ids: Vec<u32>,
-    /// Player ids the loan contract forbids fielding (parent club, etc).
-    pub clause_blocked_player_ids: Vec<u32>,
-    /// Player ids suspended *for this competition* (different bans
-    /// per competition — a league suspension does not bar cup minutes).
-    pub competition_suspended_player_ids: Vec<u32>,
-    /// Player ids exempt from the registered list cap (U21, homegrown).
-    pub registration_exempt_player_ids: Vec<u32>,
+/// The facts of a fixture that decide who may be named for it. Each is
+/// asked of the player, who owns the record it is read against.
+#[derive(Debug, Clone, Default)]
+pub struct FixtureEligibility {
+    /// The club on the other side.
+    pub opponent_club_id: Option<u32>,
+    /// The cup the fixture belongs to, when it is one.
+    pub cup_slug: Option<String>,
+    /// The competitions a suspension served here was earned in.
+    pub family: CompetitionFamily,
+    /// The selecting team, as a player's season record names it.
+    pub team_slug: String,
+    /// The selecting team, as the club's assignments name it.
+    pub team_id: u32,
 }
 
-impl CompetitionSelectionRules {
-    pub fn open() -> Self {
-        CompetitionSelectionRules {
-            registered_player_ids: None,
-            cup_tied_player_ids: Vec::new(),
-            clause_blocked_player_ids: Vec::new(),
-            competition_suspended_player_ids: Vec::new(),
-            registration_exempt_player_ids: Vec::new(),
-        }
-    }
-}
-
-/// Snapshot of the selecting side's own state — depth, congestion, and
-/// the medical infrastructure that conditions fitness-call boldness.
+/// Snapshot of the selecting side's own state — depth and the medical
+/// infrastructure that conditions fitness-call boldness.
 #[derive(Debug, Clone, Copy)]
 pub struct SquadStateProfile {
     /// 0..1 depth: 0 = paper-thin, 1 = full senior squad available.
     pub depth: f32,
-    /// 0..1 congestion: 0 = nothing pending, 1 = three games in a week.
-    pub fixture_congestion: f32,
     /// 0..1 medical staff quality (drives recurrence-risk tolerance).
     pub medical_quality: f32,
 }
@@ -428,18 +413,7 @@ impl SquadStateProfile {
             ((med.physiotherapy as f32 + med.sports_science as f32) / 40.0).clamp(0.0, 1.0);
         SquadStateProfile {
             depth,
-            fixture_congestion: 0.0,
             medical_quality,
-        }
-    }
-
-    /// Map the "competitive fixtures within the next few days" count the
-    /// matchday scheduler already computes onto the 0..1 congestion axis.
-    pub fn congestion_from_upcoming(upcoming: u8) -> f32 {
-        match upcoming {
-            0 => 0.0,
-            1 => 0.5,
-            _ => 1.0,
         }
     }
 }
@@ -449,7 +423,7 @@ impl SquadStateProfile {
 /// conservatism, …) so a methodical manager and a swashbuckler don't
 /// pick the same XI off the same scoring base.
 #[derive(Debug, Clone, Copy)]
-pub struct CoachSelectionPolicy {
+pub struct CoachSelectionTendencies {
     pub rotation_discipline: f32,
     pub star_favoritism: f32,
     pub academy_trust: f32,
@@ -460,7 +434,7 @@ pub struct CoachSelectionPolicy {
     pub relationship_bias: f32,
 }
 
-impl CoachSelectionPolicy {
+impl CoachSelectionTendencies {
     pub fn from_profile(profile: &CoachProfile, philosophy: Option<&ClubPhilosophy>) -> Self {
         let academy_trust = (profile.youth_preference * 0.6
             + profile.potential_accuracy * 0.4
@@ -471,11 +445,8 @@ impl CoachSelectionPolicy {
             })
         .clamp(0.0, 1.0);
 
-        CoachSelectionPolicy {
-            rotation_discipline: (profile.conservatism * 0.5
-                + profile.judging_accuracy * 0.3
-                + 0.2)
-                .clamp(0.0, 1.0),
+        CoachSelectionTendencies {
+            rotation_discipline: 1.0 - profile.rotation_tendency(),
             star_favoritism: (1.0 - profile.judging_accuracy * 0.6).clamp(0.0, 1.0),
             academy_trust,
             tactical_flexibility: (1.0 - profile.tactical_blindness * 0.7).clamp(0.0, 1.0),
@@ -489,7 +460,7 @@ impl CoachSelectionPolicy {
     }
 
     pub fn neutral() -> Self {
-        CoachSelectionPolicy {
+        CoachSelectionTendencies {
             rotation_discipline: 0.5,
             star_favoritism: 0.5,
             academy_trust: 0.5,
@@ -515,23 +486,20 @@ impl MatchSelectionGameModel {
             tactical_objective: TacticalObjectiveResolver::resolve(ctx),
             opponent_profile: OpponentSelectionProfile::neutral(),
             environmental_profile: EnvironmentSelectionProfile::neutral_home(),
-            competition_rules: CompetitionSelectionRules::open(),
             squad_state: SquadStateProfile::from_signals(available_len, staff),
-            coach_policy: CoachSelectionPolicy::from_profile(&profile, ctx.philosophy.as_ref()),
+            coach_tendencies: CoachSelectionTendencies::from_profile(&profile, ctx.philosophy.as_ref()),
         }
     }
 
     /// Build the fixture-aware model for a real matchday: the opponent
-    /// block reads the opposing roster, the environment carries the
-    /// venue, and congestion comes from the club's upcoming competitive
-    /// fixtures. [`MatchSelectionGameModel::build`] remains the neutral
+    /// block reads the opposing roster and the environment carries the
+    /// venue. [`MatchSelectionGameModel::build`] remains the neutral
     /// fallback for callers without a resolved opponent `Team`.
     pub fn build_for_fixture(
         ctx: &SelectionContext,
         own_team: &Team,
         opponent_team: &Team,
         is_home: bool,
-        upcoming_fixtures: u8,
         is_derby: bool,
     ) -> Self {
         let staff = own_team.staffs.head_coach();
@@ -560,8 +528,6 @@ impl MatchSelectionGameModel {
             own_team.reputation.market_value_score(),
         );
         model.environmental_profile.is_home = is_home;
-        model.squad_state.fixture_congestion =
-            SquadStateProfile::congestion_from_upcoming(upcoming_fixtures);
         model
     }
 
@@ -580,13 +546,11 @@ impl Default for MatchSelectionGameModel {
             tactical_objective: TacticalObjective::WinNowBalanced,
             opponent_profile: OpponentSelectionProfile::neutral(),
             environmental_profile: EnvironmentSelectionProfile::neutral_home(),
-            competition_rules: CompetitionSelectionRules::open(),
             squad_state: SquadStateProfile {
                 depth: 0.5,
-                fixture_congestion: 0.0,
                 medical_quality: 0.5,
             },
-            coach_policy: CoachSelectionPolicy::neutral(),
+            coach_tendencies: CoachSelectionTendencies::neutral(),
         }
     }
 }
@@ -670,17 +634,20 @@ impl TacticalObjectiveResolver {
     }
 }
 
-/// Per-player eligibility decision relative to the competition rules.
-/// The selector reads this before scoring — hard blocks drop the player
-/// from the available pool entirely; soft limits become a penalty term
-/// in the slot score so a returning player can still be chosen in an
-/// emergency.
+/// Per-player eligibility decision for a fixture. The selector reads this
+/// before scoring — hard blocks drop the player from the available pool
+/// entirely; a withheld player is named only when the side could not
+/// otherwise field eleven; soft limits become a penalty term in the slot
+/// score so a returning player can still be chosen in an emergency.
 #[derive(Debug, Clone, Copy)]
 pub enum EligibilityDecision {
     Eligible,
     SoftLimited {
         reason: EligibilityReason,
         penalty: f32,
+    },
+    Withheld {
+        reason: EligibilityReason,
     },
     HardBlocked {
         reason: EligibilityReason,
@@ -691,73 +658,87 @@ pub enum EligibilityDecision {
 pub enum EligibilityReason {
     Injured,
     SuspendedInCompetition,
-    NotRegistered,
     CupTied,
     LoanClause,
+    MoveAgreed,
     InternationalDuty,
     ReturningFromInjury,
     BelowPreferredCondition,
     ParentClubDiscouragement,
     YouthMinutesCap,
     DisciplinaryWarning,
+    /// The club has put him with another of its sides for the day.
+    WithAnotherSide,
 }
 
 /// Stateless evaluator producing an [`EligibilityDecision`] per player
-/// from the competition rules and the player's current state. Kept as
-/// a struct namespace so tests can drive it without instantiating the
-/// full selection pipeline.
+/// from what the player himself answers about the fixture. Kept as a
+/// struct namespace so tests can drive it without instantiating the full
+/// selection pipeline.
 pub struct EligibilityEvaluator;
 
 impl EligibilityEvaluator {
-    pub fn evaluate(player: &Player, rules: &CompetitionSelectionRules) -> EligibilityDecision {
+    pub fn evaluate(
+        player: &Player,
+        fixture: &FixtureEligibility,
+        date: NaiveDate,
+        is_friendly: bool,
+    ) -> EligibilityDecision {
+        let blocked = |reason| EligibilityDecision::HardBlocked { reason };
         if player.player_attributes.is_injured {
-            return EligibilityDecision::HardBlocked {
-                reason: EligibilityReason::Injured,
-            };
-        }
-        if rules.competition_suspended_player_ids.contains(&player.id) {
-            return EligibilityDecision::HardBlocked {
-                reason: EligibilityReason::SuspendedInCompetition,
-            };
-        }
-        if rules.cup_tied_player_ids.contains(&player.id) {
-            return EligibilityDecision::HardBlocked {
-                reason: EligibilityReason::CupTied,
-            };
-        }
-        if rules.clause_blocked_player_ids.contains(&player.id) {
-            return EligibilityDecision::HardBlocked {
-                reason: EligibilityReason::LoanClause,
-            };
+            return blocked(EligibilityReason::Injured);
         }
         if player.statuses.is_on_international_duty() {
-            return EligibilityDecision::HardBlocked {
-                reason: EligibilityReason::InternationalDuty,
+            return blocked(EligibilityReason::InternationalDuty);
+        }
+        if !is_friendly && player.is_suspended_in(fixture.family) {
+            return blocked(EligibilityReason::SuspendedInCompetition);
+        }
+        if fixture
+            .cup_slug
+            .as_deref()
+            .is_some_and(|cup| player.cup_tied_in(cup, &fixture.team_slug, date))
+        {
+            return blocked(EligibilityReason::CupTied);
+        }
+        if fixture
+            .opponent_club_id
+            .is_some_and(|club| player.barred_against(club))
+        {
+            return blocked(EligibilityReason::LoanClause);
+        }
+        if player
+            .assigned_side_on(date)
+            .is_some_and(|side| side != fixture.team_id)
+        {
+            return blocked(EligibilityReason::WithAnotherSide);
+        }
+        if player.move_is_agreed() {
+            return EligibilityDecision::Withheld {
+                reason: EligibilityReason::MoveAgreed,
             };
         }
-        if let Some(registered) = rules.registered_player_ids.as_ref() {
-            let id = player.id;
-            let is_registered = registered.contains(&id);
-            let is_exempt = rules.registration_exempt_player_ids.contains(&id);
-            if !is_registered && !is_exempt {
-                return EligibilityDecision::HardBlocked {
-                    reason: EligibilityReason::NotRegistered,
-                };
-            }
-        }
-        if player.player_attributes.is_in_recovery() {
-            // A structured reintegration program halves the caution —
-            // the medical staff are managing his minutes deliberately.
-            let managed_return = player.individual_training.as_ref().is_some_and(|plan| {
-                plan.focus_areas
-                    .iter()
-                    .any(|f| matches!(f, TrainingFocus::InjuryRecovery))
-            });
-            return EligibilityDecision::SoftLimited {
+        match Self::returning(player) {
+            Some(penalty) => EligibilityDecision::SoftLimited {
                 reason: EligibilityReason::ReturningFromInjury,
-                penalty: if managed_return { 1.0 } else { 2.0 },
-            };
+                penalty,
+            },
+            None => EligibilityDecision::Eligible,
         }
-        EligibilityDecision::Eligible
+    }
+
+    /// The caution a man coming back from injury carries into the score.
+    /// A structured reintegration program halves it — the medical staff
+    /// are managing his minutes deliberately.
+    pub fn returning(player: &Player) -> Option<f32> {
+        if !player.player_attributes.is_in_recovery() {
+            return None;
+        }
+        let managed_return = player.individual_training.as_ref().is_some_and(|plan| {
+            plan.focus_areas
+                .iter()
+                .any(|f| matches!(f, TrainingFocus::InjuryRecovery))
+        });
+        Some(if managed_return { 1.0 } else { 2.0 })
     }
 }

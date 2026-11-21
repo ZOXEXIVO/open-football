@@ -31,6 +31,8 @@ pub struct LeagueRegulations {
     /// simulator's revenue scale. See `FFPThresholds::default()` for
     /// the warning / sanction bands.
     pub ffp_thresholds: FFPThresholds,
+    /// Substitutes a side may name for a fixture of this competition.
+    pub bench_size: u8,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +87,21 @@ impl Default for LeagueRegulations {
 }
 
 impl LeagueRegulations {
+    /// A country's top two divisions and its cup name nine substitutes;
+    /// the divisions below, and development leagues, seven.
+    pub const BENCH_TOP_DIVISIONS: u8 = 9;
+    pub const BENCH_LOWER: u8 = 7;
+    const TOP_DIVISIONS: u8 = 2;
+
+    /// The rules of a division at `tier` of its country's pyramid.
+    pub fn for_division(tier: u8, friendly: bool) -> Self {
+        let mut regulations = Self::new();
+        if !friendly && tier <= Self::TOP_DIVISIONS {
+            regulations.bench_size = Self::BENCH_TOP_DIVISIONS;
+        }
+        regulations
+    }
+
     pub fn new() -> Self {
         LeagueRegulations {
             suspended_players: FxHashMap::default(),
@@ -94,6 +111,7 @@ impl LeagueRegulations {
             pending_cases: Vec::new(),
             yellow_card_ban_threshold: YELLOW_CARD_BAN_THRESHOLD,
             ffp_thresholds: FFPThresholds::default(),
+            bench_size: Self::BENCH_LOWER,
         }
     }
 
@@ -321,6 +339,18 @@ pub struct DisciplinaryCase {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_countrys_top_two_divisions_name_nine_substitutes_and_the_rest_seven() {
+        assert_eq!(LeagueRegulations::for_division(1, false).bench_size, 9);
+        assert_eq!(LeagueRegulations::for_division(2, false).bench_size, 9);
+        assert_eq!(LeagueRegulations::for_division(3, false).bench_size, 7);
+        assert_eq!(
+            LeagueRegulations::for_division(1, true).bench_size,
+            7,
+            "a development league"
+        );
+    }
     use crate::PlayerFieldPositionGroup;
     use crate::r#match::engine::result::{FieldSquad, MatchResultRaw};
     use crate::r#match::result::ResultMatchPositionData;

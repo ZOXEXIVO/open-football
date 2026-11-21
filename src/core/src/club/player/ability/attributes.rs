@@ -1,3 +1,4 @@
+use crate::club::player::events::discipline::PlayerDiscipline;
 use crate::club::player::injury::{InjuryRecoverySpeed, InjurySeverity, InjuryType};
 use serde::{Deserialize, Serialize};
 
@@ -122,19 +123,10 @@ pub struct PlayerAttributes {
     // match load tracking
     pub days_since_last_match: u16,
 
-    /// Matches still to be served on a competitive suspension. Bumped by
-    /// `Player::on_match_disciplinary_result` when a card crosses the
-    /// suspension threshold; decremented in `Player::serve_suspension_match`
-    /// after the player's team plays a fixture they're absent from.
-    /// Always equal to 0 when `is_banned == false`.
-    pub suspension_matches: u8,
-
-    /// Running yellow-card tally toward the next accumulation ban.
-    /// Distinct from `PlayerStatistics::yellow_cards` (which is the
-    /// season display total): this counter is reset by the threshold
-    /// each time it triggers a ban, so subsequent yellows accumulate
-    /// toward the next threshold without losing their relevance.
-    pub yellow_card_running: u8,
+    /// Suspensions and running bookings, kept apart for the domestic and
+    /// the continental competitions. `is_banned` is the answer for the
+    /// side's next competitive fixture.
+    pub discipline: PlayerDiscipline,
 }
 
 impl PlayerAttributes {
@@ -294,8 +286,7 @@ mod tests {
             last_injury_body_part: 0,
             injury_count: 0,
             days_since_last_match: 0,
-            suspension_matches: 0,
-            yellow_card_running: 0,
+            discipline: PlayerDiscipline::default(),
         }
     }
 

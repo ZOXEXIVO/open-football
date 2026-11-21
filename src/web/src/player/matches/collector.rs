@@ -306,6 +306,7 @@ mod tests {
             substitutes_used: used.to_vec(),
             selection_omissions: Vec::new(),
             overlooked: Vec::new(),
+            selection: Default::default(),
             starter_slots: Vec::new(),
         }
     }

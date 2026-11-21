@@ -16,8 +16,12 @@ use crate::league::result::{
     ClubProcessCtx, CountryProcessCtx, DeferredContractInteraction, DeferredGlobalOps,
     StagedClubOps, WorldSnapshot,
 };
+use crate::league::simulation::context::MatchdaySide;
 use crate::league::simulation::matchday::MatchdayCommitments;
-use crate::league::{CompetitionLevel, FixtureRest, KickoffClock, OpenedMatchday, Schedule};
+use crate::league::{
+    CompetitionLevel, FixtureRest, KickoffClock, KnockoutStakes, KnockoutTieReading,
+    OpenedMatchday, Schedule, TableStakes,
+};
 use crate::r#match::Match;
 use crate::r#match::MatchResult;
 use crate::shared::CountryLookupIndex;
@@ -482,6 +486,13 @@ impl Country {
                 let dates = busy.entry(team).or_default();
                 if let Some(own) = dates.iter().position(|d| *d == nominal) {
                     dates[own] = day;
+                }
+                if let Some(club) = self
+                    .clubs
+                    .iter_mut()
+                    .find(|club| club.teams.teams.iter().any(|t| t.id == team))
+                {
+                    club.on_fixture_rearranged(team, nominal, day, today);
                 }
             }
         }
@@ -1191,55 +1202,111 @@ impl Country {
             .collect()
     }
 
-    /// Walk every league's schedule and write each team's next four
-    /// upcoming + last four recent competitive fixture dates into
-    /// `Team::fixture_window`. Skips friendly leagues — those don't
-    /// drive the MD-1/MD-2 training rhythm. Cheap: scales O(fixtures)
-    /// per league once a tick.
+    /// Walk every competitive schedule and write each team's next four
+    /// upcoming fixtures, with what each is worth to it today, and its last
+    /// four recent ones into `Team::fixture_window`. Skips friendly leagues
+    /// — those don't drive the MD-1/MD-2 training rhythm. The continent
+    /// keeps its own run on the same window. Cheap: scales O(fixtures) per
+    /// league once a tick.
     fn refresh_team_fixture_windows(&mut self, today: NaiveDate) {
         let mut nearest: FxHashMap<u32, NearestFixtures> = FxHashMap::default();
-        // Cup ties count toward fixture congestion just like league games,
-        // so fold the cup's bracket into the same window maps.
-        let cup_schedule = self.domestic_cup.as_ref().map(|c| &c.league.schedule);
-        let schedules = self
-            .leagues
-            .leagues
-            .iter()
-            .filter(|l| !l.friendly)
-            .map(|l| &l.schedule)
-            .chain(cup_schedule);
-        for schedule in schedules {
-            for tour in &schedule.tours {
-                for item in &tour.items {
-                    let d = item.date.date();
-                    if d > today && item.result.is_none() {
-                        nearest
-                            .entry(item.home_team_id)
-                            .or_default()
-                            .offer_upcoming(d);
-                        nearest
-                            .entry(item.away_team_id)
-                            .or_default()
-                            .offer_upcoming(d);
-                    } else if d <= today && item.result.is_some() {
-                        nearest
-                            .entry(item.home_team_id)
-                            .or_default()
-                            .offer_recent(d);
-                        nearest
-                            .entry(item.away_team_id)
-                            .or_default()
-                            .offer_recent(d);
-                    }
-                }
-            }
+        for league in self.leagues.leagues.iter().filter(|l| !l.friendly) {
+            let stakes = league.table_stakes();
+            let worth = |team_id: u32| stakes.get(&team_id).copied().unwrap_or(TableStakes::ROUTINE);
+            FixtureWindowRefresh::offer(&mut nearest, &league.schedule, today, |_, home, away| {
+                (worth(home), worth(away))
+            });
         }
+
+        // Cup ties and play-offs count toward the week just like league
+        // games; a bracket says what each tie is worth from its round and
+        // the two sides.
+        let strength: FxHashMap<u32, u16> = self
+            .clubs
+            .iter()
+            .flat_map(|club| club.teams.teams.iter())
+            .map(|team| (team.id, team.reputation.market_value_score()))
+            .collect();
+        let cup = self
+            .domestic_cup
+            .as_ref()
+            .map(|cup| (&cup.league.schedule, DomesticCup::bracket_rounds(&self.clubs)));
+        let playoffs = self
+            .playoffs
+            .iter()
+            .map(|playoff| (&playoff.league.schedule, playoff.bracket_rounds()));
+        for (schedule, total_rounds) in cup.into_iter().chain(playoffs) {
+            let worth = |round: u8, own: u32, other: u32| {
+                let ratio = match (strength.get(&own), strength.get(&other)) {
+                    (Some(&own), Some(&other)) => f32::from(other) / f32::from(own.max(1)),
+                    _ => 1.0,
+                };
+                KnockoutStakes::of(KnockoutTieReading {
+                    round,
+                    total_rounds,
+                    opponent_ratio: ratio,
+                    aggregate_lead: None,
+                })
+            };
+            FixtureWindowRefresh::offer(&mut nearest, schedule, today, |round, home, away| {
+                (worth(round, home, away), worth(round, away, home))
+            });
+        }
+
+        let mut development: FxHashMap<u32, NearestFixtures> = FxHashMap::default();
+        for league in self.leagues.leagues.iter().filter(|l| l.friendly) {
+            FixtureWindowRefresh::offer(&mut development, &league.schedule, today, |_, _, _| {
+                (MatchdaySide::FRIENDLY_STAKES, MatchdaySide::FRIENDLY_STAKES)
+            });
+        }
+
         for club in &mut self.clubs {
             for team in &mut club.teams.teams {
-                team.fixture_window = nearest
-                    .remove(&team.id)
-                    .unwrap_or_default()
-                    .into_window(today);
+                team.fixture_window.domestic =
+                    nearest.remove(&team.id).unwrap_or_default().into_run();
+                team.fixture_window.development =
+                    development.remove(&team.id).unwrap_or_default().into_run();
+                team.fixture_window.refreshed = Some(today);
+            }
+        }
+    }
+}
+
+/// Folding one schedule into the teams' nearest fixtures.
+struct FixtureWindowRefresh;
+
+impl FixtureWindowRefresh {
+    /// `worth` answers `(round, home, away)` with what the fixture is worth
+    /// to the home side and to the away side.
+    fn offer(
+        nearest: &mut FxHashMap<u32, NearestFixtures>,
+        schedule: &Schedule,
+        today: NaiveDate,
+        worth: impl Fn(u8, u32, u32) -> (f32, f32),
+    ) {
+        for tour in &schedule.tours {
+            for item in &tour.items {
+                let d = item.date.date();
+                if d > today && item.result.is_none() {
+                    let (home, away) = worth(tour.num, item.home_team_id, item.away_team_id);
+                    nearest
+                        .entry(item.home_team_id)
+                        .or_default()
+                        .offer_upcoming(d, home);
+                    nearest
+                        .entry(item.away_team_id)
+                        .or_default()
+                        .offer_upcoming(d, away);
+                } else if d <= today && item.result.is_some() {
+                    nearest
+                        .entry(item.home_team_id)
+                        .or_default()
+                        .offer_recent(d);
+                    nearest
+                        .entry(item.away_team_id)
+                        .or_default()
+                        .offer_recent(d);
+                }
             }
         }
     }

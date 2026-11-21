@@ -1053,6 +1053,7 @@ mod breakout_watch_tests {
     use crate::transfers::squad::bands::TierBands;
     use crate::transfers::squad::standing::CareerRecordSnapshot;
     use crate::transfers::view::world::{WorldPool, WorldPoolIndex};
+    use crate::PlayerPreferredFoot;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
         PlayerAttributes, PlayerCollection, PlayerFieldPositionGroup, PlayerPosition,
@@ -1197,6 +1198,7 @@ mod breakout_watch_tests {
             let mut s = PlayerSummary {
                 player_id: 9001,
                 club_id: 300,
+                preferred_foot: PlayerPreferredFoot::Right,
                 country_id: 2,
                 continent_id: 1,
                 region: ScoutingRegion::from_country(1, "IT"),

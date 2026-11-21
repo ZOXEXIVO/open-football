@@ -1,11 +1,12 @@
 mod balance;
 mod bench_scenarios;
 mod competitive;
-mod cup_rotation;
 pub(crate) mod helpers;
+mod lines;
 pub mod model;
 mod omissions;
 mod role_duty;
+mod room;
 mod rotation;
 pub(crate) mod scoring;
 
@@ -14,23 +15,29 @@ mod tests;
 
 use crate::club::staff::goalkeeping::KeeperSelectionBrief;
 use crate::club::staff::{
-    CoachDecisionEngine, CoachProfile, CoachStrategy, StrategyDeriver, StrategyInputs,
+    CoachDecisionEngine, CoachProfile, CoachSquadPlan, CoachStrategy, PlanReading, PlannedRole,
+    ShareClimate, StrategyDeriver, StrategyInputs,
 };
+use crate::club::team::ClubWeek;
+use crate::league::LeagueRegulations;
 use crate::club::{ClubPhilosophy, PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
 use crate::{Person, Player, Tactics, Team, TeamType};
 use chrono::NaiveDate;
 use log::debug;
 use rustc_hash::FxHashSet;
+use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 
 use helpers::*;
-use model::MatchSelectionGameModel;
+use model::{EligibilityDecision, EligibilityEvaluator, FixtureEligibility, MatchSelectionGameModel};
 use rotation::{DevelopmentSelection, DevelopmentStakes, MatchInvolvement};
 use scoring::ScoringEngine;
 
 use chrono::Utc;
 pub use omissions::OmittedPlayer;
+pub use lines::PitchLine;
+pub use room::FixtureRoom;
 
 pub struct SquadSelector;
 
@@ -54,8 +61,7 @@ pub struct PlayerSelectionResult {
 pub struct SelectionContext {
     pub is_friendly: bool,
     pub date: NaiveDate,
-    /// Match importance: 0.0 = dead rubber, 1.0 = must-win.
-    /// Below 0.4: use rotation selection — reserve/youth players get chances.
+    /// What the fixture is worth to this side: 0.0 nothing, 1.0 a must-win.
     pub match_importance: f32,
     /// Club philosophy — tilts the starting XI selection. Populated by
     /// the match-day caller so a DevelopAndSell side actually puts the
@@ -98,6 +104,48 @@ pub struct SelectionContext {
     /// goalkeeper selection behaves exactly as it did before the
     /// department existed. See [`crate::club::staff::goalkeeping`].
     pub keeper_brief: Option<KeeperSelectionBrief>,
+    /// The club's week across its competitions.
+    pub week: ClubWeek,
+    /// How far football owed may move a shirt in this fixture, as the
+    /// matchday caller read it from the stakes, the week and the coach.
+    /// `None` reads the stakes alone.
+    pub room: Option<f32>,
+    /// The facts of the fixture a player's eligibility is asked against.
+    pub eligibility: FixtureEligibility,
+    /// Substitutes the competition lets a side name.
+    pub bench_size: usize,
+}
+
+/// What a side's selection was told about the fixture, kept on the team
+/// sheet so a result can be read against it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct SelectionReading {
+    pub importance: f32,
+    pub room: f32,
+    pub days_to_next: Option<u16>,
+    pub next_importance: f32,
+}
+
+impl SelectionContext {
+    pub fn reading(&self) -> SelectionReading {
+        SelectionReading {
+            importance: self.match_importance,
+            room: self.room(),
+            days_to_next: self.week.to_next.map(|days| days.clamp(0, 999) as u16),
+            next_importance: self.week.next_importance,
+        }
+    }
+
+    pub fn room(&self) -> f32 {
+        self.room
+            .unwrap_or(1.0 - self.match_importance)
+            .clamp(0.0, 1.0)
+    }
+
+    /// How little room the fixture leaves.
+    pub fn pressure(&self) -> f32 {
+        1.0 - self.room()
+    }
 }
 
 /// Competition context for squad selection. Replaces inferring the cup
@@ -121,108 +169,6 @@ pub enum SelectionCompetition {
     Friendly,
 }
 
-impl SelectionCompetition {
-    /// Build the per-side opportunity context for a domestic cup tie.
-    /// `None` for league / continental / friendly games, which don't get
-    /// the rotation bias.
-    pub(crate) fn domestic_cup_context(&self, date: NaiveDate) -> Option<DomesticCupContext> {
-        match *self {
-            SelectionCompetition::DomesticCup {
-                round,
-                total_rounds,
-                own_reputation,
-                opponent_reputation,
-            } => Some(DomesticCupContext {
-                round,
-                total_rounds,
-                opponent_ratio: opponent_reputation as f32 / own_reputation.max(1) as f32,
-                date,
-            }),
-            _ => None,
-        }
-    }
-}
-
-/// Knockout stage a domestic cup tie sits at, derived from the round
-/// index and bracket size. Drives how hard the selector rotates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CupStage {
-    /// Anything earlier than the quarterfinal — the rounds the manager rotates
-    /// through most freely.
-    Early,
-    /// "Last eight" or equivalent third-from-final stage (`round + 2 ==
-    /// total_rounds`). Still rotatable: its importance clamp deliberately stays
-    /// in the early/mid band so a quarterfinal against a weak opponent can
-    /// still be rested, but the opportunity bias is roughly half the early one.
-    Quarter,
-    /// Semifinal (`round + 1 == total_rounds`).
-    Semi,
-    /// Final (the last round, or a single-round bracket).
-    Final,
-}
-
-impl CupStage {
-    pub(crate) fn classify(round: u8, total_rounds: u8) -> Self {
-        if total_rounds <= 1 || round >= total_rounds {
-            CupStage::Final
-        } else if round + 1 == total_rounds {
-            CupStage::Semi
-        } else if round + 2 == total_rounds {
-            CupStage::Quarter
-        } else {
-            CupStage::Early
-        }
-    }
-}
-
-/// Per-side domestic-cup context consumed by the scoring engine's
-/// opportunity bias: the bracket position decides the rotation strength
-/// (via [`DomesticCupContext::stage`]), the reputation ratio nudges it back
-/// toward a strong XI against a stronger opponent. `round`/`total_rounds` are
-/// the raw bracket position — the single source of truth for the stage, and
-/// readable for tests and debug output.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct DomesticCupContext {
-    pub round: u8,
-    pub total_rounds: u8,
-    pub opponent_ratio: f32,
-    pub date: NaiveDate,
-}
-
-impl DomesticCupContext {
-    /// Knockout stage this tie sits at, derived from its bracket position.
-    pub(crate) fn stage(&self) -> CupStage {
-        CupStage::classify(self.round, self.total_rounds)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SelectionPolicy {
-    BestEleven,
-    StrongWithRotation,
-    ManagedMinutes,
-    CupRotation,
-    YouthDevelopment,
-}
-
-impl SelectionPolicy {
-    pub(crate) fn from_context(ctx: &SelectionContext) -> Self {
-        if ctx.is_friendly || ctx.match_importance <= 0.20 {
-            return SelectionPolicy::YouthDevelopment;
-        }
-        if ctx.match_importance < 0.40 {
-            return SelectionPolicy::CupRotation;
-        }
-        if ctx.match_importance < 0.60 {
-            return SelectionPolicy::ManagedMinutes;
-        }
-        if ctx.match_importance < 0.82 {
-            return SelectionPolicy::StrongWithRotation;
-        }
-        SelectionPolicy::BestEleven
-    }
-}
-
 impl Default for SelectionContext {
     fn default() -> Self {
         SelectionContext {
@@ -235,6 +181,10 @@ impl Default for SelectionContext {
             development_guest_ids: Vec::new(),
             season_matches_played: None,
             keeper_brief: None,
+            week: ClubWeek::free(),
+            room: None,
+            eligibility: FixtureEligibility::default(),
+            bench_size: usize::from(LeagueRegulations::BENCH_LOWER),
         }
     }
 }
@@ -254,7 +204,7 @@ impl SquadSelector {
         }
         let roster = team.players.players();
         let own_ids: FxHashSet<u32> = roster.iter().map(|p| p.id).collect();
-        let band = (25.0 - 15.0 * ctx.match_importance.clamp(0.0, 1.0)).round() as u8;
+        let band = (25.0 - 15.0 * ctx.pressure()).round() as u8;
         let mut starting = Vec::with_capacity(available.len());
         let mut emergency = Vec::new();
         for &player in available {
@@ -277,8 +227,8 @@ impl SquadSelector {
         let needed = (DEFAULT_SQUAD_SIZE - keeper_slots).saturating_sub(outfield);
         emergency.sort_by(|a, b| {
             let merit = |p: &Player| {
-                let slot = best_tactical_position(p, tactics);
-                CallUpReadiness::level(p) as f32 * position_fit_score(p, slot) / 20.0
+                let slot = SlotFit::best_tactical_position(p, tactics);
+                CallUpReadiness::level(p) as f32 * SlotFit::position_fit_score(p, slot) / 20.0
             };
             merit(b).total_cmp(&merit(a)).then_with(|| a.id.cmp(&b.id))
         });
@@ -286,15 +236,39 @@ impl SquadSelector {
         starting
     }
 
-    /// Competition restrictions apply before counting depth or borrowing
+    /// The fixture's blocks apply before counting depth or borrowing
     /// reserves, and also to emergency keepers and manager-pinned players.
     fn eligible_under_rules(player: &Player, ctx: &SelectionContext) -> bool {
-        ctx.game_model.as_ref().is_none_or(|model| {
-            !matches!(
-                model::EligibilityEvaluator::evaluate(player, &model.competition_rules),
-                model::EligibilityDecision::HardBlocked { .. }
-            )
-        })
+        !matches!(
+            EligibilityEvaluator::evaluate(player, &ctx.eligibility, ctx.date, ctx.is_friendly),
+            EligibilityDecision::HardBlocked { .. } | EligibilityDecision::Withheld { .. }
+        )
+    }
+
+    /// A side that cannot name eleven with a goalkeeper among them takes
+    /// back the men it was withholding.
+    fn readmit_withheld<'a>(
+        candidates: impl Iterator<Item = &'a Player>,
+        ctx: &SelectionContext,
+        available: &mut Vec<&'a Player>,
+        available_ids: &mut FxHashSet<u32>,
+    ) {
+        let can_name_eleven = available.len() >= DEFAULT_SQUAD_SIZE
+            && available.iter().any(|p| p.positions.is_goalkeeper());
+        if can_name_eleven {
+            return;
+        }
+        for player in candidates {
+            let withheld = matches!(
+                EligibilityEvaluator::evaluate(player, &ctx.eligibility, ctx.date, ctx.is_friendly),
+                EligibilityDecision::Withheld { .. }
+            );
+            let fit = PlayerAvailability::is_available(player, ctx.is_friendly)
+                || KeeperAvailability::is_fallback_available(player, ctx.is_friendly);
+            if withheld && fit && available_ids.insert(player.id) {
+                available.push(player);
+            }
+        }
     }
 
     // ========== PUBLIC API ==========
@@ -329,13 +303,8 @@ impl SquadSelector {
         ctx: &SelectionContext,
     ) -> PlayerSelectionResult {
         let is_main_team = team.team_type == TeamType::Main;
-        let mut engine = ScoringEngine::from_staff_for_team(staff, ctx.philosophy, is_main_team);
+        let mut engine = ScoringEngine::from_staff_for_team(staff, is_main_team);
         engine.owning_roster = Some(team.players.iter().map(|p| p.id).collect());
-        let policy = SelectionPolicy::from_context(ctx);
-        // Domestic-cup opportunity bias, built once per side. `None` for
-        // league / continental / friendly games — those keep the existing
-        // quality/readiness/status logic untouched.
-        let cup = ctx.competition.domestic_cup_context(ctx.date);
 
         // Coach perception profile — read-only lens, derived once.
         let coach_profile = CoachProfile::from_staff(staff);
@@ -416,6 +385,16 @@ impl SquadSelector {
             }
         }
 
+        Self::readmit_withheld(
+            team.players
+                .players()
+                .into_iter()
+                .filter(|p| is_main_team || !p.is_force_match_selection),
+            ctx,
+            &mut available,
+            &mut available_ids,
+        );
+
         let outfield_count = available
             .iter()
             .filter(|p| !p.positions.is_goalkeeper())
@@ -454,12 +433,12 @@ impl SquadSelector {
                 gk_count,
                 reserve_players.len()
             );
-        } else if available.len() < DEFAULT_SQUAD_SIZE + DEFAULT_BENCH_SIZE {
+        } else if available.len() < DEFAULT_SQUAD_SIZE + ctx.bench_size {
             debug!(
                 "Squad selection for team {}: only {} available (need {} for full squad+bench)",
                 team.name,
                 available.len(),
-                DEFAULT_SQUAD_SIZE + DEFAULT_BENCH_SIZE
+                DEFAULT_SQUAD_SIZE + ctx.bench_size
             );
         }
 
@@ -483,11 +462,11 @@ impl SquadSelector {
         let strength_ratio = game_model_ref
             .map(|m| m.opponent_profile.strength_ratio)
             .unwrap_or_else(|| StrategyInputsBuilder::strength_ratio(&ctx.competition));
-        let squad_depth = StrategyInputsBuilder::squad_depth(available.len());
+        let squad_depth = StrategyInputsBuilder::squad_depth(available.len(), ctx.bench_size);
         let coach_strategy = StrategyDeriver::derive(&StrategyInputs {
             profile: &coach_profile,
             philosophy: ctx.philosophy,
-            match_importance: ctx.match_importance,
+            match_importance: ctx.pressure(),
             is_friendly: ctx.is_friendly,
             is_cup: matches!(
                 ctx.competition,
@@ -501,11 +480,11 @@ impl SquadSelector {
         let coach_engine = CoachDecisionEngine::from_staff(staff, &coach_profile, coach_strategy)
             .with_owning_roster(engine.owning_roster.as_ref().unwrap());
 
-        // Succession heirs — young players deliberately developed
-        // behind an aging incumbent in their position group. Feeds the
-        // coach engine's SuccessionPlanning read, which was previously
-        // wired but always empty.
-        let succession_heirs = SuccessionHeirs::identify(&available, ctx.date);
+        let succession_heirs: Vec<u32> = available
+            .iter()
+            .filter(|p| staff.squad_plan.role_of(p.id) == Some(PlannedRole::SuccessionHeir))
+            .map(|p| p.id)
+            .collect();
 
         let scx = competitive::SelectionScoringContext {
             staff,
@@ -513,9 +492,10 @@ impl SquadSelector {
             engine: &engine,
             date: ctx.date,
             is_friendly: ctx.is_friendly,
-            match_importance: ctx.match_importance,
-            policy,
-            cup: cup.as_ref(),
+            match_importance: ctx.pressure(),
+            stakes: ctx.match_importance,
+            room: ctx.room(),
+            bench_size: ctx.bench_size,
             coach: Some(&coach_engine),
             competition: ctx.competition,
             game_model: game_model_ref,
@@ -541,10 +521,10 @@ impl SquadSelector {
                 remaining.len()
             );
             for player in &remaining {
-                if substitutes.len() >= DEFAULT_BENCH_SIZE {
+                if substitutes.len() >= ctx.bench_size {
                     break;
                 }
-                let pos = best_tactical_position(player, tactics);
+                let pos = SlotFit::best_tactical_position(player, tactics);
                 substitutes.push(MatchPlayer::from_player(
                     team.id,
                     player,
@@ -570,8 +550,8 @@ impl SquadSelector {
             engine: &engine,
             date: ctx.date,
             is_friendly: ctx.is_friendly,
-            match_importance: ctx.match_importance,
-            cup: cup.as_ref(),
+            match_importance: ctx.pressure(),
+            room: ctx.room(),
             coach: Some(&coach_engine),
             competition: ctx.competition,
             game_model: game_model_ref,
@@ -690,8 +670,8 @@ impl SquadSelector {
             }
         }
 
-        if available.len() < DEFAULT_SQUAD_SIZE + DEFAULT_BENCH_SIZE {
-            let needed = (DEFAULT_SQUAD_SIZE + DEFAULT_BENCH_SIZE) - available.len();
+        if available.len() < DEFAULT_SQUAD_SIZE + ctx.bench_size {
+            let needed = (DEFAULT_SQUAD_SIZE + ctx.bench_size) - available.len();
             let mut supplements: Vec<&Player> = reserve_players
                 .iter()
                 .filter(|&&rp| {
@@ -737,23 +717,51 @@ impl SquadSelector {
             }
         }
 
+        Self::readmit_withheld(
+            team.players
+                .players()
+                .into_iter()
+                .filter(|p| is_main_team || !p.is_force_match_selection),
+            ctx,
+            &mut available,
+            &mut available_ids,
+        );
+
         // Development selector: season minutes plan + keeper rotation
         // blocks + stakes slider. The season length prefers the exact
         // table read supplied by the matchday caller; the fallback is
         // estimated from the team's own roster (not the merged reserve
         // pool) so borrowed players' senior appearance counts can't
         // inflate the season the deficits are measured against.
+        // A side whose coach holds no plan is planned for the day, on the
+        // same chart and shares.
+        let drawn = staff.squad_plan.is_empty().then(|| {
+            let side = team.team_type.development_weight();
+            let mut plan = CoachSquadPlan::new();
+            plan.revise(&PlanReading {
+                climate: ShareClimate {
+                    rotation: CoachProfile::from_staff(staff).rotation_tendency(),
+                    development: side,
+                    side,
+                    ..ShareClimate::ONE_COMPETITION
+                },
+                ..PlanReading::of(&team.players, tactics.borrow(), ctx.date)
+            });
+            plan
+        });
         let development = DevelopmentSelection {
             team_id: team.id,
             tactics: tactics.borrow(),
             date: ctx.date,
             team_type: team.team_type,
-            stakes: DevelopmentStakes::from_context(ctx.match_importance, ctx.is_friendly),
+            stakes: DevelopmentStakes::from_context(ctx.pressure(), ctx.is_friendly),
             team_matches: ctx.season_matches_played.unwrap_or_else(|| {
                 MatchInvolvement::team_matches_estimate(&team.players.players())
             }),
             coach: CoachProfile::from_staff(staff),
             guest_ids: &guest_ids,
+            plan: drawn.as_ref().unwrap_or(&staff.squad_plan),
+            bench_size: ctx.bench_size,
         };
 
         let main_squad = development.select_starting_eleven(&available);
@@ -773,10 +781,10 @@ impl SquadSelector {
                 remaining.len()
             );
             for player in &remaining {
-                if substitutes.len() >= DEFAULT_BENCH_SIZE {
+                if substitutes.len() >= ctx.bench_size {
                     break;
                 }
-                let pos = best_tactical_position(player, tactics.borrow());
+                let pos = SlotFit::best_tactical_position(player, tactics.borrow());
                 substitutes.push(MatchPlayer::from_player(
                     team.id,
                     player,
@@ -849,8 +857,9 @@ impl SquadSelector {
             date: Utc::now().date_naive(),
             is_friendly: false,
             match_importance: 0.7,
-            policy: SelectionPolicy::StrongWithRotation,
-            cup: None,
+            stakes: 0.7,
+            room: 0.3,
+            bench_size: usize::from(LeagueRegulations::BENCH_LOWER),
             coach: None,
             competition: SelectionCompetition::League,
             game_model: None,
@@ -889,13 +898,13 @@ impl StrategyInputsBuilder {
 
     /// Squad-depth heuristic in [0.0, 1.0]: 1.0 = deep bench, 0.0 =
     /// thin. Linear ramp over the available pool size — anything at
-    /// or below the matchday 18 is thin; 25+ available is deep.
+    /// or below a full matchday squad is thin; seven beyond it is deep.
     /// Selection's force-fill paths can still field an XI from a
     /// thin pool; this signal only shapes how aggressively the
     /// coach rotates.
-    pub(crate) fn squad_depth(available_len: usize) -> f32 {
-        let minimum = (DEFAULT_SQUAD_SIZE + DEFAULT_BENCH_SIZE) as f32;
-        let deep = 25.0_f32;
+    pub(crate) fn squad_depth(available_len: usize, bench_size: usize) -> f32 {
+        let minimum = (DEFAULT_SQUAD_SIZE + bench_size) as f32;
+        let deep = minimum + 7.0;
         let available = available_len as f32;
         ((available - minimum) / (deep - minimum)).clamp(0.0, 1.0)
     }
@@ -916,7 +925,7 @@ impl CoachStrategyForSelection {
         StrategyDeriver::derive(&StrategyInputs {
             profile,
             philosophy: ctx.philosophy,
-            match_importance: ctx.match_importance,
+            match_importance: ctx.pressure(),
             is_friendly: ctx.is_friendly,
             is_cup: matches!(
                 ctx.competition,

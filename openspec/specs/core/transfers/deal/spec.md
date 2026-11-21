@@ -44,3 +44,51 @@ The system SHALL fix the buyer's opening wage offer at the value used in the fir
 #### Scenario: Wage anchor prevents compounding
 - **WHEN** a negotiation goes through two wage rounds each individually raising the offer by 30%
 - **THEN** the second round's raise is measured against the original anchor wage, not against the already-raised figure from the first round
+
+### Requirement: A seller answers knowing how ready it is to replace the player
+A club approached for a player it has not chosen to sell SHALL form one reading of how ready it is to replace him,
+between not at all and fully, from:
+- a player already at the club, in his shirt, perceived at or near his level;
+- names the recruitment desk holds behind him that the offered fee would buy and that would plausibly come;
+- the days left in the transfer window to complete a signing.
+
+The seller's price SHALL rise continuously as readiness falls and as the player's importance to the club rises, for
+buyers at home and abroad alike. When readiness is low, the player is a first choice and too few days remain to sign
+a replacement, the seller SHALL decline the approach for this window unless the offer stands far above his value, a
+release clause is met, or the player himself is forcing the move. A declined approach SHALL be remembered, so that
+the buyer can return in the next window and the seller's desk prepares for it.
+
+A candidate SHALL count toward readiness only if he plays the same shirt and stands near the player's level.
+
+#### Scenario: An heir in the building
+- **WHEN** a club is offered fair value for a starter whose planned heir is perceived at his level
+- **THEN** it negotiates as a willing seller
+
+#### Scenario: Nobody behind him, three weeks left
+- **WHEN** a club with no heir and no names behind a starter is approached with three weeks of the window left
+- **THEN** it asks for clearly more than his value
+
+#### Scenario: Deadline day
+- **WHEN** the same club is approached on the last day of the window with an offer at his value
+- **THEN** it declines for this window
+
+#### Scenario: An offer it cannot refuse
+- **WHEN** the offer on the last day is far above his value
+- **THEN** the club may accept
+
+#### Scenario: A cheap full-back is not a successor to a centre-back
+- **WHEN** the only name the desk holds in the same position group plays a different shirt at a much lower level
+- **THEN** the club's readiness to replace the starter is not raised by him
+
+### Requirement: A buyer that has just banked a fee is asked for more
+A selling club SHALL raise its asking price to a buyer in proportion to how large the fees that buyer has received
+this window are against the price asked, with diminishing effect, and more so when the buyer is replacing a player
+it has just sold. A buyer with no fresh income SHALL be asked the ordinary price.
+
+#### Scenario: Flush with a record sale
+- **WHEN** a club that received 100M last week asks about a 30M player
+- **THEN** it is quoted more than a club with no sales would be
+
+#### Scenario: A small sale
+- **WHEN** a club that received 2M asks about the same player
+- **THEN** it is quoted the ordinary price

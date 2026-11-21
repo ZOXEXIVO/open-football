@@ -3,83 +3,18 @@ use super::*;
 use crate::PlayerPositions;
 use crate::StaffStub;
 use crate::Team;
-use crate::club::ClubPhilosophy;
 use crate::club::player::skills::{Goalkeeping, Mental, Physical, Technical};
 use crate::{
     ChangeType, IntegerUtils, MatchTacticType, PeopleNameGeneratorData, PlayerClubContract,
     PlayerCollection, PlayerGenerator, PlayerPosition, PlayerSkills, PlayerSquadStatus,
-    PlayerStatusType, RelationshipChange, SelectionOmissionReason, StaffCollection, TeamBuilder,
+    PlayerStatusType, RelationshipChange, StaffCollection, TeamBuilder,
     TeamReputation, TeamType, TrainingSchedule,
 };
 use chrono::NaiveDate;
 use chrono::{Datelike, Duration, NaiveTime, Utc};
 
-#[test]
-fn squad_status_applies_only_in_the_owning_roster() {
-    let date = Utc::now().date_naive();
-    let mut player = make_cup_player(
-        900,
-        Contest::SLOT,
-        18,
-        PlayerSquadStatus::KeyPlayer,
-        18,
-        14,
-        0,
-        0.0,
-    );
-    let staff = TestCoach::good_youth();
-    let mut owner = ScoringEngine::from_staff(&staff);
-    owner.owning_roster = Some([player.id].into_iter().collect());
-    let mut visitor = ScoringEngine::from_staff(&staff);
-    visitor.owning_roster = Some([1, 2, 3].into_iter().collect());
-    let cup = DomesticCupContext {
-        round: 1,
-        total_rounds: 5,
-        opponent_ratio: 0.6,
-        date,
-    };
-    let baseline = (
-        visitor.domestic_cup_opportunity_bonus(&player, &cup, true),
-        visitor.player_development_credibility(&player, Contest::SLOT, date),
-    );
-    assert!(owner.squad_status_bonus(&player) > 0.0);
-    assert_eq!(visitor.squad_status_bonus(&player), 0.0);
-    assert!(!visitor.is_established(&player));
-    for status in [
-        PlayerSquadStatus::HotProspectForTheFuture,
-        PlayerSquadStatus::MainBackupPlayer,
-    ] {
-        player.contract.as_mut().unwrap().squad_status = status;
-        assert_eq!(visitor.squad_status_bonus(&player), 0.0);
-        assert_eq!(
-            visitor.domestic_cup_opportunity_bonus(&player, &cup, true),
-            baseline.0
-        );
-        assert_eq!(
-            visitor.player_development_credibility(&player, Contest::SLOT, date),
-            baseline.1
-        );
-    }
-    // Being frozen out is the club's verdict, not a squad role: it holds
-    // in whichever of its squads picks him.
-    player.contract.as_mut().unwrap().squad_status = PlayerSquadStatus::NotNeeded;
-    assert!(owner.squad_status_bonus(&player) < 0.0);
-    assert_eq!(
-        visitor.squad_status_bonus(&player),
-        owner.squad_status_bonus(&player)
-    );
-    assert_eq!(
-        visitor.player_development_credibility(&player, Contest::SLOT, date),
-        0.0
-    );
-    assert!(
-        visitor.domestic_cup_opportunity_bonus(&player, &cup, true) < baseline.0,
-        "a frozen-out visitor gets no fresh-name cup pull"
-    );
-    let intent =
-        crate::club::staff::PlayerMatchIntent::assess(&player, &staff, date, 0.3, false, false);
-    assert!(!intent.development);
-}
+/// The bench of a competition that says nothing else.
+const BENCH: usize = 7;
 
 fn call_up_fixture() -> (Team, Player) {
     let date = Utc::now().date_naive();
@@ -215,85 +150,26 @@ fn call_up_emergency_count_includes_an_outfielder_covering_goal() {
 }
 
 #[test]
-fn manager_plan_changes_the_actual_xi_and_explains_its_score() {
-    use crate::club::staff::PlannedRole;
+fn a_fixture_block_excludes_pins_and_emergency_candidates() {
     let date = Utc::now().date_naive();
-    let pair = |id| {
-        DevPlayer::with_skill(
-            DevPlayer::build(
-                id,
-                Contest::SLOT,
-                18,
-                PlayerSquadStatus::FirstTeamRegular,
-                26,
-                150,
-                150,
-                7,
-                10,
-            ),
-            14.0,
-        )
-    };
-    let team = cup_team(Contest::roster(pair(1), pair(2)));
-    let mut staff = TestCoach::good_youth();
-    staff.staff_attributes.mental.man_management = 1;
-    let ctx = SelectionContext {
-        date,
-        match_importance: 0.5,
-        ..Default::default()
-    };
-    for preferred in [1, 2] {
-        let other = 3 - preferred;
-        staff
-            .squad_plan
-            .force_role(preferred, PlannedRole::Starter, date);
-        staff
-            .squad_plan
-            .force_role(other, PlannedRole::NotInPlans, date);
-        let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
-        assert!(result.main_squad.iter().any(|p| p.id == preferred));
-        assert!(!result.main_squad.iter().any(|p| p.id == other));
-        let engine = ScoringEngine::from_staff(&staff);
-        let scx = competitive::SelectionScoringContext {
-            staff: &staff,
-            tactics: team.tactics.as_ref().unwrap(),
-            engine: &engine,
-            date,
-            is_friendly: false,
-            match_importance: 0.5,
-            policy: SelectionPolicy::ManagedMinutes,
-            cup: None,
-            coach: None,
-            competition: SelectionCompetition::League,
-            game_model: None,
-            succession_heirs: &[],
-            keeper_brief: None,
-        };
-        let pool = team.players.players();
-        let wanted = pool.iter().find(|p| p.id == preferred).unwrap();
-        let omitted = pool.iter().find(|p| p.id == other).unwrap();
-        let a = scx.starting_slot_breakdown(wanted, Contest::SLOT, &pool);
-        let b = scx.starting_slot_breakdown(omitted, Contest::SLOT, &pool);
-        assert!(a.total() > b.total());
-        assert!(
-            a.top_factors_against(&b, 3)
-                .contains(&crate::SelectionScoreFactor::ManagerPlan)
-        );
-    }
-}
-
-#[test]
-fn hard_competition_rules_exclude_pins_and_emergency_candidates() {
     let mut team = generate_test_team();
     let staff = generate_test_staff();
     let blocked: Vec<u32> = team.players.iter().take(2).map(|p| p.id).collect();
     for player in team.players.players.iter_mut().take(2) {
         player.is_force_match_selection = true;
+        player.contract_loan = Some(PlayerClubContract::new_loan(
+            1000,
+            date + Duration::days(200),
+            77,
+            770,
+            1,
+        ));
     }
-    let mut model = model::MatchSelectionGameModel::default();
-    model.competition_rules.clause_blocked_player_ids = blocked.clone();
     let ctx = SelectionContext {
-        game_model: Some(model),
+        eligibility: model::FixtureEligibility {
+            opponent_club_id: Some(77),
+            ..Default::default()
+        },
         ..Default::default()
     };
     for result in [
@@ -309,6 +185,22 @@ fn hard_competition_rules_exclude_pins_and_emergency_candidates() {
         );
         assert!(result.overlooked.iter().all(|id| !blocked.contains(id)));
     }
+    let elsewhere = SelectionContext {
+        eligibility: model::FixtureEligibility {
+            opponent_club_id: Some(78),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &elsewhere);
+    assert!(
+        blocked.iter().all(|id| result
+            .main_squad
+            .iter()
+            .chain(&result.substitutes)
+            .any(|p| p.id == *id)),
+        "against anybody else the pinned loanees are named"
+    );
 }
 
 #[test]
@@ -415,7 +307,7 @@ fn test_squad_selection_always_produces_11() {
 
     assert_eq!(result.main_squad.len(), 11);
     assert!(!result.substitutes.is_empty());
-    assert!(result.substitutes.len() <= helpers::DEFAULT_BENCH_SIZE);
+    assert!(result.substitutes.len() <= BENCH);
 }
 
 #[test]
@@ -453,7 +345,7 @@ fn test_squad_no_duplicate_players() {
 
 #[test]
 fn test_position_group_matching() {
-    let score = helpers::position_fit_score(
+    let score = SlotFit::position_fit_score(
         &generate_defender_center(),
         PlayerPositionType::DefenderCenterLeft,
     );
@@ -519,31 +411,6 @@ fn test_global_assignment_preserves_specialists() {
 }
 
 #[test]
-fn test_selection_policy_from_context() {
-    assert_eq!(
-        SelectionPolicy::from_context(&SelectionContext {
-            match_importance: 0.9,
-            ..SelectionContext::default()
-        }),
-        SelectionPolicy::BestEleven
-    );
-    assert_eq!(
-        SelectionPolicy::from_context(&SelectionContext {
-            match_importance: 0.3,
-            ..SelectionContext::default()
-        }),
-        SelectionPolicy::CupRotation
-    );
-    assert_eq!(
-        SelectionPolicy::from_context(&SelectionContext {
-            is_friendly: true,
-            ..SelectionContext::default()
-        }),
-        SelectionPolicy::YouthDevelopment
-    );
-}
-
-#[test]
 fn score_player_for_slot_with_breakdown_total_matches_legacy() {
     let team = generate_test_team();
     let staff = generate_test_staff();
@@ -591,48 +458,6 @@ fn score_player_for_slot_with_breakdown_total_matches_legacy() {
             );
         }
     }
-}
-
-#[test]
-fn stalled_prospect_gets_development_bias_in_low_risk_fixtures_only() {
-    // Requirement 4: the selector gives development minutes to a blocked,
-    // unused prospect in low-risk fixtures — but never pushes him into
-    // must-win matches.
-    let date = Utc::now().date_naive();
-    let staff = generate_test_staff();
-    let engine = ScoringEngine::from_staff(&staff);
-
-    // Blocked prospect: zero official minutes, long idle.
-    let mut prospect = make_test_player(1, &[(PlayerPositionType::Striker, 16)], 110, date);
-    prospect.player_attributes.days_since_last_match = 60;
-    prospect.statistics = Default::default();
-    prospect.cup_statistics = Default::default();
-
-    // Established regular: lots of minutes, just played.
-    let mut regular = make_test_player(2, &[(PlayerPositionType::Striker, 16)], 130, date);
-    regular.player_attributes.days_since_last_match = 3;
-    regular.statistics.played = 25;
-
-    // Low-importance fixture: the unused prospect gets a real development
-    // bias instead of being ignored...
-    let prospect_low = engine.development_minutes_bonus(&prospect, 0.1);
-    assert!(
-        prospect_low > 0.0,
-        "stalled prospect must get development minutes in low-risk fixtures, got {prospect_low}"
-    );
-    // ...more than an established regular who is already playing.
-    let regular_low = engine.development_minutes_bonus(&regular, 0.1);
-    assert!(
-        prospect_low > regular_low,
-        "unused prospect ({prospect_low}) should outrank a busy regular ({regular_low})"
-    );
-
-    // But NOT in a must-win match — prospects aren't pushed into finals.
-    let prospect_high = engine.development_minutes_bonus(&prospect, 0.9);
-    assert_eq!(
-        prospect_high, 0.0,
-        "no development bias in high-importance matches"
-    );
 }
 
 // ========== Want-away / transfer-status selection tests ==========
@@ -696,7 +521,7 @@ fn listed_unhappy_player_gets_bounded_penalty_not_exclusion() {
     let neg = RelationshipChange::negative(ChangeType::TacticalDisagreement, 2.0);
     p.relations.update_staff_relationship(staff.id, neg, date);
 
-    let adj = engine.want_away_adjustment(&p, &staff, date, 0.7, false);
+    let adj = engine.want_away_adjustment(&p, &staff, date, false);
     assert!(
         adj < 0.0,
         "a disaffected want-away player should take a penalty, got {adj}"
@@ -704,29 +529,6 @@ fn listed_unhappy_player_gets_bounded_penalty_not_exclusion() {
     assert!(adj >= -2.0, "the penalty must stay bounded, got {adj}");
     // ...and he is never excluded from the available pool by it.
     assert!(helpers::PlayerAvailability::is_available(&p, false));
-}
-
-#[test]
-fn accepted_bid_player_rested_more_in_routine_than_must_win() {
-    // Requirement 6: a player with an accepted bid is rested for injury
-    // protection in routine games, but the protection fades in a must-win.
-    let date = Utc::now().date_naive();
-    let staff = generate_test_staff();
-    let engine = ScoringEngine::from_staff(&staff);
-
-    let mut p = make_test_player(1, &[(PlayerPositionType::Striker, 16)], 150, date);
-    p.statuses.add(date, PlayerStatusType::Bid);
-
-    let routine = engine.want_away_adjustment(&p, &staff, date, 0.2, false);
-    let must_win = engine.want_away_adjustment(&p, &staff, date, 0.95, false);
-    assert!(
-        routine < 0.0,
-        "a near-sold asset should be rested in a routine match, got {routine}"
-    );
-    assert!(
-        must_win > routine,
-        "injury protection must fade as the match matters more (routine {routine}, must-win {must_win})"
-    );
 }
 
 #[test]
@@ -738,91 +540,84 @@ fn settled_player_has_zero_want_away_adjustment() {
     let engine = ScoringEngine::from_staff(&staff);
     let p = make_test_player(1, &[(PlayerPositionType::MidfielderCenter, 16)], 130, date);
     assert_eq!(
-        engine.want_away_adjustment(&p, &staff, date, 0.5, false),
+        engine.want_away_adjustment(&p, &staff, date, false),
         0.0
     );
 }
 
+/// The paired cup roster with its right-back star's move at `status`.
+fn roster_with_move(status: PlayerStatusType, date: NaiveDate) -> (Team, u32) {
+    let mut roster = paired_cup_roster();
+    let leaving = 9u32;
+    for p in roster.iter_mut().filter(|p| p.id == leaving) {
+        p.statuses.add(date, status);
+    }
+    (cup_team(roster), leaving)
+}
+
 #[test]
-fn listed_key_player_still_starts_important_match() {
-    // Requirement 3: a listed key player remains selectable for an important
-    // match — being on the market does not drop him from the XI.
+fn an_agreed_move_keeps_a_starter_out_of_a_must_win() {
     let date = Utc::now().date_naive();
     let staff = generate_test_staff();
-    let mut roster = paired_cup_roster();
-    // id 9 = DefenderRight, a KeyPlayer star whose fringe rival is a 24-year-old
-    // backup (no youth-pathway confound).
-    let listed_id = 9u32;
-    for p in roster.iter_mut() {
-        if p.id == listed_id {
-            p.statuses.add(date, PlayerStatusType::Lst);
-            if let Some(c) = p.contract.as_mut() {
-                c.is_transfer_listed = true;
-            }
-        }
-    }
-    let team = cup_team(roster);
     let ctx = SelectionContext {
-        match_importance: 0.9,
+        match_importance: 1.0,
         ..SelectionContext::default()
     };
-    assert_eq!(
-        SelectionPolicy::from_context(&ctx),
-        SelectionPolicy::BestEleven
-    );
+    for status in [PlayerStatusType::Bid, PlayerStatusType::Trn] {
+        let (team, leaving) = roster_with_move(status, date);
+        for result in [
+            SquadSelector::select_with_context(&team, &staff, &[], &ctx),
+            SquadSelector::select_for_rotation_with_context(&team, &staff, &[], &ctx),
+        ] {
+            assert_eq!(result.main_squad.len(), 11);
+            assert!(
+                result
+                    .main_squad
+                    .iter()
+                    .chain(&result.substitutes)
+                    .all(|mp| mp.id != leaving),
+                "{status:?}: a player whose move is agreed was named"
+            );
+        }
+    }
+}
 
-    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
+#[test]
+fn an_agreed_move_gives_way_when_the_side_cannot_name_eleven() {
+    let date = Utc::now().date_naive();
+    let staff = generate_test_staff();
+    let tactics = Tactics::new(MatchTacticType::T442);
+    let mut players: Vec<Player> = tactics
+        .positions()
+        .iter()
+        .enumerate()
+        .map(|(i, &slot)| make_test_player(i as u32 + 1, &[(slot, 18)], 140, date))
+        .collect();
+    let leaving = players[5].id;
+    players[5].statuses.add(date, PlayerStatusType::Trn);
+    let team = cup_team(players);
+
+    let result =
+        SquadSelector::select_with_context(&team, &staff, &[], &SelectionContext::default());
+    assert_eq!(result.main_squad.len(), 11);
     assert!(
-        result.main_squad.iter().any(|mp| mp.id == listed_id),
-        "a listed KeyPlayer must still start an important match"
+        result.main_squad.iter().any(|mp| mp.id == leaving),
+        "with ten others, the side names the man whose move is agreed"
     );
 }
 
 #[test]
-fn agreed_transfer_protected_more_in_routine_than_must_win() {
-    // An agreed move (Trn) is handled by the selection layer's importance-aware
-    // injury protection — rested in routine games, available when it matters.
+fn a_listed_player_is_as_eligible_as_an_unlisted_one() {
     let date = Utc::now().date_naive();
-    let staff = generate_test_staff();
-    let engine = ScoringEngine::from_staff(&staff);
     let mut p = make_test_player(1, &[(PlayerPositionType::Striker, 16)], 150, date);
-    p.statuses.add(date, PlayerStatusType::Trn);
-
-    let routine = engine.want_away_adjustment(&p, &staff, date, 0.2, false);
-    let must_win = engine.want_away_adjustment(&p, &staff, date, 0.95, false);
-    assert!(
-        routine < 0.0,
-        "an agreed-transfer player is rested in routine games, got {routine}"
-    );
-    assert!(
-        must_win > routine,
-        "protection fades as the match matters more (routine {routine}, must-win {must_win})"
-    );
-}
-
-#[test]
-fn agreed_transfer_player_still_starts_important_match() {
-    // An agreed-transfer key player remains selectable for a must-win — the
-    // injury protection fades to near zero at high importance.
-    let date = Utc::now().date_naive();
-    let staff = generate_test_staff();
-    let mut roster = paired_cup_roster();
-    let trn_id = 9u32; // DefenderRight star (one of four defender slots).
-    for p in roster.iter_mut() {
-        if p.id == trn_id {
-            p.statuses.add(date, PlayerStatusType::Trn);
-        }
-    }
-    let team = cup_team(roster);
-    let ctx = SelectionContext {
-        match_importance: 0.95,
-        ..SelectionContext::default()
-    };
-    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
-    assert!(
-        result.main_squad.iter().any(|mp| mp.id == trn_id),
-        "an agreed-transfer player must remain selectable for a must-win match"
-    );
+    let fixture = model::FixtureEligibility::default();
+    let unlisted = model::EligibilityEvaluator::evaluate(&p, &fixture, date, false);
+    p.statuses.add(date, PlayerStatusType::Lst);
+    p.statuses.add(date, PlayerStatusType::Req);
+    p.statuses.add(date, PlayerStatusType::Unh);
+    let listed = model::EligibilityEvaluator::evaluate(&p, &fixture, date, false);
+    assert!(matches!(unlisted, model::EligibilityDecision::Eligible));
+    assert!(matches!(listed, model::EligibilityDecision::Eligible));
 }
 
 #[test]
@@ -839,8 +634,8 @@ fn friendly_drops_disaffection_penalty() {
     let neg = RelationshipChange::negative(ChangeType::TacticalDisagreement, 2.0);
     p.relations.update_staff_relationship(staff.id, neg, date);
 
-    let competitive = engine.want_away_adjustment(&p, &staff, date, 0.5, false);
-    let friendly = engine.want_away_adjustment(&p, &staff, date, 0.5, true);
+    let competitive = engine.want_away_adjustment(&p, &staff, date, false);
+    let friendly = engine.want_away_adjustment(&p, &staff, date, true);
     assert!(
         friendly > competitive,
         "a friendly must not pile a disaffection penalty on a listed player \
@@ -1058,6 +853,8 @@ fn make_cup_player(
     );
     contract.squad_status = status;
     player.contract = Some(contract);
+    // What a coach sees is the level asked for, not the generator's draw.
+    FixtureSkills::stamp(&mut player, level as f32);
     player
 }
 
@@ -1219,39 +1016,9 @@ fn paired_cup_roster() -> Vec<Player> {
 }
 
 #[test]
-fn early_cup_rotation_starts_fringe_players() {
-    // Round 1 of 5 against a weaker opponent. With a like-for-like fringe
-    // option at every slot, the opportunity bias should hand at least five
-    // starts to rotation/backup/prospect players (the even ids).
-    let staff = generate_test_staff();
-    let team = cup_team(paired_cup_roster());
-    let importance = 0.30;
-    let ctx = domestic_cup_ctx(1, 5, 1000, 600, importance);
-
-    assert_eq!(
-        SelectionPolicy::from_context(&ctx),
-        SelectionPolicy::CupRotation
-    );
-
-    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
-    assert_eq!(result.main_squad.len(), 11);
-
-    let fringe_starters = result.main_squad.iter().filter(|p| p.id % 2 == 0).count();
-    let core_starters = result.main_squad.iter().filter(|p| p.id % 2 == 1).count();
-    assert!(
-        fringe_starters >= 5,
-        "early cup should start >=5 fringe players, got {fringe_starters}"
-    );
-    assert!(
-        core_starters <= 6,
-        "early cup should not lean on the established XI, started {core_starters}"
-    );
-}
-
-#[test]
-fn force_selection_overrides_cup_rotation() {
-    // A force-selected established player starts even when early-round cup
-    // rotation would otherwise bench him.
+fn a_pinned_player_starts_an_early_cup_tie() {
+    // A force-selected player starts even when the football owed to the
+    // man behind him would otherwise take the shirt.
     let staff = generate_test_staff();
     let mut players = paired_cup_roster();
     // id 3 is an outfield starter (odd id). Pin him to the senior XI.
@@ -1317,77 +1084,6 @@ fn cup_selection_keeps_safety_guarantees() {
     );
 }
 
-/// Roster where a low-quality established KeyPlayer (id 999) is squeezed out
-/// of the matchday squad entirely — used to check the omission reason.
-fn squeezed_keyplayer_roster() -> Vec<Player> {
-    let positions = [
-        PlayerPositionType::Goalkeeper,
-        PlayerPositionType::DefenderLeft,
-        PlayerPositionType::DefenderCenterLeft,
-        PlayerPositionType::DefenderCenterRight,
-        PlayerPositionType::DefenderRight,
-        PlayerPositionType::MidfielderLeft,
-        PlayerPositionType::MidfielderCenterLeft,
-        PlayerPositionType::MidfielderCenterRight,
-        PlayerPositionType::MidfielderRight,
-        PlayerPositionType::ForwardLeft,
-        PlayerPositionType::ForwardRight,
-    ];
-    let mut players = Vec::new();
-    let mut id = 1u32;
-    for pos in positions.iter() {
-        for _ in 0..2 {
-            players.push(make_cup_player(
-                id,
-                *pos,
-                15,
-                PlayerSquadStatus::FirstTeamRegular,
-                24,
-                5,
-                10,
-                100.0,
-            ));
-            id += 1;
-        }
-    }
-    // The squeezed star: a low-quality, overloaded 29-year-old KeyPlayer who
-    // can't beat the 22 fitter squad players for a place.
-    players.push(make_cup_player(
-        999,
-        PlayerPositionType::ForwardLeft,
-        6,
-        PlayerSquadStatus::KeyPlayer,
-        29,
-        2,
-        30,
-        400.0,
-    ));
-    players
-}
-
-#[test]
-fn cup_rotation_omits_keyplayer_as_cup_rotation() {
-    let staff = generate_test_staff();
-    let team = cup_team(squeezed_keyplayer_roster());
-    let ctx = domestic_cup_ctx(1, 5, 1000, 1000, 0.30);
-
-    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
-    assert!(
-        !result.main_squad.iter().any(|p| p.id == 999),
-        "the squeezed KeyPlayer should not start"
-    );
-    let omission = result
-        .omissions
-        .iter()
-        .find(|o| o.player_id == 999)
-        .expect("KeyPlayer omission should be recorded");
-    assert_eq!(
-        omission.context.reason,
-        SelectionOmissionReason::CupRotation,
-        "a rotated KeyPlayer in a domestic cup is a CupRotation omission"
-    );
-}
-
 /// Two keepers — an established #1 and a rested backup a notch below — plus
 /// one outfielder per outfield slot, so a full XI forms and the only real
 /// contest is in goal.
@@ -1450,34 +1146,130 @@ fn starting_goalkeeper_id(result: &PlayerSelectionResult) -> Option<u32> {
 }
 
 #[test]
-fn early_cup_starts_rested_backup_goalkeeper() {
-    // Early round vs an equal opponent, modest ability gap: the rested backup
-    // (id 2) gets the run.
+fn a_club_with_no_declared_order_fields_its_best_keeper_by_eye_in_every_competition() {
+    // No goalkeeping department has reviewed this room: the better keeper
+    // to the eye (id 1) plays the league, an early cup tie and the final.
     let staff = generate_test_staff();
     let team = cup_team(two_keeper_roster());
-    let ctx = domestic_cup_ctx(1, 5, 1000, 1000, 0.30);
+    for ctx in [
+        league_ctx(0.66),
+        domestic_cup_ctx(1, 5, 1000, 1000, 0.30),
+        domestic_cup_ctx(5, 5, 1000, 1000, 0.95),
+    ] {
+        let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
+        assert_eq!(starting_goalkeeper_id(&result), Some(1));
+    }
+}
 
-    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
+/// The brief of a club whose order is keeper 1 then keeper 2, with the
+/// domestic cup declared as the deputy's up to `reach` of the bracket.
+fn declared_order(reach: Option<f32>) -> KeeperSelectionBrief {
+    KeeperSelectionBrief {
+        number_one: Some(1),
+        deputy: Some(2),
+        third: None,
+        nominated: None,
+        authority: 0.8,
+        nominee_assurance: None,
+        fixture_standard: None,
+        rested: None,
+        deputy_cup_reach: reach,
+    }
+}
+
+fn with_brief(mut ctx: SelectionContext, brief: KeeperSelectionBrief) -> SelectionContext {
+    ctx.keeper_brief = Some(brief);
+    ctx
+}
+
+#[test]
+fn a_crowded_week_does_not_rest_the_number_one() {
+    // Three matches in eight days, a fixture that leaves all its room, and
+    // a ledger that owes the deputy a month of football: the gloves do not
+    // move.
+    use crate::club::staff::PlanReading;
+    use crate::club::team::ClubWeek;
+    let mut staff = generate_test_staff();
+    staff.id = 7;
+    let mut team = cup_team(two_keeper_roster());
+    staff.squad_plan.revise(&PlanReading::of(
+        &team.players,
+        &Tactics::new(MatchTacticType::T442),
+        Utc::now().date_naive(),
+    ));
+    for player in team.players.players.iter_mut() {
+        match player.id {
+            1 => {
+                for _ in 0..12 {
+                    player.happiness.note_official_appearance(true);
+                    player.happiness.official_minutes_since_join += 90;
+                }
+            }
+            2 => {
+                for _ in 0..12 {
+                    player.on_match_overlooked(false);
+                }
+            }
+            _ => {}
+        }
+    }
+    let ctx = SelectionContext {
+        match_importance: 0.45,
+        room: Some(1.0),
+        week: ClubWeek {
+            since_last: Some(3),
+            to_next: Some(3),
+            next_importance: 0.9,
+        },
+        ..SelectionContext::default()
+    };
+    let result =
+        SquadSelector::select_with_context(&team, &staff, &[], &with_brief(ctx, declared_order(Some(0.5))));
+    assert_eq!(starting_goalkeeper_id(&result), Some(1));
+    assert!(benched_as_goalkeeper(&result, 2));
+}
+
+#[test]
+fn the_deputy_keeps_the_cup_to_the_declared_round_whoever_the_opponent_is() {
+    let staff = generate_test_staff();
+    let team = cup_team(two_keeper_roster());
+    // Declared to the quarter-final of a five-round cup.
+    let brief = declared_order(Some(0.5));
+    for (own, opponent) in [(3000, 900), (1000, 1000), (900, 3000)] {
+        let third_round = with_brief(domestic_cup_ctx(3, 5, own, opponent, 0.5), brief);
+        let result = SquadSelector::select_with_context(&team, &staff, &[], &third_round);
+        assert_eq!(
+            starting_goalkeeper_id(&result),
+            Some(2),
+            "a third-round tie against {opponent} is the deputy's"
+        );
+        assert!(benched_as_goalkeeper(&result, 1));
+    }
+    let semi_final = with_brief(domestic_cup_ctx(4, 5, 1000, 1000, 0.8), brief);
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &semi_final);
     assert_eq!(
         starting_goalkeeper_id(&result),
-        Some(2),
-        "early cup should give the rested backup keeper a start"
+        Some(1),
+        "past the declared round the number one starts"
     );
 }
 
 #[test]
-fn cup_final_starts_first_choice_goalkeeper() {
-    // The final reverts to the #1 keeper (id 1) — no rotation bias.
+fn an_injured_number_one_hands_every_fixture_to_the_declared_deputy() {
     let staff = generate_test_staff();
-    let team = cup_team(two_keeper_roster());
-    let ctx = domestic_cup_ctx(5, 5, 1000, 1000, 0.95);
-
-    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
-    assert_eq!(
-        starting_goalkeeper_id(&result),
-        Some(1),
-        "the final demands the first-choice keeper"
-    );
+    let mut players = two_keeper_roster();
+    players[0].player_attributes.is_injured = true;
+    let team = cup_team(players);
+    let brief = declared_order(None);
+    for ctx in [
+        league_ctx(0.66),
+        league_ctx(1.0),
+        domestic_cup_ctx(5, 5, 1000, 1000, 0.95),
+    ] {
+        let result =
+            SquadSelector::select_with_context(&team, &staff, &[], &with_brief(ctx, brief));
+        assert_eq!(starting_goalkeeper_id(&result), Some(2));
+    }
 }
 
 // ========== Cup rotation strength tests ==========
@@ -1486,125 +1278,8 @@ fn cup_final_starts_first_choice_goalkeeper() {
 // slot) and count non-established starters via id parity — odd = star,
 // even = fringe.
 
-fn non_established_starter_count(result: &PlayerSelectionResult) -> usize {
-    result.main_squad.iter().filter(|p| p.id % 2 == 0).count()
-}
-
 #[test]
-fn early_cup_vs_weak_opponent_rotates_heavily() {
-    // Round 1 of 5, own 3000 vs opp 900 (ratio ~0.3). Strong rotation
-    // multiplier + post-assignment swap pass target >=7 non-established
-    // starters. With like-for-like fringe at every slot, the rotation
-    // should hit that target.
-    let staff = generate_test_staff();
-    let team = cup_team(paired_cup_roster());
-    let ctx = domestic_cup_ctx(1, 5, 3000, 900, 0.30);
-
-    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
-    assert_eq!(result.main_squad.len(), 11);
-
-    let fringe = non_established_starter_count(&result);
-    assert!(
-        fringe >= 7,
-        "early cup vs weak opponent should start >=7 non-established players, got {fringe}"
-    );
-}
-
-#[test]
-fn early_cup_vs_equal_rotates_significantly() {
-    // Equal opponents in round 1 of 5: rotation_multiplier 1.0, target 6
-    // non-established starters from the post-assignment pass.
-    let staff = generate_test_staff();
-    let team = cup_team(paired_cup_roster());
-    let ctx = domestic_cup_ctx(1, 5, 3000, 3000, 0.30);
-
-    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
-
-    let fringe = non_established_starter_count(&result);
-    assert!(
-        fringe >= 6,
-        "early cup vs equal opponent should start >=6 non-established players, got {fringe}"
-    );
-}
-
-#[test]
-fn early_cup_vs_much_stronger_opponent_still_rotates_some() {
-    // Heavy underdog (own 1000 vs opp 2500, ratio 2.5). Multiplier 0.55,
-    // target only 4 non-established starters — the manager doesn't field
-    // his reserves wholesale against the favourite. But still some
-    // rotation, and not a full reserve XI.
-    let staff = generate_test_staff();
-    let team = cup_team(paired_cup_roster());
-    let ctx = domestic_cup_ctx(1, 5, 1000, 2500, 0.35);
-
-    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
-
-    let fringe = non_established_starter_count(&result);
-    assert!(
-        fringe >= 3,
-        "even vs stronger opponent, early cup should rotate >=3, got {fringe}"
-    );
-}
-
-#[test]
-fn quarterfinal_weak_opponent_keeps_rotation() {
-    // Quarterfinal (round 3 of 5) vs weak opponent: post-assignment target
-    // 4 non-established starters. Coefficients are halved vs Early so
-    // assignment alone may not hit the target — the swap pass does.
-    let staff = generate_test_staff();
-    let team = cup_team(paired_cup_roster());
-    let ctx = domestic_cup_ctx(3, 5, 3000, 900, 0.55);
-
-    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
-
-    let fringe = non_established_starter_count(&result);
-    assert!(
-        fringe >= 4,
-        "quarterfinal vs weak opponent should start >=4 non-established, got {fringe}"
-    );
-}
-
-#[test]
-fn semifinal_returns_toward_strength() {
-    // Semi: no swap pass, status base barely tilts. The XI should be
-    // notably more established than at the quarter stage on the same
-    // roster.
-    let staff = generate_test_staff();
-    let team = cup_team(paired_cup_roster());
-    let quarter_ctx = domestic_cup_ctx(3, 5, 3000, 3000, 0.55);
-    let semi_ctx = domestic_cup_ctx(4, 5, 3000, 3000, 0.78);
-
-    let quarter = SquadSelector::select_with_context(&team, &staff, &[], &quarter_ctx);
-    let semi = SquadSelector::select_with_context(&team, &staff, &[], &semi_ctx);
-
-    let q_fringe = non_established_starter_count(&quarter);
-    let s_fringe = non_established_starter_count(&semi);
-    assert!(
-        s_fringe <= q_fringe,
-        "semifinal should not rotate harder than quarterfinal: semi={s_fringe} quarter={q_fringe}"
-    );
-}
-
-#[test]
-fn final_starts_strongest_outfield_xi() {
-    // The final reverts to the established XI: opportunity bias is zero,
-    // no swap pass runs. Most outfield slots should belong to the
-    // established (odd-id) starter rather than the idle fringe player.
-    let staff = generate_test_staff();
-    let team = cup_team(paired_cup_roster());
-    let ctx = domestic_cup_ctx(5, 5, 3000, 3000, 0.95);
-
-    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
-
-    let established = result.main_squad.iter().filter(|p| p.id % 2 == 1).count();
-    assert!(
-        established >= 8,
-        "final should field the established XI, got only {established} established starters"
-    );
-}
-
-#[test]
-fn force_selected_established_not_swapped_in_cup_rotation() {
+fn a_pinned_player_is_not_swapped_out_of_an_early_cup_tie() {
     // Stronger version of the existing force-selection test: even after
     // the swap pass runs in early/weak conditions, a force-selected
     // established player still starts.
@@ -2113,7 +1788,7 @@ fn non_main_team_ignores_force_selection() {
 }
 
 #[test]
-fn cup_rotation_preserves_team_shape() {
+fn an_early_cup_tie_keeps_the_teams_shape() {
     // The rotation pass must not corrupt the XI: no duplicate ids across
     // XI and bench, exactly one goalkeeper, all 11 tactical slots filled.
     let staff = generate_test_staff();
@@ -2140,37 +1815,6 @@ fn cup_rotation_preserves_team_shape() {
         .filter(|p| p.tactical_position.current_position == PlayerPositionType::Goalkeeper)
         .count();
     assert_eq!(gk_count, 1, "exactly one starting goalkeeper");
-}
-
-#[test]
-fn domestic_cup_context_carries_bracket_position() {
-    // The per-side context keeps the raw bracket position and derives the
-    // stage from it; non-cup competitions yield no context at all.
-    let date = Utc::now().date_naive();
-    let comp = SelectionCompetition::DomesticCup {
-        round: 3,
-        total_rounds: 5,
-        own_reputation: 1000,
-        opponent_reputation: 2000,
-    };
-    let cup = comp
-        .domestic_cup_context(date)
-        .expect("a domestic cup tie yields a context");
-    assert_eq!(cup.round, 3);
-    assert_eq!(cup.total_rounds, 5);
-    assert_eq!(cup.stage(), CupStage::Quarter);
-    assert!((cup.opponent_ratio - 2.0).abs() < 1e-6);
-
-    assert!(
-        SelectionCompetition::League
-            .domestic_cup_context(date)
-            .is_none()
-    );
-    assert!(
-        SelectionCompetition::ContinentalCup
-            .domestic_cup_context(date)
-            .is_none()
-    );
 }
 
 // ========== Future-aware squad management ==========
@@ -2223,11 +1867,6 @@ impl TestCoach {
         Self::build(18, 17, 15, 16, 16, 15, 8, 6)
     }
 
-    /// Weak with youngsters: distrusts kids, poor potential judge, rigid and
-    /// disciplinarian (high conservatism).
-    fn poor_youth() -> Staff {
-        Self::build(3, 4, 12, 5, 8, 8, 16, 16)
-    }
 }
 
 /// Development-player factory: a fit player at a chosen slot with explicit
@@ -2236,60 +1875,6 @@ impl TestCoach {
 struct DevPlayer;
 
 impl DevPlayer {
-    #[allow(clippy::too_many_arguments)]
-    fn build(
-        id: u32,
-        position: PlayerPositionType,
-        level: u8,
-        status: PlayerSquadStatus,
-        age: i32,
-        current_ability: u8,
-        potential_ability: u8,
-        days_idle: u16,
-        played: u16,
-    ) -> Player {
-        let mut player = make_cup_player(id, position, level, status, age, days_idle, played, 60.0);
-        player.player_attributes.current_ability = current_ability;
-        player.player_attributes.potential_ability = potential_ability;
-        player.player_attributes.condition = 9500;
-        player.player_attributes.fitness = 9000;
-        // Neutral form for everyone: without it, a player with appearances
-        // takes the season-average path (default rating 0 → a −1.5 form
-        // penalty) while a player with none is spared it — an asymmetry that
-        // would quietly tilt senior-vs-youth contests.
-        player.load.form_rating = 6.5;
-        player.skills.physical.match_readiness = 15.0;
-        player.skills.mental.work_rate = 12.0;
-        player.skills.mental.determination = 12.0;
-        player.skills.mental.teamwork = 12.0;
-        player.training.training_performance = 12.0;
-        player
-    }
-
-    /// An aging incumbent being phased out: backup role, idle, an expiring
-    /// deal and reduced condition so the fragility signal reads. Still skilled
-    /// enough to be a real selection — succession only bites once a credible
-    /// younger option exists.
-    fn aging_incumbent(id: u32, position: PlayerPositionType, age: i32) -> Player {
-        let mut player = Self::build(
-            id,
-            position,
-            15,
-            PlayerSquadStatus::MainBackupPlayer,
-            age,
-            150,
-            150,
-            25,
-            3,
-        );
-        let date = Utc::now().date_naive();
-        if let Some(contract) = player.contract.as_mut() {
-            contract.expiration = date + Duration::days(120);
-        }
-        player.player_attributes.condition = 6000;
-        player
-    }
-
     /// Flatten every outfield skill to `value` so perceived quality is
     /// deterministic. The generator scatters skills regardless of the
     /// position level, so quality contrasts have to be set explicitly here
@@ -2336,656 +1921,6 @@ impl DevPlayer {
         physical.strength = value;
         player
     }
-}
-
-/// Single-slot contest builder: a senior and a young player able to fill the
-/// same one formation slot, plus a filler for every other slot, so exactly
-/// one of the two starts and the loser drops to the bench.
-struct Contest;
-
-impl Contest {
-    const SLOT: PlayerPositionType = PlayerPositionType::ForwardLeft;
-
-    /// A senior incumbent (id 1) with a modest *skill* edge and an underused
-    /// young prospect (id 2). The edge lives in skills — not status or
-    /// reputation — so the senior can't carry it into a cross-fill at the
-    /// other forward slot; the contest stays at `SLOT`, and the loser benches.
-    /// Both carry neutral form so appearances don't skew perceived quality.
-    fn contest_pair() -> (Player, Player) {
-        let senior = DevPlayer::with_skill(
-            DevPlayer::build(
-                1,
-                Self::SLOT,
-                17,
-                PlayerSquadStatus::FirstTeamRegular,
-                28,
-                165,
-                168,
-                5,
-                20,
-            ),
-            14.0,
-        );
-        let youth = DevPlayer::with_skill(
-            DevPlayer::build(
-                2,
-                Self::SLOT,
-                17,
-                PlayerSquadStatus::HotProspectForTheFuture,
-                19,
-                140,
-                185,
-                14,
-                0,
-            ),
-            11.0,
-        );
-        (senior, youth)
-    }
-
-    /// Full T442 roster around the contested pair. Every filler is an
-    /// established, neutral-form player skilled to match the senior, so no
-    /// filler is displaced by a cross-fill — the loser of `SLOT` has nowhere
-    /// to go but the bench.
-    fn roster(senior: Player, youth: Player) -> Vec<Player> {
-        let slots = [
-            PlayerPositionType::Goalkeeper,
-            PlayerPositionType::DefenderLeft,
-            PlayerPositionType::DefenderCenterLeft,
-            PlayerPositionType::DefenderCenterRight,
-            PlayerPositionType::DefenderRight,
-            PlayerPositionType::MidfielderLeft,
-            PlayerPositionType::MidfielderCenterLeft,
-            PlayerPositionType::MidfielderCenterRight,
-            PlayerPositionType::MidfielderRight,
-            PlayerPositionType::ForwardLeft,
-            PlayerPositionType::ForwardRight,
-        ];
-        let mut players = Vec::new();
-        let mut id = 200u32;
-        for &pos in slots.iter() {
-            if pos == Self::SLOT {
-                continue;
-            }
-            players.push(DevPlayer::with_skill(
-                DevPlayer::build(
-                    id,
-                    pos,
-                    16,
-                    PlayerSquadStatus::FirstTeamRegular,
-                    26,
-                    160,
-                    162,
-                    5,
-                    12,
-                ),
-                14.0,
-            ));
-            id += 1;
-        }
-        players.push(senior);
-        players.push(youth);
-        players
-    }
-
-    fn ctx(
-        importance: f32,
-        philosophy: ClubPhilosophy,
-        competition: SelectionCompetition,
-    ) -> SelectionContext {
-        SelectionContext {
-            match_importance: importance,
-            philosophy: Some(philosophy),
-            competition,
-            ..SelectionContext::default()
-        }
-    }
-
-    fn cup(round: u8, total: u8, own: u16, opp: u16) -> DomesticCupContext {
-        SelectionCompetition::DomesticCup {
-            round,
-            total_rounds: total,
-            own_reputation: own,
-            opponent_reputation: opp,
-        }
-        .domestic_cup_context(Utc::now().date_naive())
-        .unwrap()
-    }
-
-    fn started(result: &PlayerSelectionResult, id: u32) -> bool {
-        result.main_squad.iter().any(|p| p.id == id)
-    }
-}
-
-#[test]
-fn important_match_keeps_strongest_xi_over_youth_pathway() {
-    let staff = TestCoach::good_youth();
-    let engine =
-        ScoringEngine::from_staff_for_team(&staff, Some(ClubPhilosophy::DevelopAndSell), true);
-    let date = Utc::now().date_naive();
-    let slot = Contest::SLOT;
-    let youth = DevPlayer::build(
-        1,
-        slot,
-        15,
-        PlayerSquadStatus::HotProspectForTheFuture,
-        19,
-        140,
-        190,
-        7,
-        0,
-    );
-    // Title decider / final stakes: the pathway layer is fully switched off.
-    assert_eq!(
-        engine.future_pathway_adjustment(&youth, slot, 0.9, date, None, &[], true),
-        0.0,
-        "future pathway must be off in a high-importance match"
-    );
-    assert_eq!(engine.pathway_context_multiplier(0.9, None, true), 0.0);
-}
-
-#[test]
-fn develop_and_sell_early_cup_starts_credible_young_player() {
-    let staff = StaffStub::build();
-    let (senior, youth) = Contest::contest_pair();
-    let team = cup_team(Contest::roster(senior, youth));
-    let ctx = Contest::ctx(
-        0.30,
-        ClubPhilosophy::DevelopAndSell,
-        SelectionCompetition::DomesticCup {
-            round: 1,
-            total_rounds: 5,
-            own_reputation: 1000,
-            opponent_reputation: 600,
-        },
-    );
-
-    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
-    assert!(
-        Contest::started(&result, 2),
-        "a DevelopAndSell side should start the credible young player in an early cup tie"
-    );
-}
-
-#[test]
-fn weak_young_player_does_not_displace_senior_player() {
-    let staff = TestCoach::good_youth();
-    let engine =
-        ScoringEngine::from_staff_for_team(&staff, Some(ClubPhilosophy::DevelopAndSell), true);
-    let date = Utc::now().date_naive();
-    let tactics = Tactics::new(MatchTacticType::T442);
-    let slot = Contest::SLOT;
-    let group = slot.position_group();
-    // Clearly better senior (strong skills) vs a weak youngster (low CA & PA,
-    // weak raw skills) who can still nominally fill the slot.
-    let senior = DevPlayer::with_skill(
-        DevPlayer::build(
-            1,
-            slot,
-            16,
-            PlayerSquadStatus::FirstTeamRegular,
-            27,
-            168,
-            170,
-            5,
-            20,
-        ),
-        16.0,
-    );
-    let weak_youth = DevPlayer::with_skill(
-        DevPlayer::build(
-            2,
-            slot,
-            14,
-            PlayerSquadStatus::DecentYoungster,
-            18,
-            75,
-            88,
-            7,
-            0,
-        ),
-        6.0,
-    );
-    let pool: Vec<&Player> = vec![&senior, &weak_youth];
-    let total = |p: &Player| {
-        engine.score_player_for_slot(p, slot, group, &staff, &tactics, date, false, &[])
-            + engine.future_pathway_adjustment(p, slot, 0.2, date, None, &pool, true)
-    };
-    assert!(
-        total(&senior) > total(&weak_youth),
-        "a clearly better senior keeps his place over a weak youngster in a low-risk match: \
-         senior {} vs youth {}",
-        total(&senior),
-        total(&weak_youth)
-    );
-}
-
-#[test]
-fn sign_to_compete_reduces_youth_pathway_bonus() {
-    let staff = TestCoach::good_youth();
-    let date = Utc::now().date_naive();
-    let slot = Contest::SLOT;
-    let youth = DevPlayer::build(
-        1,
-        slot,
-        15,
-        PlayerSquadStatus::HotProspectForTheFuture,
-        19,
-        140,
-        190,
-        7,
-        0,
-    );
-    let pathway = |philosophy: ClubPhilosophy| {
-        ScoringEngine::from_staff_for_team(&staff, Some(philosophy), true)
-            .future_pathway_adjustment(&youth, slot, 0.2, date, None, &[], true)
-    };
-    let develop = pathway(ClubPhilosophy::DevelopAndSell);
-    let balanced = pathway(ClubPhilosophy::Balanced);
-    let compete = pathway(ClubPhilosophy::SignToCompete);
-    assert!(
-        develop > balanced && balanced > compete,
-        "DevelopAndSell {develop} > Balanced {balanced} > SignToCompete {compete}"
-    );
-    assert!(compete >= 0.0);
-}
-
-#[test]
-fn coach_good_with_youngsters_gives_prospect_low_risk_start() {
-    let date = Utc::now().date_naive();
-    let slot = Contest::SLOT;
-    let youth = DevPlayer::build(
-        1,
-        slot,
-        15,
-        PlayerSquadStatus::HotProspectForTheFuture,
-        19,
-        140,
-        190,
-        7,
-        0,
-    );
-    let good = TestCoach::good_youth();
-    let poor = TestCoach::poor_youth();
-    let pathway = |staff: &Staff| {
-        ScoringEngine::from_staff_for_team(staff, Some(ClubPhilosophy::Balanced), true)
-            .future_pathway_adjustment(&youth, slot, 0.2, date, None, &[], true)
-    };
-    let good_pull = pathway(&good);
-    let poor_pull = pathway(&poor);
-    assert!(
-        good_pull > poor_pull,
-        "a coach good with youngsters gives a bigger pathway pull: good {good_pull} vs poor {poor_pull}"
-    );
-    assert!(good_pull > 0.0);
-}
-
-#[test]
-fn coach_poor_with_youngsters_prefers_senior_in_same_context() {
-    let ctx = Contest::ctx(0.48, ClubPhilosophy::Balanced, SelectionCompetition::League);
-    let good = TestCoach::good_youth();
-    let poor = TestCoach::poor_youth();
-
-    let (senior_g, youth_g) = Contest::contest_pair();
-    let team_good = cup_team(Contest::roster(senior_g, youth_g));
-    let result_good = SquadSelector::select_with_context(&team_good, &good, &[], &ctx);
-
-    let (senior_p, youth_p) = Contest::contest_pair();
-    let team_poor = cup_team(Contest::roster(senior_p, youth_p));
-    let result_poor = SquadSelector::select_with_context(&team_poor, &poor, &[], &ctx);
-
-    assert!(
-        Contest::started(&result_good, 2),
-        "a coach good with youngsters starts the prospect in a low-risk league game"
-    );
-    assert!(
-        Contest::started(&result_poor, 1) && !Contest::started(&result_poor, 2),
-        "a coach poor with youngsters keeps the senior and benches the prospect"
-    );
-}
-
-#[test]
-fn high_judging_potential_identifies_high_potential_player() {
-    let date = Utc::now().date_naive();
-    let slot = Contest::SLOT;
-    // High potential, only modest current ability — invisible to a poor
-    // judge. The upside must be OBSERVABLE (the scorer reads the
-    // estimated ceiling, never hidden PA): flatten skills near today's
-    // level, then raise the growth signals scouts and coaches read.
-    let mut prospect = DevPlayer::with_skill(
-        DevPlayer::build(
-            1,
-            slot,
-            14,
-            PlayerSquadStatus::HotProspectForTheFuture,
-            18,
-            110,
-            200,
-            7,
-            0,
-        ),
-        11.0,
-    );
-    prospect.skills.mental.determination = 17.0;
-    prospect.skills.mental.work_rate = 16.0;
-    prospect.skills.mental.composure = 16.0;
-    prospect.skills.mental.decisions = 16.0;
-    prospect.skills.mental.anticipation = 16.0;
-    prospect.skills.mental.concentration = 16.0;
-    prospect.attributes.ambition = 16.0;
-    prospect.attributes.professionalism = 16.0;
-    let high_potential = TestCoach::build(14, 18, 12, 12, 12, 12, 10, 10);
-    let low_potential = TestCoach::build(14, 2, 12, 12, 12, 12, 10, 10);
-    let credible_high = ScoringEngine::from_staff_for_team(&high_potential, None, true)
-        .player_development_credibility(&prospect, slot, date);
-    let credible_low = ScoringEngine::from_staff_for_team(&low_potential, None, true)
-        .player_development_credibility(&prospect, slot, date);
-    assert!(
-        credible_high > credible_low,
-        "a better potential judge values the high-PA prospect more: {credible_high} vs {credible_low}"
-    );
-}
-
-#[test]
-fn low_judging_potential_requires_more_current_ability() {
-    let date = Utc::now().date_naive();
-    let slot = Contest::SLOT;
-    let low_potential = TestCoach::build(14, 2, 12, 12, 12, 12, 10, 10);
-    let engine = ScoringEngine::from_staff_for_team(&low_potential, None, true);
-    // Same role and age — one is high current ability, the other all upside.
-    let high_ca = DevPlayer::build(
-        1,
-        slot,
-        15,
-        PlayerSquadStatus::HotProspectForTheFuture,
-        19,
-        185,
-        190,
-        7,
-        0,
-    );
-    let high_pa = DevPlayer::build(
-        2,
-        slot,
-        15,
-        PlayerSquadStatus::HotProspectForTheFuture,
-        19,
-        80,
-        200,
-        7,
-        0,
-    );
-    let credible_ca = engine.player_development_credibility(&high_ca, slot, date);
-    let credible_pa = engine.player_development_credibility(&high_pa, slot, date);
-    assert!(
-        credible_ca > credible_pa,
-        "a poor potential judge leans on current ability: high-CA {credible_ca} vs high-PA {credible_pa}"
-    );
-}
-
-#[test]
-fn dead_rubber_league_gives_underused_prospect_minutes() {
-    let staff = StaffStub::build();
-
-    let (senior_a, youth_a) = Contest::contest_pair();
-    let dead_rubber = cup_team(Contest::roster(senior_a, youth_a));
-    let dead_result = SquadSelector::select_with_context(
-        &dead_rubber,
-        &staff,
-        &[],
-        &Contest::ctx(0.15, ClubPhilosophy::Balanced, SelectionCompetition::League),
-    );
-
-    let (senior_b, youth_b) = Contest::contest_pair();
-    let must_win = cup_team(Contest::roster(senior_b, youth_b));
-    let must_win_result = SquadSelector::select_with_context(
-        &must_win,
-        &staff,
-        &[],
-        &Contest::ctx(0.90, ClubPhilosophy::Balanced, SelectionCompetition::League),
-    );
-
-    assert!(
-        Contest::started(&dead_result, 2),
-        "a dead rubber should hand the underused prospect a start"
-    );
-    assert!(
-        !Contest::started(&must_win_result, 2),
-        "a must-win match keeps the senior — no pathway minutes for the prospect"
-    );
-}
-
-#[test]
-fn aging_incumbent_managed_only_when_successor_is_credible() {
-    let date = Utc::now().date_naive();
-    let slot = PlayerPositionType::DefenderCenter;
-    let engine = ScoringEngine::from_staff_for_team(
-        &TestCoach::good_youth(),
-        Some(ClubPhilosophy::DevelopAndSell),
-        true,
-    );
-    let aging = DevPlayer::aging_incumbent(1, slot, 35);
-
-    assert_eq!(
-        engine.late_career_succession_pressure(&aging, slot, date, &[]),
-        0.0,
-        "no successor -> no succession pressure"
-    );
-
-    let old_alternative = DevPlayer::build(
-        2,
-        slot,
-        15,
-        PlayerSquadStatus::FirstTeamRegular,
-        33,
-        150,
-        150,
-        7,
-        5,
-    );
-    assert_eq!(
-        engine.late_career_succession_pressure(&aging, slot, date, &[&old_alternative]),
-        0.0,
-        "an equally-old alternative is not a credible successor"
-    );
-
-    let young = DevPlayer::build(
-        3,
-        slot,
-        15,
-        PlayerSquadStatus::HotProspectForTheFuture,
-        19,
-        145,
-        190,
-        7,
-        0,
-    );
-    assert!(
-        engine.late_career_succession_pressure(&aging, slot, date, &[&young]) > 0.0,
-        "a credible young successor opens the succession question"
-    );
-}
-
-#[test]
-fn cup_final_ignores_future_pathway_adjustment() {
-    let date = Utc::now().date_naive();
-    let engine = ScoringEngine::from_staff_for_team(
-        &TestCoach::good_youth(),
-        Some(ClubPhilosophy::DevelopAndSell),
-        true,
-    );
-    let cup = Contest::cup(5, 5, 1000, 1000);
-    let slot = Contest::SLOT;
-    let youth = DevPlayer::build(
-        1,
-        slot,
-        15,
-        PlayerSquadStatus::HotProspectForTheFuture,
-        19,
-        140,
-        190,
-        7,
-        0,
-    );
-    let cb_slot = PlayerPositionType::DefenderCenter;
-    let aging = DevPlayer::aging_incumbent(2, cb_slot, 35);
-    assert_eq!(
-        engine.future_pathway_adjustment(&youth, slot, 0.95, date, Some(&cup), &[], true),
-        0.0,
-        "the final ignores the youth pathway pull"
-    );
-    assert_eq!(
-        engine.future_pathway_adjustment(&aging, cb_slot, 0.95, date, Some(&cup), &[], true),
-        0.0,
-        "the final ignores succession pressure too"
-    );
-}
-
-#[test]
-fn future_pathway_bonus_is_position_group_aware() {
-    let date = Utc::now().date_naive();
-    let engine = ScoringEngine::from_staff_for_team(&TestCoach::good_youth(), None, true);
-    let slot = Contest::SLOT;
-    let youth_forward = DevPlayer::with_skill(
-        DevPlayer::build(
-            1,
-            slot,
-            14,
-            PlayerSquadStatus::HotProspectForTheFuture,
-            19,
-            130,
-            185,
-            7,
-            0,
-        ),
-        10.0,
-    );
-    let strong_centre_back = DevPlayer::with_skill(
-        DevPlayer::build(
-            2,
-            PlayerPositionType::DefenderCenter,
-            15,
-            PlayerSquadStatus::KeyPlayer,
-            27,
-            175,
-            175,
-            5,
-            20,
-        ),
-        16.0,
-    );
-    let strong_forward = DevPlayer::with_skill(
-        DevPlayer::build(
-            3,
-            slot,
-            15,
-            PlayerSquadStatus::KeyPlayer,
-            27,
-            175,
-            175,
-            5,
-            20,
-        ),
-        16.0,
-    );
-    // A strong senior in another unit must not gate the forward prospect.
-    let gap_other_group =
-        engine.same_role_quality_gap(&youth_forward, slot, date, &[&strong_centre_back]);
-    assert!(
-        gap_other_group <= 0.0001,
-        "a defender must not gate a forward prospect: {gap_other_group}"
-    );
-    // A strong senior in the SAME unit does.
-    let gap_same_group =
-        engine.same_role_quality_gap(&youth_forward, slot, date, &[&strong_forward]);
-    assert!(
-        gap_same_group > 0.5,
-        "a strong same-role senior gates the prospect: {gap_same_group}"
-    );
-}
-
-#[test]
-fn bench_includes_development_player_when_starting_gap_is_too_large() {
-    let date = Utc::now().date_naive();
-    let engine = ScoringEngine::from_staff_for_team(
-        &TestCoach::good_youth(),
-        Some(ClubPhilosophy::DevelopAndSell),
-        true,
-    );
-    let slot = Contest::SLOT;
-    let youth = DevPlayer::build(
-        1,
-        slot,
-        13,
-        PlayerSquadStatus::HotProspectForTheFuture,
-        18,
-        120,
-        195,
-        7,
-        0,
-    );
-    let strong_senior = DevPlayer::build(
-        2,
-        slot,
-        19,
-        PlayerSquadStatus::KeyPlayer,
-        27,
-        185,
-        185,
-        5,
-        20,
-    );
-    let pool: Vec<&Player> = vec![&strong_senior];
-    // Starting is gated by the big same-role gap; the bench is not.
-    let pull_start = engine.future_pathway_adjustment(&youth, slot, 0.25, date, None, &pool, true);
-    let pull_bench = engine.future_pathway_adjustment(&youth, slot, 0.25, date, None, &[], false);
-    assert!(
-        pull_bench > pull_start,
-        "ungated bench pull should exceed the gated starting pull: bench {pull_bench} vs start {pull_start}"
-    );
-    assert!(pull_bench > 0.0, "the prospect still earns a bench place");
-}
-
-#[test]
-fn not_needed_player_does_not_gain_pathway_priority() {
-    let date = Utc::now().date_naive();
-    let slot = Contest::SLOT;
-    let engine = ScoringEngine::from_staff_for_team(
-        &TestCoach::good_youth(),
-        Some(ClubPhilosophy::DevelopAndSell),
-        true,
-    );
-    let not_needed = DevPlayer::build(
-        1,
-        slot,
-        15,
-        PlayerSquadStatus::NotNeeded,
-        19,
-        150,
-        195,
-        7,
-        0,
-    );
-    let prospect = DevPlayer::build(
-        2,
-        slot,
-        15,
-        PlayerSquadStatus::HotProspectForTheFuture,
-        19,
-        150,
-        195,
-        7,
-        0,
-    );
-    assert_eq!(
-        engine.future_pathway_adjustment(&not_needed, slot, 0.2, date, None, &[], true),
-        0.0,
-        "a frozen-out player gets no pathway pull"
-    );
-    assert!(
-        engine.future_pathway_adjustment(&prospect, slot, 0.2, date, None, &[], true) > 0.0,
-        "a prospect with the same numbers does"
-    );
 }
 
 // ========== Backup-goalkeeper coverage ==========
@@ -3297,8 +2232,9 @@ fn gk_unit_ctx<'a>(
         date: Utc::now().date_naive(),
         is_friendly: false,
         match_importance: 0.7,
-        policy: SelectionPolicy::StrongWithRotation,
-        cup: None,
+        stakes: 0.7,
+        room: 0.3,
+        bench_size: BENCH,
         coach: None,
         competition: super::SelectionCompetition::League,
         game_model: None,
@@ -3316,7 +2252,7 @@ fn full_bench_replaces_lowest_outfield_sub_with_backup_gk() {
 
     // A full bench of seven outfielders, no keeper, with a keeper available in
     // the remaining pool.
-    let outfield: Vec<Player> = (0..helpers::DEFAULT_BENCH_SIZE as u32)
+    let outfield: Vec<Player> = (0..BENCH as u32)
         .map(|i| {
             make_cup_player(
                 100 + i,
@@ -3348,13 +2284,13 @@ fn full_bench_replaces_lowest_outfield_sub_with_backup_gk() {
         .map(|p| MatchPlayer::from_player(1, p, PlayerPositionType::MidfielderCenter, false, None))
         .collect();
     let mut used_ids: Vec<u32> = subs.iter().map(|s| s.id).collect();
-    assert_eq!(subs.len(), helpers::DEFAULT_BENCH_SIZE);
+    assert_eq!(subs.len(), BENCH);
 
     scx.ensure_backup_goalkeeper(1, &mut subs, &mut used_ids, &remaining);
 
     assert_eq!(
         subs.len(),
-        helpers::DEFAULT_BENCH_SIZE,
+        BENCH,
         "bench size stays at the cap"
     );
     assert!(
@@ -3366,7 +2302,7 @@ fn full_bench_replaces_lowest_outfield_sub_with_backup_gk() {
     let outfield_left = subs.iter().filter(|s| s.id >= 100).count();
     assert_eq!(
         outfield_left,
-        helpers::DEFAULT_BENCH_SIZE - 1,
+        BENCH - 1,
         "exactly one outfield sub was dropped for the keeper"
     );
 }
@@ -3378,7 +2314,7 @@ fn force_selected_outfield_sub_is_not_dropped_for_backup_gk() {
     let engine = ScoringEngine::from_staff(&staff);
     let scx = gk_unit_ctx(&staff, &tactics, &engine);
 
-    let mut outfield: Vec<Player> = (0..helpers::DEFAULT_BENCH_SIZE as u32)
+    let mut outfield: Vec<Player> = (0..BENCH as u32)
         .map(|i| {
             make_cup_player(
                 100 + i,
@@ -3394,7 +2330,7 @@ fn force_selected_outfield_sub_is_not_dropped_for_backup_gk() {
         .collect();
     // Pin every outfield sub except the last to the matchday squad — the lone
     // non-pinned sub (id 106) is the only one the keeper may displace.
-    let last = 100 + helpers::DEFAULT_BENCH_SIZE as u32 - 1;
+    let last = 100 + BENCH as u32 - 1;
     for p in outfield.iter_mut() {
         if p.id != last {
             p.is_force_match_selection = true;
@@ -3460,7 +2396,7 @@ fn no_backup_gk_available_keeps_existing_emergency_behavior() {
     assert_eq!(starting_goalkeeper_id(&result), Some(1));
     assert_eq!(
         result.substitutes.len(),
-        helpers::DEFAULT_BENCH_SIZE,
+        BENCH,
         "the bench still fills with outfielders"
     );
     assert_eq!(
@@ -3719,7 +2655,7 @@ fn bench_role_prefers_fit_specialist_over_high_quality_misfit() {
     let mut pool: Vec<&Player> = vec![&forward, &defender];
     pool.extend(mids.iter());
     assert!(
-        pool.len() > helpers::DEFAULT_BENCH_SIZE,
+        pool.len() > BENCH,
         "the test needs a surplus to exercise the fit filter"
     );
 
@@ -3732,49 +2668,6 @@ fn bench_role_prefers_fit_specialist_over_high_quality_misfit() {
 }
 
 // ========== Prospect bench role uses the simulation date ==========
-
-#[test]
-fn prospect_bench_fit_uses_simulation_date() {
-    let staff = generate_test_staff();
-    let tactics = Tactics::new(MatchTacticType::T442);
-    let engine = ScoringEngine::from_staff(&staff);
-    // A simulation date far from any plausible wall-clock run date.
-    let sim_date = NaiveDate::from_ymd_opt(2045, 1, 1).unwrap();
-    let scx = super::competitive::SelectionScoringContext {
-        staff: &staff,
-        tactics: &tactics,
-        engine: &engine,
-        date: sim_date,
-        is_friendly: false,
-        match_importance: 0.3,
-        policy: SelectionPolicy::CupRotation,
-        cup: None,
-        coach: None,
-        competition: super::SelectionCompetition::League,
-        game_model: None,
-        succession_heirs: &[],
-        keeper_brief: None,
-    };
-    // 22 on the simulation date (born 2023) → the 0.65 prospect tier. Against
-    // the wall clock he'd read as a small child (the 1.0 tier), so a wall-clock
-    // age check would score differently — proving the fit uses `self.date`.
-    let mut player = make_cup_player(
-        1,
-        PlayerPositionType::MidfielderCenter,
-        14,
-        PlayerSquadStatus::HotProspectForTheFuture,
-        0,
-        5,
-        3,
-        50.0,
-    );
-    player.birth_date = NaiveDate::from_ymd_opt(2023, 1, 1).unwrap();
-    let fit = scx.bench_role_fit(&player, super::competitive::BenchRole::Prospect);
-    assert!(
-        (fit - 0.65).abs() < 1e-6,
-        "prospect fit should use the simulation date (22 → 0.65), got {fit}"
-    );
-}
 
 // ========== Post-assignment cohesion swap ==========
 
@@ -3895,9 +2788,8 @@ mod game_model_tests {
     use super::super::balance::{LineupBalanceReading, LineupBalanceScorer, LineupBalanceWeights};
     use super::super::bench_scenarios::{BenchScenario, BenchScenarioPlan, BenchScenarioScorer};
     use super::super::model::{
-        CompetitionSelectionRules, EligibilityDecision, EligibilityEvaluator,
-        MatchSelectionGameModel, MatchTypeClassifier, MatchTypeSignal, OpponentSelectionProfile,
-        TacticalObjective,
+        EligibilityDecision, EligibilityEvaluator, FixtureEligibility, MatchSelectionGameModel,
+        MatchTypeClassifier, MatchTypeSignal, OpponentSelectionProfile, TacticalObjective,
     };
     use super::super::role_duty::{
         OpponentMatchupScorer, RoleDutyFitScorer, RoleProfileResolver, SelectionRoleProfile,
@@ -4011,37 +2903,137 @@ mod game_model_tests {
         );
     }
 
-    #[test]
-    fn eligibility_evaluator_blocks_cup_tied() {
-        let player = make_test_player(99, &[(PlayerPositionType::Striker, 16)], 130, date());
-        let mut rules = CompetitionSelectionRules::open();
-        rules.cup_tied_player_ids.push(99);
-        match EligibilityEvaluator::evaluate(&player, &rules) {
-            EligibilityDecision::HardBlocked { .. } => {}
-            other => panic!("expected HardBlocked for cup-tied player, got {:?}", other),
+    /// A striker who played `apps` times in "the-cup" for another club
+    /// earlier in the campaign he is now in.
+    fn player_with_cup_record(apps: u16) -> Player {
+        use crate::league::Season;
+        use crate::{PlayerStatCompetitionKind, PlayerStatLedgerEntry, PlayerStatistics};
+        let mut player = make_test_player(99, &[(PlayerPositionType::Striker, 16)], 130, date());
+        player
+            .statistics_history
+            .season_ledger
+            .push(PlayerStatLedgerEntry {
+                seq_id: 0,
+                season_start_year: Season::from_date(date()).start_year,
+                team_slug: "old-club".into(),
+                team_name: "Old Club".into(),
+                team_reputation: 5_000,
+                league_slug: "l".into(),
+                league_name: "L".into(),
+                competition_kind: PlayerStatCompetitionKind::DomesticCup,
+                competition_slug: "the-cup".into(),
+                is_loan: false,
+                transfer_fee: None,
+                coverage_days: None,
+                spell_end: None,
+                statistics: PlayerStatistics {
+                    played: apps,
+                    ..Default::default()
+                },
+            });
+        player
+    }
+
+    fn fixture(cup: Option<&str>) -> FixtureEligibility {
+        FixtureEligibility {
+            cup_slug: cup.map(str::to_string),
+            team_slug: "new-club".into(),
+            ..Default::default()
         }
     }
 
     #[test]
-    fn eligibility_evaluator_allows_registered_player() {
-        let player = make_test_player(50, &[(PlayerPositionType::Striker, 16)], 130, date());
-        let mut rules = CompetitionSelectionRules::open();
-        rules.registered_player_ids = Some(vec![50, 51]);
-        match EligibilityEvaluator::evaluate(&player, &rules) {
-            EligibilityDecision::Eligible => {}
-            other => panic!("expected Eligible for registered player, got {:?}", other),
-        }
+    fn a_cup_tied_player_sits_that_cup_out_and_no_other_competition() {
+        let player = player_with_cup_record(2);
+        let evaluate =
+            |cup: Option<&str>| EligibilityEvaluator::evaluate(&player, &fixture(cup), date(), false);
+        assert!(matches!(
+            evaluate(Some("the-cup")),
+            EligibilityDecision::HardBlocked { .. }
+        ));
+        assert!(matches!(evaluate(Some("another-cup")), EligibilityDecision::Eligible));
+        assert!(matches!(evaluate(None), EligibilityDecision::Eligible));
+        assert!(player.cup_tied_in("the-cup", "new-club", date()));
+        assert!(
+            !player.cup_tied_in("the-cup", "old-club", date()),
+            "the club he played for is not another club"
+        );
     }
 
     #[test]
-    fn eligibility_evaluator_blocks_unregistered_player() {
-        let player = make_test_player(60, &[(PlayerPositionType::Striker, 16)], 130, date());
-        let mut rules = CompetitionSelectionRules::open();
-        rules.registered_player_ids = Some(vec![70, 71]);
-        match EligibilityEvaluator::evaluate(&player, &rules) {
-            EligibilityDecision::HardBlocked { .. } => {}
-            other => panic!("expected HardBlocked, got {:?}", other),
-        }
+    fn a_player_with_no_loan_and_no_cup_record_answers_no() {
+        let unused = player_with_cup_record(0);
+        assert!(!unused.cup_tied_in("the-cup", "new-club", date()), "named and never used");
+        let player = make_test_player(98, &[(PlayerPositionType::Striker, 16)], 130, date());
+        assert!(!player.cup_tied_in("the-cup", "new-club", date()));
+        assert!(!player.barred_against(77));
+        assert!(!player.move_is_agreed());
+    }
+
+    #[test]
+    fn a_loanee_is_barred_against_his_parent_club_only() {
+        use crate::PlayerClubContract;
+        let mut player = make_test_player(97, &[(PlayerPositionType::Striker, 16)], 130, date());
+        player.contract_loan = Some(PlayerClubContract::new_loan(
+            1000,
+            date() + chrono::Duration::days(200),
+            77,
+            770,
+            1,
+        ));
+        assert!(player.barred_against(77));
+        assert!(!player.barred_against(78));
+        let against = |club: u32| {
+            EligibilityEvaluator::evaluate(
+                &player,
+                &FixtureEligibility {
+                    opponent_club_id: Some(club),
+                    ..Default::default()
+                },
+                date(),
+                false,
+            )
+        };
+        assert!(matches!(against(77), EligibilityDecision::HardBlocked { .. }));
+        assert!(matches!(against(78), EligibilityDecision::Eligible));
+    }
+
+    #[test]
+    fn an_agreed_move_is_withheld_and_a_suspension_follows_its_family() {
+        use crate::club::player::events::discipline::CompetitionFamily;
+        let mut leaving = make_test_player(96, &[(PlayerPositionType::Striker, 16)], 130, date());
+        leaving.statuses.add(date(), PlayerStatusType::Bid);
+        assert!(leaving.move_is_agreed());
+        assert!(matches!(
+            EligibilityEvaluator::evaluate(&leaving, &FixtureEligibility::default(), date(), true),
+            EligibilityDecision::Withheld { .. }
+        ));
+
+        let mut sent_off = make_test_player(95, &[(PlayerPositionType::Striker, 16)], 130, date());
+        sent_off.on_match_disciplinary_result(0, 1, 5, CompetitionFamily::Continental);
+        let in_family = |family: CompetitionFamily, friendly: bool| {
+            EligibilityEvaluator::evaluate(
+                &sent_off,
+                &FixtureEligibility {
+                    family,
+                    ..Default::default()
+                },
+                date(),
+                friendly,
+            )
+        };
+        assert!(matches!(
+            in_family(CompetitionFamily::Domestic, false),
+            EligibilityDecision::Eligible
+        ));
+        assert!(matches!(
+            in_family(CompetitionFamily::Continental, false),
+            EligibilityDecision::HardBlocked { .. }
+        ));
+        assert!(matches!(
+            in_family(CompetitionFamily::Continental, true),
+            EligibilityDecision::Eligible
+        ));
     }
 
     #[test]
@@ -4138,8 +3130,8 @@ mod game_model_tests {
         assert!((model.opponent_profile.strength_ratio - 1.0).abs() < 1e-6);
         // Squad depth tracks the available pool size.
         assert!(model.squad_state.depth >= 0.0 && model.squad_state.depth <= 1.0);
-        // Coach policy values clamped to 0..1.
-        let p = &model.coach_policy;
+        // The coach's tendencies are clamped to 0..1.
+        let p = &model.coach_tendencies;
         assert!((0.0..=1.0).contains(&p.rotation_discipline));
         assert!((0.0..=1.0).contains(&p.medical_caution));
     }
@@ -4843,8 +3835,8 @@ fn development_guest_keeper_yields_to_own_keeper_behind_plan() {
 fn keeper_room_roster() -> Vec<Player> {
     let date = Utc::now().date_naive();
     let mut players = vec![
-        make_test_player(1, &[(PlayerPositionType::Goalkeeper, 20)], 160, date),
-        make_test_player(2, &[(PlayerPositionType::Goalkeeper, 20)], 164, date),
+        make_test_player(1, &[(PlayerPositionType::Goalkeeper, 20)], 142, date),
+        make_test_player(2, &[(PlayerPositionType::Goalkeeper, 20)], 144, date),
         make_test_player(3, &[(PlayerPositionType::Goalkeeper, 19)], 130, date),
         make_test_player(4, &[(PlayerPositionType::Goalkeeper, 17)], 115, date),
     ];
@@ -4900,6 +3892,7 @@ fn settled_room_brief(nominated: Option<u32>) -> KeeperSelectionBrief {
         nominee_assurance: None,
         fixture_standard: None,
         rested: None,
+        deputy_cup_reach: None,
     }
 }
 
@@ -4996,4 +3989,921 @@ fn a_manager_who_does_not_listen_picks_his_own_keeper() {
         Some(4),
         "advice nobody acts on changes nothing"
     );
+}
+
+// ========== Scenarios the selection and replacement change turns green ==========
+
+/// A 4-4-2 first team with two spare keepers as good as the first and a
+/// reserve of centre-backs, so the bench's role list runs out of fits.
+fn three_keeper_squad(date: NaiveDate) -> Team {
+    let tactics = Tactics::new(MatchTacticType::T442);
+    let mut players: Vec<Player> = tactics
+        .positions()
+        .iter()
+        .enumerate()
+        .map(|(i, &slot)| make_test_player(i as u32 + 1, &[(slot, 18)], 150, date))
+        .collect();
+    players.push(make_test_player(50, &[(PlayerPositionType::Goalkeeper, 20)], 150, date));
+    players.push(make_test_player(51, &[(PlayerPositionType::Goalkeeper, 20)], 148, date));
+    for i in 0..8 {
+        players.push(make_test_player(
+            60 + i,
+            &[(PlayerPositionType::DefenderCenter, 18)],
+            90,
+            date,
+        ));
+    }
+    cup_team(players)
+}
+
+#[test]
+fn a_bench_of_seven_names_one_keeper_when_three_are_fit() {
+    let date = Utc::now().date_naive();
+    let team = three_keeper_squad(date);
+    let staff = TestCoach::good_youth();
+    let result =
+        SquadSelector::select_with_context(&team, &staff, &[], &SelectionContext::default());
+
+    let bench_keepers = result
+        .substitutes
+        .iter()
+        .filter(|sub| team.players.find(sub.id).is_some_and(|p| p.positions.is_goalkeeper()))
+        .count();
+    assert_eq!(result.substitutes.len(), 7);
+    assert_eq!(
+        bench_keepers, 1,
+        "a bench of seven carries one keeper and six outfield options"
+    );
+}
+
+/// The selection spec's rotation scenarios: how much of a first-choice XI a
+/// side fields follows the stakes, the week and the football the plan owes.
+mod rotation_scenarios {
+    use super::*;
+    use crate::club::staff::PlanReading;
+    use crate::club::team::ClubWeek;
+    use crate::league::{KnockoutStakes, KnockoutTieReading, TableStakes};
+    use crate::r#match::squad::selection::model::CoachSelectionTendencies;
+
+    /// A 4-4-2 squad with a first choice (ids 1..=11) and a man behind him
+    /// (ids 21..=31) for every shirt, a coach whose plan is drawn on it,
+    /// and a ledger that moves as fixtures are played.
+    struct Season {
+        team: Team,
+        staff: Staff,
+        date: NaiveDate,
+    }
+
+    impl Season {
+        /// How far each second stands behind his first choice, shirt by
+        /// shirt, so the shirts do not all turn over on the same night.
+        const BEHIND: [u8; 11] = [34, 22, 28, 38, 24, 30, 23, 36, 26, 32, 29];
+
+        fn new() -> Self {
+            let date = Utc::now().date_naive();
+            let shape = Tactics::new(MatchTacticType::T442);
+            let mut players = Vec::new();
+            for (i, slot) in shape.positions().iter().enumerate() {
+                players.push(make_test_player(i as u32 + 1, &[(*slot, 20)], 150, date));
+                players.push(make_test_player(
+                    i as u32 + 21,
+                    &[(*slot, 20)],
+                    150 - Self::BEHIND[i],
+                    date,
+                ));
+            }
+            // The generator's random name, reputation and sharpness are not
+            // what these scenarios are about.
+            for player in players.iter_mut() {
+                player.player_attributes.current_reputation = 2000;
+                player.player_attributes.home_reputation = 2000;
+                player.player_attributes.world_reputation = 2000;
+                player.player_attributes.international_apps = 0;
+                player.skills.physical.match_readiness = 15.0;
+                player.birth_date = NaiveDate::from_ymd_opt(date.year() - 26, 1, 1).unwrap();
+            }
+            let team = cup_team(players);
+            let mut staff = generate_test_staff();
+            staff.id = 7;
+            staff
+                .squad_plan
+                .revise(&PlanReading::of(&team.players, &shape, date));
+            Season { team, staff, date }
+        }
+
+        /// One fixture: the named men play ninety minutes, the rest of a
+        /// fit squad watch.
+        fn play(&mut self, starters: &[u32]) {
+            for player in self.team.players.players.iter_mut() {
+                if starters.contains(&player.id) {
+                    player.happiness.note_official_appearance(true);
+                    player.happiness.official_minutes_since_join += 90;
+                    player.player_attributes.days_since_last_match = 0;
+                } else {
+                    player.on_match_overlooked(false);
+                }
+                player.player_attributes.days_since_last_match += 7;
+            }
+        }
+
+        /// A run of fixtures in which the first choices played everything.
+        fn after_a_settled_run(matches: usize) -> Self {
+            let mut season = Self::new();
+            let firsts: Vec<u32> = (1..=11).collect();
+            for _ in 0..matches {
+                season.play(&firsts);
+            }
+            season
+        }
+
+        fn context(&self, stakes: f32, week: ClubWeek, competition: SelectionCompetition) -> SelectionContext {
+            SelectionContext {
+                date: self.date,
+                match_importance: stakes,
+                room: Some(FixtureRoom::of(
+                    stakes,
+                    &week,
+                    &CoachSelectionTendencies::neutral(),
+                )),
+                week,
+                competition,
+                ..SelectionContext::default()
+            }
+        }
+
+        fn league(&self, stakes: f32) -> SelectionContext {
+            self.context(stakes, ClubWeek::free(), SelectionCompetition::League)
+        }
+
+        fn pick(&self, ctx: &SelectionContext) -> Vec<u32> {
+            let result = SquadSelector::select_with_context(&self.team, &self.staff, &[], ctx);
+            let mut ids: Vec<u32> = result.main_squad.iter().map(|p| p.id).collect();
+            ids.sort_unstable();
+            ids
+        }
+
+        fn owed(&self, id: u32) -> f32 {
+            let player = self.team.players.players.iter().find(|p| p.id == id).unwrap();
+            self.staff.squad_plan.entry(id).unwrap().owed(player)
+        }
+
+        fn first_choices_in(xi: &[u32]) -> usize {
+            xi.iter().filter(|id| **id <= 11).count()
+        }
+
+        fn changes(a: &[u32], b: &[u32]) -> usize {
+            b.iter().filter(|id| !a.contains(id)).count()
+        }
+    }
+
+    #[test]
+    fn a_must_win_leaves_no_room() {
+        let season = Season::after_a_settled_run(20);
+        assert!(season.owed(5) < -1.0, "a first choice is well ahead of his share");
+        assert!(season.owed(25) > 1.0, "and the man behind him is owed football");
+
+        let must_win = season.pick(&season.league(1.0));
+        assert_eq!(must_win, (1..=11).collect::<Vec<u32>>(), "nobody starts because he is owed");
+
+        let dead_rubber = season.pick(&season.league(0.1));
+        assert!(
+            Season::first_choices_in(&dead_rubber) < 8,
+            "the same ledger decides a fixture with nothing on it: {dead_rubber:?}"
+        );
+    }
+
+    #[test]
+    fn two_near_equal_fixtures_are_picked_alike() {
+        let season = Season::after_a_settled_run(4);
+        for stakes in [0.30_f32, 0.45, 0.58, 0.70, 0.85] {
+            let one = season.pick(&season.league(stakes));
+            let other = season.pick(&season.league(stakes + 0.02));
+            assert!(
+                Season::changes(&one, &other) <= 1,
+                "stakes {stakes}: {one:?} against {other:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_small_club_hosts_a_giant_in_the_cup() {
+        let season = Season::after_a_settled_run(10);
+        let stakes = KnockoutStakes::of(KnockoutTieReading {
+            round: 1,
+            total_rounds: 6,
+            opponent_ratio: 3.0,
+            aggregate_lead: None,
+        });
+        let ctx = season.context(
+            stakes,
+            ClubWeek::free(),
+            SelectionCompetition::DomesticCup {
+                round: 1,
+                total_rounds: 6,
+                own_reputation: 1000,
+                opponent_reputation: 3000,
+            },
+        );
+        let xi = season.pick(&ctx);
+        assert!(
+            Season::first_choices_in(&xi) >= 10,
+            "its strongest side for the night of its season: {xi:?}"
+        );
+    }
+
+    #[test]
+    fn a_giant_visits_a_small_club_in_an_early_round() {
+        let mut season = Season::new();
+        let firsts: Vec<u32> = (1..=11).collect();
+        // One first choice has been out of the side for half the run.
+        let without_six: Vec<u32> = firsts.iter().copied().filter(|id| *id != 6).collect();
+        for round in 0..10 {
+            season.play(if round < 5 { &firsts } else { &without_six });
+        }
+        assert!(season.owed(6) > 0.0, "he is himself behind his share");
+
+        let stakes = KnockoutStakes::of(KnockoutTieReading {
+            round: 1,
+            total_rounds: 6,
+            opponent_ratio: 0.3,
+            aggregate_lead: None,
+        });
+        let league_in_three_days = ClubWeek {
+            since_last: Some(4),
+            to_next: Some(3),
+            next_importance: TableStakes::ROUTINE,
+        };
+        let ctx = season.context(
+            stakes,
+            league_in_three_days,
+            SelectionCompetition::DomesticCup {
+                round: 1,
+                total_rounds: 6,
+                own_reputation: 3000,
+                opponent_reputation: 900,
+            },
+        );
+        let xi = season.pick(&ctx);
+        let owed: usize = xi.iter().filter(|id| season.owed(**id) > 0.0).count();
+        assert!(owed >= 6, "most of the side are men behind their share: {xi:?}");
+        assert!(xi.contains(&6), "a first choice who is behind his share may still start");
+    }
+
+    #[test]
+    fn the_league_match_before_a_decisive_european_night() {
+        let season = Season::after_a_settled_run(10);
+        let tie_in_three_days = ClubWeek {
+            since_last: Some(4),
+            to_next: Some(3),
+            next_importance: 0.97,
+        };
+        let league = season.pick(&season.context(
+            TableStakes::ROUTINE,
+            tie_in_three_days,
+            SelectionCompetition::League,
+        ));
+        assert!(
+            Season::first_choices_in(&league) <= 8,
+            "several first choices are rested for the league match: {league:?}"
+        );
+
+        let tie = season.pick(&season.context(
+            0.97,
+            ClubWeek::free(),
+            SelectionCompetition::ContinentalCup,
+        ));
+        assert!(
+            Season::first_choices_in(&tie) >= 10,
+            "and the strongest side plays the tie: {tie:?}"
+        );
+    }
+
+    #[test]
+    fn a_group_match_with_nothing_on_it_is_picked_like_a_league_match_with_nothing_on_it() {
+        let season = Season::after_a_settled_run(6);
+        let stakes = TableStakes::PROFESSIONAL_FLOOR;
+        let group = season.pick(&season.context(
+            stakes,
+            ClubWeek::free(),
+            SelectionCompetition::ContinentalCup,
+        ));
+        let league = season.pick(&season.league(stakes));
+        assert_eq!(group, league);
+    }
+
+    #[test]
+    fn a_full_week_between_league_matches_changes_the_xi_little() {
+        let mut season = Season::new();
+        let mut previous: Option<Vec<u32>> = None;
+        let mut changes = Vec::new();
+        for _ in 0..16 {
+            let xi = season.pick(&season.league(TableStakes::ROUTINE));
+            if let Some(previous) = &previous {
+                changes.push(Season::changes(previous, &xi));
+            }
+            season.play(&xi);
+            previous = Some(xi);
+        }
+        let mean = changes.iter().sum::<usize>() as f32 / changes.len() as f32;
+        assert!(mean <= 3.0, "changes from one match to the next: {changes:?}");
+        assert!(
+            changes.iter().all(|c| *c <= 5),
+            "no night turns the side over: {changes:?}"
+        );
+        assert!(
+            changes.iter().sum::<usize>() > 0,
+            "and over sixteen matches the men behind do get football"
+        );
+    }
+}
+
+/// Every side of a club picks from a plan: the same chart, shares and
+/// ledger, with one weight for how far the side exists to develop players.
+mod development_sides {
+    use super::*;
+    use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
+    use crate::club::staff::{PlanReading, ShareClimate};
+    use crate::club::team::ClubWeek;
+    use crate::league::TableStakes;
+    use crate::r#match::squad::selection::model::CoachSelectionTendencies;
+
+    /// The 26-year-old left forward of the eleven, and the teenager behind
+    /// him the staff believe in.
+    const SENIOR: u32 = 10;
+    const PROSPECT: u32 = 50;
+
+    struct Side {
+        team: Team,
+        staff: Staff,
+        date: NaiveDate,
+    }
+
+    impl Side {
+        /// What the staff read growth from: how a man applies himself and
+        /// how he reads the game.
+        fn believed_in(mut player: Player) -> Player {
+            player.skills.mental.determination = 18.0;
+            player.skills.mental.work_rate = 18.0;
+            player.attributes.professionalism = 18.0;
+            player.attributes.ambition = 18.0;
+            player.skills.mental.composure = 16.0;
+            player.skills.mental.decisions = 16.0;
+            player.skills.mental.anticipation = 16.0;
+            player.skills.mental.concentration = 16.0;
+            player
+        }
+
+        fn settled(mut player: Player, date: NaiveDate, age: i32) -> Player {
+            player.player_attributes.current_reputation = 2000;
+            player.player_attributes.home_reputation = 2000;
+            player.player_attributes.world_reputation = 2000;
+            player.player_attributes.international_apps = 0;
+            player.skills.physical.match_readiness = 15.0;
+            player.birth_date = NaiveDate::from_ymd_opt(date.year() - age, 1, 1).unwrap();
+            player
+        }
+
+        fn new(team_type: TeamType, prospect_age: i32) -> Self {
+            let date = Utc::now().date_naive();
+            let shape = Tactics::new(MatchTacticType::T442);
+            let mut players: Vec<Player> = shape
+                .positions()
+                .iter()
+                .enumerate()
+                .map(|(i, slot)| {
+                    Self::settled(
+                        make_test_player(i as u32 + 1, &[(*slot, 20)], 130, date),
+                        date,
+                        26,
+                    )
+                })
+                .collect();
+            players.push(Self::settled(
+                Self::believed_in(make_test_player(
+                    PROSPECT,
+                    &[(PlayerPositionType::ForwardLeft, 20)],
+                    121,
+                    date,
+                )),
+                date,
+                prospect_age,
+            ));
+            let mut team = cup_team(players);
+            team.team_type = team_type;
+            let mut side = Side {
+                team,
+                staff: generate_test_staff(),
+                date,
+            };
+            side.staff.id = 7;
+            side.staff.squad_plan = side.plan();
+            side
+        }
+
+        fn plan(&self) -> CoachSquadPlan {
+            let weight = self.team.team_type.development_weight();
+            let mut plan = CoachSquadPlan::new();
+            plan.revise(&PlanReading {
+                climate: ShareClimate {
+                    development: weight,
+                    side: weight,
+                    ..ShareClimate::ONE_COMPETITION
+                },
+                ..PlanReading::of(
+                    &self.team.players,
+                    &Tactics::new(MatchTacticType::T442),
+                    self.date,
+                )
+            });
+            plan
+        }
+
+        fn player(&self, id: u32) -> &Player {
+            self.team.players.players.iter().find(|p| p.id == id).unwrap()
+        }
+
+        fn league(&self, stakes: f32) -> SelectionContext {
+            let room = FixtureRoom::of(
+                stakes,
+                &ClubWeek::free(),
+                &CoachSelectionTendencies::neutral(),
+            );
+            SelectionContext {
+                date: self.date,
+                match_importance: stakes,
+                room: Some(FixtureRoom::for_side(
+                    room,
+                    self.team.team_type.development_weight(),
+                )),
+                ..SelectionContext::default()
+            }
+        }
+
+        fn pick(&self, staff: &Staff, stakes: f32) -> Vec<u32> {
+            let result =
+                SquadSelector::select_with_context(&self.team, staff, &[], &self.league(stakes));
+            let mut ids: Vec<u32> = result.main_squad.iter().map(|p| p.id).collect();
+            ids.sort_unstable();
+            ids
+        }
+
+        fn play(&mut self, starters: &[u32]) {
+            for player in self.team.players.players.iter_mut() {
+                if starters.contains(&player.id) {
+                    player.happiness.note_official_appearance(true);
+                    player.happiness.official_minutes_since_join += 90;
+                    player.player_attributes.days_since_last_match = 0;
+                } else {
+                    player.on_match_overlooked(false);
+                }
+                player.player_attributes.days_since_last_match += 7;
+            }
+        }
+    }
+
+    #[test]
+    fn a_b_team_in_a_real_league_starts_the_teenager_it_believes_in_more_often() {
+        let mut side = Side::new(TeamType::B, 19);
+        let today = AbilityEstimator::observable_level(side.player(SENIOR)) as i32
+            - AbilityEstimator::observable_level(side.player(PROSPECT)) as i32;
+        assert!(
+            (1..=6).contains(&today),
+            "the 26-year-old is slightly better today: {today} levels"
+        );
+        assert!(
+            PotentialEstimator::believed_growth(side.player(PROSPECT), side.date) > 0.4,
+            "and the staff rate the teenager highly"
+        );
+
+        let (mut senior, mut prospect) = (0, 0);
+        for _ in 0..30 {
+            let xi = side.pick(&side.staff, TableStakes::ROUTINE);
+            senior += usize::from(xi.contains(&SENIOR));
+            prospect += usize::from(xi.contains(&PROSPECT));
+            side.play(&xi);
+        }
+        assert!(
+            prospect > senior,
+            "over a season the teenager starts more: {prospect} against {senior}"
+        );
+        assert!(senior > 0, "and the senior man is still used");
+    }
+
+    #[test]
+    fn the_same_pair_at_a_first_team_is_led_by_the_man_who_is_better_today() {
+        let mut side = Side::new(TeamType::Main, 19);
+        let (mut senior, mut prospect) = (0, 0);
+        for _ in 0..30 {
+            let xi = side.pick(&side.staff, TableStakes::ROUTINE);
+            senior += usize::from(xi.contains(&SENIOR));
+            prospect += usize::from(xi.contains(&PROSPECT));
+            side.play(&xi);
+        }
+        assert!(senior > prospect, "{senior} against {prospect}");
+    }
+
+    #[test]
+    fn a_b_teams_decider_is_picked_on_the_day_alone() {
+        let mut side = Side::new(TeamType::B, 19);
+        for _ in 0..12 {
+            let xi = side.pick(&side.staff, TableStakes::ROUTINE);
+            side.play(&xi);
+        }
+        // The same coach with no plan picks on fit and nothing else.
+        let mut no_plan = side.staff.clone();
+        no_plan.squad_plan.clear();
+        assert_eq!(
+            side.pick(&side.staff, 1.0),
+            side.pick(&no_plan, 1.0),
+            "nobody starts a decider because football is owed to him"
+        );
+    }
+
+    #[test]
+    fn an_under_18_side_shares_its_minutes_by_how_much_the_club_believes_in_each_player() {
+        let staff = generate_test_staff();
+        let date = Utc::now().date_naive();
+        let shape = Tactics::new(MatchTacticType::T442);
+        let mut players = Vec::new();
+        for (i, slot) in shape.positions().iter().enumerate() {
+            let first = Side::settled(
+                make_test_player(i as u32 + 1, &[(*slot, 20)], 100, date),
+                date,
+                17,
+            );
+            let mut twin = first.clone();
+            twin.id = i as u32 + 21;
+            players.push(first);
+            players.push(twin);
+        }
+        // One of the two left forwards is the boy the staff believe in.
+        let believed = players.iter().position(|p| p.id == SENIOR).unwrap();
+        players[believed] = Side::believed_in(players[believed].clone());
+        let mut team = cup_team(players);
+        team.team_type = TeamType::U18;
+
+        for _ in 0..20 {
+            play_development_round(&mut team, &staff);
+        }
+        let starts = |id: u32| {
+            team.players
+                .players
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap()
+                .friendly_statistics
+                .played
+        };
+        assert!(
+            starts(SENIOR) > starts(SENIOR + 20),
+            "the believed-in boy plays more: {} against {}",
+            starts(SENIOR),
+            starts(SENIOR + 20)
+        );
+        assert!(starts(SENIOR + 20) >= 4, "and his twin is not left to rot");
+        for player in team.players.players.iter().filter(|p| !p.positions.is_goalkeeper()) {
+            assert!(
+                player.friendly_statistics.played >= 4,
+                "player {} has {} starts of 20",
+                player.id,
+                player.friendly_statistics.played
+            );
+        }
+    }
+}
+
+/// Selection reads only what a coach can observe.
+mod observable_only {
+    use super::*;
+
+    fn outfield(date: NaiveDate) -> Vec<Player> {
+        Tactics::new(MatchTacticType::T442)
+            .positions()
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| **slot != PlayerPositionType::Goalkeeper)
+            .map(|(i, slot)| make_test_player(100 + i as u32, &[(*slot, 20)], 130, date))
+            .collect()
+    }
+
+    #[test]
+    fn two_keepers_who_look_alike_are_treated_alike() {
+        let date = Utc::now().date_naive();
+        let staff = generate_test_staff();
+        let keeper = make_test_player(1, &[(PlayerPositionType::Goalkeeper, 20)], 140, date);
+        let pick = |hidden: [u8; 2]| {
+            let mut one = keeper.clone();
+            let mut other = keeper.clone();
+            other.id = 2;
+            one.player_attributes.current_ability = hidden[0];
+            one.player_attributes.potential_ability = hidden[0];
+            other.player_attributes.current_ability = hidden[1];
+            other.player_attributes.potential_ability = hidden[1];
+            let engine = ScoringEngine::from_staff(&staff);
+            let scores = (
+                engine.goalkeeper_score(&one, &staff, false, date),
+                engine.goalkeeper_score(&other, &staff, false, date),
+            );
+            let mut players = outfield(date);
+            players.push(one);
+            players.push(other);
+            let team = cup_team(players);
+            let result =
+                SquadSelector::select_with_context(&team, &staff, &[], &league_ctx(0.7));
+            (scores, starting_goalkeeper_id(&result))
+        };
+        // The coach's eye is his own, so two men he sees the same may still
+        // score a shade apart. What is hidden moves neither score.
+        let (scores, first) = pick([180, 100]);
+        let (swapped, second) = pick([100, 180]);
+        assert_eq!(scores, swapped, "each keeper scores the same whatever is hidden");
+        assert_eq!(first, second, "and what is hidden does not choose between them");
+    }
+
+    #[test]
+    fn an_emergency_fill_takes_the_best_by_what_the_staff_can_see() {
+        let date = Utc::now().date_naive();
+        let staff = generate_test_staff();
+        // No goalkeeper at the club: somebody has to go in goal.
+        let mut players = outfield(date);
+        players.push(make_test_player(
+            200,
+            &[(PlayerPositionType::MidfielderCenter, 20)],
+            130,
+            date,
+        ));
+        // One man is the best player to the eye and the worst on paper,
+        // another the reverse.
+        let seen = players.iter().position(|p| p.id == 104).unwrap();
+        FixtureSkills::stamp(&mut players[seen], 17.0);
+        players[seen].player_attributes.current_ability = 60;
+        let hidden = players.iter().position(|p| p.id == 107).unwrap();
+        players[hidden].player_attributes.current_ability = 199;
+
+        let team = cup_team(players);
+        let result = SquadSelector::select_with_context(&team, &staff, &[], &league_ctx(0.7));
+        assert_eq!(
+            starting_goalkeeper_id(&result),
+            Some(104),
+            "the fill is chosen on perceived level"
+        );
+    }
+}
+
+#[test]
+fn a_friendly_plays_the_man_in_the_shop_window_from_its_first_fixture() {
+    use crate::club::staff::{PlanReading, PlannedRole};
+
+    const FOR_SALE: u32 = 40;
+    let date = NaiveDate::from_ymd_opt(2026, 7, 10).unwrap();
+    let tactics = Tactics::new(MatchTacticType::T442);
+    let squad = |listed: bool| {
+        let mut players: Vec<Player> = tactics
+            .positions()
+            .iter()
+            .enumerate()
+            .map(|(i, &slot)| make_test_player(i as u32 + 1, &[(slot, 20)], 150, date))
+            .collect();
+        let mut second = make_test_player(
+            FOR_SALE,
+            &[(PlayerPositionType::MidfielderCenterLeft, 20)],
+            140,
+            date,
+        );
+        if listed {
+            second.statuses.add(date, crate::PlayerStatusType::Lst);
+        }
+        players.push(second);
+        let team = cup_team(players);
+        let mut staff = generate_test_staff();
+        staff.id = 7;
+        staff
+            .squad_plan
+            .revise(&PlanReading::of(&team.players, &tactics, date));
+        (team, staff)
+    };
+    let ctx = SelectionContext {
+        is_friendly: true,
+        match_importance: 0.1,
+        date,
+        season_matches_played: Some(0.0),
+        ..SelectionContext::default()
+    };
+    let starts = |listed: bool| {
+        let (team, staff) = squad(listed);
+        assert_eq!(
+            staff.squad_plan.role_of(FOR_SALE) == Some(PlannedRole::ShopWindow),
+            listed
+        );
+        SquadSelector::select_for_rotation_with_context(&team, &staff, &[], &ctx)
+            .main_squad
+            .iter()
+            .any(|p| p.id == FOR_SALE)
+    };
+    assert!(!starts(false), "behind a better man, he waits");
+    assert!(starts(true), "for sale, he is shown in the first friendly");
+}
+
+/// The bench: one goalkeeper, a man for each line on the pitch, a
+/// prospect's seat when the fixture leaves room, then the rest.
+mod bench_order {
+    use super::*;
+    use crate::club::staff::{PlanReading, PlannedRole};
+
+    /// A 4-4-2 eleven (ids 1..=11) and whoever the test adds behind it.
+    fn eleven(date: NaiveDate) -> Vec<Player> {
+        Tactics::new(MatchTacticType::T442)
+            .positions()
+            .iter()
+            .enumerate()
+            .map(|(i, &slot)| make_test_player(i as u32 + 1, &[(slot, 20)], 150, date))
+            .collect()
+    }
+
+    fn bench_of(team: &Team, staff: &Staff, ctx: &SelectionContext) -> Vec<u32> {
+        SquadSelector::select_with_context(team, staff, &[], ctx)
+            .substitutes
+            .iter()
+            .map(|p| p.id)
+            .collect()
+    }
+
+    fn keepers_among(team: &Team, ids: &[u32]) -> usize {
+        ids.iter()
+            .filter(|id| team.players.find(**id).is_some_and(|p| p.positions.is_goalkeeper()))
+            .count()
+    }
+
+    /// Twenty fit outfield players and three goalkeepers behind an eleven.
+    fn deep_squad(date: NaiveDate) -> Team {
+        let mut players = eleven(date);
+        players.push(make_test_player(50, &[(PlayerPositionType::Goalkeeper, 20)], 140, date));
+        players.push(make_test_player(51, &[(PlayerPositionType::Goalkeeper, 20)], 130, date));
+        let spare = [
+            PlayerPositionType::DefenderCenter,
+            PlayerPositionType::DefenderLeft,
+            PlayerPositionType::MidfielderCenter,
+            PlayerPositionType::MidfielderRight,
+            PlayerPositionType::Striker,
+        ];
+        for i in 0..10u32 {
+            players.push(make_test_player(
+                60 + i,
+                &[(spare[i as usize % spare.len()], 18)],
+                130,
+                date,
+            ));
+        }
+        cup_team(players)
+    }
+
+    #[test]
+    fn a_competition_with_nine_places_names_nine() {
+        let date = Utc::now().date_naive();
+        let team = deep_squad(date);
+        let staff = generate_test_staff();
+        let ctx = SelectionContext {
+            bench_size: 9,
+            ..SelectionContext::default()
+        };
+        let bench = bench_of(&team, &staff, &ctx);
+        assert_eq!(bench.len(), 9);
+        assert_eq!(keepers_among(&team, &bench), 1, "nine places still name one goalkeeper");
+    }
+
+    #[test]
+    fn a_bench_of_twelve_may_name_a_second_goalkeeper_and_a_shorter_one_never_does() {
+        let date = Utc::now().date_naive();
+        // Two spare keepers and only ten spare outfielders: twelve places
+        // have room for both keepers, nine do not take the second.
+        let team = deep_squad(date);
+        let staff = generate_test_staff();
+        let twelve = bench_of(
+            &team,
+            &staff,
+            &SelectionContext {
+                bench_size: 12,
+                ..SelectionContext::default()
+            },
+        );
+        assert_eq!(twelve.len(), 12);
+        assert_eq!(keepers_among(&team, &twelve), 2);
+
+        let mut thin = team;
+        thin.players.players.retain(|p| p.id < 66);
+        let nine = bench_of(
+            &thin,
+            &staff,
+            &SelectionContext {
+                bench_size: 9,
+                ..SelectionContext::default()
+            },
+        );
+        assert_eq!(
+            keepers_among(&thin, &nine),
+            1,
+            "a seat left empty is not given to a second keeper: {nine:?}"
+        );
+    }
+
+    #[test]
+    fn every_line_on_the_pitch_has_cover_before_a_seat_goes_on_quality() {
+        let date = Utc::now().date_naive();
+        let mut players = eleven(date);
+        players.push(make_test_player(50, &[(PlayerPositionType::Goalkeeper, 20)], 140, date));
+        // Eight strikers better than anything else on the bench, and one
+        // modest man for each of the other lines.
+        for i in 0..8u32 {
+            players.push(make_test_player(60 + i, &[(PlayerPositionType::Striker, 20)], 148, date));
+        }
+        let cover = [
+            (80, PlayerPositionType::DefenderCenter),
+            (81, PlayerPositionType::DefenderLeft),
+            (82, PlayerPositionType::MidfielderCenter),
+            (83, PlayerPositionType::MidfielderRight),
+        ];
+        for (id, position) in cover {
+            players.push(make_test_player(id, &[(position, 18)], 110, date));
+        }
+        let team = cup_team(players);
+        let bench = bench_of(&team, &generate_test_staff(), &SelectionContext::default());
+        for (id, position) in cover {
+            assert!(bench.contains(&id), "no cover for {position:?} on {bench:?}");
+        }
+        assert_eq!(bench.len(), BENCH);
+    }
+
+    /// A deep squad whose coach's plan holds one man on a development
+    /// path, a clear step below the seniors he competes with for a seat.
+    fn squad_with_a_prospect(date: NaiveDate) -> (Team, Staff) {
+        let team = deep_squad(date);
+        let mut staff = generate_test_staff();
+        staff.id = 7;
+        staff.squad_plan.revise(&PlanReading::of(
+            &team.players,
+            &Tactics::new(MatchTacticType::T442),
+            date,
+        ));
+        (team, staff)
+    }
+
+    const PROSPECT: u32 = 99;
+
+    fn with_prospect(date: NaiveDate) -> (Team, Staff) {
+        let (mut team, mut staff) = squad_with_a_prospect(date);
+        // Every line already has better cover than him.
+        let prospect =
+            make_test_player(PROSPECT, &[(PlayerPositionType::MidfielderCenter, 18)], 112, date);
+        team.players.players.push(prospect);
+        // The generator's draw of age, name and sharpness is not what a
+        // seat is decided on here: one boy, and men who are what they
+        // will be.
+        for player in team.players.players.iter_mut() {
+            let age = if player.id == PROSPECT { 18 } else { 28 };
+            player.birth_date = NaiveDate::from_ymd_opt(date.year() - age, 1, 1).unwrap();
+            player.player_attributes.current_reputation = 2000;
+            player.player_attributes.home_reputation = 2000;
+            player.player_attributes.world_reputation = 2000;
+            player.player_attributes.international_apps = 0;
+            player.skills.physical.match_readiness = 15.0;
+        }
+        staff.squad_plan.revise(&PlanReading::of(
+            &team.players,
+            &Tactics::new(MatchTacticType::T442),
+            date,
+        ));
+        staff
+            .squad_plan
+            .force_role(PROSPECT, PlannedRole::DevelopmentPathway, date);
+        (team, staff)
+    }
+
+    #[test]
+    fn a_prospect_is_given_a_seat_on_a_quiet_night_and_none_on_a_night_that_matters() {
+        let date = Utc::now().date_naive();
+        let (team, staff) = with_prospect(date);
+
+        let quiet = bench_of(
+            &team,
+            &staff,
+            &SelectionContext {
+                match_importance: 0.1,
+                ..SelectionContext::default()
+            },
+        );
+        assert!(quiet.contains(&PROSPECT), "a fixture with room names him: {quiet:?}");
+
+        let must_win = bench_of(
+            &team,
+            &staff,
+            &SelectionContext {
+                match_importance: 1.0,
+                ..SelectionContext::default()
+            },
+        );
+        assert!(
+            !must_win.contains(&PROSPECT),
+            "every place is filled for the match in front of the team: {must_win:?}"
+        );
+    }
 }

@@ -1,4 +1,5 @@
 use crate::club::board::mandate::SigningMandate;
+use crate::club::core::SellerCover;
 use crate::club::player::events::transfer_social::TransferContinentalPath;
 use crate::transfers::deal::negotiation::NegotiationPhase;
 use crate::transfers::deal::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
@@ -121,6 +122,8 @@ pub(crate) struct NegotiationData {
     /// `None` for domestic moves, whose importance is recomputed live in
     /// the resolver.
     pub(crate) foreign_seller_importance: Option<f32>,
+    /// Foreign moves only: the seller's cover for him, staged at creation.
+    pub(crate) foreign_seller_cover: Option<SellerCover>,
     /// Foreign moves only: the absolute floor the seller's books put under
     /// the fee, staged at creation — see the twin field on
     /// [`crate::transfers::deal::negotiation::TransferNegotiation`].

@@ -1703,6 +1703,7 @@ mod tests {
             free_kick_taker_id: None,
             selection_omissions: vec![],
             overlooked: vec![],
+            selection: Default::default(),
             coach_snapshot: None,
             coach_card: None,
             familiarity: None,
@@ -1770,7 +1771,8 @@ mod tests {
         let intents = rustc_hash::FxHashMap::from_iter([(
             201,
             PlayerMatchIntent {
-                planned_bench: 1.2,
+                owed: 1.0,
+                room: 1.0,
                 development: true,
                 cameo_from: 70,
                 minimum_lead: 2,

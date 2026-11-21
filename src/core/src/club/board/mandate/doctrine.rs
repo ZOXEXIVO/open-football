@@ -430,6 +430,7 @@ mod doctrine_tests {
                 stage: PathwayStage::Rotation,
                 verdict_multiple: None,
                 unsellable: false,
+                advised_to_move_on: false,
                 loans_used: 0,
                 book_value: 31_000_000.0,
             }

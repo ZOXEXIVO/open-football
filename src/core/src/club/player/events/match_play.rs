@@ -1242,9 +1242,7 @@ fn compute_drop_magnitude(player: &Player, ctx: &MatchSelectionContext) -> f32 {
         SelectionOmissionReason::FatigueManagement
         | SelectionOmissionReason::FitnessProtection
         | SelectionOmissionReason::ReturningFromInjury => 0.5,
-        SelectionOmissionReason::CupRotation
-        | SelectionOmissionReason::LowMatchImportanceRotation
-        | SelectionOmissionReason::YouthDevelopmentRotation => 0.6,
+        SelectionOmissionReason::LowMatchImportanceRotation => 0.6,
         SelectionOmissionReason::TacticalMismatch
         | SelectionOmissionReason::PositionFitIssue
         | SelectionOmissionReason::NoNaturalRoleInFormation

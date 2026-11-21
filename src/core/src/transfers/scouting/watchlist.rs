@@ -231,7 +231,7 @@ impl WatchDemand {
             let Some(brief) = club.transfer_plan.brief.as_ref() else {
                 continue;
             };
-            if brief.slots.is_empty() {
+            if brief.slots.is_empty() && brief.behind.is_empty() {
                 continue;
             }
             let Some(team) = club.teams.main().or_else(|| club.teams.teams.first()) else {
@@ -246,7 +246,7 @@ impl WatchDemand {
                     .resolve_for_transfers()
                     .best_scout_judging_ability(),
             );
-            for slot in &brief.slots {
+            for slot in brief.slots.iter().chain(&brief.behind) {
                 let Some(weakest) = MarketKnowledge::weakest_over_bar(&kindest, slot) else {
                     continue;
                 };
@@ -602,7 +602,7 @@ impl MarketKnowledge {
         let Some(brief) = plan.brief.as_ref() else {
             return Vec::new();
         };
-        if brief.slots.is_empty() {
+        if brief.slots.is_empty() && brief.behind.is_empty() {
             return Vec::new();
         }
         let Some(team) = club.teams.main().or_else(|| club.teams.teams.first()) else {
@@ -628,7 +628,7 @@ impl MarketKnowledge {
         let kindest = ClubOpinion::kindest(judging);
 
         let mut entries: Vec<(WatchlistEntry, FileReading)> = Vec::new();
-        for slot in brief.slots.iter() {
+        for slot in brief.slots.iter().chain(&brief.behind) {
             let envelope_ceiling = Self::envelope_ceiling(slot);
             // A shirt with no envelope is filled on loan or on a free.
             let terms = if envelope_ceiling > 0.0 {

@@ -188,6 +188,7 @@ fn a_solvent_club_loans_an_unrealised_mandate_rather_than_writing_it_off() {
         stage: PathwayStage::Rotation,
         verdict_multiple: None,
         unsellable: false,
+        advised_to_move_on: false,
         loans_used: 0,
         book_value: book,
     };

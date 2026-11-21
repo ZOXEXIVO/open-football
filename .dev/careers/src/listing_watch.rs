@@ -16,6 +16,8 @@ const STARTING_SHARE: f32 = 0.5;
 const ESTABLISHED_AGE: u8 = 24;
 const NAMED: usize = 25;
 const RELISTED_WITHIN_DAYS: u32 = 180;
+/// Days on the list at which the asking price is read against the first.
+const ASKING_MARKS: [u32; 3] = [30, 60, 90];
 
 struct Stretch {
     since: u32,
@@ -35,6 +37,10 @@ struct Stretch {
     age: u8,
     status: &'static str,
     days_left: i32,
+    /// The asking price read in the week he was listed.
+    asked_first: Option<f64>,
+    /// Marks of `ASKING_MARKS` already read.
+    asked_marks: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -54,6 +60,12 @@ struct LoanRead {
 pub struct ListingWatch {
     live_sale: HashSet<u32>,
     open: HashMap<u32, Stretch>,
+    /// Live asking prices, by player, as of the last weekly read.
+    asking: HashMap<u32, f64>,
+    /// The asking price at each mark as a share of the price at listing.
+    asking_held: [Vec<f32>; 3],
+    /// Mean value of first-team players at top-250 clubs, week by week.
+    value_weeks: Vec<(NaiveDate, f64, u32)>,
     started: BTreeMap<(Tier, bool, String), u32>,
     ended: BTreeMap<(Tier, bool, &'static str), Vec<u32>>,
     loan_reads: HashMap<u32, LoanRead>,
@@ -75,6 +87,7 @@ pub struct ListingWatch {
 impl ListingWatch {
     pub fn on_week(&mut self, data: &SimulatorData, ranks: &ClubRanks, date: NaiveDate) {
         self.live_sale.clear();
+        self.asking.clear();
         for continent in &data.continents {
             for country in &continent.countries {
                 for l in &country.transfer_market.listings {
@@ -85,6 +98,7 @@ impl ListingWatch {
                         )
                     {
                         self.live_sale.insert(l.player_id);
+                        self.asking.insert(l.player_id, l.asking_price.amount);
                     }
                 }
                 for club in &country.clubs {
@@ -132,6 +146,34 @@ impl ListingWatch {
             if !live_sale.contains(id) {
                 s.weeks_no_row += 1;
             }
+            let Some(&asking) = self.asking.get(id) else {
+                continue;
+            };
+            let Some(first) = s.asked_first else {
+                s.asked_first = Some(asking);
+                continue;
+            };
+            while s.asked_marks < ASKING_MARKS.len() && s.days >= ASKING_MARKS[s.asked_marks] {
+                if first > 0.0 {
+                    self.asking_held[s.asked_marks].push((asking / first) as f32);
+                }
+                s.asked_marks += 1;
+            }
+        }
+    }
+
+    /// One first-team player's value on a weekly read.
+    pub fn on_value(&mut self, p: &Player, now: &Snap, date: NaiveDate) {
+        if now.tier() > Tier::Top || now.on_loan {
+            return;
+        }
+        let value = p.value(date, now.league_rep, now.club_rep as u16);
+        match self.value_weeks.last_mut() {
+            Some((week, sum, n)) if *week == date => {
+                *sum += value;
+                *n += 1;
+            }
+            _ => self.value_weeks.push((date, value, 1)),
         }
     }
 
@@ -181,6 +223,8 @@ impl ListingWatch {
                     age: now.age,
                     status: now.status,
                     days_left: now.days_left,
+                    asked_first: None,
+                    asked_marks: 0,
                 },
             );
         }
@@ -513,6 +557,38 @@ impl ListingWatch {
         println!("  club pressure on the first of August, by tier, share of clubs at 0, up to .5, above .5:");
         for ((tier, kind, bucket), count) in &self.pressure {
             println!("    {:<14} {kind:<6} {bucket} {count:>6}", tier.label());
+        }
+        println!("  asking price against the price in the week of listing (weekly reads, every tier):");
+        for (mark, held) in ASKING_MARKS.iter().zip(&self.asking_held) {
+            let mut held = held.clone();
+            held.sort_by(|a, b| a.total_cmp(b));
+            if held.is_empty() {
+                println!("    after {mark:>2}d  n=0");
+                continue;
+            }
+            let mean = held.iter().sum::<f32>() / held.len() as f32;
+            println!(
+                "    after {mark:>2}d  n={:<6} mean {:>5.1}%  median {:>5.1}%  p10 {:>5.1}%",
+                held.len(),
+                mean * 100.0,
+                held[held.len() / 2] * 100.0,
+                held[held.len() / 10] * 100.0,
+            );
+        }
+        println!("  mean value of first-team players at top-250 clubs, week by week ($M), and the move on the week before:");
+        let mut before: Option<f64> = None;
+        let mut widest = (0.0f64, None);
+        for (week, sum, n) in &self.value_weeks {
+            let mean = sum / f64::from((*n).max(1));
+            let moved = before.map_or(0.0, |b| (mean - b) / b * 100.0);
+            if moved.abs() > widest.0 {
+                widest = (moved.abs(), Some(*week));
+            }
+            println!("    {week}  {:>7.3}  n={n:<6} {moved:>+6.2}%", mean / 1e6);
+            before = Some(mean);
+        }
+        if let Some(week) = widest.1 {
+            println!("    widest weekly move {:.2}% in the week to {week}", widest.0);
         }
         println!("  how a stretch on the list ended, by tier, starter for most of it:");
         for ((tier, starter, how), spans) in &self.ended {

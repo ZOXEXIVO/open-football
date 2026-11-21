@@ -606,6 +606,11 @@ impl Player {
             .on_loan_spell_reviewed(verdict, runway, loan_band, MindClock::day(date));
     }
 
+    /// His club has put him up for sale and no move is agreed yet.
+    pub fn is_on_the_market(&self) -> bool {
+        self.statuses.has(PlayerStatusType::Lst) && !self.move_is_agreed()
+    }
+
     /// The club has put him on the market, and why.
     ///
     /// The badge is the visible half of the decision; the contract flag

@@ -306,6 +306,24 @@ impl CoachProfile {
     /// 0 = stronger dampening). A high-judging-accuracy, high-man-
     /// management coach sees through one bad game; a high-recency,
     /// high-negativity coach lets it through unchecked.
+    /// A manager of ordinary habits hands the gloves back for the final.
+    pub const NEUTRAL_CUP_REACH: f32 = 0.85;
+
+    /// How far into a cup he lets his deputy keep the gloves, as a share of
+    /// the bracket: 1.0 is the final. A manager who manages men and rotates
+    /// lets him finish what he started; a conservative one takes the shirt
+    /// back for the late rounds.
+    pub fn deputy_cup_reach(&self) -> f32 {
+        (0.45 + 0.75 * (0.6 * self.man_management + 0.4 * self.rotation_tendency()))
+            .clamp(0.0, 1.0)
+    }
+
+    /// How readily he rotates, 0..1: less the more conservative he is and
+    /// the better he judges who his best players are.
+    pub fn rotation_tendency(&self) -> f32 {
+        (0.8 - self.conservatism * 0.5 - self.judging_accuracy * 0.3).clamp(0.0, 1.0)
+    }
+
     pub fn one_bad_game_dampener(&self) -> f32 {
         let damp = self.judging_accuracy * 0.4
             + self.man_management * 0.3

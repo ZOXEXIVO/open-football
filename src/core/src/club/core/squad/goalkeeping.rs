@@ -191,7 +191,7 @@ mod tests {
     use super::*;
     use crate::academy::ClubAcademy;
     use crate::club::player::core::builder::PlayerBuilder;
-    use crate::club::staff::goalkeeping::{KeeperAdvice, KeeperSuccession};
+    use crate::club::staff::goalkeeping::{KeeperAdvice, KeeperFixture, KeeperSuccession};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
     use crate::{
@@ -383,8 +383,15 @@ mod tests {
         assert_eq!(brief.deputy, Some(2));
         assert!(brief.authority > 0.0);
         assert_eq!(brief.nominated, Some(4));
-        assert!(
-            brief.selection_adjustment(4, 0.20) > brief.selection_adjustment(1, 0.20),
+        assert_eq!(
+            brief.keeper_for(
+                &KeeperFixture {
+                    stakes: 0.20,
+                    domestic_cup_progress: None,
+                },
+                &[1, 2, 3, 4]
+            ),
+            Some(4),
             "in a fixture the club can afford, the boy is the pick"
         );
     }

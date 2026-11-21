@@ -28,12 +28,18 @@ use rustc_hash::FxHashMap;
 
 use chrono::{Datelike, Duration, NaiveDate, Weekday};
 
+use crate::club::core::{DepartedPlayer, DepartureKind};
+use crate::transfers::squad::outlook::DepartureOutlook;
+use crate::transfers::value::PlayerValuationCalculator;
+
 use crate::club::board::ChairmanAmbition;
 use crate::club::player::contract::PlayerSquadStatus;
 use crate::transfers::deal::auction::DeadlineWindow;
 use crate::transfers::market::window::TransferCalendar;
 use crate::transfers::pipeline::processor::SquadPlayerInfo;
-use crate::transfers::pipeline::{TransferNeedPriority, TransferNeedReason};
+use crate::transfers::pipeline::{
+    TransferNeedPriority, TransferNeedReason, Vacancy, VacancyBrief, VacancyReading,
+};
 use crate::transfers::squad::{GroupNeed, GroupNeedScan, NeedKind};
 use crate::transfers::value::wage::WagePower;
 use crate::{Club, ClubPhilosophy, Country, PlayerFieldPositionGroup, PlayerPositionType};
@@ -526,6 +532,10 @@ impl BriefSlot {
 #[derive(Debug, Clone)]
 pub struct RecruitmentBrief {
     pub slots: Vec<BriefSlot>,
+    /// Shirts of first choices the club may lose, watched against the man
+    /// in them with the fee he would bring. Nothing is bought for them; the
+    /// desk keeps names, so a vacancy does not start from nothing.
+    pub behind: Vec<BriefSlot>,
     pub planned_on: NaiveDate,
     /// Money slack at plan time — carried so the diagnostics can explain a
     /// thin brief without recomputing it.
@@ -542,6 +552,7 @@ impl RecruitmentBrief {
     pub fn empty(date: NaiveDate) -> Self {
         RecruitmentBrief {
             slots: Vec::new(),
+            behind: Vec::new(),
             planned_on: date,
             money_slack: 0.0,
             ambition_drive: 0.0,
@@ -604,6 +615,36 @@ impl SquadPlanner {
     /// Most slots one brief carries. A window is a handful of decisions,
     /// not a rebuild — and each extra slot dilutes the envelopes.
     const MAX_SLOTS: usize = 5;
+
+    /// The brief for each shirt a departure left open and the review has
+    /// decided to search for: measured against the man who left, not
+    /// against whoever is in the shirt now.
+    pub(in crate::transfers) fn vacancy_briefs(
+        inputs: &PlanInputs<'_>,
+        searching: &[Vacancy],
+        budget: f64,
+        window: Option<(NaiveDate, NaiveDate)>,
+    ) -> Vec<VacancyBrief> {
+        if searching.is_empty() {
+            return Vec::new();
+        }
+        let plan = SquadPlan::build(inputs);
+        let mut left = budget.max(0.0);
+        searching
+            .iter()
+            .map(|vacancy| {
+                let brief = vacancy.brief(&VacancyReading {
+                    philosophy: inputs.club.philosophy,
+                    baseline_level: plan.baseline_for(vacancy.departed.shirt),
+                    budget: left,
+                    window,
+                    today: inputs.date,
+                });
+                left = (left - brief.money).max(0.0);
+                brief
+            })
+            .collect()
+    }
 
     pub(in crate::transfers) fn plan(inputs: &PlanInputs<'_>) -> RecruitmentBrief {
         let plan = SquadPlan::build(inputs);
@@ -745,6 +786,7 @@ impl SquadPlanner {
 
         RecruitmentBrief {
             slots,
+            behind: Self::names_behind(inputs, &plan),
             planned_on: inputs.date,
             money_slack: slack.ratio,
             ambition_drive: ambition.drive,
@@ -838,6 +880,89 @@ impl SquadPlanner {
             BriefTier::B => (lo.saturating_sub(5).max(18), hi.saturating_add(4)),
             BriefTier::C => (lo.saturating_sub(6).max(18), hi.saturating_add(8)),
         }
+    }
+
+    /// Outlook times importance from which the desk keeps names behind a
+    /// starter.
+    const WATCH_BEHIND: f32 = 0.2;
+    /// Starters watched behind per scout the club employs, and the most.
+    const BEHIND_PER_SCOUT: usize = 1;
+    const MOST_BEHIND: usize = 3;
+
+    /// The first choices the club may lose, most at risk first, as many as
+    /// its scouts can keep files for: each a watch slot measured against
+    /// him, with the fee he would bring as the money.
+    fn names_behind(inputs: &PlanInputs<'_>, plan: &SquadPlan) -> Vec<BriefSlot> {
+        let club = inputs.club;
+        let Some(main) = club.teams.main() else {
+            return Vec::new();
+        };
+        let coach_plan = &main.staffs.head_coach().squad_plan;
+        let scouts = main.staffs.resolve_for_transfers().scouts.len();
+        let room = (scouts * Self::BEHIND_PER_SCOUT).clamp(1, Self::MOST_BEHIND);
+        let side_level = {
+            let mut levels: Vec<u8> = inputs.squad.iter().map(|p| p.current_ability).collect();
+            levels.sort_unstable_by(|a, b| b.cmp(a));
+            levels.truncate(11);
+            (levels.iter().map(|l| u32::from(*l)).sum::<u32>() / levels.len().max(1) as u32) as u8
+        };
+        let (league_rep, club_rep) = PlayerValuationCalculator::seller_context_from_club(club);
+
+        let mut at_risk: Vec<(f32, BriefSlot)> = inputs
+            .squad
+            .iter()
+            .filter_map(|info| {
+                let entry = coach_plan.entry(info.player_id)?;
+                let shirt = entry.shirt.filter(|_| entry.place == 0)?;
+                let player = main.players.find(info.player_id)?;
+                let departed =
+                    DepartedPlayer::read(club, info.player_id, DepartureKind::Sold, inputs.date)?;
+                let outlook = DepartureOutlook::of(
+                    player,
+                    club.transfer_plan.is_marketed(info.player_id),
+                    info.current_ability,
+                    side_level,
+                    inputs.date,
+                );
+                let risk = outlook.likelihood() * departed.importance();
+                if risk < Self::WATCH_BEHIND {
+                    return None;
+                }
+                let fee = player.value(inputs.date, league_rep, club_rep);
+                let level = info.current_ability;
+                Some((
+                    risk,
+                    BriefSlot {
+                        position: shirt,
+                        group: shirt.position_group(),
+                        tier: BriefTier::B,
+                        gap: 0,
+                        // Near his level: a man the desk believes within
+                        // eight of him.
+                        min_gain: -8,
+                        envelope: 0.0,
+                        fee_reach: fee,
+                        age_band: Self::age_band(
+                            plan.age_profile_target(),
+                            BriefTier::B,
+                            &TransferNeedReason::Replacement,
+                        ),
+                        promised_status: BriefTier::B.promised_status(),
+                        target_level: level,
+                        baseline_level: plan.baseline_for(shirt),
+                        incumbent_level: level,
+                        incumbent: Some(MandateIncumbent {
+                            player_id: info.player_id,
+                            age: info.age,
+                        }),
+                        reason: TransferNeedReason::Replacement,
+                        priority: TransferNeedPriority::Optional,
+                    },
+                ))
+            })
+            .collect();
+        at_risk.sort_by(|a, b| b.0.total_cmp(&a.0));
+        at_risk.into_iter().take(room).map(|(_, slot)| slot).collect()
     }
 
     /// Brief the groups whose BENCH is short of the plan, at tier C.

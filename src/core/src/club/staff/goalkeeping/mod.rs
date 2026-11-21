@@ -31,7 +31,9 @@ pub mod room;
 mod tests;
 
 pub use advice::{KeeperAdvice, KeeperRecommendation, KeeperSuccession, KeeperTier, KeeperUrgency};
-pub use brief::KeeperSelectionBrief;
+pub use brief::{KeeperFixture, KeeperSelectionBrief};
 pub use department::{GoalkeepingDepartment, GoalkeepingStaff, KeeperCoachAuthority};
-pub use plan::{KeeperAssignment, KeeperNomination, KeeperReviewOutcome, KeeperRoomPlan};
+pub use plan::{
+    DeputyCompetition, KeeperAssignment, KeeperNomination, KeeperReviewOutcome, KeeperRoomPlan,
+};
 pub use room::{KeeperAgeCurve, KeeperRoom, RoomKeeper};

@@ -913,7 +913,9 @@ impl PersonalTermsPackager {
                     PromisedSquadStatus::HotProspectForTheFuture
                 }
                 TransferNeedReason::ExperiencedHead => PromisedSquadStatus::FirstTeamRegular,
-                TransferNeedReason::SuccessionPlanning => PromisedSquadStatus::FirstTeamRegular,
+                TransferNeedReason::SuccessionPlanning | TransferNeedReason::Replacement => {
+                    PromisedSquadStatus::FirstTeamRegular
+                }
                 _ => PromisedSquadStatus::FirstTeamSquadRotation,
             });
         }

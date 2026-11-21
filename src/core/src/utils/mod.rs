@@ -1,3 +1,4 @@
+mod assignment;
 pub mod cpu;
 mod date;
 mod estimation;
@@ -7,6 +8,7 @@ pub mod performance;
 pub mod random;
 mod strings;
 
+pub use assignment::SlotAssignment;
 pub use cpu::*;
 pub use date::*;
 pub use estimation::*;

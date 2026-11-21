@@ -267,6 +267,7 @@ impl DatabaseGenerator {
                     // nationalities once the world is assembled — see
                     // `SimulatorData::bootstrap_market_ledgers`.
                     market_ledger: ClubMarketLedger::default(),
+                    key_departures: Vec::new(),
                     // …and the lending half of the same memory, from the
                     // loanees the shipped world already has out.
                     loan_placements: LoanPlacementLedger::default(),

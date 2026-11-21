@@ -1483,6 +1483,7 @@ fn make_squad_simple(team_id: u32, level: u8) -> MatchSquad {
         free_kick_taker_id: None,
         selection_omissions: Vec::new(),
         overlooked: Vec::new(),
+        selection: Default::default(),
         coach_snapshot: None,
         coach_card: None,
         familiarity: None,
@@ -1564,6 +1565,7 @@ fn make_squad_viewer(
         free_kick_taker_id: None,
         selection_omissions: Vec::new(),
         overlooked: Vec::new(),
+        selection: Default::default(),
         coach_snapshot: None,
         coach_card: None,
         familiarity: None,
@@ -1955,6 +1957,7 @@ fn league_squad(t: &LeagueTeam) -> MatchSquad {
         free_kick_taker_id: None,
         selection_omissions: Vec::new(),
         overlooked: Vec::new(),
+        selection: Default::default(),
         coach_snapshot: None,
         coach_card: None,
         familiarity: None,
@@ -5310,6 +5313,7 @@ impl MixedQualityHarness {
             free_kick_taker_id: None,
             selection_omissions: Vec::new(),
             overlooked: Vec::new(),
+            selection: Default::default(),
             coach_snapshot: None,
             coach_card: None,
             familiarity: None,
@@ -5833,7 +5837,7 @@ fn print_usage() {
 // disproportionately ones holding a lead — finishing with zero subs
 // and an untouched bench. Real-world reference (5-sub era): ~4.5
 // subs/team, zero-sub teams essentially nonexistent.
-/// **The substitution census** — `dev_match subs N [level] [bench_gap]`.
+/// **The substitution census** — `dev_match subs N [level] [bench_gap] [bench]`.
 ///
 /// The only harness that fields a bench, and therefore the only one that can
 /// see anything about substitutions at all: `stats` plays eleven men with
@@ -5855,10 +5859,28 @@ fn print_usage() {
 struct SubstitutionCensus;
 
 impl SubstitutionCensus {
-    fn run(n_matches: usize, level: u8, bench_gap: u8) {
+    /// The longest bench a competition allows: a keeper, cover for every
+    /// line twice over, and a second keeper in the last seat.
+    const BENCH: [PlayerPositionType; 12] = [
+        PlayerPositionType::Goalkeeper,
+        PlayerPositionType::DefenderCenterLeft,
+        PlayerPositionType::DefenderCenterRight,
+        PlayerPositionType::MidfielderCenterLeft,
+        PlayerPositionType::MidfielderCenterRight,
+        PlayerPositionType::ForwardLeft,
+        PlayerPositionType::ForwardRight,
+        PlayerPositionType::DefenderLeft,
+        PlayerPositionType::MidfielderRight,
+        PlayerPositionType::DefenderRight,
+        PlayerPositionType::MidfielderLeft,
+        PlayerPositionType::Goalkeeper,
+    ];
+
+    fn run(n_matches: usize, level: u8, bench_gap: u8, bench: usize) {
+        let bench = bench.clamp(1, Self::BENCH.len());
         println!(
-            "Substitution usage: {} matches, both squads level {}",
-            n_matches, level
+            "Substitution usage: {} matches, both squads level {}, benches of {}",
+            n_matches, level, bench
         );
 
         struct SubsRow {
@@ -5898,16 +5920,7 @@ impl SubstitutionCensus {
                 })
                 .collect();
 
-            let sub_positions: [PlayerPositionType; 7] = [
-                PlayerPositionType::Goalkeeper,
-                PlayerPositionType::DefenderCenterLeft,
-                PlayerPositionType::DefenderCenterRight,
-                PlayerPositionType::MidfielderCenterLeft,
-                PlayerPositionType::MidfielderCenterRight,
-                PlayerPositionType::ForwardLeft,
-                PlayerPositionType::ForwardRight,
-            ];
-            let substitutes: Vec<MatchPlayer> = sub_positions
+            let substitutes: Vec<MatchPlayer> = Self::BENCH[..bench]
                 .iter()
                 .enumerate()
                 .map(|(i, &pos)| {
@@ -5929,6 +5942,7 @@ impl SubstitutionCensus {
                 free_kick_taker_id: None,
                 selection_omissions: Vec::new(),
                 overlooked: Vec::new(),
+                selection: Default::default(),
                 coach_snapshot: None,
                 coach_card: None,
                 familiarity: None,
@@ -6478,7 +6492,8 @@ Usage: {}", core::r#match::TeamPins::USAGE);
             let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(100);
             let level: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14);
             let bench_gap: u8 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(3);
-            SubstitutionCensus::run(n, level, bench_gap);
+            let bench: usize = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(7);
+            SubstitutionCensus::run(n, level, bench_gap, bench);
         }
         // State-of-mind A/B: two identical XIs, Team 2's keeper (or, with
         // `outfield`, its ten outfielders) a full step below the standard.
@@ -6780,6 +6795,7 @@ fn make_squad_calibrated(team_id: u32, level: u8) -> MatchSquad {
         free_kick_taker_id: None,
         selection_omissions: Vec::new(),
         overlooked: Vec::new(),
+        selection: Default::default(),
         coach_snapshot: None,
         coach_card: None,
         familiarity: None,

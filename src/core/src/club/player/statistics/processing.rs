@@ -1,3 +1,4 @@
+use crate::PlayerStatCompetitionKind;
 use crate::PlayerStatistics;
 use crate::TeamInfo;
 use crate::club::player::player::Player;
@@ -128,6 +129,23 @@ impl Player {
             .map(|e| Season::from_date(e.joined_date).start_year)
             .unwrap_or_else(|| Season::from_date(date).start_year)
             .max(self.statistics_history.frozen_league_season_floor())
+    }
+
+    /// He has already appeared in this season's edition of the cup for a
+    /// team other than `team_slug`: the record of a spell that closed in
+    /// the campaign his spell at `team_slug` is in.
+    pub fn cup_tied_in(&self, competition_slug: &str, team_slug: &str, date: NaiveDate) -> bool {
+        let campaign = self.spell_season_anchor(team_slug, date);
+        self.statistics_history.season_ledger.iter().any(|entry| {
+            entry.season_start_year == campaign
+                && entry.competition_slug == competition_slug
+                && entry.team_slug != team_slug
+                && matches!(
+                    entry.competition_kind,
+                    PlayerStatCompetitionKind::DomesticCup | PlayerStatCompetitionKind::ContinentalCup
+                )
+                && entry.statistics.played + entry.statistics.played_subs > 0
+        })
     }
 
     /// The single chokepoint for "this spell is done — freeze its match

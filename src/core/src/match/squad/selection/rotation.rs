@@ -21,6 +21,7 @@
 //! that no tie-break can hide.
 
 use crate::club::PlayerPositionType;
+use crate::club::staff::{CoachSquadPlan, PlannedRole};
 use crate::club::staff::perception::{
     AbilityEstimator, CoachProfile, DevelopmentFormEvidence, PotentialEstimator,
 };
@@ -32,6 +33,7 @@ use rustc_hash::FxHashMap;
 use std::cmp::Ordering;
 
 use super::helpers;
+use super::helpers::SlotFit;
 use super::helpers::KeeperAvailability;
 
 /// Development-fixture selector. Built once per side per matchday by the
@@ -58,6 +60,12 @@ pub(crate) struct DevelopmentSelection<'a> {
     /// the roster's own development (see `DevelopmentPlan::build` and
     /// `KeeperRotationPlan::pick`).
     pub guest_ids: &'a [u32],
+    /// The side's plan: who is planned for each shirt and the share of its
+    /// football each man carries. The same plan a first team is picked
+    /// from, drawn for a side that exists to develop players.
+    pub plan: &'a CoachSquadPlan,
+    /// Substitutes the competition lets the side name.
+    pub bench_size: usize,
 }
 
 impl DevelopmentSelection<'_> {
@@ -106,7 +114,7 @@ impl DevelopmentSelection<'_> {
                 Some(self.date),
             ));
             used_ids.push(gk.id);
-        } else if let Some(any) = helpers::pick_best_unused(available, &used_ids) {
+        } else if let Some(any) = SlotFit::pick_best_unused(available, &used_ids) {
             // No real keeper on the roster at all — same emergency
             // outfielder-in-goal fallback as the competitive path.
             squad.push(MatchPlayer::from_player(
@@ -168,7 +176,7 @@ impl DevelopmentSelection<'_> {
 
             match best {
                 Some(player) => {
-                    let pos = helpers::best_tactical_position(player, self.tactics);
+                    let pos = SlotFit::best_tactical_position(player, self.tactics);
                     squad.push(MatchPlayer::from_player(
                         self.team_id,
                         player,
@@ -196,7 +204,7 @@ impl DevelopmentSelection<'_> {
 
             match best {
                 Some(player) => {
-                    let pos = helpers::best_tactical_position(player, self.tactics);
+                    let pos = SlotFit::best_tactical_position(player, self.tactics);
                     squad.push(MatchPlayer::from_player(
                         self.team_id,
                         player,
@@ -217,7 +225,7 @@ impl DevelopmentSelection<'_> {
     /// underplayed remaining players — the bench is how fringe squad
     /// members collect cameo minutes between starts.
     pub(crate) fn select_substitutes(&self, remaining: &[&Player]) -> Vec<MatchPlayer> {
-        let mut subs: Vec<MatchPlayer> = Vec::with_capacity(helpers::DEFAULT_BENCH_SIZE);
+        let mut subs: Vec<MatchPlayer> = Vec::with_capacity(self.bench_size);
         let mut used_ids: Vec<u32> = Vec::new();
 
         if let Some(gk) = KeeperRotationPlan::pick(self, remaining, &used_ids) {
@@ -232,10 +240,12 @@ impl DevelopmentSelection<'_> {
         }
 
         let plan = DevelopmentPlan::build(self, remaining, helpers::DEFAULT_SQUAD_SIZE - 1);
-        while subs.len() < helpers::DEFAULT_BENCH_SIZE {
+        while subs.len() < self.bench_size {
+            // One goalkeeper on the bench; the gloves' turn comes round in
+            // the starting XI.
             let best = remaining
                 .iter()
-                .filter(|p| !used_ids.contains(&p.id))
+                .filter(|p| !used_ids.contains(&p.id) && !p.positions.is_goalkeeper())
                 .max_by(|a, b| {
                     let sa = self.bench_score(&plan, a);
                     let sb = self.bench_score(&plan, b);
@@ -245,7 +255,7 @@ impl DevelopmentSelection<'_> {
 
             match best {
                 Some(player) => {
-                    let pos = helpers::best_tactical_position(player, self.tactics);
+                    let pos = SlotFit::best_tactical_position(player, self.tactics);
                     subs.push(MatchPlayer::from_player(
                         self.team_id,
                         player,
@@ -283,7 +293,7 @@ impl DevelopmentSelection<'_> {
         // is the real hierarchy); a guest keeps only his familiarity
         // fraction, re-based onto the own squad's mean grade, so a
         // stronger visitor slots in as a positional peer, not a superior.
-        let raw_fit = helpers::position_fit_score(player, slot_position);
+        let raw_fit = SlotFit::position_fit_score(player, slot_position);
         let fit = if self.is_guest(player.id) {
             (raw_fit / DevelopmentPlan::primary_position_level(player))
                 * plan.own_mean_position_level
@@ -427,10 +437,10 @@ impl MatchInvolvement {
     }
 }
 
-/// Season minutes plan for a candidate pool: per-player development
-/// priority (assessed potential + observable level), the appearance
-/// share that priority earns, and the deficit against what the player
-/// has actually been given. Built once per selection pass.
+/// The side's plan read against a candidate pool: the share of the
+/// side's football the plan gives each man, and the deficit against what
+/// he has actually been given in the fixtures this side plays. Built once
+/// per selection pass.
 struct DevelopmentPlan {
     profiles: FxHashMap<u32, CandidateProfile>,
     /// Mean primary position level (1-20 grade scale) of the team's own
@@ -465,20 +475,6 @@ impl DevelopmentPlan {
     /// Deficit is expressed in matches and capped so a long-absent player
     /// re-enters the XI without erasing positional structure entirely.
     const DEFICIT_CAP: f32 = 6.0;
-    /// Priority band: even the squad's least-backed player keeps a real
-    /// minutes share (0.6), the most-backed reaches 1.4 before the
-    /// final-year showcase bump.
-    const PRIORITY_FLOOR: f32 = 0.6;
-    const PRIORITY_SPAN: f32 = 0.8;
-    /// Bounds on how much of the priority blend chases assessed
-    /// potential rather than observable level, scaled by the coach's
-    /// potential judgement: a poor judge still knows the obvious
-    /// wonderkid (0.30), a sharp one plans minutes around upside (0.65).
-    const CEILING_SHARE_FLOOR: f32 = 0.30;
-    const CEILING_SHARE_SPAN: f32 = 0.35;
-    /// Final-year showcase multiplier — the age-cap season is the club's
-    /// last look before the pro-contract / release decision.
-    const SHOWCASE_BUMP: f32 = 1.12;
     const FORM_BASELINE: f32 = 6.7;
     const FORM_SCALE: f32 = 0.9;
     const FORM_CAP: f32 = 0.9;
@@ -500,6 +496,8 @@ impl DevelopmentPlan {
     /// have the development side field the visitor for his ability — the
     /// inverse of what the visit is for.
     const GUEST_QUALITY: f32 = 0.5;
+    /// Fixtures a man the club is selling is read as already owed for.
+    const SHOP_WINDOW_HEAD_START: f32 = 6.0;
     /// Fallback position-level grade when a plan has no own candidates to
     /// average over.
     const NEUTRAL_POSITION_LEVEL: f32 = 12.0;
@@ -524,47 +522,31 @@ impl DevelopmentPlan {
             .copied()
             .collect();
 
-        let ceilings: Vec<f32> = own
-            .iter()
-            .map(|p| PotentialEstimator::observable_ceiling(p, sel.date) as f32)
-            .collect();
         let levels: Vec<f32> = own
             .iter()
             .map(|p| AbilityEstimator::observable_level(p) as f32)
             .collect();
-        let ceiling_norm = RangeNorm::over(&ceilings);
         let level_norm = RangeNorm::over(&levels);
 
-        let age_cap = sel.team_type.development_age_cap();
-        let ceiling_share = Self::CEILING_SHARE_FLOOR
-            + Self::CEILING_SHARE_SPAN * sel.coach.potential_accuracy.clamp(0.0, 1.0);
-        let weights: Vec<f32> = own
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                let mut w = Self::PRIORITY_FLOOR
-                    + Self::PRIORITY_SPAN
-                        * (ceiling_share * ceiling_norm.of(ceilings[i])
-                            + (1.0 - ceiling_share) * level_norm.of(levels[i]));
-                if let Some(cap) = age_cap
-                    && DateUtils::age(p.birth_date, sel.date) >= cap
-                {
-                    w *= Self::SHOWCASE_BUMP;
-                }
-                w
-            })
-            .collect();
-        let mean_weight = if weights.is_empty() {
-            1.0
-        } else {
-            weights.iter().sum::<f32>() / weights.len() as f32
-        };
-
-        let slot_share = slots as f32 / own.len().max(1) as f32;
+        // A man the plan has not reached yet is expected an even share.
+        let even_share = (slots as f32 / own.len().max(1) as f32).min(1.0);
         for (i, p) in own.iter().enumerate() {
-            let expected_share = (slot_share * weights[i] / mean_weight.max(f32::EPSILON)).min(1.0);
-            let deficit = (expected_share * sel.team_matches - MatchInvolvement::involvement(p))
-                .clamp(-Self::DEFICIT_CAP, Self::DEFICIT_CAP);
+            let expected_share = sel
+                .plan
+                .entry(p.id)
+                .map(|entry| entry.share)
+                .unwrap_or(even_share);
+            // A man in the shop window is owed his share from the first
+            // fixture: the window does not wait for a season to build a
+            // debt.
+            let head_start = if sel.plan.role_of(p.id) == Some(PlannedRole::ShopWindow) {
+                Self::SHOP_WINDOW_HEAD_START
+            } else {
+                0.0
+            };
+            let deficit = (expected_share * (sel.team_matches + head_start)
+                - MatchInvolvement::involvement(p))
+            .clamp(-Self::DEFICIT_CAP, Self::DEFICIT_CAP);
             profiles.insert(
                 p.id,
                 CandidateProfile {
@@ -834,28 +816,20 @@ impl KeeperRotationPlan {
 /// Want-away nudge for rotation / development selection. Unlike the
 /// competitive path it has no disaffection arm — a development fixture is
 /// exactly where a listed player should get minutes to stay sharp. It
-/// only (a) gives a small keep-sharp pull to a listed / transfer-requested
-/// / unhappy player with no imminent move, and (b) protects a
-/// near-transfer (`Bid`/`Trn`) player from injury in a meaningless game.
+/// gives a small keep-sharp pull to a listed / transfer-requested /
+/// unhappy player.
 struct RotationWantAway;
 
 impl RotationWantAway {
     /// Small keep-sharp pull for a want-away player getting rotation minutes.
     const KEEP_SHARP: f32 = 2.0;
-    /// Protection strong enough to bench a near-sold player from a rotation /
-    /// development XI whenever there is anyone else to field.
-    const PROTECT_NEAR_TRANSFER: f32 = -12.0;
 
     fn adjustment(player: &Player, is_guest: bool) -> f32 {
-        if player.statuses.has(PlayerStatusType::Trn) || player.statuses.has(PlayerStatusType::Bid)
-        {
-            return Self::PROTECT_NEAR_TRANSFER;
-        }
         // A guest's entire standing is his fixed practice pull — the
         // fixture-less squads that send guests are exactly where listed
         // players sit, so stacking keep-sharp on top would hand nearly
         // every visitor a second, larger pull and crowd out the team's
-        // own development. Injury protection above still applies.
+        // own development.
         if is_guest {
             return 0.0;
         }

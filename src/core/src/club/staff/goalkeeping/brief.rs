@@ -36,50 +36,27 @@ pub struct KeeperSelectionBrief {
     pub fixture_standard: Option<f32>,
     /// The keeper the department wants kept out of the big nights.
     pub rested: Option<u32>,
+    /// How far into the domestic cup the deputy keeps the gloves, when the
+    /// club has declared the cup his: 1.0 is the final.
+    pub deputy_cup_reach: Option<f32>,
+}
+
+/// What a fixture is, as far as the gloves are concerned.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct KeeperFixture {
+    /// What the fixture is worth to the side. Never the week: a crowded
+    /// calendar does not rest a goalkeeper.
+    pub stakes: f32,
+    /// For a domestic cup tie, how far through the bracket it sits: 0 the
+    /// first round, 1 the final.
+    pub domestic_cup_progress: Option<f32>,
 }
 
 impl KeeperSelectionBrief {
-    /// Standing of the declared number one, before the manager's deference
-    /// scales it.
-    ///
-    /// What matters is the NET figure against the deputy, since he is the
-    /// only man who can realistically take the shirt: `NUMBER_ONE_STANDING -
-    /// DEPUTY_STANDING`, which is 2.8. `goalkeeper_score` moves about three
-    /// points per ten of assessed ability, so that is some nine ability
-    /// points of stickiness at full authority — deliberately a little more
-    /// than the department's own `USURP_MARGIN`, so the order changes
-    /// because the department changed it at a review and never because a
-    /// deputy turned up a point fresher on a Saturday. That is how keepers
-    /// are actually handled, and it is the whole reason for declaring an
-    /// order at all.
-    const NUMBER_ONE_STANDING: f32 = 4.0;
-
-    /// The deputy's standing over the rest of the room. It only has to
-    /// settle who goes in when the number one cannot, so the club does not
-    /// field its fourth keeper because he happens to be fresh.
-    const DEPUTY_STANDING: f32 = 1.2;
-    const THIRD_STANDING: f32 = 0.4;
-
-    /// The nomination.
-    ///
-    /// Not a nudge — a decision, in the same sense as the cup deputy's
-    /// designation. A goalkeeping coach who says a boy is ready is asking
-    /// for him to be picked ahead of a better keeper, because that is the
-    /// only way a young keeper is ever made, and an amount that merely
-    /// competes with the ability gap would never actually get anybody
-    /// played: the point of a nomination is that it is not the marginal
-    /// call the argmax was already making.
-    ///
-    /// At full authority it is worth around seventy ability points, and
-    /// that is the right order of magnitude, because the bound on who plays
-    /// is not this number. It is the department's own gate: a nominated
-    /// keeper has cleared the readiness band against the club's LAST senior
-    /// keeper, is at least eighteen, is not injured, is starved of senior
-    /// minutes, and is the only keeper nominated at the club. What is left
-    /// for the magnitude to decide is whether the manager acts on all that
-    /// — so it scales with his deference, and a department he half-listens
-    /// to gets its boy a game only when the gap is modest anyway.
-    const NOMINATION_PULL: f32 = 22.0;
+    /// How much of the manager's ear and the fixture's room a request needs
+    /// before he acts on it. A department he half-listens to gets its boy a
+    /// game only in a fixture with nothing on it.
+    const ACTS_ON: f32 = 0.5;
 
     /// Fixture importance at or below which the club can afford to hand a
     /// prospect the gloves, and the importance by which it can no longer
@@ -91,9 +68,6 @@ impl KeeperSelectionBrief {
     /// nominee is used to, and the fixture is no longer his: a debut is
     /// made where the step is small, not where the stakes merely are.
     const STEP_LIMIT: f32 = 0.08;
-    /// What resting a shaken keeper from a big night is worth, against the
-    /// number one's standing, at full authority.
-    const REST_PULL: f32 = 10.0;
 
     /// Build the matchday read from the standing plan.
     pub fn from_plan(plan: &KeeperRoomPlan, today: NaiveDate) -> Self {
@@ -109,6 +83,7 @@ impl KeeperSelectionBrief {
                 .and_then(|n| n.perceived_assurance),
             fixture_standard: None,
             rested: plan.rested(),
+            deputy_cup_reach: plan.deputy_competition().map(|declared| declared.reach),
         }
     }
 
@@ -150,49 +125,46 @@ impl KeeperSelectionBrief {
         1.0 - (match_importance - Self::STAKES_FREE) / (Self::STAKES_CLOSED - Self::STAKES_FREE)
     }
 
-    /// The department's contribution to one keeper's selection score.
+    /// The keeper the declared order names for a fixture, among those
+    /// `eligible` for it. `None` when nobody in the order can play.
     ///
-    /// Additive and signed, like every other term the selector folds in. A
-    /// silent brief, or a keeper nobody has an opinion about, returns zero.
-    pub fn selection_adjustment(&self, player_id: u32, match_importance: f32) -> f32 {
+    /// The number one whenever he is eligible, except on a night that is
+    /// the deputy's by declaration, a night the manager acts on the
+    /// department's nomination, or a big night it wants a shaken number one
+    /// kept out of. Nothing here weighs form, freshness or football owed.
+    pub fn keeper_for(&self, fixture: &KeeperFixture, eligible: &[u32]) -> Option<u32> {
+        let can = |id: Option<u32>| id.filter(|id| eligible.contains(id));
         let authority = self.authority.clamp(0.0, 1.0);
-        if authority <= f32::EPSILON {
-            return 0.0;
+
+        if let Some(nominee) = can(self.nominated)
+            && authority * Self::stakes_room(fixture.stakes) * self.step_room() >= Self::ACTS_ON
+        {
+            return Some(nominee);
         }
 
-        // How far this fixture belongs to the boy. Zero once the result
-        // matters, and then the room is the number one's as usual.
-        let room = if self.nominated.is_some() {
-            Self::stakes_room(match_importance) * self.step_room()
+        let deputys_night = fixture
+            .domestic_cup_progress
+            .zip(self.deputy_cup_reach)
+            .is_some_and(|(progress, reach)| progress <= reach + f32::EPSILON);
+        let rested = self.rested.is_some()
+            && self.rested == self.number_one
+            && fixture.stakes >= Self::STAKES_CLOSED
+            && authority >= Self::ACTS_ON;
+
+        let order = if deputys_night || rested {
+            [self.deputy, self.number_one, self.third]
         } else {
-            0.0
+            [self.number_one, self.deputy, self.third]
         };
+        order.into_iter().find_map(can)
+    }
 
-        // A shaken keeper is kept out of the nights that matter.
-        let rest = if self.rested == Some(player_id) && match_importance >= Self::STAKES_CLOSED {
-            -Self::REST_PULL * authority
-        } else {
-            0.0
-        };
-
-        if self.nominated == Some(player_id) && room > 0.0 {
-            return Self::NOMINATION_PULL * authority * room + rest;
-        }
-
-        if self.number_one == Some(player_id) {
-            // A live nomination is a request to leave the number one out of
-            // THIS game, so his standing gives way as the fixture becomes
-            // the one the club has set aside — and comes straight back the
-            // moment the stakes rise. Without this the two halves of the
-            // department's own advice would compete with each other.
-            return Self::NUMBER_ONE_STANDING * authority * (1.0 - room) + rest;
-        }
-        if self.deputy == Some(player_id) {
-            return Self::DEPUTY_STANDING * authority + rest;
-        }
-        if self.third == Some(player_id) {
-            return Self::THIRD_STANDING * authority + rest;
-        }
-        rest
+    /// The next keeper in the declared order among those `eligible`: the
+    /// man who sits on the bench behind whoever was asked for.
+    pub fn next_in_order(&self, eligible: &[u32]) -> Option<u32> {
+        [self.number_one, self.deputy, self.third]
+            .into_iter()
+            .flatten()
+            .find(|id| eligible.contains(id))
     }
 }

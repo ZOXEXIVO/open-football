@@ -1,12 +1,9 @@
 //! High-level strategy the coach approaches a fixture with.
 //!
-//! Distinct from [`SelectionPolicy`] — the policy is a tactical
-//! squad-rotation knob the existing selection code already implements,
-//! while [`CoachStrategy`] is the broader stance the coach takes that
-//! drives *how strongly* each assessment dimension nudges the score.
-//! The selection layer reads both: policy still picks the rotation
-//! shape, strategy decides how much weight a poor-form signal carries
-//! in that shape.
+//! How much a side rotates is not decided here: that follows the room a
+//! fixture leaves and the football the plan owes. [`CoachStrategy`] is the
+//! stance the coach takes that drives *how strongly* each assessment
+//! dimension — form, trust, risk, role fit — nudges his reading of a man.
 //!
 //! The strategy is derived once per match-day from the staff's
 //! personality, the club philosophy, the match importance, the

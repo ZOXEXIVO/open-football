@@ -464,7 +464,7 @@ mod tests {
     use crate::transfers::pipeline::SellerPlausibilityContext;
     use crate::transfers::squad::standing::CareerRecordSnapshot;
     use crate::transfers::view::player::PlayerSummaryBuilder;
-    use crate::{PlayerFieldPositionGroup, PlayerPositionType};
+    use crate::{PlayerFieldPositionGroup, PlayerPositionType, PlayerPreferredFoot};
 
     /// A market summary of a homesick loyal Brazilian at an English club:
     /// three starts in a season, a formed want, and the personality the
@@ -526,6 +526,7 @@ mod tests {
         let mut s = PlayerSummary {
             player_id: 1,
             club_id: 100,
+            preferred_foot: PlayerPreferredFoot::Right,
             country_id: 1,
             continent_id: 1,
             region: ScoutingRegion::WesternEurope,

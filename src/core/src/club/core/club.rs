@@ -2,6 +2,7 @@ use crate::TeamCollection;
 use crate::club::academy::{AcademyDevelopmentIdentity, ClubAcademy};
 use crate::club::board::ClubBoard;
 use crate::club::board::vision::VisionYouthFocus;
+use crate::club::core::squad::KeyDeparture;
 use crate::club::facilities::ClubFacilities;
 use crate::club::news::{ClubAffair, ClubAffairLog};
 use crate::club::status::ClubStatus;
@@ -24,6 +25,16 @@ pub enum ClubPhilosophy {
 }
 
 impl ClubPhilosophy {
+    /// How far the club exists to bring players through, 0..1.
+    pub fn development_lean(self) -> f32 {
+        match self {
+            ClubPhilosophy::DevelopAndSell => 1.0,
+            ClubPhilosophy::LoanFocused => 0.5,
+            ClubPhilosophy::Balanced => 0.3,
+            ClubPhilosophy::SignToCompete => 0.0,
+        }
+    }
+
     /// What the club is FOR, derived from the brief its board actually
     /// wrote and the academy it actually runs.
     ///
@@ -114,6 +125,8 @@ pub struct Club {
     /// [`ClubMarketKnowledge`]. Bootstrapped at world load from the squad's
     /// own foreign nationalities, so the shipped world is its own evidence.
     pub market_ledger: ClubMarketLedger,
+    /// Sales the dressing room has not judged yet.
+    pub key_departures: Vec<KeyDeparture>,
 
     /// Where this club has SENT its loanees, and how each destination
     /// served them. The lending half of the same relationship — see
@@ -165,6 +178,7 @@ impl Club {
             facilities,
             rivals: Vec::new(),
             market_ledger: ClubMarketLedger::default(),
+            key_departures: Vec::new(),
             loan_placements: LoanPlacementLedger::default(),
             affairs: ClubAffairLog::new(),
         }

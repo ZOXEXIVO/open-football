@@ -1019,12 +1019,14 @@ impl ApproachPass {
         estimated_fee: f64,
         request: Option<&TransferRequest>,
         player_age: u8,
-        date: NaiveDate,
+        // The buyer's own mid-season window is open: the short one, in
+        // whichever month its country keeps it.
+        mid_season_window: bool,
         buying_club_balance: i64,
         philosophy: &ClubPhilosophy,
         prospect: &ProspectSigningContext,
     ) -> TransferApproach {
-        let is_january = MarketCadence::is_january_window(date);
+        let is_january = mid_season_window;
 
         let age = player_age;
 
@@ -2455,17 +2457,12 @@ mod prospect_approach_tests {
     use super::*;
     use crate::PlayerPositionType;
     use crate::transfers::pipeline::TransferApproach;
-    use chrono::NaiveDate;
 
     /// Fixtures for the prospect buy-vs-loan decision matrix. Grouped on
     /// a unit struct per the project's no-free-helpers convention.
     struct ApproachFixtures;
 
     impl ApproachFixtures {
-        fn summer() -> NaiveDate {
-            NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()
-        }
-
         fn development_request() -> TransferRequest {
             TransferRequest::new(
                 1,
@@ -2534,7 +2531,7 @@ mod prospect_approach_tests {
                 fee,
                 Some(request),
                 age,
-                Self::summer(),
+                false,
                 balance,
                 &philosophy,
                 prospect,

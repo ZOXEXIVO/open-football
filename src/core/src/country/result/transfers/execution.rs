@@ -1,6 +1,7 @@
 use super::types::DeferredTransfer;
 use crate::club::Person;
 use crate::club::SquadDepartures;
+use crate::club::core::{DepartedPlayer, DepartureKind};
 use crate::club::board::mandate::{MandateExit, SigningMandate};
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::mind::verdict::MindOption;
@@ -505,47 +506,6 @@ impl SquadReactionPass {
         }
     }
 
-    /// Fire `ConcernedByClubDirection` on ambitious / senior teammates
-    /// after a meaningful departure. Caller flags the departing player as
-    /// "important" (key player / high reputation) before invoking — depth
-    /// sales never qualify. Cooldown 120d.
-    fn squad_concern_signal(selling_club: &mut Club, departing: &DepartingPlayerInfo) {
-        if !departing.high_reputation {
-            return;
-        }
-        for team in &mut selling_club.teams.teams {
-            for existing in team.players.iter_mut() {
-                if existing.id == departing.id {
-                    continue;
-                }
-                let status = existing
-                    .contract
-                    .as_ref()
-                    .map(|c| c.squad_status.clone())
-                    .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
-                let cares = existing.attributes.ambition >= 14.0
-                    || matches!(
-                        status,
-                        PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
-                    );
-                if !cares {
-                    continue;
-                }
-                let mut ctx = ClubDirectionContext::new(ClubDirectionKind::Concern)
-                    .with_focal_player(departing.id)
-                    .with_evidence(ClubDirectionEvidence::KeyPlayerSoldUnreplaced)
-                    .with_evidence(ClubDirectionEvidence::SquadQualityWeakened);
-                if existing.attributes.ambition >= 15.0 {
-                    ctx = ctx.with_evidence(ClubDirectionEvidence::HighAmbition);
-                }
-                if matches!(status, PlayerSquadStatus::KeyPlayer) {
-                    ctx = ctx.with_evidence(ClubDirectionEvidence::HighInfluence);
-                }
-                existing.on_club_direction_concern(ctx);
-            }
-        }
-    }
-
     /// True if the country's primary language(s) are met at functional fluency
     /// (proficiency >= 70). Used to gate CompatriotJoined: an integration boost
     /// from a same-nationality teammate matters most when the new arrival is
@@ -864,7 +824,14 @@ impl TransferExecutor {
     ) -> Option<(Player, TeamInfo, Option<u32>, u32)> {
         let country = data.country_mut(selling_country_id)?;
 
+        let window_closes = TransferWindowManager::for_country(country.id, &country.code, today)
+            .current_window_dates(country.id, today)
+            .map(|(_, closes)| closes);
         let selling_club = country.clubs.iter_mut().find(|c| c.id == selling_club_id)?;
+
+        // What the club knew of him, read while it still has him.
+        let departed = DepartedPlayer::read(selling_club, player_id, DepartureKind::Sold, today)
+            .map(|d| d.for_fee(fee).with_window(window_closes));
 
         // Tell the dugout before the squad loses him. A loan suspends the
         // working relationship rather than ending it: he is still the
@@ -925,15 +892,12 @@ impl TransferExecutor {
             }
             if is_loan {
                 selling_club.finance.receive_loan_fee(fee);
-            } else {
-                let share = ClubFinances::reinvest_share_for(&selling_club.philosophy);
-                selling_club.finance.add_transfer_income_at(fee, share);
-                // The shirt is free. Whoever the club has been bringing
-                // through behind him moves up a rung — the succession
-                // half of selling at peak, and the club's own decision
-                // rather than a consequence the rebalance stumbles on
-                // three weeks later.
-                selling_club.on_asset_sold(player_id, today);
+            } else if let Some(departed) = departed.as_ref() {
+                // The shirt is free and the money is in. The club's own
+                // parts each react to the one fact: the plan moves the man
+                // behind him up, the fee is booked, and the dressing room
+                // is given a date to judge what the club did about it.
+                selling_club.on_player_departed(departed);
             }
         }
 
@@ -1366,7 +1330,6 @@ impl TransferExecutor {
                     }
                 }
             }
-            SquadReactionPass::squad_concern_signal(selling_club, info);
         }
     }
 
@@ -2649,6 +2612,40 @@ mod country_pair_execution_tests {
                 .iter()
                 .any(|t| t.players.players.iter().any(|p| p.id == 200)),
             "pre-cutoff transfer must place the player at the destination"
+        );
+    }
+
+    #[test]
+    fn selling_a_starter_through_the_executor_moves_the_man_behind_him_up() {
+        use crate::club::player::squad::PathwayStage;
+        use crate::PlayerClubContract;
+
+        let date = CountryPairFixtures::d(2021, 6, 1);
+        let (mut data, mut transfer) = CountryPairFixtures::ru_to_ua_world(date);
+        transfer.is_loan = false;
+        transfer.fee = 3_000_000.0;
+        let mut heir = CountryPairFixtures::player(201, 100);
+        heir.contract = Some(PlayerClubContract::new(
+            50_000,
+            CountryPairFixtures::d(2025, 6, 30),
+        ));
+        assert_eq!(heir.pathway_stage(), PathwayStage::Prospect);
+        let sellers = &mut data.country_mut(1).unwrap().clubs[0].teams.teams[0];
+        sellers.players.add(heir);
+        // The coach's plan as the daily tick leaves it.
+        sellers.revise_coach_squad_plan(date, None);
+
+        assert!(TransferExecutor::one(&mut data, &transfer, date));
+
+        let spartak = &data.country(1).unwrap().clubs[0];
+        let heir = spartak.teams.teams[0].players.find(201).unwrap();
+        assert!(
+            matches!(
+                heir.pathway_stage(),
+                PathwayStage::Rotation | PathwayStage::Starter | PathwayStage::Core
+            ),
+            "the striker was sold and the only striker left is still a {:?}",
+            heir.pathway_stage()
         );
     }
 

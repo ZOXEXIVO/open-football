@@ -3,7 +3,9 @@ extern crate rand;
 use crate::club::mind::organs::goals::GoalKind;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind, FactClaim, MindClock};
 use crate::club::mind::verdict::{MindOption, ReasonSet};
+use crate::club::staff::coach::PlannedRole;
 use crate::club::staff::coach::dossier::closer::{PartingReport, SpellCloser};
+use crate::club::staff::coach::standing::StandingRung;
 use crate::club::staff::goalkeeping::KeeperRoomPlan;
 use crate::club::staff::mind::organs::judgements::CoachDecisionState;
 use crate::club::staff::mind::{StaffMind, StaffTickContext};
@@ -267,6 +269,18 @@ impl StaffCollection {
                 .unwrap_or(false)
         })?;
         Some(&mut self.staffs[idx])
+    }
+
+    /// Whoever picks this side's team, mutably: the head coach the read-only
+    /// [`Self::head_coach`] names, or the stand-in a side with nobody in
+    /// the seat is picked by. The stand-in holds a plan for the squad and
+    /// nothing else.
+    pub fn squad_planner_mut(&mut self) -> &mut Staff {
+        let id = self.head_coach().id;
+        match self.staffs.iter().position(|s| s.id == id) {
+            Some(idx) => &mut self.staffs[idx],
+            None => &mut self.stub,
+        }
     }
 
     /// Display name for the head coach, used wherever a decision is
@@ -665,6 +679,20 @@ pub enum CoachingStyle {
 }
 
 impl Staff {
+    /// He has no place for the player himself: not in his plans, or put
+    /// in the shop window by the club after he had frozen him out. A man
+    /// the club is selling whom he still picks is not his call.
+    pub fn has_no_place_for(&self, player_id: u32) -> bool {
+        match self.squad_plan.role_of(player_id) {
+            Some(PlannedRole::NotInPlans) => true,
+            Some(PlannedRole::ShopWindow) => self
+                .coach_memory
+                .standing_of(player_id)
+                .is_some_and(|standing| standing.rung == StandingRung::FrozenOut),
+            _ => false,
+        }
+    }
+
     pub fn new(
         id: u32,
         full_name: FullName,

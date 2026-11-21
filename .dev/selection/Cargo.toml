@@ -1,0 +1,27 @@
+[package]
+name = "dev_selection"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Matchday-selection census: ticks the whole world for a season and reads
+# every first-team sheet of the top two divisions beside real-football
+# reference bands — rotation, how football is spread, goalkeepers, benches
+# and who starts.
+#
+# Defaults to `match-stub`: the team sheets are the selector's own whichever
+# engine plays them, and a season on the real engine is hours.
+core = { path = "../../src/core" }
+database = { path = "../../src/database" }
+chrono = "0.4"
+log = "0.4"
+env_logger = "0.11"
+mimalloc = "0.1"
+
+[features]
+default = ["match-stub"]
+match-stub = ["core/match-stub"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 16

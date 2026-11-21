@@ -2,7 +2,8 @@ use crate::Country;
 use crate::context::GlobalContext;
 use crate::continent::national::{NationalCompetitionConfig, NationalTeamCompetitions};
 use crate::continent::{
-    ContinentalCompetitions, ContinentalRankings, ContinentalRegulations, EconomicZone,
+    ContinentalCompetitions, ContinentalQualification, ContinentalRankings,
+    ContinentalRegulations, EconomicZone,
 };
 use crate::country::{CountryPendingState, CountryResult};
 use crate::league::FixtureRest;
@@ -224,6 +225,22 @@ impl Continent {
         // …and stamped on the country itself as well as on its context.
         // The transfer market runs outside `GlobalContext`, and the
         // player-side appraisal needs the same clock the mind reads.
+        // Which places of each top flight lead into the continent's club
+        // competitions is the continent's to say; the league reads them
+        // as lines of its table.
+        for (league_id, lines) in ContinentalQualification::table_lines(self) {
+            let league = self
+                .countries
+                .iter_mut()
+                .flat_map(|country| country.leagues.leagues.iter_mut())
+                .find(|league| league.id == league_id);
+            if let Some(league) = league
+                && league.continental_lines != lines
+            {
+                league.continental_lines = lines;
+            }
+        }
+
         let world_clocks = ctx.simulation.tournament_clocks.clone();
         let home_leagues = ctx.simulation.home_leagues.clone();
         self.countries.par_iter_mut().for_each(|c| {

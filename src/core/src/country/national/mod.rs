@@ -458,6 +458,7 @@ impl NationalTeam {
             free_kick_taker_id: None,
             selection_omissions: Vec::new(),
             overlooked: Vec::new(),
+            selection: Default::default(),
             // National-team coaches don't carry persistent club coach
             // memory yet — the match engine falls back to the legacy
             // (memory-less) substitution scoring for these fixtures.
@@ -567,6 +568,7 @@ impl NationalTeam {
             free_kick_taker_id: None,
             selection_omissions: Vec::new(),
             overlooked: Vec::new(),
+            selection: Default::default(),
             coach_snapshot: None,
             coach_card: None,
             familiarity: None,

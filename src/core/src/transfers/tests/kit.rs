@@ -49,6 +49,7 @@ use crate::transfers::gate::{AppraisalConfig, PlayerOfferAppraisal, PlayerStance
 use crate::transfers::pipeline::{PlayerSummary, SellerPlausibilityContext};
 use crate::transfers::squad::standing::CareerRecordSnapshot;
 use crate::transfers::view::player::PlayerSummaryBuilder;
+use crate::PlayerPreferredFoot;
 use crate::{
     Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes, Player,
     PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerFieldPositionGroup,
@@ -729,6 +730,7 @@ impl TestSummary {
         let mut summary = PlayerSummary {
             player_id: self.player_id,
             club_id: self.club_id,
+            preferred_foot: PlayerPreferredFoot::Right,
             country_id: self.country_id,
             continent_id: 1,
             region,

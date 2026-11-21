@@ -266,14 +266,6 @@ impl CountryTransferWindow {
 pub struct MarketCadence;
 
 impl MarketCadence {
-    /// European-calendar fallback for the mid-season window bias. Kept
-    /// only for the pure decision fns that carry no country context
-    /// (`resolve_initial_approach`); every country-holding caller uses
-    /// [`Self::is_mid_season_window_for`] instead.
-    pub(in crate::transfers) fn is_january_window(date: NaiveDate) -> bool {
-        date.month() == 1
-    }
-
     /// The date falls inside the COUNTRY's shorter (mid-season
     /// reinforcement) window — January in Europe, July for MLS-style
     /// calendars, June for Latam. Drives the "prefer loans, quick

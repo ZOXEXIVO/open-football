@@ -837,16 +837,21 @@ impl LeaguePlayoff {
         self.push_series(5, CROSS_BRACKET, 0, high, low, 1, false, anchor);
     }
 
+    /// The format's expected depth, not the rounds drawn so far.
+    pub(crate) fn bracket_rounds(&self) -> u8 {
+        let drawn = self.series.iter().map(|s| s.round).max().unwrap_or(1);
+        match self.format {
+            PlayoffFormat::MlsCup => 5,
+            _ => self.expected_final_round().unwrap_or(drawn).max(drawn),
+        }
+    }
+
     /// Today's unplayed playoff ties, tagged with their bracket position
     /// so the match builder can scale importance by stage. The round total
     /// is the format's EXPECTED depth (not the rounds drawn so far), so an
     /// early wild-card tie doesn't carry final-level importance.
     fn collect_today_matches(&self, current_date: NaiveDate) -> Vec<LeagueMatch> {
-        let drawn = self.series.iter().map(|s| s.round).max().unwrap_or(1);
-        let total_rounds = match self.format {
-            PlayoffFormat::MlsCup => 5,
-            _ => self.expected_final_round().unwrap_or(drawn).max(drawn),
-        };
+        let total_rounds = self.bracket_rounds();
         self.league
             .schedule
             .tours

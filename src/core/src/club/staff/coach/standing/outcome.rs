@@ -92,37 +92,52 @@ impl StandingRead {
             }
             // He still plays, but not as anybody's first choice.
             StandingRung::OutOfFavour => (None, Some(PlannedRole::Rotation)),
-            // There is no honest role here at all.
-            StandingRung::FrozenOut => (None, Some(PlannedRole::ShopWindow)),
+            // There is no honest role here at all. Whether he is for sale
+            // is the club's decision, read where the plan is drawn.
+            StandingRung::FrozenOut => (None, Some(PlannedRole::NotInPlans)),
         }
     }
 
-    /// Clamp a derived role into what the standing allows.
+    /// How far the coach's trust moves a man in the depth chart, in the
+    /// levels the chart is drawn in. This is what keeps a trusted man in
+    /// his shirt when a marginally stronger one arrives, and what stops a
+    /// man the coach has gone cold on being planned as anybody's first
+    /// choice while there is somebody else.
+    pub fn chart_margin(standing: Option<&CoachStanding>) -> f32 {
+        match standing.map(|s| s.rung) {
+            Some(StandingRung::Undroppable) => StandingTuning::CHART_UNDROPPABLE,
+            Some(StandingRung::Trusted) => StandingTuning::CHART_TRUSTED,
+            Some(StandingRung::InFavour) => StandingTuning::CHART_IN_FAVOUR,
+            Some(StandingRung::Neutral) | None => 0.0,
+            Some(StandingRung::UnderReview) => StandingTuning::CHART_UNDER_REVIEW,
+            Some(StandingRung::OutOfFavour) => StandingTuning::CHART_OUT_OF_FAVOUR,
+            Some(StandingRung::FrozenOut) => StandingTuning::CHART_FROZEN_OUT,
+        }
+    }
+
+    /// Clamp a derived role into what the standing allows, for a man the
+    /// chart puts `place` men behind the first choice of his shirt.
     ///
-    /// The floor only applies where the coach can honour it: it lifts a man
-    /// who is *ranked* highly enough to deserve it, and it never overrides
-    /// the specialist's read of the goalkeeping order.
+    /// A floor lifts only the first choice: the coach can trust his cover
+    /// without calling him a cornerstone. A ceiling holds a man down only
+    /// where somebody stands ahead of him — a first choice the coach has
+    /// gone cold on still plays — except that a frozen-out man has no
+    /// honest role wherever the chart puts him.
     pub fn bound_role(
         derived: PlannedRole,
         standing: Option<&CoachStanding>,
-        rank: usize,
+        place: usize,
     ) -> PlannedRole {
         let (floor, ceiling) = Self::plan_bounds(standing);
         let mut role = derived;
-        if let Some(floor) = floor {
-            // Only lift a man the depth chart already puts near the front.
-            // A coach can trust his third-choice left-back without calling
-            // him a cornerstone.
-            let deserves = match floor {
-                PlannedRole::Cornerstone => rank == 0,
-                PlannedRole::Starter => rank <= 1,
-                _ => true,
-            };
-            if deserves && !role.is_at_least(floor) {
-                role = floor;
-            }
+        if let Some(floor) = floor
+            && place == 0
+            && !role.is_at_least(floor)
+        {
+            role = floor;
         }
         if let Some(ceiling) = ceiling
+            && (place > 0 || ceiling.is_exit_path())
             && role.is_at_least(ceiling)
             && role != ceiling
         {
@@ -208,21 +223,23 @@ mod tests {
     }
 
     #[test]
-    fn a_man_out_of_favour_still_plays_but_not_as_a_first_choice() {
+    fn a_man_out_of_favour_is_held_down_only_where_somebody_stands_ahead_of_him() {
         let standing = Fx::at(StandingRung::OutOfFavour);
         assert_eq!(
             StandingRead::bound_role(PlannedRole::Starter, Some(&standing), 0),
-            PlannedRole::Rotation
+            PlannedRole::Starter,
+            "a first choice the coach has gone cold on still plays"
         );
         assert_eq!(
             StandingRead::bound_role(PlannedRole::Cover, Some(&standing), 4),
             PlannedRole::Cover,
             "the ceiling never promotes anybody"
         );
+        assert!(StandingRead::chart_margin(Some(&standing)) < 0.0);
     }
 
     #[test]
-    fn a_coach_can_trust_a_squad_player_without_calling_him_a_cornerstone() {
+    fn a_coach_can_trust_a_squad_player_without_calling_him_a_starter() {
         let standing = Fx::at(StandingRung::Trusted);
         assert_eq!(
             StandingRead::bound_role(PlannedRole::Cover, Some(&standing), 4),
@@ -231,8 +248,11 @@ mod tests {
         );
         assert_eq!(
             StandingRead::bound_role(PlannedRole::Rotation, Some(&standing), 1),
-            PlannedRole::Starter
+            PlannedRole::Rotation,
+            "trust keeps a man his shirt in the chart; it does not rename the man behind"
         );
+        assert!(StandingRead::chart_margin(Some(&standing)) > 0.0);
+        assert_eq!(StandingRead::chart_margin(None), 0.0);
     }
 
     #[test]

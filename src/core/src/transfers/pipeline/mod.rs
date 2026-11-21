@@ -17,6 +17,7 @@ pub mod shortlist;
 #[cfg(test)]
 mod tests;
 pub mod trace;
+mod vacancy;
 
 use crate::club::board::mandate::MandateIncumbent;
 use crate::club::player::contract::PlayerSquadStatus;
@@ -34,7 +35,10 @@ use crate::transfers::squad::ledger::SellListEntry;
 use crate::transfers::squad::plan::{BriefSlot, BriefTier, RecruitmentBrief};
 use crate::transfers::view::world::WorldPool;
 use crate::transfers::{MarketMap, ScoutingRegion};
-use crate::{Player, PlayerFieldPositionGroup, PlayerPositionType, ReputationLevel};
+use crate::club::core::DepartedPlayer;
+use crate::{
+    Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerPreferredFoot, ReputationLevel,
+};
 use chrono::NaiveDate;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -42,11 +46,13 @@ pub use self::advice::StaffRecommendations;
 pub use self::circulation::MarketCirculation;
 pub use self::processor::{PlayerSummary, SellerPlausibilityContext};
 pub use self::trace::TransferTrace;
+pub use self::vacancy::{ShirtHolder, Vacancy, VacancyBrief, VacancyOutcome, VacancyReading};
 use chrono::Duration;
 use std::cmp::Ordering;
 
 pub(in crate::transfers) mod processor {
     use crate::PathwayStage;
+    use crate::PlayerPreferredFoot;
     use crate::club::player::language::LanguageProfile;
     use crate::club::player::mind::{AnchorView, CareerPlanView};
     use crate::club::player::transfer::LevelFloor;
@@ -178,6 +184,7 @@ pub(in crate::transfers) mod processor {
         pub club_name: String,
         pub position: PlayerPositionType,
         pub position_group: PlayerFieldPositionGroup,
+        pub preferred_foot: PlayerPreferredFoot,
         /// Every role this player can actually fill, not just the group his
         /// one primary label falls in. Recruitment searches on this: a
         /// player's stored position order is an arbitrary pick among equally
@@ -414,6 +421,10 @@ pub enum TransferNeedReason {
     /// a call: it had nothing to patch, so it raised no request, so no
     /// scout was assigned, so no shortlist existed, so no bid was made.
     SquadInvestment,
+    /// A player the club was picking has left, and the shirt needs a man
+    /// like him: the reference is the one who went, not the division's
+    /// standard and not whoever is left.
+    Replacement,
 }
 
 impl TransferNeedReason {
@@ -434,6 +445,7 @@ impl TransferNeedReason {
                 "request_reason_opportunistic_loan_upgrade"
             }
             TransferNeedReason::SquadInvestment => "request_reason_squad_investment",
+            TransferNeedReason::Replacement => "request_reason_replacement",
         }
     }
 
@@ -457,6 +469,7 @@ impl TransferNeedReason {
                 "signing_reason_opportunistic_loan_upgrade"
             }
             TransferNeedReason::SquadInvestment => "signing_reason_squad_investment",
+            TransferNeedReason::Replacement => "signing_reason_replacement",
         }
     }
 }
@@ -682,6 +695,11 @@ pub struct TransferRequest {
     /// an heir rather than a generic upgrade — see
     /// [`crate::club::board::mandate::MandatePurpose::from_request`].
     pub incumbent: Option<MandateIncumbent>,
+    /// The stronger foot the shirt asks for, when the search has a view.
+    pub preferred_foot: Option<PlayerPreferredFoot>,
+    /// How pressing the search is beside others of the same priority,
+    /// 0..1: what puts a late replacement ahead of cover and of the future.
+    pub urgency: f32,
 }
 
 impl TransferRequest {
@@ -729,6 +747,9 @@ impl TransferRequest {
             // is the measured age range of the real standout-abroad move
             // (18-27), not a preference.
             TransferNeedReason::SquadInvestment => (20, 27),
+            // The band a vacancy's brief sets replaces this one; a man to
+            // take a shirt now is what it starts from.
+            TransferNeedReason::Replacement => (21, 30),
         };
 
         TransferRequest {
@@ -753,7 +774,42 @@ impl TransferRequest {
             min_gain: 0,
             promised_status: PlayerSquadStatus::FirstTeamSquadRotation,
             incumbent: None,
+            preferred_foot: None,
+            urgency: 0.0,
         }
+    }
+
+    /// Become the search `other` asks for, keeping this one's identity and
+    /// what has been done under it.
+    pub fn reshaped_to(&mut self, other: &TransferRequest) {
+        self.reason = other.reason.clone();
+        self.priority = other.priority.clone();
+        self.min_ability = other.min_ability;
+        self.ideal_ability = other.ideal_ability;
+        self.preferred_age_min = other.preferred_age_min;
+        self.preferred_age_max = other.preferred_age_max;
+        self.budget_allocation = other.budget_allocation;
+        self.promised_status = other.promised_status.clone();
+        self.preferred_foot = other.preferred_foot;
+        self.urgency = other.urgency;
+        self.incumbent = other.incumbent;
+    }
+
+    /// Take the terms of a vacancy's brief: the level measured from the
+    /// man who left, the club's age band, the foot his shirt asks for, the
+    /// money his sale reserved and the urgency of the time left.
+    pub fn for_vacancy(mut self, brief: &VacancyBrief) -> Self {
+        self.reason = TransferNeedReason::Replacement;
+        self.priority = brief.priority.clone();
+        self.min_ability = brief.min_level;
+        self.ideal_ability = brief.level;
+        self.preferred_age_min = brief.age_band.0;
+        self.preferred_age_max = brief.age_band.1;
+        self.budget_allocation = brief.money;
+        self.promised_status = brief.promised_status.clone();
+        self.preferred_foot = brief.foot;
+        self.urgency = brief.urgency;
+        self
     }
 
     /// Name the man whose shirt the club is shopping for.
@@ -1475,6 +1531,13 @@ pub struct ClubTransferPlan {
     /// See [`NeedEscalation`].
     pub unmet_needs: Vec<UnmetNeed>,
 
+    /// Shirts a departure has left open. Survives `reset_for_window`: a
+    /// vacancy the window could not answer is carried into the next one
+    /// with the money its sale reserved.
+    pub vacancies: Vec<Vacancy>,
+    /// Fees the club has taken in since its window opened.
+    pub fees_received_this_window: f64,
+
     /// Staged loan-availability broadcasts, keyed by player id. Seller-side
     /// "push": a National+ club offers each loan-listed player to clubs one
     /// reputation tier at a time, top-down. Empty for clubs below the
@@ -1753,6 +1816,51 @@ pub struct FileReview {
 /// The one door through which a club's attention on another club's player
 /// is opened, kept or closed. A route states what it saw and hands in the
 /// gate's reading; the department decides, and remembers what it read.
+impl ClubTransferPlan {
+    /// A player the first team was picking has left. The shirt is
+    /// recorded open on the day, with the share of his fee the club
+    /// recycled held for it; the next daily review reads it.
+    pub fn stage_vacancy(&mut self, departed: &DepartedPlayer, recycled: f64) {
+        self.vacancies
+            .retain(|v| v.departed.player_id != departed.player_id);
+        self.vacancies.extend(Vacancy::of(departed, recycled));
+    }
+
+    /// A vacancy the recruitment review has not looked at yet.
+    pub fn has_unread_vacancy(&self) -> bool {
+        self.vacancies.iter().any(|v| !v.read)
+    }
+
+    /// The review has judged a vacancy: a search stays open and is marked
+    /// read, anything else closes it and frees its reserve.
+    pub fn on_vacancy_reviewed(&mut self, player_id: u32, outcome: VacancyOutcome) {
+        if outcome.closes() {
+            self.vacancies.retain(|v| v.departed.player_id != player_id);
+        } else if let Some(vacancy) = self
+            .vacancies
+            .iter_mut()
+            .find(|v| v.departed.player_id == player_id)
+        {
+            vacancy.read = true;
+        }
+    }
+
+    /// Raise a vacancy's search, or re-shape the search already open for
+    /// the same shirt to it: the vacancy's level, age band, money and
+    /// urgency replace the smaller need's, and its shortlist starts again.
+    pub fn open_replacement_search(&mut self, request: TransferRequest) {
+        let open = self.transfer_requests.iter_mut().find(|existing| {
+            existing.position == request.position
+                && existing.status != TransferRequestStatus::Fulfilled
+                && existing.status != TransferRequestStatus::Abandoned
+        });
+        match open {
+            Some(existing) => existing.reshaped_to(&request),
+            None => self.transfer_requests.push(request),
+        }
+    }
+}
+
 impl ClubTransferPlan {
     /// What the department last concluded about him.
     pub fn file_reading(&self, player_id: u32) -> Option<&FileReading> {
@@ -2113,6 +2221,8 @@ impl ClubTransferPlan {
             reserved: 0.0,
             transfer_requests: Vec::new(),
             unmet_needs: Vec::new(),
+            vacancies: Vec::new(),
+            fees_received_this_window: 0.0,
             scouting_assignments: Vec::new(),
             scouting_reports: Vec::new(),
             shortlists: Vec::new(),
@@ -2387,6 +2497,7 @@ impl ClubTransferPlan {
         self.active_negotiation_count = 0;
         self.spent = 0.0;
         self.reserved = 0.0;
+        self.fees_received_this_window = 0.0;
         self.initialized = false;
         self.last_evaluation_date = None;
 

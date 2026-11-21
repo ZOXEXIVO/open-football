@@ -93,7 +93,8 @@ impl GoalkeepingDepartmentView {
                 is_heir: heir == Some(keeper.player_id),
                 is_nominated: nominated == Some(keeper.player_id),
                 senior_apps: keeper.senior_apps,
-                planned_share: (tier.planned_share() * 100.0).round() as u8,
+                planned_share: (plan.glove_share(keeper.player_id).unwrap_or(0.0) * 100.0).round()
+                    as u8,
             });
         }
         // The declared order first, then everyone else as the room reads.

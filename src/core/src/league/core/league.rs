@@ -6,7 +6,7 @@ use crate::league::{
     CompetitionLevel, LeagueAwards, LeagueBuildOutput, LeagueDynamics, LeagueMatch,
     LeagueMilestones, LeagueNewsroom, LeaguePendingState, LeagueRegulations, LeagueResult,
     LeagueStatistics, LeagueTable, LeagueTableResult, LeagueTableRow, MatchStorage,
-    PlayerOfTheWeekHistory, Schedule, ScheduleItem,
+    PlayerOfTheWeekHistory, Schedule, ScheduleItem, TableLine,
 };
 use crate::r#match::MatchResult;
 use crate::{Club, PlayerFieldPositionGroup, PlayerStatistics, Team};
@@ -44,6 +44,9 @@ pub struct League {
     /// and friendly competitions, which have no league page to read it
     /// on.
     pub newsroom: LeagueNewsroom,
+    /// The places of this table that lead into continental competitions,
+    /// as the continent draws them. Empty below a qualifying top flight.
+    pub continental_lines: Vec<TableLine>,
 }
 
 /// A division's matchday after [`League::open_matchday`]: today's fixtures
@@ -95,6 +98,7 @@ impl League {
         friendly: bool,
     ) -> Self {
         let financials = LeagueFinancials::default();
+        let regulations = LeagueRegulations::for_division(settings.tier, friendly);
 
         League {
             id,
@@ -109,7 +113,7 @@ impl League {
             final_table: None,
             split_first_table: None,
             dynamics: LeagueDynamics::new(),
-            regulations: LeagueRegulations::new(),
+            regulations,
             statistics: LeagueStatistics::new(),
             milestones: LeagueMilestones::new(),
             friendly,
@@ -118,6 +122,7 @@ impl League {
             player_of_week: PlayerOfTheWeekHistory::new(),
             awards: LeagueAwards::default(),
             newsroom: LeagueNewsroom::for_league(id),
+            continental_lines: Vec::new(),
         }
     }
 

@@ -22,7 +22,7 @@ use crate::transfers::gate::{MoveTerms, PursuitAction, TransferMovePlausibility}
 use crate::transfers::pipeline::{
     DetailedScoutingReport, FileReading, PlayerSummary, ReportRiskFlag, ScoutingAssignment,
     ScoutingRecommendation, ShortlistCandidate, ShortlistCandidateStatus, TransferRequest,
-    TransferRequestStatus, TransferShortlist,
+    TransferNeedReason, TransferRequestStatus, TransferShortlist,
 };
 use crate::transfers::squad::plan::{MoneySlack, PlanningCadence};
 use crate::transfers::value::PlayerValuationCalculator;
@@ -30,7 +30,7 @@ use crate::transfers::value::upgrade::UpgradeMath;
 use crate::transfers::view::player::CountryPlayerLookup;
 use crate::transfers::view::world::WorldPool;
 use crate::{
-    Club, Country, Person, PlayerFieldPositionGroup, StaffPosition, TeamType,
+    Club, Country, Person, PlayerFieldPositionGroup, PlayerPreferredFoot, StaffPosition, TeamType,
     TransferInterestSource, TransferInterestStage,
 };
 use std::cmp::Ordering;
@@ -167,6 +167,9 @@ impl ShortlistPass {
     /// size as the recruitment-meeting endorsement: preparation should tilt
     /// a close call, not overrule a scout who has actually seen the player.
     const WATCHLIST_LIFT: f32 = 1.10;
+    /// What the stronger foot a shirt asks for is worth between two men
+    /// otherwise alike: a preference, never a bar.
+    const FOOT_LIFT: f32 = 1.06;
 
     /// Value at or below which a club with no transfer budget can still
     /// take a player on: a token payment a board signs off out of running
@@ -309,6 +312,17 @@ impl ShortlistPass {
                 .map(|s| s.transfer_request_id)
                 .collect();
 
+            Self::shortlists_from_names_behind(
+                country,
+                player_lookup,
+                club,
+                date,
+                plan,
+                &buyer,
+                &existing_shortlist_request_ids,
+                &mut results,
+            );
+
             Self::shortlists_from_scouting(
                 country,
                 club,
@@ -388,6 +402,59 @@ impl ShortlistPass {
         Self::leak_approved_pursuits(country, date, approved_targets);
     }
 
+    /// A replacement search for a shirt the desk was already keeping names
+    /// behind starts from those names: the files are the observation a new
+    /// search would otherwise wait weeks for.
+    #[allow(clippy::too_many_arguments)]
+    fn shortlists_from_names_behind(
+        country: &Country,
+        player_lookup: &CountryPlayerLookup,
+        club: &Club,
+        date: NaiveDate,
+        plan: &ClubTransferPlan,
+        buyer: &ShortlistBuyer<'_>,
+        existing_shortlist_request_ids: &[u32],
+        results: &mut Vec<ShortlistResult>,
+    ) {
+        for request in plan.transfer_requests.iter().filter(|r| {
+            r.reason == TransferNeedReason::Replacement
+                && r.budget_allocation > 0.0
+                && matches!(
+                    r.status,
+                    TransferRequestStatus::Pending | TransferRequestStatus::ScoutingActive
+                )
+                && !existing_shortlist_request_ids.contains(&r.id)
+        }) {
+            let mut candidates: Vec<ShortlistCandidate> = plan
+                .watchlist
+                .iter()
+                .filter(|e| e.slot_position == request.position && !e.is_loan)
+                .filter(|e| e.believed_ability >= request.min_ability)
+                .filter(|e| e.estimated_value <= request.budget_allocation * 2.0)
+                .filter(|e| !plan.is_rejected(e.player_id, date))
+                .map(|e| ShortlistCandidate {
+                    player_id: e.player_id,
+                    score: e.score,
+                    estimated_fee: e.estimated_value,
+                    status: ShortlistCandidateStatus::Available,
+                })
+                .collect();
+            if candidates.is_empty() {
+                continue;
+            }
+            candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
+            candidates.truncate(10);
+            let shortlist = TransferShortlist::new(request.id, request.budget_allocation)
+                .with_candidates(candidates);
+            results.push(ShortlistResult {
+                club_id: club.id,
+                readings: Self::readings(country, player_lookup, buyer, &shortlist, true, date),
+                shortlist,
+                request_id: request.id,
+            });
+        }
+    }
+
     /// One shortlist per scouting assignment that has produced a report.
     #[allow(clippy::too_many_arguments)]
     fn shortlists_from_scouting(
@@ -410,7 +477,11 @@ impl ShortlistPass {
             .collect();
 
         for assignment in completed_assignments {
-            if existing_shortlist_request_ids.contains(&assignment.transfer_request_id) {
+            if existing_shortlist_request_ids.contains(&assignment.transfer_request_id)
+                || results
+                    .iter()
+                    .any(|r| r.club_id == club.id && r.request_id == assignment.transfer_request_id)
+            {
                 continue;
             }
 
@@ -665,6 +736,12 @@ impl ShortlistPass {
             SquadRegistrationLimits::new(country.id, &country.regulations),
         );
 
+        let wanted_foot = plan
+            .transfer_requests
+            .iter()
+            .find(|request| request.id == assignment.transfer_request_id)
+            .and_then(|request| request.preferred_foot);
+
         let mut candidates: Vec<ShortlistCandidate> = reports
             .iter()
             .filter(|r| r.estimated_value <= budget_alloc * 2.0)
@@ -711,7 +788,16 @@ impl ShortlistPass {
                 {
                     return None;
                 }
-                Some((r, plausibility_mult))
+                let foot_mult = match wanted_foot {
+                    Some(foot)
+                        if summary.preferred_foot == foot
+                            || summary.preferred_foot == PlayerPreferredFoot::Both =>
+                    {
+                        Self::FOOT_LIFT
+                    }
+                    _ => 1.0,
+                };
+                Some((r, plausibility_mult * foot_mult))
             })
             .map(|(r, plausibility_mult)| {
                 let ability_score = r.assessed_ability as f32 / 200.0;
@@ -1327,12 +1413,15 @@ mod market_fallback_age_tests {
     use crate::transfers::pipeline::shortlist::ShortlistPass;
     use crate::transfers::pipeline::{
         TransferNeedPriority, TransferNeedReason, TransferRequest, TransferRequestStatus,
+        WatchAvailability, WatchlistEntry,
     };
+    use crate::transfers::squad::plan::BriefTier;
     use crate::transfers::view::world::WorldPool;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, Goalkeeping, Mental,
-        PersonAttributes, Physical, Player, PlayerAttributes, PlayerCollection, PlayerPosition,
-        PlayerPositionType, PlayerPositions, PlayerSkills, PlayerStatusType, StaffCollection, Team,
+        PersonAttributes, Physical, Player, PlayerAttributes, PlayerCollection,
+        PlayerFieldPositionGroup, PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills,
+        PlayerStatusType, StaffCollection, Team,
         TeamCollection, TeamReputation, TeamType, Technical, TrainingSchedule,
     };
     use chrono::{NaiveDate, NaiveTime};
@@ -1602,6 +1691,68 @@ mod market_fallback_age_tests {
             plan.transfer_requests[0].status,
             TransferRequestStatus::Shortlisted
         );
+    }
+
+    /// The names the desk kept behind the buyer's keeper: one man it has
+    /// a file on and nobody has listed.
+    const FILED: u32 = 990;
+
+    fn replacement_world(date: NaiveDate, with_names: bool) -> Country {
+        let mut country = MarketAgeFixtures::world(date);
+        // A keeper at the other club whom nobody has put on the market.
+        country.clubs[1].teams.teams[0]
+            .players
+            .add(MarketAgeFixtures::gk(FILED, 2000));
+        let plan = &mut country.clubs[0].transfer_plan;
+        plan.transfer_requests[0].reason = TransferNeedReason::Replacement;
+        plan.transfer_requests[0].min_ability = 40;
+        plan.transfer_requests[0].preferred_age_min = 20;
+        plan.transfer_requests[0].preferred_age_max = 30;
+        if with_names {
+            plan.watchlist.push(WatchlistEntry {
+                player_id: FILED,
+                club_id: MarketAgeFixtures::SELLER_ID,
+                country_id: 1,
+                position: PlayerPositionType::Goalkeeper,
+                position_group: PlayerFieldPositionGroup::Goalkeeper,
+                age: 26,
+                believed_ability: 120,
+                estimated_value: 4_000_000.0,
+                score: 50.0,
+                availability: WatchAvailability::None,
+                slot_position: PlayerPositionType::Goalkeeper,
+                slot_tier: BriefTier::B,
+                last_refreshed: date,
+                is_loan: false,
+            });
+        }
+        country
+    }
+
+    fn shortlist_of(country: &Country) -> Vec<u32> {
+        country.clubs[0]
+            .transfer_plan
+            .shortlists
+            .iter()
+            .find(|s| s.transfer_request_id == 1)
+            .map(|s| s.candidates.iter().map(|c| c.player_id).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_replacement_search_starts_from_the_names_the_desk_kept_behind_the_shirt() {
+        let date = MarketAgeFixtures::d(2026, 7, 1);
+        let mut country = replacement_world(date, true);
+        ShortlistPass::build_shortlists(&mut country, WorldPool::empty(), &MarketMap::default(), date);
+        assert_eq!(shortlist_of(&country), vec![FILED], "shortlisted on the day, unscouted");
+    }
+
+    #[test]
+    fn a_replacement_search_with_no_names_behind_it_runs_as_any_search_does() {
+        let date = MarketAgeFixtures::d(2026, 7, 1);
+        let mut country = replacement_world(date, false);
+        ShortlistPass::build_shortlists(&mut country, WorldPool::empty(), &MarketMap::default(), date);
+        assert!(!shortlist_of(&country).contains(&FILED));
     }
 }
 

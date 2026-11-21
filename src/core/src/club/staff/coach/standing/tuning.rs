@@ -5,6 +5,18 @@
 pub struct StandingTuning;
 
 impl StandingTuning {
+    // ── The depth chart ─────────────────────────────────────────
+    //
+    // Levels a rung adds to a man's standing for a shirt. A trusted man
+    // holds his shirt against a newcomer up to five levels better.
+
+    pub const CHART_UNDROPPABLE: f32 = 8.0;
+    pub const CHART_TRUSTED: f32 = 5.0;
+    pub const CHART_IN_FAVOUR: f32 = 2.0;
+    pub const CHART_UNDER_REVIEW: f32 = -2.0;
+    pub const CHART_OUT_OF_FAVOUR: f32 = -8.0;
+    pub const CHART_FROZEN_OUT: f32 = -40.0;
+
     // ── Impulses ────────────────────────────────────────────────
     //
     // Signed nudges to the continuous score. Sized so that an ordinary

@@ -48,20 +48,6 @@ impl KeeperTier {
         matches!(self, Self::NumberOne | Self::Deputy | Self::Third)
     }
 
-    /// Share of the season's competitive matches the tier is planned to
-    /// start. A real keeper room is lopsided on purpose — the number one
-    /// plays almost everything, the deputy owns the cup, and the rest is
-    /// a handful of games — so the shares are lopsided too.
-    pub fn planned_share(self) -> f32 {
-        match self {
-            Self::NumberOne => 0.76,
-            Self::Deputy => 0.18,
-            Self::Third => 0.03,
-            Self::Pathway => 0.03,
-            Self::Academy | Self::Surplus => 0.0,
-        }
-    }
-
     /// Stable key for the events feed and the UI.
     pub fn as_i18n_key(self) -> &'static str {
         match self {
@@ -119,6 +105,12 @@ pub enum KeeperAdvice {
 }
 
 impl KeeperAdvice {
+    /// Advice the recruitment desk acts on: a keeper to sign, or one to
+    /// move on.
+    pub fn is_for_recruitment(self) -> bool {
+        self.is_club_scoped() || self == Self::TimeToMoveHimOn
+    }
+
     /// Advice about the club's shape rather than about one man.
     pub fn is_club_scoped(self) -> bool {
         matches!(
@@ -171,6 +163,9 @@ pub struct KeeperRecommendation {
     /// The standard of football a loan should take him to, when the
     /// department has read him well enough to say.
     pub target_standard: Option<f32>,
+    /// For advice to sign a keeper, the level of the declared number one:
+    /// what the signing is measured against.
+    pub reference_level: Option<u8>,
 }
 
 impl KeeperRecommendation {
@@ -180,6 +175,7 @@ impl KeeperRecommendation {
             player_id: Some(player_id),
             urgency,
             target_standard: None,
+            reference_level: None,
         }
     }
 
@@ -189,11 +185,17 @@ impl KeeperRecommendation {
             player_id: None,
             urgency,
             target_standard: None,
+            reference_level: None,
         }
     }
 
     pub fn aimed_at(mut self, standard: Option<f32>) -> Self {
         self.target_standard = standard;
+        self
+    }
+
+    pub fn measured_against(mut self, level: Option<u8>) -> Self {
+        self.reference_level = level;
         self
     }
 }

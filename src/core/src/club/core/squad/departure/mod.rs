@@ -23,6 +23,12 @@
 //! and a sale the manager asked for leave a coach feeling very differently,
 //! and guessing between them would be worse than not recording it.
 
+mod departed;
+mod readiness;
+
+pub use departed::{DepartedPlayer, DepartureKind, KeyDeparture};
+pub use readiness::{ReplacementReadiness, SellerCover};
+
 use crate::club::Club;
 use crate::club::mind::organs::memory::ActorRef;
 use crate::club::person::Person;
@@ -233,12 +239,7 @@ impl SquadDepartures {
         }
 
         let coach = main.staffs.head_coach();
-        if coach.id != 0
-            && coach
-                .squad_plan
-                .role_of(player_id)
-                .is_some_and(|role| role.is_exit_path())
-        {
+        if coach.id != 0 && coach.has_no_place_for(player_id) {
             return SeparationCause::SoldOnMyCall;
         }
         SeparationCause::SoldByBoard
@@ -253,12 +254,7 @@ impl SquadDepartures {
             return SeparationCause::ReleasedByBoard;
         };
         let coach = main.staffs.head_coach();
-        if coach.id != 0
-            && coach
-                .squad_plan
-                .role_of(player_id)
-                .is_some_and(|role| role.is_exit_path())
-        {
+        if coach.id != 0 && coach.has_no_place_for(player_id) {
             return SeparationCause::ReleasedOnMyCall;
         }
         SeparationCause::ReleasedByBoard

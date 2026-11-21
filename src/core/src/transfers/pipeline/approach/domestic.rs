@@ -509,7 +509,7 @@ impl DomesticApproachPass {
             candidate.estimated_fee,
             request,
             player_age,
-            date,
+            MarketCadence::is_mid_season_window_for(&country.code, date),
             club.finance.balance.balance,
             &club.philosophy,
             &prospect_ctx,

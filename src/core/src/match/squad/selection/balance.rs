@@ -302,10 +302,10 @@ impl LineupBalanceScorer {
 /// Returns up to one proposal per starter — the caller applies them in
 /// order.
 pub struct BalanceSwapPass {
-    /// Max slot score the swap may concede in high-importance matches.
-    pub max_slot_loss_high: f32,
-    /// Max slot score it may concede in early cup rotations.
-    pub max_slot_loss_cup_early: f32,
+    /// Max slot score the swap may concede in a fixture that leaves no room.
+    pub max_slot_loss_tight: f32,
+    /// Max slot score it may concede in a fixture that leaves all of it.
+    pub max_slot_loss_loose: f32,
     /// Minimum balance gain required to flip.
     pub min_balance_gain: f32,
 }
@@ -313,22 +313,18 @@ pub struct BalanceSwapPass {
 impl BalanceSwapPass {
     pub fn standard() -> Self {
         BalanceSwapPass {
-            max_slot_loss_high: 1.25,
-            max_slot_loss_cup_early: 3.5,
+            max_slot_loss_tight: 1.25,
+            max_slot_loss_loose: 3.5,
             min_balance_gain: 0.25,
         }
     }
 
-    /// Score gap allowed for this fixture's importance / rotation context.
-    pub fn allowed_slot_loss(&self, match_importance: f32, is_cup_early: bool) -> f32 {
-        if is_cup_early {
-            self.max_slot_loss_cup_early
-        } else if match_importance >= 0.7 {
-            self.max_slot_loss_high
-        } else {
-            (self.max_slot_loss_high + 0.6).min(self.max_slot_loss_cup_early)
-        }
+    /// Score gap allowed for the room this fixture leaves.
+    pub fn allowed_slot_loss(&self, room: f32) -> f32 {
+        self.max_slot_loss_tight
+            + (self.max_slot_loss_loose - self.max_slot_loss_tight) * room.clamp(0.0, 1.0)
     }
+
 }
 
 /// Stateless helper that picks the objective from the game model when

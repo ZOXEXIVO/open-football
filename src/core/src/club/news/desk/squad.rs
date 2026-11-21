@@ -2291,9 +2291,7 @@ impl SquadDesk {
                     | Why::FitnessProtection
                     | Why::MedicalRecurrenceRisk
                     | Why::ReturningFromInjury
-                    | Why::CupRotation
-                    | Why::LowMatchImportanceRotation
-                    | Why::YouthDevelopmentRotation,
+                    | Why::LowMatchImportanceRotation,
                 ) => Some(NewsStoryKind::RotationRested),
                 Some(
                     Why::TacticalMismatch

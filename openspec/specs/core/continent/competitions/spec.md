@@ -102,3 +102,37 @@ A club's league-table position SHALL place it in the qualification band of at mo
 #### Scenario: A season's draws are inspected together
 - **WHEN** the set of clubs drawn this season is requested after several of the continent's competitions have completed their draws
 - **THEN** it contains every club drawn into any of those competitions for that season year, deduplicated
+
+### Requirement: A continental tie states what it is worth to each side
+For every continental club fixture, the competition SHALL compute an importance score between 0.0 and 1.0 for each
+side separately, on the same scale the domestic competitions use.
+
+In a group stage the score SHALL read how much the result can still change the side's fate in its group: high while
+qualification is open, and low once the side's place is settled either way. In a two-legged knockout tie the second
+leg SHALL read the aggregate score: a level or close tie is a must-win, and a tie already decided by a wide margin is
+not. A final SHALL be a must-win.
+
+#### Scenario: A group already won
+- **WHEN** a club has secured first place in its group before the last group match
+- **THEN** its importance for that match is low, and its opponent's is high if the opponent can still qualify
+
+#### Scenario: A second leg in the balance
+- **WHEN** a second leg starts with the aggregate score level
+- **THEN** both sides' importance is at the top of the scale
+
+#### Scenario: A second leg already settled
+- **WHEN** a side starts a second leg four goals ahead on aggregate
+- **THEN** its importance is well below a must-win
+
+### Requirement: A continental fixture is built like a domestic one
+A continental fixture SHALL give each side's selection the same matchday context a domestic fixture gives: the stakes
+for that side, the club's week across competitions, the club's philosophy, the goalkeeping department's word, the
+competition's bench size and eligibility rules, and the club's own first team.
+
+#### Scenario: The keeper order in Europe
+- **WHEN** a club with a declared goalkeeping order plays a continental tie
+- **THEN** its selection is given that order
+
+#### Scenario: A league match three days later
+- **WHEN** a club's continental tie is followed by a league match in three days
+- **THEN** the tie's selection is told so

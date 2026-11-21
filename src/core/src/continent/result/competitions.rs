@@ -341,6 +341,43 @@ impl ContinentResult {
         Some(results)
     }
 
+    /// Write every first team's continental run into its fixture window,
+    /// beside the domestic run its country keeps there.
+    pub(crate) fn refresh_continental_fixture_windows(
+        &self,
+        data: &mut SimulatorData,
+        date: NaiveDate,
+    ) {
+        let Some(continent) = data.continent_mut(self.get_continent_id()) else {
+            return;
+        };
+        let mut runs = {
+            let clubs = Self::get_clubs_map(&continent.countries);
+            continent.continental_competitions.fixture_runs(date, &clubs)
+        };
+        for club in continent
+            .countries
+            .iter_mut()
+            .flat_map(|country| country.clubs.iter_mut())
+        {
+            let run = runs.remove(&club.id).unwrap_or_default();
+            let Some(team) = club.teams.main_mut() else {
+                continue;
+            };
+            if team.fixture_window.continental != run {
+                team.fixture_window.continental = run;
+            }
+            // Both runs of the window are current now, so the squad can
+            // be told which competitions its next fixture belongs to.
+            let family = team.fixture_window.next_family(date);
+            for player in team.players.iter_mut() {
+                if player.player_attributes.discipline.awaiting != family {
+                    player.on_next_fixture_family(family);
+                }
+            }
+        }
+    }
+
     fn tier_results(
         results: &[MatchResult],
         competition: CompetitionTier,

@@ -3,7 +3,7 @@ use crate::Tactics;
 use crate::club::staff::CoachMatchSnapshot;
 use crate::r#match::CoachCard;
 use crate::r#match::MatchPlayer;
-use crate::r#match::squad::OmittedPlayer;
+use crate::r#match::squad::{OmittedPlayer, SelectionReading};
 
 #[derive(Debug, Clone)]
 pub struct MatchSquad {
@@ -24,6 +24,7 @@ pub struct MatchSquad {
     /// Own-roster players fit for selection and named nowhere — see
     /// [`crate::r#match::squad::PlayerSelectionResult::overlooked`].
     pub overlooked: Vec<u32>,
+    pub selection: SelectionReading,
     /// Live-match snapshot of the head coach's persistent state —
     /// memory store, perception profile, and strategy for this
     /// fixture. Populated at squad-construction time by the team

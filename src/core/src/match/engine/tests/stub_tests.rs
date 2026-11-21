@@ -41,6 +41,54 @@ fn with_bench(mut side: MatchSquad, base_id: u32) -> MatchSquad {
     side
 }
 
+/// A bench of `size`, each man a copy of a starter in shirt order, so the
+/// first of them is a goalkeeper and a bench of twelve carries a second.
+fn with_bench_of(mut side: MatchSquad, base_id: u32, size: usize) -> MatchSquad {
+    side.substitutes.clear();
+    for offset in 0..size {
+        let mut substitute = side.main_squad[offset % side.main_squad.len()].clone();
+        substitute.id = base_id + offset as u32;
+        side.substitutes.push(substitute);
+    }
+    side
+}
+
+#[test]
+fn the_substitution_draw_holds_at_every_bench_the_competitions_allow() {
+    for size in [7usize, 9, 12] {
+        let home = with_bench_of(rated(1, 100, 140), 150, size);
+        let away = with_bench_of(rated(2, 200, 140), 250, size);
+        let mut changes = 0usize;
+        for seed in 0..200u64 {
+            let result = play(&home, &away, seed, false);
+            for (side, bench_from) in [(&home, 150u32), (&away, 250u32)] {
+                let made: Vec<_> = result
+                    .substitutions
+                    .iter()
+                    .filter(|s| s.team_id == side.team_id)
+                    .collect();
+                assert!(made.len() <= 5, "bench {size}, seed {seed}: {} changes", made.len());
+                let mut came_on: Vec<u32> = made.iter().map(|s| s.player_in_id).collect();
+                assert!(
+                    came_on
+                        .iter()
+                        .all(|id| (bench_from..bench_from + size as u32).contains(id)),
+                    "bench {size}, seed {seed}: a man came on who was not on the bench"
+                );
+                came_on.sort_unstable();
+                came_on.dedup();
+                assert_eq!(came_on.len(), made.len(), "bench {size}, seed {seed}: one man came on twice");
+                changes += made.len();
+            }
+        }
+        assert!(
+            changes as f32 / 400.0 > 2.0,
+            "bench {size}: sides still use their changes ({} a side)",
+            changes as f32 / 400.0
+        );
+    }
+}
+
 /// On a fixed day: a man's season reads the calendar, and a test must not.
 fn play(home: &MatchSquad, away: &MatchSquad, seed: u64, knockout: bool) -> MatchResultRaw {
     let config = MatchEngineConfig {

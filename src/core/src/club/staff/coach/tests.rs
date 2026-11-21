@@ -355,11 +355,20 @@ fn big_match_trust_protects_against_poor_form() {
 #[test]
 fn development_strategy_lifts_youth_preference() {
     let mut staff = CoachSetup::youth_staff();
-    let young = PlayerFixture::youth_forward(7);
+    let mut young = PlayerFixture::youth_forward(7);
+    // What the staff read growth from: how he applies himself and how he
+    // reads the game.
+    young.skills.mental.determination = 17.0;
+    young.skills.mental.work_rate = 17.0;
+    young.attributes.professionalism = 17.0;
+    young.attributes.ambition = 17.0;
+    young.skills.mental.decisions = 15.0;
+    young.skills.mental.anticipation = 15.0;
+    young.skills.mental.concentration = 15.0;
 
     // Even with no observed history, the coach should weight the
-    // youth player's development priority — the assessment surfaces
-    // a DevelopmentPathway reason.
+    // growth the staff see in him — the assessment surfaces a
+    // DevelopmentPathway reason.
     let profile = CoachProfile::from_staff(&staff);
     let engine = CoachDecisionEngine::from_staff(&staff, &profile, CoachStrategy::DevelopYouth);
     let assessment = engine.assess_player_for_selection(&young, &CtxFixture::league());

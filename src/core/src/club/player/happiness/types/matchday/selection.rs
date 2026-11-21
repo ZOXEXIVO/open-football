@@ -111,11 +111,7 @@ pub enum SelectionOmissionReason {
     /// Manager preferred the rival to balance the shape (eg. defensive
     /// reliability against a tough opponent).
     TeammatePreferredForTacticalBalance,
-    /// Manager promoted a youth player as part of development plan.
-    YouthDevelopmentRotation,
-    /// Cup / League Cup rotation call.
-    CupRotation,
-    /// Low-importance match — manager rotated for managed minutes.
+    /// The fixture left room and the manager's plan owed others football.
     LowMatchImportanceRotation,
     /// Player's squad status doesn't match the moment (e.g. fringe
     /// player overlooked when the manager could afford his best XI).
@@ -189,10 +185,6 @@ impl SelectionOmissionReason {
             SelectionOmissionReason::TeammatePreferredForTacticalBalance => {
                 "selection_reason_teammate_preferred_for_tactical_balance"
             }
-            SelectionOmissionReason::YouthDevelopmentRotation => {
-                "selection_reason_youth_development_rotation"
-            }
-            SelectionOmissionReason::CupRotation => "selection_reason_cup_rotation",
             SelectionOmissionReason::LowMatchImportanceRotation => {
                 "selection_reason_low_match_importance_rotation"
             }
@@ -299,9 +291,8 @@ impl SelectionRole {
 /// the renderer doesn't have to expose raw f32 scores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SelectionScoreFactor {
+    /// Football the manager's plan owed him.
     ManagerPlan,
-    PlayingTimeCommitment,
-    LoanAgreement,
     PositionFit,
     PerceivedQuality,
     MatchReadiness,
@@ -311,18 +302,10 @@ pub enum SelectionScoreFactor {
     Reputation,
     CoachRelationship,
     Newcomer,
-    YouthPreference,
     TrainingImpression,
     Cohesion,
-    SquadStatus,
     ForceSelection,
-    ClubPhilosophy,
     InjuryRisk,
-    DevelopmentMinutes,
-    /// Domestic-cup rotation opportunity — the chosen player got cup minutes
-    /// as part of the manager's early-round rotation (status / age / fresh
-    /// legs), distinct from the generic development-minutes nudge.
-    CupOpportunity,
     /// Opponent matchup adjustment (pace, aerial, press, low block, wide).
     OpponentMatchup,
     /// Role / duty fit on top of the raw position-level score.
@@ -342,10 +325,6 @@ impl SelectionScoreFactor {
         match self {
             SelectionScoreFactor::PositionFit => "selection_factor_position_fit",
             SelectionScoreFactor::ManagerPlan => "selection_factor_manager_plan",
-            SelectionScoreFactor::PlayingTimeCommitment => {
-                "selection_factor_playing_time_commitment"
-            }
-            SelectionScoreFactor::LoanAgreement => "selection_factor_loan_agreement",
             SelectionScoreFactor::PerceivedQuality => "selection_factor_perceived_quality",
             SelectionScoreFactor::MatchReadiness => "selection_factor_match_readiness",
             SelectionScoreFactor::Fatigue => "selection_factor_fatigue",
@@ -354,15 +333,10 @@ impl SelectionScoreFactor {
             SelectionScoreFactor::Reputation => "selection_factor_reputation",
             SelectionScoreFactor::CoachRelationship => "selection_factor_coach_relationship",
             SelectionScoreFactor::Newcomer => "selection_factor_newcomer",
-            SelectionScoreFactor::YouthPreference => "selection_factor_youth_preference",
             SelectionScoreFactor::TrainingImpression => "selection_factor_training_impression",
             SelectionScoreFactor::Cohesion => "selection_factor_cohesion",
-            SelectionScoreFactor::SquadStatus => "selection_factor_squad_status",
             SelectionScoreFactor::ForceSelection => "selection_factor_force_selection",
-            SelectionScoreFactor::ClubPhilosophy => "selection_factor_club_philosophy",
             SelectionScoreFactor::InjuryRisk => "selection_factor_injury_risk",
-            SelectionScoreFactor::DevelopmentMinutes => "selection_factor_development_minutes",
-            SelectionScoreFactor::CupOpportunity => "selection_factor_cup_opportunity",
             SelectionScoreFactor::OpponentMatchup => "selection_factor_opponent_matchup",
             SelectionScoreFactor::RoleDutyFit => "selection_factor_role_duty_fit",
             SelectionScoreFactor::LineupBalance => "selection_factor_lineup_balance",

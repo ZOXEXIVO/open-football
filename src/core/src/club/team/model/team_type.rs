@@ -34,6 +34,21 @@ impl TeamType {
         }
     }
 
+    /// How far the side exists to develop players rather than to win:
+    /// nothing for a first team, everything for an under-18 side.
+    pub fn development_weight(&self) -> f32 {
+        match self {
+            TeamType::Main => 0.0,
+            TeamType::B | TeamType::Second => 0.45,
+            TeamType::Reserve => 0.55,
+            TeamType::U23 => 0.75,
+            TeamType::U21 => 0.8,
+            TeamType::U20 => 0.85,
+            TeamType::U19 => 0.9,
+            TeamType::U18 => 1.0,
+        }
+    }
+
     /// Maximum player age allowed on this team type (None = no limit)
     pub fn max_age(&self) -> Option<u8> {
         match self {

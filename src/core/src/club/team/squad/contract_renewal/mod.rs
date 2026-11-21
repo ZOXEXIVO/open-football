@@ -414,13 +414,18 @@ impl ContractRenewalManager {
         // manager has already written off is not offered fresh terms
         // however tidily his deal is running down — which is how a club
         // stops paying for a squad it no longer picks.
-        let plan = &team.staffs.head_coach().squad_plan;
+        // Only a manager writes a man off: the stand-in who picks a side
+        // with nobody in the seat holds a plan and no such verdict.
+        let coach = team.staffs.head_coach();
+        let plan = &coach.squad_plan;
         team.players
             .players
             .iter()
             .filter(|player| {
-                plan.role_of(player.id)
-                    .is_none_or(|role| role != PlannedRole::NotInPlans)
+                coach.id == 0
+                    || plan
+                        .role_of(player.id)
+                        .is_none_or(|role| role != PlannedRole::NotInPlans)
             })
             .filter_map(|player| Self::evaluate(player, date, team.team_type))
             .collect()
@@ -1723,6 +1728,9 @@ mod loanee_evaluate_tests {
         TrainingSchedule,
     };
     use crate::{
+        MatchTacticType, StaffClubContract, StaffPosition, StaffStatus, StaffStub, Tactics,
+    };
+    use crate::{
         PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
         PlayerPositions, PlayerSkills,
     };
@@ -1730,6 +1738,90 @@ mod loanee_evaluate_tests {
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    /// The weakest of a back four is still the first choice for his shirt.
+    /// Two seasons behind a man who has since left do not make him a player
+    /// the manager has written off, so his deal is renewed like any other.
+    #[test]
+    fn a_first_choice_fourth_defender_is_offered_a_renewal() {
+        let today = d(2026, 7, 1);
+        let shirt = |id: u32, position: PlayerPositionType, ability: u8| {
+            let mut p = PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("T".into(), format!("P{id}")))
+                .birth_date(d(1999, 1, 1))
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::flat_for_ability(ability))
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(PlayerAttributes {
+                    current_ability: ability,
+                    potential_ability: ability,
+                    ..Default::default()
+                })
+                .build()
+                .unwrap();
+            let mut contract = PlayerClubContract::new(100_000, d(2027, 6, 30));
+            contract.squad_status = PlayerSquadStatus::FirstTeamSquadRotation;
+            p.contract = Some(contract);
+            p
+        };
+        let mut players: Vec<Player> = Tactics::new(MatchTacticType::T442)
+            .positions()
+            .iter()
+            .enumerate()
+            .map(|(i, &slot)| shirt(i as u32 + 1, slot, 150))
+            .collect();
+        let mut right_back = shirt(5, PlayerPositionType::DefenderRight, 118);
+        for year in [2024, 2025] {
+            right_back
+                .statistics_history
+                .season_ledger
+                .push(league_season(year, 1));
+        }
+        players[4] = right_back;
+
+        let mut manager = StaffStub::build();
+        manager.id = 77;
+        manager.contract = Some(StaffClubContract::new(
+            50_000,
+            d(2030, 6, 30),
+            StaffPosition::Manager,
+            StaffStatus::Active,
+        ));
+        let mut team = TeamBuilder::new()
+            .id(1)
+            .league_id(None)
+            .club_id(2)
+            .name("Side".to_string())
+            .slug("t".to_string())
+            .team_type(TeamType::Main)
+            .players(PlayerCollection::new(players))
+            .staffs(StaffCollection::new(vec![manager]))
+            .reputation(TeamReputation::new(500, 500, 500))
+            .training_schedule(TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            ))
+            .build()
+            .unwrap();
+        team.revise_coach_squad_plan(today, None);
+
+        let entry = *team.staffs.head_coach().squad_plan.entry(5).unwrap();
+        assert_eq!(entry.place, 0, "nobody else plays right-back");
+        assert!(entry.role.is_at_least(PlannedRole::Starter), "{:?}", entry.role);
+        assert!(
+            ContractRenewalManager::collect_candidates(&team, today)
+                .iter()
+                .any(|candidate| candidate.player_id == 5),
+            "the club renews the man who plays every week"
+        );
     }
 
     #[test]

@@ -4,6 +4,7 @@ use crate::ContractBonusType;
 use crate::PlayerContractProposal;
 use crate::club::CareerRunway;
 use crate::club::SquadDepartures;
+use crate::club::core::{DepartedPlayer, DepartureKind};
 use crate::club::board::mandate::SigningMandate;
 use crate::club::board::{BoardTransferConcern, BoardTransferDecision};
 use crate::club::finance::ParachuteEntitlement;
@@ -1385,14 +1386,13 @@ impl CountryResult {
         data.continents[bci].countries[bcoi].clubs[bcli]
             .finance
             .register_obligated_purchase(fee as f64, 4);
-        data.continents[pci].countries[pcoi].clubs[pcli]
-            .finance
-            .add_transfer_income(fee as f64);
-        // The shirt is free at the parent too. A buyout is a sale, and
-        // the man behind him moves up a rung exactly as he would on any
-        // other one — the permanent-move branch has always said so and
-        // this one never did.
-        data.continents[pci].countries[pcoi].clubs[pcli].on_asset_sold(event.player_id, date);
+        // A buyout is a sale. The parent was not picking him, so the fact
+        // it is told carries the money and little else.
+        if let Some(departed) = data.player(event.player_id).map(|player| {
+            DepartedPlayer::away(player, DepartureKind::BoughtOut, date).for_fee(fee as f64)
+        }) {
+            data.continents[pci].countries[pcoi].clubs[pcli].on_player_departed(&departed);
+        }
 
         // Mutate the player in place — he stays in the borrower roster.
         let Some((ci, coi, cli, ti)) = data.find_player_position(event.player_id) else {
@@ -1533,6 +1533,14 @@ impl CountryResult {
         // The borrowing manager's spell with him ends here. The parent
         // club's does not — his was suspended, not closed, and it resumes
         // when the player walks back through the door.
+        let departed = player_pos.and_then(|(ci, coi, cli, _)| {
+            DepartedPlayer::read(
+                &data.continents[ci].countries[coi].clubs[cli],
+                event.player_id,
+                DepartureKind::LoanEnded,
+                date,
+            )
+        });
         if let Some((ci, coi, cli, _)) = player_pos {
             SquadDepartures::notify(
                 &mut data.continents[ci].countries[coi].clubs[cli],
@@ -1553,6 +1561,9 @@ impl CountryResult {
             }
             None => return,
         };
+        if let (Some((ci, coi, cli, _)), Some(departed)) = (player_pos, departed.as_ref()) {
+            data.continents[ci].countries[coi].clubs[cli].on_player_departed(departed);
+        }
         if let Some(concern) = event.turned_down {
             player.on_option_turned_down(concern, date);
         }

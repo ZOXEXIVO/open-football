@@ -54,6 +54,9 @@ pub struct ClubContext<'c> {
     /// mirrored here so the player generator can consult it without taking
     /// a reference to the academy struct itself.
     pub pathway_reputation: u8,
+    /// How far the club exists to bring players through, 0..1
+    /// ([`crate::ClubPhilosophy::development_lean`]).
+    pub development_lean: f32,
 }
 
 impl<'c> ClubContext<'c> {
@@ -82,7 +85,13 @@ impl<'c> ClubContext<'c> {
             league_reputation: 0,
             country_reputation: 0,
             pathway_reputation: 50,
+            development_lean: 0.3,
         }
+    }
+
+    pub fn with_development_lean(mut self, development_lean: f32) -> Self {
+        self.development_lean = development_lean;
+        self
     }
 
     pub fn with_facilities(

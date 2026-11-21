@@ -1,4 +1,6 @@
-use crate::club::staff::{CoachMatchSnapshot, CoachPlayerBond, CoachProfile, CoachStrategy};
+use crate::club::staff::{
+    CoachMatchSnapshot, CoachPlayerBond, CoachProfile, CoachStrategy, PlayerMatchIntent,
+};
 use crate::club::team::MatchdayLeadership;
 use crate::r#match::squad::{CoachStrategyForSelection, PlayerSelectionResult};
 use crate::r#match::{CoachCard, MatchPlayer, MatchSquad, SelectionContext, SquadSelector};
@@ -51,6 +53,7 @@ impl Team {
             free_kick_taker_id,
             selection_omissions: squad_result.omissions,
             overlooked: squad_result.overlooked,
+            selection: Default::default(),
             coach_snapshot,
             coach_card: CoachCard::of_head_coach(head_coach),
             familiarity: Some(familiarity),
@@ -107,6 +110,7 @@ impl Team {
             free_kick_taker_id,
             selection_omissions: squad_result.omissions,
             overlooked: squad_result.overlooked,
+            selection: ctx.reading(),
             coach_snapshot,
             coach_card: CoachCard::of_head_coach(head_coach),
             familiarity: Some(familiarity),
@@ -172,6 +176,7 @@ impl Team {
             free_kick_taker_id,
             selection_omissions: squad_result.omissions,
             overlooked: squad_result.overlooked,
+            selection: ctx.reading(),
             coach_snapshot,
             coach_card: CoachCard::of_head_coach(head_coach),
             familiarity: Some(familiarity),
@@ -353,17 +358,7 @@ impl MatchCoachSnapshot {
             .map(|p| {
                 (
                     p.id,
-                    crate::club::staff::PlayerMatchIntent::assess(
-                        p,
-                        head_coach,
-                        ctx.date,
-                        ctx.match_importance,
-                        matches!(
-                            ctx.competition,
-                            crate::r#match::SelectionCompetition::DomesticCup { .. }
-                        ),
-                        ctx.is_friendly,
-                    ),
+                    PlayerMatchIntent::assess(p, head_coach, ctx.room()),
                 )
             })
             .collect();

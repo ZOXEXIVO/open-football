@@ -7,6 +7,11 @@ pub struct ContinentalRegulations {
     pub youth_requirements: YouthRequirements,
 }
 
+impl ContinentalRegulations {
+    /// Substitutes a side may name for a continental tie.
+    pub const BENCH_SIZE: u8 = 12;
+}
+
 impl Default for ContinentalRegulations {
     fn default() -> Self {
         Self::new()

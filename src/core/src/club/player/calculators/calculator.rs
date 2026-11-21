@@ -1,3 +1,4 @@
+use crate::club::player::statistics::FootballRecord;
 use crate::club::staff::perception::PotentialEstimator;
 use crate::{Person, Player, PlayerPositionType, PlayerSquadStatus, PlayerStatusType};
 use chrono::NaiveDate;
@@ -18,7 +19,7 @@ impl PlayerValueCalculator {
         let status_factor = Self::determine_status_factor(player);
         let squad_role_factor = Self::determine_squad_role_factor(player);
         let contract_factor = Self::determine_contract_factor(player, now);
-        let performance_factor = Self::determine_performance_factor(player, league_reputation);
+        let performance_factor = Self::determine_performance_factor(player, now, league_reputation);
         let recent_form_factor = Self::determine_recent_form_factor(player);
         let career_factor = Self::determine_career_consistency_factor(player);
         let reputation_factor = Self::determine_reputation_factor(player);
@@ -228,68 +229,75 @@ impl PlayerValueCalculator {
         }
     }
 
-    /// Season performance: goals, assists, appearances, average rating.
-    /// League-aware: deviations from neutral (1.0) are scaled by league
-    /// strength so a goal in a top-5 league is worth more to the market
-    /// than a goal in a semi-pro division. Half-weight when no league
-    /// context is available (academy, free agents, calibration tests).
-    fn determine_performance_factor(player: &Player, league_reputation: u16) -> f64 {
-        let stats = &player.statistics;
-        let mut factor = 1.0;
+    /// What a man with no football behind him is read at, and what regular
+    /// football at an ordinary rating is: thirty appearances land where
+    /// the market has always put a season's regular.
+    const NO_FOOTBALL: f64 = 0.90;
+    const REGULAR_FOOTBALL: f64 = 0.95;
+    /// Appearances at which half of that gap is closed.
+    const FOOTBALL_HALF: f64 = 8.0;
+    /// Value per rating point above the ordinary for his position.
+    const RATING_SLOPE: f64 = 0.40;
 
-        // Appearances — regular playing time proves value
-        if stats.played > 25 {
-            factor *= 1.1;
-        } else if stats.played > 15 {
-            // Decent number of apps, no adjustment
-        } else if stats.played > 5 {
-            factor *= 0.95;
-        } else if stats.played > 0 {
-            factor *= 0.85; // Barely played — mild discount
-        } else {
-            factor *= 0.90; // No appearances yet — slight discount
+    /// What the amount of football behind him is worth: saturating, and
+    /// never lower for more of it.
+    pub fn football_played_factor(appearances: f32) -> f64 {
+        let appearances = f64::from(appearances.max(0.0));
+        Self::NO_FOOTBALL
+            + (Self::REGULAR_FOOTBALL - Self::NO_FOOTBALL) * appearances
+                / (appearances + Self::FOOTBALL_HALF)
+    }
+
+    /// How fast one more appearance moves his value at this record, as a
+    /// share of what the first one moves it: 1.0 with nothing behind him,
+    /// falling toward nothing as the record fills.
+    pub fn football_leverage(appearances: f32) -> f32 {
+        let half = Self::FOOTBALL_HALF as f32;
+        let through = half / (appearances.max(0.0) + half);
+        through * through
+    }
+
+    /// A value through `knots`, straight between them and flat outside.
+    fn along(knots: &[(f64, f64)], x: f64) -> f64 {
+        let (first, last) = (knots[0], knots[knots.len() - 1]);
+        if x <= first.0 {
+            return first.1;
         }
-
-        // Goals contribution — position-aware
-        if stats.played > 5 {
-            let goals_per_game = stats.goals as f64 / stats.played as f64;
-            let assists_per_game = stats.assists as f64 / stats.played as f64;
-
-            if player.position().is_forward() {
-                if goals_per_game > 0.5 {
-                    factor *= 1.2;
-                } else if goals_per_game > 0.3 {
-                    factor *= 1.1;
-                } else if goals_per_game < 0.1 {
-                    factor *= 0.8; // Forward who can't score
-                }
-            }
-
-            if player.position().is_midfielder() {
-                let combined = goals_per_game + assists_per_game;
-                if combined > 0.4 {
-                    factor *= 1.15;
-                } else if combined > 0.2 {
-                    factor *= 1.05;
-                }
-            }
+        if x >= last.0 {
+            return last.1;
         }
+        let at = knots.iter().position(|k| x < k.0).unwrap_or(knots.len() - 1);
+        let (lo, hi) = (knots[at - 1], knots[at]);
+        lo.1 + (hi.1 - lo.1) * (x - lo.0) / (hi.0 - lo.0)
+    }
 
-        // Average match rating — stronger impact for mediocre/poor performers
-        if stats.average_rating > 7.5 {
-            factor *= 1.15;
-        } else if stats.average_rating > 7.0 {
-            factor *= 1.05;
-        } else if stats.average_rating > 6.9 {
-            factor *= 0.97; // Slightly below par — mild discount
-        } else if stats.average_rating > 6.8 {
-            factor *= 0.93; // Average at best — noticeable discount
-        } else if stats.average_rating > 6.5 {
-            factor *= 0.85; // Below average performer
-        } else if stats.average_rating > 6.0 {
-            factor *= 0.75; // Poor performer — clear discount
-        } else if stats.average_rating > 0.0 {
-            factor *= 0.65; // Very poor
+    /// Football over this season and the last: how much of it, how well,
+    /// and what it produced. A continuous record, so no appearance and no
+    /// change of season moves the value by a band. League-aware:
+    /// deviations from neutral (1.0) are scaled by league strength so a
+    /// goal in a top-5 league is worth more to the market than a goal in a
+    /// semi-pro division. Half-weight when no league context is available
+    /// (academy, free agents, calibration tests).
+    fn determine_performance_factor(player: &Player, now: NaiveDate, league_reputation: u16) -> f64 {
+        let record = FootballRecord::of(player, now);
+        let group = player.position().position_group();
+        let mut factor = Self::football_played_factor(record.appearances);
+
+        let edge = f64::from(record.rating_edge(group));
+        factor *= (1.0 + Self::RATING_SLOPE * edge).clamp(0.70, 1.30);
+
+        // What his football produced, weighed by how much of it there is.
+        if record.appearances > 0.0 {
+            let per_game = |n: f32| f64::from(n / record.appearances);
+            let (goals, assists) = (per_game(record.goals), per_game(record.assists));
+            let produced = if player.position().is_forward() {
+                Self::along(&[(0.05, 0.8), (0.2, 1.0), (0.4, 1.1), (0.6, 1.2)], goals)
+            } else if player.position().is_midfielder() {
+                Self::along(&[(0.1, 1.0), (0.3, 1.05), (0.5, 1.15)], goals + assists)
+            } else {
+                1.0
+            };
+            factor *= 1.0 + (produced - 1.0) * f64::from(record.confidence());
         }
 
         // International experience. Intentionally lighter than reputation —
@@ -630,6 +638,170 @@ mod tests {
 
     fn d(year: i32) -> NaiveDate {
         NaiveDate::from_ymd_opt(year, 7, 1).unwrap()
+    }
+
+    /// `played` league starts at an ordinary rating.
+    fn with_ordinary_season(mut player: Player, played: u16) -> Player {
+        player.statistics.played = played;
+        for _ in 0..played {
+            player.statistics.record_match_rating(6.9, 90, true);
+        }
+        player
+    }
+
+    #[test]
+    fn a_debut_does_not_lower_market_value() {
+        let now = d(2025);
+        let unused = make_valuation_player(now, 130, 140, 24, PlayerPositionType::MidfielderCenter);
+        let debutant = with_ordinary_season(unused.clone(), 1);
+
+        let before = PlayerValueCalculator::calculate(&unused, now, 1.0, 7000, 7000);
+        let after = PlayerValueCalculator::calculate(&debutant, now, 1.0, 7000, 7000);
+        assert!(
+            after >= before,
+            "one ordinary appearance took the value from {before} to {after}"
+        );
+    }
+
+    #[test]
+    fn a_regulars_value_does_not_move_when_the_season_is_archived() {
+        use crate::club::player::statistics::TeamInfo;
+        use crate::league::Season;
+
+        let last_day = NaiveDate::from_ymd_opt(2026, 6, 30).unwrap();
+        let first_day = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
+        let mut regular = with_ordinary_season(
+            make_valuation_player(last_day, 130, 140, 26, PlayerPositionType::MidfielderCenter),
+            30,
+        );
+        let before = PlayerValueCalculator::calculate(&regular, last_day, 1.0, 7000, 7000);
+
+        let team = TeamInfo {
+            name: "Club".to_string(),
+            slug: "club".to_string(),
+            reputation: 7000,
+            league_name: "League".to_string(),
+            league_slug: "league".to_string(),
+        };
+        regular.on_season_end(Season::new(2025), &team, first_day);
+        let after = PlayerValueCalculator::calculate(&regular, first_day, 1.0, 7000, 7000);
+
+        let moved = (after - before).abs() / before;
+        assert!(
+            moved <= 0.05,
+            "archiving the season moved the value by {:.0}%: {before} to {after}",
+            moved * 100.0
+        );
+    }
+
+    #[test]
+    fn one_poor_cameo_moves_the_value_by_a_small_amount() {
+        let now = d(2025);
+        let unused = make_valuation_player(now, 130, 140, 24, PlayerPositionType::MidfielderCenter);
+        let mut cameo = unused.clone();
+        cameo.statistics.played_subs = 1;
+        cameo.statistics.record_match_rating(5.4, 20, false);
+
+        let before = PlayerValueCalculator::calculate(&unused, now, 1.0, 7000, 7000);
+        let after = PlayerValueCalculator::calculate(&cameo, now, 1.0, 7000, 7000);
+        let moved = (after - before).abs() / before;
+        assert!(
+            moved <= 0.03,
+            "twenty poor minutes moved the value by {:.1}%",
+            moved * 100.0
+        );
+    }
+
+    #[test]
+    fn a_year_of_football_is_worth_more_than_a_year_on_the_bench() {
+        let now = d(2025);
+        let benched = make_valuation_player(now, 130, 140, 26, PlayerPositionType::MidfielderCenter);
+        let played = with_ordinary_season(benched.clone(), 30);
+
+        let on_the_bench = PlayerValueCalculator::calculate(&benched, now, 1.0, 7000, 7000);
+        let on_the_pitch = PlayerValueCalculator::calculate(&played, now, 1.0, 7000, 7000);
+        assert!(on_the_pitch > on_the_bench, "{on_the_pitch} against {on_the_bench}");
+    }
+
+    #[test]
+    fn more_football_of_the_same_quality_never_lowers_the_value_and_no_count_is_a_step() {
+        let now = d(2025);
+        let base = make_valuation_player(now, 130, 140, 26, PlayerPositionType::DefenderCenter);
+        // Unrounded, so a step cannot hide in the rounding of a fee.
+        let factor = |played: u16| {
+            let player = with_ordinary_season(base.clone(), played);
+            PlayerValueCalculator::determine_performance_factor(&player, now, 7000)
+        };
+        let mut previous = factor(0);
+        for played in 1..=40 {
+            let next = factor(played);
+            assert!(next >= previous, "{played} appearances read below {}", played - 1);
+            // The old bands were five to fifteen per cent apart.
+            assert!(
+                next - previous <= 0.02,
+                "appearance {played} moved the factor by {:.3}",
+                next - previous
+            );
+            previous = next;
+        }
+    }
+
+    #[test]
+    fn football_long_gone_counts_for_less_the_longer_he_has_been_without() {
+        use crate::club::player::statistics::TeamInfo;
+        use crate::league::Season;
+
+        let now = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
+        let team = TeamInfo {
+            name: "Club".to_string(),
+            slug: "club".to_string(),
+            reputation: 7000,
+            league_name: "League".to_string(),
+            league_slug: "league".to_string(),
+        };
+        let mut regular = with_ordinary_season(
+            make_valuation_player(now, 130, 140, 26, PlayerPositionType::MidfielderCenter),
+            30,
+        );
+        regular.on_season_end(Season::new(2025), &team, now);
+        let idle = |days: u16| {
+            let mut player = regular.clone();
+            player.player_attributes.days_since_last_match = days;
+            PlayerValueCalculator::determine_performance_factor(&player, now, 7000)
+        };
+        assert_eq!(idle(30), idle(80), "a close season costs nothing");
+        assert!(idle(200) < idle(80));
+        assert!(idle(360) < idle(200));
+    }
+
+    #[test]
+    fn football_at_the_club_he_left_this_season_still_counts() {
+        use crate::club::player::CurrentSeasonEntry;
+
+        let now = d(2025);
+        let settled = with_ordinary_season(
+            make_valuation_player(now, 130, 140, 26, PlayerPositionType::MidfielderCenter),
+            20,
+        );
+        let mut moved = settled.clone();
+        let spell = std::mem::take(&mut moved.statistics);
+        moved.statistics_history.current.push(CurrentSeasonEntry {
+            team_name: "Old".to_string(),
+            team_slug: "old".to_string(),
+            team_reputation: 7000,
+            league_name: "League".to_string(),
+            league_slug: "league".to_string(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: spell,
+            joined_date: NaiveDate::from_ymd_opt(2024, 8, 1).unwrap(),
+            departed_date: Some(NaiveDate::from_ymd_opt(2025, 1, 15).unwrap()),
+            seq_id: 1,
+        });
+        assert_eq!(
+            PlayerValueCalculator::determine_performance_factor(&moved, now, 7000),
+            PlayerValueCalculator::determine_performance_factor(&settled, now, 7000),
+        );
     }
 
     #[test]

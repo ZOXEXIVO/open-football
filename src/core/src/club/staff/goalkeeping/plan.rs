@@ -14,7 +14,7 @@
 
 use rustc_hash::FxHashMap;
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 
 use super::advice::{KeeperAdvice, KeeperRecommendation, KeeperSuccession, KeeperTier};
 
@@ -27,7 +27,8 @@ pub struct KeeperAssignment {
     pub set_on: NaiveDate,
     /// For a pathway keeper being groomed, the incumbent he is behind.
     pub understudy_to: Option<u32>,
-    /// Share of the season's competitive matches the plan intends for him.
+    /// Share of the season's competitive matches the declared order gives
+    /// him ([`KeeperRoomPlan::glove_share`]).
     pub planned_share: f32,
 }
 
@@ -57,6 +58,46 @@ impl KeeperNomination {
     }
 }
 
+/// The competition a club gives its deputy for the season: the domestic
+/// cup, and how far into it he keeps the gloves. Declared at the start of a
+/// season and again when the order changes, never tie by tie.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DeputyCompetition {
+    /// How far through the bracket he keeps the shirt, as the share of
+    /// its rounds played: 1.0 is the final.
+    pub reach: f32,
+    pub declared_on: NaiveDate,
+    /// The order it was declared for.
+    pub number_one: u32,
+    pub deputy: u32,
+}
+
+impl DeputyCompetition {
+    /// The month a season's declarations are made from.
+    const SEASON_TURNS: u32 = 7;
+
+    /// Whether a tie `progress` of the way through the bracket (0 the
+    /// first round, 1 the final) is still the deputy's.
+    pub fn holds(&self, progress: f32) -> bool {
+        progress <= self.reach + f32::EPSILON
+    }
+
+    fn season_of(date: NaiveDate) -> i32 {
+        if date.month() >= Self::SEASON_TURNS {
+            date.year()
+        } else {
+            date.year() - 1
+        }
+    }
+
+    /// Whether the declaration still stands for this order on this day.
+    fn stands(&self, number_one: u32, deputy: u32, today: NaiveDate) -> bool {
+        self.number_one == number_one
+            && self.deputy == deputy
+            && Self::season_of(self.declared_on) == Self::season_of(today)
+    }
+}
+
 /// The department's standing view of the club's goalkeepers.
 #[derive(Debug, Clone, Default)]
 pub struct KeeperRoomPlan {
@@ -69,6 +110,8 @@ pub struct KeeperRoomPlan {
     third: Option<u32>,
     /// The young keeper the department is building toward the shirt.
     heir: Option<u32>,
+    /// The deputy's competition, when the club has declared one.
+    deputy_competition: Option<DeputyCompetition>,
     succession: KeeperSuccession,
     nomination: Option<KeeperNomination>,
     recommendations: Vec<KeeperRecommendation>,
@@ -135,6 +178,36 @@ impl KeeperRoomPlan {
         self.heir
     }
 
+    pub fn deputy_competition(&self) -> Option<&DeputyCompetition> {
+        self.deputy_competition.as_ref()
+    }
+
+    /// What the deputy is planned beyond his competition: the odd league
+    /// match the number one misses.
+    const DEPUTY_SHARE: f32 = 0.04;
+    /// The share of a season's fixtures a whole domestic cup run is.
+    const CUP_SHARE: f32 = 0.10;
+    const THIRD_SHARE: f32 = 0.01;
+
+    /// The share of the gloves the declared order gives a keeper over a
+    /// season. `None` for a keeper outside it.
+    pub fn glove_share(&self, player_id: u32) -> Option<f32> {
+        let deputy = self.deputy.map_or(0.0, |_| {
+            Self::DEPUTY_SHARE
+                + Self::CUP_SHARE * self.deputy_competition.map_or(0.0, |c| c.reach)
+        });
+        let third = self.third.map_or(0.0, |_| Self::THIRD_SHARE);
+        if self.number_one == Some(player_id) {
+            Some(1.0 - deputy - third)
+        } else if self.deputy == Some(player_id) {
+            Some(deputy)
+        } else if self.third == Some(player_id) {
+            Some(third)
+        } else {
+            None
+        }
+    }
+
     pub fn succession(&self) -> KeeperSuccession {
         self.succession
     }
@@ -164,6 +237,14 @@ impl KeeperRoomPlan {
 
     /// Whether the department is asking the club to do something about the
     /// shape of the room as a whole.
+    /// What the recruitment desk reads at its next review: the keepers the
+    /// department wants signed and the ones it wants moved on.
+    pub fn recruitment_advice(&self) -> impl Iterator<Item = &KeeperRecommendation> {
+        self.recommendations
+            .iter()
+            .filter(|r| r.advice.is_for_recruitment())
+    }
+
     pub fn wants(&self, advice: KeeperAdvice) -> bool {
         self.recommendations.iter().any(|r| r.advice == advice)
     }
@@ -220,7 +301,7 @@ impl KeeperRoomPlan {
                         previous.map(|a| a.set_on).unwrap_or(today)
                     },
                     understudy_to,
-                    planned_share: tier.planned_share(),
+                    planned_share: 0.0,
                 },
             );
         }
@@ -230,6 +311,31 @@ impl KeeperRoomPlan {
         self.deputy = outcome.deputy;
         self.third = outcome.third;
         self.heir = outcome.heir;
+        // Declared once: a declaration stands while the order it was made
+        // for holds and the season has not turned.
+        self.deputy_competition = match (outcome.deputy_cup_reach, self.number_one, self.deputy) {
+            (Some(reach), Some(number_one), Some(deputy)) => Some(
+                self.deputy_competition
+                    .filter(|standing| standing.stands(number_one, deputy, today))
+                    .unwrap_or(DeputyCompetition {
+                        reach,
+                        declared_on: today,
+                        number_one,
+                        deputy,
+                    }),
+            ),
+            _ => None,
+        };
+        let shares: Vec<(u32, f32)> = self
+            .assignments
+            .keys()
+            .map(|id| (*id, self.glove_share(*id).unwrap_or(0.0)))
+            .collect();
+        for (id, share) in shares {
+            if let Some(assignment) = self.assignments.get_mut(&id) {
+                assignment.planned_share = share;
+            }
+        }
         self.succession = outcome.succession;
         self.recommendations = outcome.recommendations;
         self.authority = outcome.authority;
@@ -281,4 +387,7 @@ pub struct KeeperReviewOutcome {
     pub nominee_assurance: Option<f32>,
     pub recommendations: Vec<KeeperRecommendation>,
     pub authority: f32,
+    /// How far into the cup the deputy would keep the gloves, when he is
+    /// ready to be given it.
+    pub deputy_cup_reach: Option<f32>,
 }

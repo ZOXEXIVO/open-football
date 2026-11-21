@@ -20,13 +20,15 @@ use rustc_hash::FxHashMap;
 
 use crate::club::board::mandate::{MandateIncumbent, MandatePurpose, MinutesCurve};
 use crate::club::staff::Staff;
+use crate::club::staff::goalkeeping::{KeeperAdvice, KeeperUrgency};
 use crate::club::staff::perception::{EstimationContext, PotentialEstimator};
 use crate::club::team::squad::{MIN_FIRST_TEAM_SQUAD, SquadAssetContext};
 use crate::transfers::loan::home::SquadHomeContext;
 use crate::transfers::pipeline::processor::SquadPlayerInfo;
 use crate::transfers::pipeline::trace::TransferTrace;
 use crate::transfers::pipeline::{
-    LoanOutCandidate, TransferNeedPriority, TransferNeedReason, TransferRequest,
+    LoanOutCandidate, TransferNeedPriority, TransferNeedReason, TransferRequest, Vacancy,
+    VacancyOutcome,
 };
 use crate::{
     Club, ClubPhilosophy, MatchTacticType, Person, Player, PlayerFieldPositionGroup,
@@ -34,6 +36,7 @@ use crate::{
 };
 
 use super::needs::{EmergencyGroupSlot, FirstTeamSquadNeeds};
+use super::outlook::DepartureOutlook;
 use super::plan::{PlanInputs, RecruitmentBrief, SquadPlanner};
 use super::{
     GroupNeed, GroupNeedScan, InvestmentAppetite, InvestmentWatch, SquadEvaluation,
@@ -90,6 +93,8 @@ pub(in crate::transfers::squad) struct ReviewLedger {
     budget_used: f64,
     requests: Vec<TransferRequest>,
     next_id: u32,
+    /// What the review made of each shirt a departure left open.
+    vacancies: Vec<(u32, VacancyOutcome)>,
 }
 
 impl<'a> SquadReview<'a> {
@@ -300,6 +305,7 @@ impl<'a> SquadReview<'a> {
             max_concurrent: 1,
             brief: None,
             sell_list: Vec::new(),
+            vacancies: Vec::new(),
         })
     }
 
@@ -439,6 +445,7 @@ impl<'a> SquadReview<'a> {
         self.investment_requests(&mut ledger);
         self.succession_requests(&mut ledger);
         self.pre_departure_requests(&mut ledger);
+        self.goalkeeping_requests(&mut ledger);
         self.youth_requests(&mut ledger);
         self.padding_and_loan_requests(&mut ledger);
         self.finish(ledger)
@@ -462,7 +469,31 @@ impl<'a> SquadReview<'a> {
         // STEP 3: Generate transfer requests from gaps
         // ──────────────────────────────────────────────────────────
 
-        let available_budget = budget * 0.9; // Keep 10% reserve
+        // A shirt a departure left open is judged first: held from within,
+        // filled, or to be searched for. A search keeps the money its sale
+        // reserved, so that comes off the pot before anything is split.
+        let vacancies: Vec<(Vacancy, VacancyOutcome)> = club
+            .transfer_plan
+            .vacancies
+            .iter()
+            .map(|vacancy| {
+                let departed = &vacancy.departed;
+                let holder = club.shirt_holder(departed.shirt, departed.date);
+                (*vacancy, vacancy.judge(holder, date))
+            })
+            .collect();
+        let searching: Vec<Vacancy> = vacancies
+            .iter()
+            .filter(|(_, outcome)| *outcome == VacancyOutcome::Search)
+            .map(|(vacancy, _)| *vacancy)
+            .collect();
+        let reserved: f64 = searching
+            .iter()
+            .map(|vacancy| vacancy.reserve)
+            .sum::<f64>()
+            .min(budget.max(0.0));
+
+        let available_budget = (budget - reserved).max(0.0) * 0.9; // Keep 10% reserve
         let mut budget_used = 0.0;
 
         // Continuous reputation score — drives tier baselines without
@@ -532,7 +563,7 @@ impl<'a> SquadReview<'a> {
         // memory of failed searches. What the request now carries in
         // addition is the TIER (how transformative), the improvement bar,
         // and the shirt the club is promising.
-        let brief = SquadPlanner::plan(&PlanInputs {
+        let plan_inputs = PlanInputs {
             club,
             squad,
             position_coverage,
@@ -548,9 +579,35 @@ impl<'a> SquadReview<'a> {
                 .as_ref()
                 .map(|t| t.max_squad_size as usize)
                 .unwrap_or(0),
-        });
+        };
+        let brief = SquadPlanner::plan(&plan_inputs);
+
+        // The replacement searches go on the list first, each with the
+        // money its own sale reserved.
+        let replacements =
+            SquadPlanner::vacancy_briefs(&plan_inputs, &searching, budget, self.current_window);
+        for replacement in &replacements {
+            requests.push(
+                TransferRequest::new(
+                    next_id,
+                    replacement.position,
+                    replacement.priority.clone(),
+                    TransferNeedReason::Replacement,
+                    replacement.min_level,
+                    replacement.level,
+                    replacement.money,
+                )
+                .for_vacancy(replacement),
+            );
+            next_id += 1;
+        }
 
         for slot in brief.slots.iter() {
+            // A shirt with a vacancy is searched for as the vacancy asks,
+            // not a second time as a gap in the formation.
+            if replacements.iter().any(|r| r.position == slot.position) {
+                continue;
+            }
             // How many times the club has already come up short here. A need
             // raised for the first time escalates by nothing at all; one the
             // club has been carrying since last summer is put to the board
@@ -594,6 +651,10 @@ impl<'a> SquadReview<'a> {
             budget_used,
             requests,
             next_id,
+            vacancies: vacancies
+                .iter()
+                .map(|(vacancy, outcome)| (vacancy.departed.player_id, *outcome))
+                .collect(),
         }
     }
 
@@ -849,15 +910,28 @@ impl<'a> SquadReview<'a> {
         // age-gated succession pass misses him. Runs for every club, so a
         // Balanced lower-tier side no longer loses its best player for free
         // with nothing lined up.
-        const REPLACE_CONTRACT_MONTHS: i32 = 9;
+        //
+        // The clock is one of six readings of the same outlook: a first
+        // choice the club is selling, who has asked to go, who has been
+        // approached, or who has outgrown the side is as likely to leave as
+        // one with nine months on his deal.
+        const LIKELY_TO_LEAVE: f32 = 0.5;
+        let side_level = self.first_choice_level();
         for player_info in squad {
             if budget_used >= available_budget {
                 break;
             }
-            let short_contract = player_info
-                .contract_months_remaining
-                .is_some_and(|m| m <= REPLACE_CONTRACT_MONTHS);
-            if !short_contract {
+            let Some(player) = self.players.iter().find(|p| p.id == player_info.player_id) else {
+                continue;
+            };
+            let outlook = DepartureOutlook::of(
+                player,
+                self.club.transfer_plan.is_marketed(player.id),
+                player_info.current_ability,
+                side_level,
+                self.date,
+            );
+            if outlook.likelihood() < LIKELY_TO_LEAVE {
                 continue;
             }
             let group = player_info.primary_position.position_group();
@@ -902,6 +976,70 @@ impl<'a> SquadReview<'a> {
         ledger.requests = requests;
         ledger.budget_used = budget_used;
         ledger.next_id = next_id;
+    }
+
+    /// The level of the side's first choices: the mean of the best eleven
+    /// the coach reads in the squad.
+    fn first_choice_level(&self) -> u8 {
+        let mut levels: Vec<u8> = self.squad.iter().map(|p| p.current_ability).collect();
+        levels.sort_unstable_by(|a, b| b.cmp(a));
+        levels.truncate(11);
+        if levels.is_empty() {
+            return 0;
+        }
+        (levels.iter().map(|l| u32::from(*l)).sum::<u32>() / levels.len() as u32) as u8
+    }
+
+    /// STEP 4a' — the keeper the goalkeeping department asked the club to
+    /// sign. One keeper search a window: a succession or upgrade search
+    /// already open answers the room, and the youth step below defers to
+    /// this one.
+    fn goalkeeping_requests(&self, ledger: &mut ReviewLedger) {
+        let Some(plan) = self.club.keeper_plan() else {
+            return;
+        };
+        let searching = ledger
+            .requests
+            .iter()
+            .any(|r| r.position.position_group() == PlayerFieldPositionGroup::Goalkeeper);
+        if searching {
+            return;
+        }
+        let asked = plan
+            .recruitment_advice()
+            .filter(|r| r.advice.is_club_scoped())
+            .filter_map(|r| Some((r, r.reference_level?)))
+            .max_by_key(|(r, _)| r.urgency);
+        let Some((advice, level)) = asked else {
+            return;
+        };
+        // Levels below the number one a signing may be, at worst and at
+        // best, and the share of a discretionary unit it is worth.
+        let (reason, below_floor, below_ideal, share) = match advice.advice {
+            KeeperAdvice::SignACredibleDeputy => (TransferNeedReason::DepthCover, 22, 8, 0.5),
+            KeeperAdvice::SignAKeeperForTheFuture => {
+                (TransferNeedReason::DevelopmentSigning, 40, 15, 0.3)
+            }
+            _ => (TransferNeedReason::ExperiencedHead, 40, 25, 0.1),
+        };
+        let priority = match advice.urgency {
+            KeeperUrgency::Urgent => TransferNeedPriority::Important,
+            _ => TransferNeedPriority::Optional,
+        };
+        let alloc = (ledger.discretionary_unit * share)
+            .min(ledger.available_budget - ledger.budget_used)
+            .max(0.0);
+        ledger.requests.push(TransferRequest::new(
+            ledger.next_id,
+            PlayerPositionType::Goalkeeper,
+            priority,
+            reason,
+            level.saturating_sub(below_floor),
+            level.saturating_sub(below_ideal),
+            alloc,
+        ));
+        ledger.next_id += 1;
+        ledger.budget_used += alloc;
     }
 
     /// STEP 4b — youth development signings. Elite and Continental clubs farm
@@ -1263,7 +1401,10 @@ impl<'a> SquadReview<'a> {
         let budget = self.budget;
         let max_concurrent = self.max_concurrent;
         let ReviewLedger {
-            brief, requests, ..
+            brief,
+            requests,
+            vacancies,
+            ..
         } = ledger;
         let mut loan_outs: Vec<LoanOutCandidate> = Vec::new();
 
@@ -1342,6 +1483,7 @@ impl<'a> SquadReview<'a> {
             max_concurrent,
             brief: Some(brief),
             sell_list,
+            vacancies,
         }
     }
 }

@@ -78,3 +78,35 @@ SHALL still feel some frustration when he is owed matches.
 - **WHEN** a player turns 31
 - **THEN** his career stake, and so his frustration for the same owed matches, changes by no more than the continuous
   drift of one day
+
+### Requirement: Concern over a sold player waits for the club's answer
+When a club sells a player who mattered to it, his ambitious and senior team-mates SHALL NOT react on the day of the
+sale. The club SHALL be given a period of grace, which ends when the transfer window closes or after a few weeks,
+whichever comes first. At its end each such team-mate SHALL judge what the club did:
+- concern, when nobody at or near the departed player's level holds his shirt, by promotion or by signing;
+- no reaction, when the shirt is held at about his level;
+- encouragement, when the player who came in is clearly better.
+
+How much a departure matters SHALL be read from the player's importance to this club, his planned role and the share
+of football he was taking, on one continuous scale. It SHALL NOT be read from his fame alone: a small club feels the
+loss of its best player, and a great club does not feel the loss of a reserve, however well known.
+
+#### Scenario: Sold and replaced within the window
+- **WHEN** a club sells its first-choice striker and signs a striker of similar level two weeks later
+- **THEN** no team-mate records concern about the sale
+
+#### Scenario: Sold and not replaced
+- **WHEN** the window closes with the shirt held by a player well below the departed striker's level
+- **THEN** ambitious and senior team-mates record concern, naming the sale
+
+#### Scenario: The heir steps up
+- **WHEN** the shirt is taken by a young player the staff perceive at the departed player's level
+- **THEN** no team-mate records concern
+
+#### Scenario: A small club's best player
+- **WHEN** a lower-division club sells the player its team was built around, unknown outside his country
+- **THEN** his team-mates judge the sale as they would a famous player's at a great club
+
+#### Scenario: A famous reserve
+- **WHEN** a great club sells a well-known player who was planned as cover
+- **THEN** no team-mate reacts

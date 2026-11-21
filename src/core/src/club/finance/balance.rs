@@ -61,6 +61,11 @@ pub struct SeasonTransferFees {
     pub paid: f64,
     /// Fees taken in on completed outgoing deals.
     pub received: f64,
+    /// The share of those sales the club has put back into the market.
+    pub recycled: f64,
+    /// Money committed against the transfer budget: fees paid, and fees
+    /// set aside for a deal that is agreed and not yet done.
+    pub committed: f64,
 }
 
 impl SeasonTransferFees {
@@ -296,6 +301,7 @@ impl ClubFinances {
             }
             budget.amount -= amount;
         }
+        self.season_fees.committed += amount;
         self.balance.push_cash_outflow(amount as i64);
         self.season_fees.paid += amount;
         let years = contract_years.max(1) as u32;
@@ -327,6 +333,7 @@ impl ClubFinances {
         if let Some(ref mut budget) = self.transfer_budget {
             budget.amount = (budget.amount - amount).max(0.0);
         }
+        self.season_fees.committed += amount;
         self.balance.push_cash_outflow(amount as i64);
         self.season_fees.paid += amount;
         let years = contract_years.max(1) as u32;
@@ -358,6 +365,7 @@ impl ClubFinances {
             }
             budget.amount -= amount;
         }
+        self.season_fees.committed += amount;
         true
     }
 
@@ -371,6 +379,7 @@ impl ClubFinances {
         if let Some(ref mut budget) = self.transfer_budget {
             budget.amount += amount;
         }
+        self.season_fees.committed = (self.season_fees.committed - amount).max(0.0);
     }
 
     /// Buying-side loan fee payment — immediate cash + immediate P&L,
@@ -384,6 +393,7 @@ impl ClubFinances {
         if let Some(ref mut budget) = self.transfer_budget {
             budget.amount = (budget.amount - amount as f64).max(0.0);
         }
+        self.season_fees.committed += amount as f64;
         self.balance.push_expense_loan_fees(amount);
     }
 
@@ -442,15 +452,37 @@ impl ClubFinances {
         self.balance.push_income(amount as i64);
         self.season_fees.received += amount.max(0.0);
 
-        let recycled = amount * reinvest_share.clamp(0.0, 1.0);
+        let recycled = amount.max(0.0) * reinvest_share.clamp(0.0, 1.0);
+        self.season_fees.recycled += recycled;
+        // The live figure moves by what the recompute will make of it.
+        let usable = recycled * self.transfer_throttle();
         if let Some(ref mut budget) = self.transfer_budget {
-            budget.amount += recycled;
+            budget.amount += usable;
         } else {
             self.transfer_budget = Some(CurrencyValue {
-                amount: recycled,
+                amount: usable,
                 currency: Currency::Usd,
             });
         }
+    }
+
+    /// How much of the money a club may spend its finances leave it:
+    /// everything, a share in distress, nothing under an embargo.
+    fn transfer_throttle(&self) -> f64 {
+        if self.debt.standing.blocks_transfer_spending() {
+            0.0
+        } else {
+            self.distress_level.budget_factors().0
+        }
+    }
+
+    /// The transfer money available against a season's `mandate`: the
+    /// mandate and what the club has recycled from its sales, throttled as
+    /// a whole, less everything it has committed.
+    pub fn transfer_money(&self, mandate: f64) -> f64 {
+        ((mandate + self.season_fees.recycled) * self.transfer_throttle()
+            - self.season_fees.committed)
+            .max(0.0)
     }
 
     /// Pure cash movement that is NOT a player sale — sell-on payouts,

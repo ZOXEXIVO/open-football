@@ -353,7 +353,7 @@ impl Player {
 
         self.statuses.remove(PlayerStatusType::Int);
         self.statuses.remove(PlayerStatusType::IntU21);
-        self.player_attributes.is_banned = false;
+        self.clear_suspensions();
         // Pre-season training counts as recent work.
         self.player_attributes.days_since_last_match = 7;
     }

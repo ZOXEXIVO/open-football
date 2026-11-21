@@ -3,18 +3,14 @@ use crate::club::player::load::{
     RECOVERY_DEBT_HEAVY,
 };
 use crate::club::staff::CoachPlayerBond;
-use crate::club::staff::perception::{CoachProfile, PotentialEstimator};
+use crate::club::staff::perception::{AbilityEstimator, CoachProfile};
 use crate::club::{
-    ClubPhilosophy, PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus,
-    PositionCoverage, Staff,
+    PlayerFieldPositionGroup, PlayerPositionType, PositionCoverage, Staff,
 };
-use crate::utils::DateUtils;
 use crate::{Player, PlayerStatusType, SelectionScoreFactor, Tactics};
 use chrono::NaiveDate;
 
-use super::cup_rotation::CupRotation;
-use super::helpers;
-use super::{CupStage, DomesticCupContext};
+use super::helpers::SlotFit;
 use std::cmp::Ordering;
 
 /// Per-component breakdown of a slot score. Mirrors what
@@ -26,9 +22,9 @@ use std::cmp::Ordering;
 /// the comparison line in the player-events render.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SlotScoreBreakdown {
-    pub manager_plan: f32,
-    pub playing_time_commitment: f32,
-    pub loan_incentive: f32,
+    /// Football the manager's plan owes him, weighed by the room the
+    /// fixture leaves. Everything else here is his fit for the shirt.
+    pub football_owed: f32,
     pub position_fit: f32,
     pub perceived_quality: f32,
     pub match_readiness: f32,
@@ -38,29 +34,14 @@ pub struct SlotScoreBreakdown {
     pub reputation: f32,
     pub coach_relationship: f32,
     pub newcomer: f32,
-    pub youth_preference: f32,
     pub training_impression: f32,
     pub cohesion: f32,
-    pub squad_status: f32,
     pub force_selection: f32,
-    pub philosophy: f32,
     pub group_mismatch: f32,
-    /// External adjustments applied on top of the pure slot score by the
-    /// competitive selector (`development_minutes_bonus`, the domestic-cup
-    /// opportunity bias, the injury-risk penalty). Left at zero by
-    /// `score_player_for_slot_with_breakdown` — the pure slot score is
-    /// unchanged — and populated by the omissions builder so the
-    /// comparison can explain a backup/prospect being preferred.
-    pub development_minutes: f32,
-    pub domestic_cup_opportunity: f32,
+    /// The physical risk of starting him, as a non-positive penalty. Left
+    /// at zero by `score_player_for_slot_with_breakdown` and filled in by
+    /// the competitive selector.
     pub injury_risk: f32,
-    /// Future-aware pathway adjustment (`future_pathway_adjustment`): the
-    /// signed nudge that gives a credible young player low-risk minutes and
-    /// applies succession pressure to an aging incumbent with a ready
-    /// replacement. Another external adjustment — zero in the pure slot
-    /// score, populated by the omissions builder. Surfaced through the same
-    /// `DevelopmentMinutes` factor as the development-minutes nudge.
-    pub future_pathway: f32,
     /// Bounded opponent-matchup adjustment (pace, aerial, press, low block,
     /// wide). Populated by the omissions builder when the selection layer
     /// carries a richer game model. The pure scoring engine leaves it at
@@ -85,9 +66,7 @@ pub struct SlotScoreBreakdown {
 
 impl SlotScoreBreakdown {
     pub fn total(&self) -> f32 {
-        self.manager_plan
-            + self.playing_time_commitment
-            + self.loan_incentive
+        self.football_owed
             + self.position_fit
             + self.perceived_quality
             + self.match_readiness
@@ -97,17 +76,11 @@ impl SlotScoreBreakdown {
             + self.reputation
             + self.coach_relationship
             + self.newcomer
-            + self.youth_preference
             + self.training_impression
             + self.cohesion
-            + self.squad_status
             + self.force_selection
-            + self.philosophy
             + self.group_mismatch
-            + self.development_minutes
-            + self.domestic_cup_opportunity
             + self.injury_risk
-            + self.future_pathway
             + self.opponent_matchup
             + self.role_duty_fit
             + self.lineup_balance
@@ -126,18 +99,10 @@ impl SlotScoreBreakdown {
         omitted: &SlotScoreBreakdown,
         limit: usize,
     ) -> Vec<SelectionScoreFactor> {
-        let factors: [(SelectionScoreFactor, f32); 28] = [
+        let factors: [(SelectionScoreFactor, f32); 21] = [
             (
                 SelectionScoreFactor::ManagerPlan,
-                self.manager_plan - omitted.manager_plan,
-            ),
-            (
-                SelectionScoreFactor::PlayingTimeCommitment,
-                self.playing_time_commitment - omitted.playing_time_commitment,
-            ),
-            (
-                SelectionScoreFactor::LoanAgreement,
-                self.loan_incentive - omitted.loan_incentive,
+                self.football_owed - omitted.football_owed,
             ),
             (
                 SelectionScoreFactor::PositionFit,
@@ -180,10 +145,6 @@ impl SlotScoreBreakdown {
                 self.newcomer - omitted.newcomer,
             ),
             (
-                SelectionScoreFactor::YouthPreference,
-                self.youth_preference - omitted.youth_preference,
-            ),
-            (
                 SelectionScoreFactor::TrainingImpression,
                 self.training_impression - omitted.training_impression,
             ),
@@ -192,37 +153,16 @@ impl SlotScoreBreakdown {
                 self.cohesion - omitted.cohesion,
             ),
             (
-                SelectionScoreFactor::SquadStatus,
-                self.squad_status - omitted.squad_status,
-            ),
-            (
                 SelectionScoreFactor::ForceSelection,
                 self.force_selection - omitted.force_selection,
-            ),
-            (
-                SelectionScoreFactor::ClubPhilosophy,
-                self.philosophy - omitted.philosophy,
             ),
             (
                 SelectionScoreFactor::PositionFit,
                 self.group_mismatch - omitted.group_mismatch,
             ),
-            // External adjustments. development_minutes and the future-aware
-            // pathway nudge both surface as the generic DevelopmentMinutes
-            // factor (a prospect winning the slot on a development/succession
-            // call); the domestic-cup opportunity bias has its own
-            // CupOpportunity factor. injury_risk is stored as a non-positive
-            // penalty — a smaller (less negative) value for the selected
-            // player means he was the safer pick.
-            (
-                SelectionScoreFactor::DevelopmentMinutes,
-                (self.development_minutes + self.future_pathway)
-                    - (omitted.development_minutes + omitted.future_pathway),
-            ),
-            (
-                SelectionScoreFactor::CupOpportunity,
-                self.domestic_cup_opportunity - omitted.domestic_cup_opportunity,
-            ),
+            // injury_risk is stored as a non-positive penalty — a smaller
+            // (less negative) value for the selected player means he was
+            // the safer pick.
             (
                 SelectionScoreFactor::InjuryRisk,
                 self.injury_risk - omitted.injury_risk,
@@ -269,9 +209,6 @@ pub(crate) struct ScoringEngine {
     /// ([`PlayerSquadStatus::carries_across_squads`]) into this team.
     pub(crate) owning_roster: Option<rustc_hash::FxHashSet<u32>>,
     pub(crate) profile: CoachProfile,
-    /// Club philosophy tilts selection — DevelopAndSell pushes youth further
-    /// up the XI, LoanFocused prefers loan signings when merit is close.
-    pub(crate) philosophy: Option<ClubPhilosophy>,
     /// `is_force_match_selection` is a Main-team pin — the manager wants
     /// the player in the senior matchday XI. B / Reserve / U-team squad
     /// selection ignores it, so a U18 starlet flagged for the first team
@@ -284,20 +221,14 @@ impl ScoringEngine {
         ScoringEngine {
             owning_roster: None,
             profile: CoachProfile::from_staff(staff),
-            philosophy: None,
             honor_force_selection: true,
         }
     }
 
-    pub fn from_staff_for_team(
-        staff: &Staff,
-        philosophy: Option<ClubPhilosophy>,
-        is_main_team: bool,
-    ) -> Self {
+    pub fn from_staff_for_team(staff: &Staff, is_main_team: bool) -> Self {
         ScoringEngine {
             owning_roster: None,
             profile: CoachProfile::from_staff(staff),
-            philosophy,
             honor_force_selection: is_main_team,
         }
     }
@@ -306,59 +237,6 @@ impl ScoringEngine {
         self.owning_roster
             .as_ref()
             .is_none_or(|ids| ids.contains(&player.id))
-    }
-
-    pub(crate) fn squad_status<'p>(&self, player: &'p Player) -> Option<&'p PlayerSquadStatus> {
-        player
-            .contract
-            .as_ref()
-            .map(|c| &c.squad_status)
-            .filter(|status| self.owns_player(player) || status.carries_across_squads())
-    }
-
-    pub(crate) fn is_established(&self, player: &Player) -> bool {
-        matches!(
-            self.squad_status(player),
-            Some(PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular)
-        )
-    }
-
-    /// Philosophy-specific selection tilt. Small magnitudes so philosophy
-    /// biases but doesn't swamp real quality signals.
-    pub fn philosophy_bonus(&self, player: &Player, date: NaiveDate) -> f32 {
-        let Some(phil) = self.philosophy.as_ref() else {
-            return 0.0;
-        };
-        let age = DateUtils::age(player.birth_date, date);
-        let is_loan_in = player.contract_loan.is_some();
-        match phil {
-            ClubPhilosophy::DevelopAndSell => {
-                // Clubs built around developing and selling push youth up
-                // the XI even in important matches.
-                match age {
-                    0..=17 => 0.5,
-                    18..=21 => 1.2,
-                    22..=23 => 0.6,
-                    _ => 0.0,
-                }
-            }
-            ClubPhilosophy::LoanFocused => {
-                if is_loan_in {
-                    0.9
-                } else {
-                    0.0
-                }
-            }
-            ClubPhilosophy::SignToCompete => {
-                // Experienced heads get the nod; youngsters are backup.
-                match age {
-                    25..=32 => 0.4,
-                    18..=21 => -0.4,
-                    _ => 0.0,
-                }
-            }
-            _ => 0.0,
-        }
     }
 
     /// Lens-weighted skill composite using the coach's perception lens
@@ -512,10 +390,10 @@ impl ScoringEngine {
         let physical_load = player.load.physical_load_7;
         let debt = player.load.recovery_debt;
 
-        let minutes_t = ramp(minutes_load, FATIGUE_LOAD_THRESHOLD, FATIGUE_LOAD_DANGER);
-        let physical_t = ramp(physical_load, PHYSICAL_LOAD_THRESHOLD, PHYSICAL_LOAD_DANGER);
+        let minutes_t = ScoringCurves::ramp(minutes_load, FATIGUE_LOAD_THRESHOLD, FATIGUE_LOAD_DANGER);
+        let physical_t = ScoringCurves::ramp(physical_load, PHYSICAL_LOAD_THRESHOLD, PHYSICAL_LOAD_DANGER);
         // Debt ramp: 0 at no debt, full penalty at 2× HEAVY threshold.
-        let debt_t = ramp(debt, RECOVERY_DEBT_HEAVY, RECOVERY_DEBT_HEAVY * 2.0);
+        let debt_t = ScoringCurves::ramp(debt, RECOVERY_DEBT_HEAVY, RECOVERY_DEBT_HEAVY * 2.0);
 
         let t = minutes_t.max(physical_t).max(debt_t);
         if t <= 0.0 {
@@ -627,7 +505,7 @@ impl ScoringEngine {
             let teammate_group = teammate.position().position_group();
 
             // Sharper proximity weighting reflecting football positional units.
-            let proximity_weight = position_proximity_weight(
+            let proximity_weight = ScoringCurves::position_proximity_weight(
                 player_pos,
                 slot_position,
                 teammate_pos,
@@ -719,14 +597,14 @@ impl ScoringEngine {
     ) -> (f32, SlotScoreBreakdown) {
         let p = &self.profile;
         let mut b = SlotScoreBreakdown {
-            position_fit: helpers::position_fit_score(player, slot_position)
+            position_fit: SlotFit::position_fit_score(player, slot_position)
                 * (0.20 * (1.0 - p.tactical_blindness * 0.3)),
             perceived_quality: self.perceived_quality(player) * (0.40 + p.judging_accuracy * 0.05),
             match_readiness: self.match_readiness(player) * (0.15 + p.conservatism * 0.05),
             condition_floor: -self.condition_floor_penalty(player, is_friendly),
-            tactical_style: helpers::tactical_style_bonus(player, slot_position, tactics)
+            tactical_style: SlotFit::tactical_style_bonus(player, slot_position, tactics)
                 * (0.05 * (1.0 - p.tactical_blindness * 0.5)),
-            side_foot: helpers::side_foot_bonus(player, slot_position)
+            side_foot: SlotFit::side_foot_bonus(player, slot_position)
                 * (0.6 * (1.0 - p.tactical_blindness * 0.3)),
             ..Default::default()
         };
@@ -743,27 +621,11 @@ impl ScoringEngine {
 
         b.newcomer = -Self::newcomer_penalty(player, date, p);
 
-        let age = DateUtils::age(player.birth_date, date);
-        let youth_multiplier = match age {
-            0..=16 => 0.0,
-            17..=18 => 2.5,
-            19..=20 => 1.5,
-            21 => 0.8,
-            _ => 0.0,
-        };
-        b.youth_preference = p.youth_preference * youth_multiplier;
-        if staff.squad_plan.entry(player.id).is_some() {
-            // An explicit individual plan replaces the blanket age preference.
-            b.youth_preference = 0.0;
-        }
-
         b.training_impression = (self.training_impression(player) - 10.0) * p.attitude_weight * 0.3;
 
         b.cohesion = self.cohesion_bonus(player, selected_players, slot_position, slot_group);
 
-        b.squad_status = self.squad_status_bonus(player);
         b.force_selection = self.force_selection_bonus(player);
-        b.philosophy = self.philosophy_bonus(player, date);
 
         // Out of his line — charged on what the player can actually play,
         // not on the single label his record happens to list first. A man
@@ -792,432 +654,33 @@ impl ScoringEngine {
         }
     }
 
-    /// Squad status tilt — the coach has a plan for each player's minutes
-    /// at the start of the season. KeyPlayer and FirstTeamRegular always
-    /// play when fit; NotNeeded is a bench dweller; HotProspect gets a small
-    /// preferential nod in rotation calls. Conservative coaches lean into
-    /// the plan; risk-takers override it on form.
-    pub fn squad_status_bonus(&self, player: &Player) -> f32 {
-        let Some(status) = self.squad_status(player) else {
-            return 0.0;
-        };
-        let raw = match status {
-            PlayerSquadStatus::KeyPlayer => 1.8,
-            PlayerSquadStatus::FirstTeamRegular => 1.0,
-            PlayerSquadStatus::FirstTeamSquadRotation => 0.3,
-            PlayerSquadStatus::HotProspectForTheFuture => 0.5,
-            PlayerSquadStatus::DecentYoungster => 0.1,
-            PlayerSquadStatus::MainBackupPlayer => -0.2,
-            PlayerSquadStatus::NotNeeded => -1.2,
-            _ => 0.0,
-        };
-        // Conservative coaches respect the label; risk-takers ignore it.
-        let weight = 0.6 + self.profile.conservatism * 0.8 - self.profile.risk_tolerance * 0.3;
-        raw * weight.clamp(0.2, 1.4)
-    }
-
-    /// Bounded selection nudge for a player whose transfer-market situation
-    /// colours — but never decides — whether the manager picks him. Being on
-    /// the market is a soft football/psychology signal here, not an
-    /// availability block: ability, position fit, condition, match importance
-    /// and squad need all dominate this term. Returns 0.0 for a settled
-    /// player, so the vast majority of scoring calls are unaffected (and never
-    /// pay the relationship/market reads).
+    /// What a want-away player's visible disaffection costs him. A man who
+    /// has asked to go or is unhappy, whose morale and whose relationship
+    /// with the manager are both poor, is marked down; a professional who
+    /// wants out and still trains well is not. Nothing for a settled
+    /// player, and nothing in a friendly.
     ///
-    /// Components, all small, summed then clamped to ±2.0:
-    ///   * **shop window / value protection** — a listed but still-useful
-    ///     player gets a small positive pull: clubs keep showing a saleable
-    ///     asset and protecting his match sharpness;
-    ///   * **needs sharpness** — a player with no live market (no recent buyer
-    ///     interest, no accepted bid/agreed move) who hasn't played recently
-    ///     leans back toward normal selection so he stays fit and visible;
-    ///     stacked with a small extra pull once he has been stuck on the list
-    ///     for a long time with no takers;
-    ///   * **disaffection** — a transfer-requested / unhappy player whose
-    ///     morale *and* manager relationship are both poor takes a small
-    ///     negative; a professional who wants out but still trains well is not
-    ///     penalised;
-    ///   * **injury protection** — a player with an accepted bid / agreed move
-    ///     is rested by a penalty that fades as the match matters more, so the
-    ///     club protects a near-sold asset in routine games but still uses him
-    ///     in a must-win.
-    ///
-    /// Market state is read from the durable availability record where present,
-    /// with conservative defaults otherwise (a freshly-listed player has no
-    /// live market until interest is actually recorded).
+    /// A player whose move is agreed is not scored here at all: he is
+    /// withheld from the squad (see `EligibilityEvaluator`).
     pub fn want_away_adjustment(
         &self,
         player: &Player,
         staff: &Staff,
         date: NaiveDate,
-        match_importance: f32,
         is_friendly: bool,
     ) -> f32 {
-        let listed = player.statuses.has(PlayerStatusType::Lst);
         let requested = player.statuses.has(PlayerStatusType::Req);
         let unhappy = player.statuses.has(PlayerStatusType::Unh);
-        let bid_accepted = player.statuses.has(PlayerStatusType::Bid);
-        let agreed_move = player.statuses.has(PlayerStatusType::Trn);
-
-        // Settled player — nothing to adjust, and no extra reads.
-        if !(listed || requested || unhappy || bid_accepted || agreed_move) {
+        if is_friendly || !(requested || unhappy) {
             return 0.0;
         }
-
-        // A live market = the move is genuinely progressing: an accepted bid /
-        // agreed deal, or at least one concrete approach in the rolling window.
-        let recent_interest = player
-            .availability_market_state()
-            .map(|s| s.recent_interest(date))
-            .unwrap_or(0);
-        let market_is_live = bid_accepted || agreed_move || recent_interest > 0;
-
-        let mut adj = 0.0f32;
-
-        // Shop window / value protection — only while he's still a useful squad
-        // member the club would field, not one it has already frozen out.
-        let still_useful = self
-            .squad_status(player)
-            .map(|status| {
-                !matches!(
-                    status,
-                    PlayerSquadStatus::NotNeeded | PlayerSquadStatus::Invalid
-                )
-            })
-            .unwrap_or(true);
-        if listed && still_useful {
-            adj += 0.3;
-        }
-
-        // Needs sharpness — idle player with no live market drifts back toward
-        // normal selection; a long, fruitless spell on the list pulls a little
-        // harder so the club stops shadow-banning an unsellable player.
-        if !market_is_live {
-            let idle = player.player_attributes.days_since_last_match as f32;
-            adj += (idle / 21.0).clamp(0.0, 1.0) * 0.5;
-            if listed && player.days_available(date) > 60 {
-                adj += 0.3;
-            }
-        }
-
-        // Disaffection — only when a want-away player is genuinely sulking:
-        // both morale and the manager relationship have to be poor. Skipped in
-        // friendlies, which are exactly where a manager hands a disaffected
-        // player minutes to keep him sharp and in the shop window.
-        if !is_friendly && (requested || unhappy) {
-            let morale = player.happiness.morale;
-            let relationship = self.relationship_score(player, staff, date);
-            if morale < 40.0 && relationship < 0.0 {
-                let morale_deficit = ((40.0 - morale) / 40.0).clamp(0.0, 1.0);
-                adj -= morale_deficit * 0.8 + (-relationship) * 0.6;
-            }
-        }
-
-        // Injury protection for a near-complete departure. A meaningless game is
-        // no place to risk a near-sold asset, so protect at full strength in
-        // friendlies; in competitive games the protection fades as the match
-        // matters more (a must-win still uses him).
-        if agreed_move || bid_accepted {
-            let protect = if is_friendly {
-                1.0
-            } else {
-                (1.0 - match_importance).clamp(0.0, 1.0)
-            };
-            let base = if agreed_move { 1.4 } else { 0.7 };
-            adj -= base * protect;
-        }
-
-        adj.clamp(-2.0, 2.0)
-    }
-
-    /// Bonus for underplayed players in low-importance matches.
-    /// When match_importance < 0.4, reserve/youth players who haven't played
-    /// much get a significant boost — simulates managers resting stars and
-    /// giving fringe players chances in dead rubbers.
-    pub fn development_minutes_bonus(&self, player: &Player, match_importance: f32) -> f32 {
-        if match_importance >= 0.5 {
+        let morale = player.happiness.morale;
+        let relationship = self.relationship_score(player, staff, date);
+        if morale >= 40.0 || relationship >= 0.0 {
             return 0.0;
         }
-
-        let rotation_factor = (0.5 - match_importance) * 2.0; // 0.0 at 0.5, 1.0 at 0.0
-
-        let days_idle = player.player_attributes.days_since_last_match as f32;
-        // Cup minutes count toward "has played this season" — otherwise a
-        // player who's been getting cup starts but no league minutes still
-        // reads as totally unused and gets the underplayed boost stacked on
-        // top of his cup-rotation bonus.
-        let total_games = (player.statistics.played
-            + player.statistics.played_subs
-            + player.cup_statistics.played
-            + player.cup_statistics.played_subs) as f32;
-
-        // Players who haven't played recently need minutes
-        let rest_bonus = (days_idle / 21.0).min(1.0) * 2.0;
-
-        // Players with few season appearances need development time
-        let minutes_bonus = if total_games < 10.0 {
-            (10.0 - total_games) * 0.3
-        } else {
-            0.0
-        };
-
-        (rest_bonus + minutes_bonus) * rotation_factor
-    }
-
-    /// Official matches a loanee is assumed to feature in across a season. Used
-    /// to turn his annual loan wage into a per-match figure, so the per-start fee
-    /// can be read as "how many matches' worth of his wage does one start pay".
-    const LOAN_FEE_REFERENCE_MATCHES: f32 = 40.0;
-    /// Scales the fee/wage ratio into a selection nudge. Tuned so a typical
-    /// development-loan fee lands a starting pull around 0.6-0.9 — enough to tip
-    /// a genuinely close call, never enough to start a clearly worse player.
-    const LOAN_FEE_PULL_SCALE: f32 = 0.6;
-    /// Upper bound on the starting-XI loan-fee nudge. Sits below the quality
-    /// term's reach (perceived_quality alone spans several points) so the fee
-    /// shapes borderline selection without overriding a real ability gap.
-    const LOAN_FEE_START_PULL_CAP: f32 = 1.0;
-    /// Upper bound on the bench loan-fee nudge — deliberately smaller, since a
-    /// benched loanee only earns the reduced substitute fee if he comes on.
-    const LOAN_FEE_BENCH_PULL_CAP: f32 = 0.5;
-
-    /// Selection pull from a loan match-fee — the borrowing club's financial
-    /// reason to FIELD a loanee. Shared by the starting-XI scorer (`for_starting`
-    /// true) and the bench scorer (`for_starting` false) so the two never drift.
-    ///
-    /// The club banks the parent-funded fee every time it plays the loanee in an
-    /// official match: the full fee for a start, the reduced substitute share off
-    /// the bench (see [`PlayerClubContract::loan_fee_for_appearance`]). Measuring
-    /// that fee against one match's worth of the wage the borrower itself pays
-    /// him yields a size-agnostic "is this worth playing him for" ratio — a
-    /// Premier-League borrower's beefy fee and a minnow's modest one both read on
-    /// the same scale. The ratio is scaled down and tightly capped, so it only
-    /// ever tips a close call, and it is zero in friendlies (no fee is paid
-    /// there) and for non-loanees / fee-less loans.
-    pub fn loan_match_fee_pull(
-        &self,
-        player: &Player,
-        for_starting: bool,
-        is_friendly: bool,
-    ) -> f32 {
-        if is_friendly {
-            return 0.0;
-        }
-        let Some(loan) = player.contract_loan.as_ref() else {
-            return 0.0;
-        };
-        let fee = loan.loan_fee_for_appearance(for_starting);
-        if fee == 0 {
-            return 0.0;
-        }
-        let wage = loan.salary.max(1) as f32;
-        let per_match_wage = (wage / Self::LOAN_FEE_REFERENCE_MATCHES).max(1.0);
-        let ratio = fee as f32 / per_match_wage;
-        let cap = if for_starting {
-            Self::LOAN_FEE_START_PULL_CAP
-        } else {
-            Self::LOAN_FEE_BENCH_PULL_CAP
-        };
-        (ratio * Self::LOAN_FEE_PULL_SCALE).clamp(0.0, cap)
-    }
-
-    /// Domestic-cup opportunity bias. On top of the normal quality /
-    /// readiness / status scoring, early cup rounds tilt minutes toward
-    /// rotation players, backups and prospects while protecting overloaded
-    /// stars; the tilt fades round by round so semis and finals revert to
-    /// the strongest available XI. Only called when the match is a domestic
-    /// cup tie — league / continental / friendly games never see it.
-    ///
-    /// `for_starting` distinguishes the starting-XI bias from the lighter
-    /// bench bias (a star kept fresh on the bench, a recovering player only
-    /// trusted with cameo minutes).
-    pub fn domestic_cup_opportunity_bonus(
-        &self,
-        player: &Player,
-        cup: &DomesticCupContext,
-        for_starting: bool,
-    ) -> f32 {
-        let stage = cup.stage();
-
-        // Rotation-tilt bucket. Everything that pushes the manager toward
-        // rotation (favouring a fringe player, pulling a star out for rest)
-        // accumulates here and is then scaled by the opponent-strength
-        // multiplier. Safety penalties (recovery, deep-tiredness) bypass
-        // the scaling and apply at full magnitude regardless of opponent.
-        let mut rotation_tilt = 0.0f32;
-        let mut safety_penalty = 0.0f32;
-
-        // Base by squad status — the further from the final, the harder the
-        // manager rotates away from the established XI toward the fringe.
-        // Negative bases (KeyPlayer/FirstTeamRegular) are star-rest penalties
-        // and scale with opponent strength too — both push rotation harder.
-        if let Some(status) = self.squad_status(player) {
-            rotation_tilt += stage.status_base(status);
-        }
-
-        // Youth get extra rope to play their way in during early rounds.
-        let age = DateUtils::age(player.birth_date, cup.date);
-        rotation_tilt += stage.youth_bonus(age);
-
-        // Underplayed players need minutes — strongest signal in the early
-        // rounds, gone by the final.
-        let idle = player.player_attributes.days_since_last_match;
-        let idle_factor = (idle as f32 / CupRotation::IDLE_FULL_DAYS).min(1.0);
-        rotation_tilt += idle_factor * stage.idle_weight();
-
-        let appearances = (player.statistics.played
-            + player.statistics.played_subs
-            + player.cup_statistics.played) as f32;
-        if appearances < CupRotation::APPEARANCE_TARGET {
-            let factor = ((CupRotation::APPEARANCE_TARGET - appearances)
-                / CupRotation::APPEARANCE_TARGET)
-                .clamp(0.0, 1.0);
-            rotation_tilt += factor * stage.appearance_weight();
-        }
-
-        // Match-practice signal — gives backups, prospects and underused
-        // squad members an explicit "needs minutes" push on top of the
-        // squad-status base. Scales with squad role so the same idle days
-        // pull a Rotation/MainBackup harder than a KeyPlayer.
-        rotation_tilt += self.domestic_cup_match_practice_bonus(player, cup, for_starting);
-
-        // Fitness protection: pull overloaded stars even harder out of the
-        // early-round XI. This is a rotation push (the manager rests a tired
-        // star, regardless of opponent strength it should still apply), so
-        // it goes into the rotation bucket.
-        if self.is_established(player)
-            && (player.load.physical_load_7 >= CupRotation::OVERLOAD_PHYSICAL_LOAD
-                || player.load.minutes_last_7 >= CupRotation::OVERLOAD_MINUTES)
-        {
-            rotation_tilt += stage.overload_protection();
-        }
-
-        // Deep tiredness and post-injury recovery are safety calls — never
-        // dampened by opponent strength. A flogged player or a fragile
-        // returnee should sit even in a winnable cup tie against a minnow.
-        if player.load.recovery_debt >= CupRotation::RECOVERY_DEBT_THRESHOLD {
-            safety_penalty += stage.recovery_debt_penalty();
-        }
-        if player.player_attributes.is_in_recovery() {
-            if for_starting {
-                // Don't risk a recovering player in the early/mid rounds; the
-                // final is left to the injury-risk penalty + squad depth.
-                if stage != CupStage::Final {
-                    safety_penalty += CupRotation::RECOVERY_STARTING_PENALTY;
-                }
-            } else if player.player_attributes.condition_percentage() as f32
-                >= CupRotation::CAMEO_MIN_CONDITION
-                && idle >= CupRotation::CAMEO_MIN_IDLE_DAYS
-            {
-                safety_penalty += CupRotation::RECOVERING_BENCH_CAMEO;
-            }
-        }
-
-        let multiplier = CupRotation::rotation_multiplier(stage, cup.opponent_ratio);
-        rotation_tilt * multiplier + safety_penalty
-    }
-
-    /// Explicit "needs minutes" signal stacked on top of the squad-status
-    /// base. Three components — days idle, season appearances, this-cup
-    /// appearances — scaled per stage and gated by squad role so the same
-    /// underuse pulls a Rotation/MainBackup hard but barely nudges a
-    /// KeyPlayer.
-    ///
-    /// `for_starting` is reserved for the starting-XI vs bench split: bench
-    /// scoring already has its own integration bonus, so the signal is
-    /// gentler for the bench. Today the lever lives in role_multiplier and
-    /// for_starting is only used by the caller's gating, but the parameter
-    /// is kept on the signature so future tuning can split bench from XI
-    /// without another plumbing change.
-    pub fn domestic_cup_match_practice_bonus(
-        &self,
-        player: &Player,
-        cup: &DomesticCupContext,
-        for_starting: bool,
-    ) -> f32 {
-        let stage = cup.stage();
-        // Stage-scaled weights for the three components.
-        let (idle_w, underused_w, cup_unseen_w) = match stage {
-            CupStage::Early => (1.8, 2.2, 1.4),
-            CupStage::Quarter => (1.0, 1.2, 0.7),
-            CupStage::Semi => (0.3, 0.2, 0.0),
-            CupStage::Final => (0.0, 0.0, 0.0),
-        };
-
-        let days_idle = player.player_attributes.days_since_last_match as f32;
-        let idle_bonus = (days_idle / 28.0).clamp(0.0, 1.0) * idle_w;
-
-        let total_season_apps = (player.statistics.played
-            + player.statistics.played_subs
-            + player.cup_statistics.played
-            + player.cup_statistics.played_subs) as f32;
-        let underused_bonus = if total_season_apps < 8.0 {
-            ((8.0 - total_season_apps) / 8.0) * underused_w
-        } else {
-            0.0
-        };
-
-        let cup_apps = player.cup_statistics.played + player.cup_statistics.played_subs;
-        let cup_unseen_bonus = if cup_apps == 0 { cup_unseen_w } else { 0.0 };
-
-        // Role multiplier: rotation/backup/prospect get the strongest pull,
-        // KeyPlayer/FirstTeamRegular barely move.
-        let role_mult = self
-            .squad_status(player)
-            .map(|status| match status {
-                PlayerSquadStatus::FirstTeamSquadRotation
-                | PlayerSquadStatus::MainBackupPlayer
-                | PlayerSquadStatus::HotProspectForTheFuture => 1.25,
-                PlayerSquadStatus::DecentYoungster => 1.10,
-                PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular => 0.35,
-                PlayerSquadStatus::NotNeeded => 0.20,
-                _ => 1.00,
-            })
-            .unwrap_or(1.00);
-
-        let _ = for_starting;
-        (idle_bonus + underused_bonus + cup_unseen_bonus) * role_mult
-    }
-
-    /// Domestic-cup goalkeeper adjustment. Early rounds are when a backup
-    /// keeper plausibly gets a run, so a rested non-first-choice keeper is
-    /// nudged up and the established #1 nudged down against a weaker
-    /// opponent. Fades to zero by the final.
-    pub fn domestic_cup_goalkeeper_adjustment(
-        &self,
-        player: &Player,
-        cup: &DomesticCupContext,
-    ) -> f32 {
-        let stage = cup.stage();
-        if self.is_established(player) {
-            // Established #1 only steps aside against a comparable/weaker
-            // opponent, and only in the early rounds.
-            if stage == CupStage::Early
-                && cup.opponent_ratio < CupRotation::GK_FIRST_CHOICE_OPPONENT_RATIO_CAP
-            {
-                CupRotation::GK_FIRST_CHOICE_EARLY_PENALTY
-            } else {
-                0.0
-            }
-        } else if player.player_attributes.days_since_last_match
-            >= CupRotation::GK_BACKUP_MIN_IDLE_DAYS
-        {
-            // A rested senior deputy IS the cup keeper in the early
-            // rounds against an opponent who is no stronger — a decision
-            // the manager takes before the season, not a marginal
-            // preference re-weighed each tie. See
-            // [`CupRotation::GK_CUP_DEPUTY_DESIGNATION`].
-            let designated = stage == CupStage::Early
-                && cup.opponent_ratio < CupRotation::GK_FIRST_CHOICE_OPPONENT_RATIO_CAP
-                && self.owns_player(player)
-                && CupRotation::is_senior_deputy(player);
-            if designated {
-                CupRotation::GK_CUP_DEPUTY_DESIGNATION
-            } else {
-                stage.gk_backup()
-            }
-        } else {
-            0.0
-        }
+        let morale_deficit = ((40.0 - morale) / 40.0).clamp(0.0, 1.0);
+        -(morale_deficit * 0.8 + (-relationship) * 0.6).min(2.0)
     }
 
     /// Risk of asking a player to start while physically fragile. This is
@@ -1272,345 +735,13 @@ impl ScoringEngine {
             raw += 4.5;
         }
 
-        let importance_dampener = (1.15 - match_importance).clamp(0.25, 1.10);
-        raw * importance_dampener * (1.0 - self.profile.risk_tolerance * 0.35)
+        raw * Self::caution(match_importance) * (1.0 - self.profile.risk_tolerance * 0.35)
     }
 
-    // ===================== Future-aware squad management =====================
-    //
-    // A small, heavily-gated layer on top of the pure slot score. It lets a
-    // coach make realistic long-term selection calls — give a credible young
-    // player low-risk minutes, ease an aging incumbent toward a ready
-    // successor — without ever knowing the future. Everything is inferred from
-    // visible football signals (age, current/potential ability, role, fitness,
-    // contract, recent minutes, match stakes) and the coach's own staff
-    // profile + the club's philosophy. The adjustment fades to zero as the
-    // match matters more, so finals and title deciders keep the strongest XI.
-
-    /// Future-aware selection adjustment, layered on top of the pure slot
-    /// score. Two effects, both small and gated so they only flip close calls
-    /// in low-risk contexts:
-    ///
-    ///   * a credible young player gets a pathway pull toward minutes — bigger
-    ///     when the coach is good with youngsters, the club develops, and the
-    ///     stakes are low;
-    ///   * an aging incumbent with a credible younger same-role replacement
-    ///     gets gentle succession pressure (a small penalty) — but only when
-    ///     the visible planning signals back it up, never on age alone.
-    ///
-    /// Returns ~0 in high-importance matches, so the strongest realistic XI is
-    /// untouched. `available_same_role` is the pool the gap / successor checks
-    /// compare against; pass `&[]` for bench scoring, which deliberately skips
-    /// the same-role gate so a not-quite-ready prospect still makes the bench.
-    pub fn future_pathway_adjustment(
-        &self,
-        player: &Player,
-        slot: PlayerPositionType,
-        match_importance: f32,
-        date: NaiveDate,
-        cup: Option<&DomesticCupContext>,
-        available_same_role: &[&Player],
-        for_starting: bool,
-    ) -> f32 {
-        let context = self.pathway_context_multiplier(match_importance, cup, for_starting);
-        if context <= 0.0 {
-            return 0.0;
-        }
-        // How strongly coach + club back youth development right now.
-        let plan = (self.coach_youth_pathway_factor() * self.philosophy_pathway_multiplier())
-            .clamp(0.3, 2.0);
-
-        // --- Young-player pathway pull ---
-        let credibility = self.player_development_credibility(player, slot, date);
-        let young_pull = if credibility > 0.0 {
-            // Gate by the quality gap to the best established same-role option.
-            // A coach who reads potential well backs the kid across a wider
-            // gap; a poor judge needs him near-ready now.
-            let gap = self.same_role_quality_gap(player, slot, date, available_same_role);
-            let tolerated = 1.5 + self.profile.potential_accuracy * 2.5;
-            let gate = (1.0 - gap / tolerated).clamp(0.0, 1.0);
-            credibility * gate
-        } else {
-            0.0
-        };
-
-        // --- Aging-incumbent succession pressure (a penalty) ---
-        let succession =
-            self.late_career_succession_pressure(player, slot, date, available_same_role);
-
-        ((young_pull - succession) * plan * context).clamp(-2.5, 2.5)
-    }
-
-    /// Coach's appetite and skill for developing youngsters, centred on 1.0
-    /// for an average coach and clamped to a sane 0.5..1.5 band. Built from the
-    /// perception profile: working-with-youngsters and judging-potential
-    /// dominate, man-management and adaptability/risk help, conservatism drags
-    /// it down.
-    pub fn coach_youth_pathway_factor(&self) -> f32 {
-        let p = &self.profile;
-        let raw = p.youth_preference * 0.35
-            + p.potential_accuracy * 0.25
-            + p.man_management * 0.15
-            + p.risk_tolerance * 0.20
-            - p.conservatism * 0.20;
-        // An average coach (~0.5 on each normalised input) lands at raw≈0.375;
-        // recentre that to 1.0 so the factor scales sensibly either side.
-        (1.0 + raw - 0.375).clamp(0.5, 1.5)
-    }
-
-    /// How much the coach trusts a player's *potential* signal, 0..1. A poor
-    /// judge of potential reads the upside noisily and per-player, so he leans
-    /// on visible current ability instead of projected growth.
-    pub fn coach_potential_confidence(&self, player: &Player) -> f32 {
-        let p = &self.profile;
-        let noise = p.perception_noise(player.id, 0xC0AC);
-        (p.potential_accuracy + noise * (1.0 - p.potential_accuracy) * 0.3).clamp(0.0, 1.0)
-    }
-
-    /// Club-philosophy multiplier on the youth pathway. DevelopAndSell sides
-    /// push kids through; SignToCompete sides protect the proven XI; loan-heavy
-    /// sides lean in a touch (loan kids in for development).
-    pub fn philosophy_pathway_multiplier(&self) -> f32 {
-        match self.philosophy.as_ref() {
-            Some(ClubPhilosophy::DevelopAndSell) => 1.5,
-            Some(ClubPhilosophy::LoanFocused) => 1.1,
-            Some(ClubPhilosophy::SignToCompete) => 0.5,
-            _ => 1.0,
-        }
-    }
-
-    /// Context gate for the pathway adjustment: 0 in high-stakes matches,
-    /// largest in dead rubbers / friendlies / early cup rounds against weak
-    /// opposition. Fades sharply with match importance, and pulls a little
-    /// harder for bench inclusion than for a start (a not-quite-ready kid
-    /// belongs on the bench before the XI).
-    pub fn pathway_context_multiplier(
-        &self,
-        match_importance: f32,
-        cup: Option<&DomesticCupContext>,
-        for_starting: bool,
-    ) -> f32 {
-        // Finals, title deciders, key continental nights: never bias.
-        if match_importance >= 0.82 {
-            return 0.0;
-        }
-        // Sharp quadratic fade — meaningful below ~0.5, gone by ~0.7.
-        let base = (1.0 - match_importance / 0.7).clamp(0.0, 1.0);
-        let mut mult = base * base;
-
-        // Early cup rounds are explicit development windows: give a floor that
-        // scales with how winnable the tie is (weaker opponent → more room).
-        if let Some(cup) = cup {
-            let floor = match cup.stage() {
-                CupStage::Early => 0.6,
-                CupStage::Quarter => 0.3,
-                _ => 0.0,
-            };
-            if floor > 0.0 {
-                let opp_scale = (1.0 / cup.opponent_ratio.max(0.5)).clamp(0.4, 1.4);
-                mult = mult.max(floor * opp_scale);
-            }
-        }
-
-        if !for_starting {
-            mult *= 1.4;
-        }
-        mult.clamp(0.0, 1.5)
-    }
-
-    /// Credibility of `player` as a development pick at `slot`, 0..~1.8. Reads
-    /// only visible football signals — age window, the perceived potential gap
-    /// (discounted by the coach's potential judgement), a current-ability
-    /// floor, position fit, match readiness and training impression, minus a
-    /// physical-unreadiness penalty. A frozen-out (NotNeeded) player scores
-    /// zero — the club isn't developing him. No hidden future knowledge.
-    pub fn player_development_credibility(
-        &self,
-        player: &Player,
-        slot: PlayerPositionType,
-        date: NaiveDate,
-    ) -> f32 {
-        // A player the club has frozen out is not on a development pathway,
-        // regardless of age or potential.
-        if let Some(status) = self.squad_status(player)
-            && matches!(
-                status,
-                PlayerSquadStatus::NotNeeded | PlayerSquadStatus::Invalid
-            )
-        {
-            return 0.0;
-        }
-
-        let age = DateUtils::age(player.birth_date, date);
-        // Age windows: 16-and-under almost never; 17-21 the core window;
-        // 22-23 the tail; 24+ no generic youth pathway.
-        let age_window = match age {
-            0..=15 => 0.15,
-            16 => 0.5,
-            17..=18 => 1.0,
-            19..=21 => 1.0,
-            22..=23 => 0.55,
-            _ => return 0.0,
-        };
-
-        let ca = player.player_attributes.current_ability as f32;
-        // The coach can't see biological PA — the youth-pathway score
-        // reads the observable ceiling, then discounts by how well this
-        // coach reads potential. A poor judge barely sees the upside.
-        let pa = PotentialEstimator::observable_ceiling(player, date) as f32;
-        let confidence = self.coach_potential_confidence(player);
-        let potential_gap = ((pa - ca).max(0.0) / 50.0).clamp(0.0, 1.2) * confidence;
-
-        // Current-ability floor: the prospect needs a baseline to belong.
-        let current_floor = ((ca - 70.0) / 90.0).clamp(0.0, 1.0);
-
-        let position_fit = (helpers::position_fit_score(player, slot) / 20.0).clamp(0.0, 1.0);
-
-        let readiness = (self.match_readiness(player) / 20.0).clamp(0.0, 1.0);
-        let training = ((self.training_impression(player) - 10.0) / 12.0).clamp(-0.4, 0.6);
-
-        let phys_ready = (player.skills.physical.match_readiness / 20.0).clamp(0.0, 1.0);
-        let phys_penalty = if phys_ready < 0.5 {
-            (0.5 - phys_ready) * 1.5
-        } else {
-            0.0
-        };
-
-        let raw = potential_gap * 0.9
-            + current_floor * 0.7
-            + position_fit * 0.6
-            + readiness * 0.35
-            + training * 0.3
-            - phys_penalty;
-
-        (raw * age_window).clamp(0.0, 1.8)
-    }
-
-    /// Perceived-quality gap from `player` to the best *established*
-    /// (24-or-older) same-position-group option available. Positive means the
-    /// prospect is worse than the senior alternative. Gates the youth pathway
-    /// pull so a kid far below the senior option isn't pushed into the XI even
-    /// in a low-risk match. Position-group aware — a strong senior in another
-    /// unit is irrelevant.
-    pub fn same_role_quality_gap(
-        &self,
-        player: &Player,
-        slot: PlayerPositionType,
-        date: NaiveDate,
-        available_same_role: &[&Player],
-    ) -> f32 {
-        let group = slot.position_group();
-        let player_q = self.role_quality(player, group);
-        let mut best_senior_q = player_q;
-        for other in available_same_role {
-            if other.id == player.id {
-                continue;
-            }
-            if other.position().position_group() != group {
-                continue;
-            }
-            // Compare against established alternatives, not other prospects.
-            if DateUtils::age(other.birth_date, date) <= 23 {
-                continue;
-            }
-            let q = self.role_quality(other, group);
-            if q > best_senior_q {
-                best_senior_q = q;
-            }
-        }
-        best_senior_q - player_q
-    }
-
-    /// Perceived quality of `player` judged in `group`'s terms. Goalkeepers are
-    /// read through the keeper-specific composite (`gk_perceived_quality`) —
-    /// the outfield `perceived_quality` never touches the goalkeeping block, so
-    /// comparing two keepers through it would weigh finishing/dribbling instead
-    /// of handling/reflexes. Every other unit keeps the standard perceived
-    /// quality. This keeps the same-role gap and successor checks meaningful for
-    /// keepers as well as outfielders, even though GK starting selection itself
-    /// deliberately stays outside the future-aware pathway (see
-    /// `competitive::pick_best_goalkeeper`).
-    fn role_quality(&self, player: &Player, group: PlayerFieldPositionGroup) -> f32 {
-        if group == PlayerFieldPositionGroup::Goalkeeper {
-            self.gk_perceived_quality(player)
-        } else {
-            self.perceived_quality(player)
-        }
-    }
-
-    /// Gentle succession pressure on an aging incumbent — a non-negative
-    /// magnitude the caller subtracts. Only fires when (a) the player is past
-    /// the position's late-career age, (b) a credible younger same-role
-    /// replacement is actually available, and (c) visible planning signals
-    /// back it up (declining role, idle spell, expiring contract, injury /
-    /// fatigue risk, years past the threshold). Never triggers on age alone —
-    /// a 34-year-old still clearly the best option keeps his place because the
-    /// signals stay low and the base quality gap dominates.
-    pub fn late_career_succession_pressure(
-        &self,
-        player: &Player,
-        slot: PlayerPositionType,
-        date: NaiveDate,
-        available_same_role: &[&Player],
-    ) -> f32 {
-        let age = DateUtils::age(player.birth_date, date);
-        let group = slot.position_group();
-        let threshold = Self::late_career_age_threshold(group);
-        if (age as i32) < threshold {
-            return 0.0;
-        }
-
-        // A credible successor must exist — meaningfully younger, same role,
-        // and a genuine development prospect in his own right.
-        let has_successor = available_same_role.iter().any(|other| {
-            if other.id == player.id {
-                return false;
-            }
-            let oage = DateUtils::age(other.birth_date, date) as i32;
-            (age as i32) - oage >= 5
-                && self.player_development_credibility(other, slot, date) >= 0.6
-        });
-        if !has_successor {
-            return 0.0;
-        }
-
-        // Accumulate visible planning evidence.
-        let mut signals = 0.0;
-        if let Some(c) = player.contract.as_ref() {
-            signals += match self.squad_status(player) {
-                Some(PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular) => 0.0,
-                Some(PlayerSquadStatus::FirstTeamSquadRotation) => 0.3,
-                Some(PlayerSquadStatus::MainBackupPlayer) => 0.5,
-                Some(PlayerSquadStatus::NotNeeded) => 0.8,
-                Some(_) => 0.2,
-                None => 0.0,
-            };
-            let days_left = (c.expiration - date).num_days();
-            if days_left < 220 {
-                signals += 0.3;
-            }
-        }
-        let idle = player.player_attributes.days_since_last_match as f32;
-        signals += (idle / 30.0).clamp(0.0, 0.5);
-        // Reuse the injury-risk read as a fragility signal (importance held low
-        // so it reads the player's intrinsic risk, not the match stakes).
-        signals += (self.injury_risk_penalty(player, 0.3, false) / 12.0).clamp(0.0, 0.4);
-        let years_past = ((age as i32) - threshold).max(0) as f32;
-        signals += (years_past * 0.12).clamp(0.0, 0.5);
-
-        (signals * 0.5).clamp(0.0, 2.0)
-    }
-
-    /// Position-group late-career age threshold. Goalkeepers age slowest;
-    /// forwards and wingers fastest. Only used to *open* a succession question
-    /// when a credible younger option exists — never to penalise age directly.
-    fn late_career_age_threshold(group: PlayerFieldPositionGroup) -> i32 {
-        match group {
-            PlayerFieldPositionGroup::Goalkeeper => 37,
-            PlayerFieldPositionGroup::Defender => 34,
-            PlayerFieldPositionGroup::Midfielder => 33,
-            PlayerFieldPositionGroup::Forward => 32,
-        }
+    /// How much weight a coach gives tiredness and physical risk in a
+    /// fixture: all of it when little is at stake, a quarter in a must-win.
+    pub fn caution(match_importance: f32) -> f32 {
+        (1.15 - match_importance).clamp(0.25, 1.10)
     }
 
     /// Overall quality score (bench selection)
@@ -1650,85 +781,25 @@ impl ScoringEngine {
         };
         score += rel * rel_dampening;
 
-        let best_pos = helpers::best_tactical_position(player, tactics);
+        let best_pos = SlotFit::best_tactical_position(player, tactics);
         if player.positions.get_level(best_pos) > 0 {
             score += 0.5;
         }
 
         score -= Self::newcomer_penalty(player, date, p);
 
-        let age = DateUtils::age(player.birth_date, date);
-        let youth_multiplier = match age {
-            0..=16 => 0.0,
-            17..=18 => 2.5,
-            19..=20 => 1.5,
-            21 => 0.8,
-            _ => 0.0,
-        };
-        if staff.squad_plan.entry(player.id).is_none() {
-            score += p.youth_preference * youth_multiplier;
-        }
-
         score += (self.training_impression(player) - 10.0) * p.attitude_weight * 0.3;
-
-        // Squad status tilt applies to bench ordering too: a KeyPlayer
-        // resting on the bench still gets priority to come on.
-        score += self.squad_status_bonus(player) * 0.6;
-
-        // Philosophy bench tilt — half as strong as in the XI, since
-        // bench selection is already broad.
-        score += self.philosophy_bonus(player, date) * 0.5;
-
-        // Bench integration bonus: coaches want to give minutes to players
-        // who haven't played much — loan players, youth, returning from injury.
-        // A good coach includes them on the bench to sub in when possible.
-        let total_games = (player.statistics.played + player.statistics.played_subs) as f32;
-        if total_games < 5.0 {
-            let loan_factor = if player.contract_loan.is_some() {
-                1.3
-            } else {
-                1.0
-            };
-            let need_minutes_bonus = (5.0 - total_games) * 0.4 * loan_factor;
-            score += need_minutes_bonus;
-        }
-
-        // Sharpness top-up: a fit-but-rusty regular (good condition,
-        // low recent load, fading match-readiness, not in recovery)
-        // belongs on the bench so they can come on for cameo minutes.
-        // This is the "needs sharpness" lever distinct from "needs
-        // development minutes".
-        if !player.player_attributes.is_in_recovery() {
-            let condition = player.player_attributes.condition_percentage() as f32;
-            let days_idle = player.player_attributes.days_since_last_match as f32;
-            let physical_readiness = player.skills.physical.match_readiness;
-            if condition >= 70.0
-                && days_idle >= 7.0
-                && physical_readiness < 14.0
-                && player.load.physical_load_7 < PHYSICAL_LOAD_THRESHOLD * 0.5
-            {
-                let sharpness_need = (14.0 - physical_readiness).clamp(0.0, 8.0);
-                score += sharpness_need * 0.10;
-            }
-        }
-
-        // Loan match-fee incentive: the parent club pays the borrower per
-        // official appearance, so fielding the loanee is worth real money. The
-        // bench score uses the lighter substitute-fee pull — get him on the team
-        // sheet so he can come on — distinct from the stronger pull to actually
-        // start him in the XI (applied in `starting_slot_score`).
-        score += self.loan_match_fee_pull(player, false, is_friendly);
 
         score
     }
 
-    /// Goalkeeper score — CA first, keeper-specific skills second, everything
-    /// else a tiebreaker. `perceived_quality()` composes from outfield skills
-    /// (finishing, dribbling, tackling, passing…) and never reads the
-    /// goalkeeping block, so for a keeper-vs-keeper comparison it reflects
-    /// the wrong attributes. We anchor on `current_ability` (so the better
-    /// keeper plays) and add a GK-specific skill composite that actually
-    /// reads handling, reflexes, aerial ability, and distribution.
+    /// Goalkeeper score — the level the staff see first, keeper-specific
+    /// skills second, everything else a tiebreaker. `perceived_quality()`
+    /// composes from outfield skills (finishing, dribbling, tackling,
+    /// passing…) and never reads the goalkeeping block, so for a
+    /// keeper-vs-keeper comparison it reflects the wrong attributes. This
+    /// anchors on the observable level and adds a GK-specific composite
+    /// that reads handling, reflexes, aerial ability and distribution.
     pub fn goalkeeper_score(
         &self,
         player: &Player,
@@ -1736,7 +807,7 @@ impl ScoringEngine {
         is_friendly: bool,
         date: NaiveDate,
     ) -> f32 {
-        let ca = player.player_attributes.current_ability as f32 / 10.0;
+        let ca = f32::from(AbilityEstimator::observable_level(player)) / 10.0;
         let gk_q = self.gk_perceived_quality(player);
         let gk_level = player.positions.get_level(PlayerPositionType::Goalkeeper) as f32;
         let readiness = self.match_readiness(player);
@@ -1776,233 +847,126 @@ impl ScoringEngine {
     }
 }
 
-/// Sharper position-proximity weight for cohesion calculations.
-///
-/// Football positional units rather than abstract groups:
-///   * GK ↔ CB: 1.0 (set-piece communication, last-line trust)
-///   * CB ↔ CB: 1.0 (back-line partnership)
-///   * Fullback ↔ Winger same side: 0.9 (overlapping runs)
-///   * CM/DM/AM cluster: 0.8 (midfield triangulation)
-///   * Striker ↔ AM/winger: 0.7 (final-third combination)
-///   * Adjacent groups: 0.4 fallback (better than the legacy 0.5
-///     because it forces the calculation to lean on the unit pairs above)
-///   * Distant unrelated roles: 0.15
-fn position_proximity_weight(
-    player_pos: PlayerPositionType,
-    slot_pos: PlayerPositionType,
-    teammate_pos: PlayerPositionType,
-    slot_group: PlayerFieldPositionGroup,
-    teammate_group: PlayerFieldPositionGroup,
-) -> f32 {
-    use PlayerPositionType::*;
+/// How near two shirts stand, and how far a load is into its danger band.
+struct ScoringCurves;
 
-    // GK ↔ CB
-    let gk_cb = |a: PlayerPositionType, b: PlayerPositionType| -> bool {
-        matches!(a, Goalkeeper)
-            && matches!(b, DefenderCenter | DefenderCenterLeft | DefenderCenterRight)
-    };
-    if gk_cb(slot_pos, teammate_pos) || gk_cb(teammate_pos, slot_pos) {
-        return 1.0;
-    }
+impl ScoringCurves {
+    /// Sharper position-proximity weight for cohesion calculations.
+    ///
+    /// Football positional units rather than abstract groups:
+    ///   * GK ↔ CB: 1.0 (set-piece communication, last-line trust)
+    ///   * CB ↔ CB: 1.0 (back-line partnership)
+    ///   * Fullback ↔ Winger same side: 0.9 (overlapping runs)
+    ///   * CM/DM/AM cluster: 0.8 (midfield triangulation)
+    ///   * Striker ↔ AM/winger: 0.7 (final-third combination)
+    ///   * Adjacent groups: 0.4 fallback (better than the legacy 0.5
+    ///     because it forces the calculation to lean on the unit pairs above)
+    ///   * Distant unrelated roles: 0.15
+    fn position_proximity_weight(
+        player_pos: PlayerPositionType,
+        slot_pos: PlayerPositionType,
+        teammate_pos: PlayerPositionType,
+        slot_group: PlayerFieldPositionGroup,
+        teammate_group: PlayerFieldPositionGroup,
+    ) -> f32 {
+        use PlayerPositionType::*;
 
-    // CB ↔ CB
-    let is_cb = |p: PlayerPositionType| -> bool {
-        matches!(p, DefenderCenter | DefenderCenterLeft | DefenderCenterRight)
-    };
-    if is_cb(slot_pos) && is_cb(teammate_pos) {
-        return 1.0;
-    }
-
-    // Fullback ↔ Winger same side
-    let left_pair = |a: PlayerPositionType, b: PlayerPositionType| -> bool {
-        matches!(a, DefenderLeft | WingbackLeft)
-            && matches!(b, MidfielderLeft | AttackingMidfielderLeft | ForwardLeft)
-    };
-    let right_pair = |a: PlayerPositionType, b: PlayerPositionType| -> bool {
-        matches!(a, DefenderRight | WingbackRight)
-            && matches!(b, MidfielderRight | AttackingMidfielderRight | ForwardRight)
-    };
-    if left_pair(slot_pos, teammate_pos)
-        || left_pair(teammate_pos, slot_pos)
-        || right_pair(slot_pos, teammate_pos)
-        || right_pair(teammate_pos, slot_pos)
-    {
-        return 0.9;
-    }
-
-    // Midfield cluster (CM / DM / AM, any flank)
-    let is_mid_cluster = |p: PlayerPositionType| -> bool {
-        matches!(
-            p,
-            MidfielderCenter
-                | MidfielderCenterLeft
-                | MidfielderCenterRight
-                | DefensiveMidfielder
-                | AttackingMidfielderCenter
-                | AttackingMidfielderLeft
-                | AttackingMidfielderRight
-                | MidfielderLeft
-                | MidfielderRight
-        )
-    };
-    if is_mid_cluster(slot_pos) && is_mid_cluster(teammate_pos) {
-        return 0.8;
-    }
-
-    // Striker ↔ AM / winger
-    let is_striker = |p: PlayerPositionType| -> bool {
-        matches!(p, Striker | ForwardCenter | ForwardLeft | ForwardRight)
-    };
-    let is_am_winger = |p: PlayerPositionType| -> bool {
-        matches!(
-            p,
-            AttackingMidfielderLeft
-                | AttackingMidfielderRight
-                | AttackingMidfielderCenter
-                | MidfielderLeft
-                | MidfielderRight
-        )
-    };
-    if (is_striker(slot_pos) && is_am_winger(teammate_pos))
-        || (is_striker(teammate_pos) && is_am_winger(slot_pos))
-    {
-        return 0.7;
-    }
-
-    // Same group fallback (post-specific-pair).
-    if slot_group == teammate_group {
-        return 0.6;
-    }
-
-    // Adjacent groups — defenders↔midfielders or midfielders↔forwards.
-    if helpers::is_adjacent_group(slot_group, teammate_group) {
-        return 0.4;
-    }
-
-    // Distant pairs (e.g. striker↔fullback or GK↔striker).
-    let _ = player_pos; // reserved for future per-player fine-tuning
-    0.15
-}
-
-/// Linear ramp: 0.0 below `lo`, 1.0 at `hi`, allowed to overshoot up to
-/// 2.0 for "deep into the danger zone" signals.
-fn ramp(value: f32, lo: f32, hi: f32) -> f32 {
-    if value <= lo {
-        return 0.0;
-    }
-    let span = (hi - lo).max(1.0);
-    ((value - lo) / span).min(2.0)
-}
-
-#[cfg(test)]
-mod loan_match_fee_pull_tests {
-    //! The loan match-fee selection pull — a borrowing club's financial reason
-    //! to field an inbound loanee. Locks the contract: positive but bounded for
-    //! a fee-carrying loan, stronger for a start than off the bench, and silent
-    //! for non-loanees and in friendlies (no fee is paid there).
-    use super::*;
-    use crate::PlayerClubContract;
-    use crate::club::player::builder::PlayerBuilder;
-    use crate::club::staff::StaffStub;
-    use crate::shared::fullname::FullName;
-    use crate::{
-        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositions, PlayerSkills,
-    };
-    use chrono::NaiveDate;
-
-    struct Fixture;
-
-    impl Fixture {
-        fn engine() -> ScoringEngine {
-            let mut s = StaffStub::build();
-            s.id = 7;
-            ScoringEngine::from_staff(&s)
+        // GK ↔ CB
+        let gk_cb = |a: PlayerPositionType, b: PlayerPositionType| -> bool {
+            matches!(a, Goalkeeper)
+                && matches!(b, DefenderCenter | DefenderCenterLeft | DefenderCenterRight)
+        };
+        if gk_cb(slot_pos, teammate_pos) || gk_cb(teammate_pos, slot_pos) {
+            return 1.0;
         }
 
-        fn player_on_loan(fee: Option<u32>, loan_wage: u32) -> Player {
-            let mut p = PlayerBuilder::new()
-                .id(202)
-                .full_name(FullName::new("Loan".into(), "Ee".into()))
-                .birth_date(NaiveDate::from_ymd_opt(2004, 1, 1).unwrap())
-                .country_id(1)
-                .attributes(PersonAttributes::default())
-                .skills(PlayerSkills::default())
-                .positions(PlayerPositions {
-                    positions: vec![PlayerPosition {
-                        position: PlayerPositionType::MidfielderCenter,
-                        level: 14,
-                    }],
-                })
-                .player_attributes(PlayerAttributes::default())
-                .build()
-                .unwrap();
-            let mut loan = PlayerClubContract::new_loan(
-                loan_wage,
-                NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
-                10,
-                1,
-                20,
-            );
-            loan.loan_match_fee = fee;
-            p.contract_loan = Some(loan);
-            p
+        // CB ↔ CB
+        let is_cb = |p: PlayerPositionType| -> bool {
+            matches!(p, DefenderCenter | DefenderCenterLeft | DefenderCenterRight)
+        };
+        if is_cb(slot_pos) && is_cb(teammate_pos) {
+            return 1.0;
         }
+
+        // Fullback ↔ Winger same side
+        let left_pair = |a: PlayerPositionType, b: PlayerPositionType| -> bool {
+            matches!(a, DefenderLeft | WingbackLeft)
+                && matches!(b, MidfielderLeft | AttackingMidfielderLeft | ForwardLeft)
+        };
+        let right_pair = |a: PlayerPositionType, b: PlayerPositionType| -> bool {
+            matches!(a, DefenderRight | WingbackRight)
+                && matches!(b, MidfielderRight | AttackingMidfielderRight | ForwardRight)
+        };
+        if left_pair(slot_pos, teammate_pos)
+            || left_pair(teammate_pos, slot_pos)
+            || right_pair(slot_pos, teammate_pos)
+            || right_pair(teammate_pos, slot_pos)
+        {
+            return 0.9;
+        }
+
+        // Midfield cluster (CM / DM / AM, any flank)
+        let is_mid_cluster = |p: PlayerPositionType| -> bool {
+            matches!(
+                p,
+                MidfielderCenter
+                    | MidfielderCenterLeft
+                    | MidfielderCenterRight
+                    | DefensiveMidfielder
+                    | AttackingMidfielderCenter
+                    | AttackingMidfielderLeft
+                    | AttackingMidfielderRight
+                    | MidfielderLeft
+                    | MidfielderRight
+            )
+        };
+        if is_mid_cluster(slot_pos) && is_mid_cluster(teammate_pos) {
+            return 0.8;
+        }
+
+        // Striker ↔ AM / winger
+        let is_striker = |p: PlayerPositionType| -> bool {
+            matches!(p, Striker | ForwardCenter | ForwardLeft | ForwardRight)
+        };
+        let is_am_winger = |p: PlayerPositionType| -> bool {
+            matches!(
+                p,
+                AttackingMidfielderLeft
+                    | AttackingMidfielderRight
+                    | AttackingMidfielderCenter
+                    | MidfielderLeft
+                    | MidfielderRight
+            )
+        };
+        if (is_striker(slot_pos) && is_am_winger(teammate_pos))
+            || (is_striker(teammate_pos) && is_am_winger(slot_pos))
+        {
+            return 0.7;
+        }
+
+        // Same group fallback (post-specific-pair).
+        if slot_group == teammate_group {
+            return 0.6;
+        }
+
+        // Adjacent groups — defenders↔midfielders or midfielders↔forwards.
+        if SlotFit::is_adjacent_group(slot_group, teammate_group) {
+            return 0.4;
+        }
+
+        // Distant pairs (e.g. striker↔fullback or GK↔striker).
+        let _ = player_pos; // reserved for future per-player fine-tuning
+        0.15
     }
 
-    #[test]
-    fn fee_loan_gets_positive_bounded_start_pull() {
-        let e = Fixture::engine();
-        let p = Fixture::player_on_loan(Some(2_000), 50_000);
-        let pull = e.loan_match_fee_pull(&p, true, false);
-        assert!(pull > 0.0, "fee-carrying loanee must earn a starting pull");
-        assert!(
-            pull <= ScoringEngine::LOAN_FEE_START_PULL_CAP,
-            "start pull must stay capped: {pull}"
-        );
-    }
-
-    #[test]
-    fn start_pull_exceeds_bench_pull() {
-        let e = Fixture::engine();
-        let p = Fixture::player_on_loan(Some(2_000), 50_000);
-        let start = e.loan_match_fee_pull(&p, true, false);
-        let bench = e.loan_match_fee_pull(&p, false, false);
-        assert!(bench > 0.0);
-        assert!(
-            start > bench,
-            "starting earns the full fee so it must pull harder than the bench (start {start} vs bench {bench})"
-        );
-    }
-
-    #[test]
-    fn no_pull_in_friendly_or_for_non_loanee() {
-        let e = Fixture::engine();
-        let p = Fixture::player_on_loan(Some(2_000), 50_000);
-        assert_eq!(
-            e.loan_match_fee_pull(&p, true, true),
-            0.0,
-            "no fee is paid in friendlies"
-        );
-
-        let fee_less = Fixture::player_on_loan(None, 50_000);
-        assert_eq!(e.loan_match_fee_pull(&fee_less, true, false), 0.0);
-
-        let mut regular = Fixture::player_on_loan(Some(2_000), 50_000);
-        regular.contract_loan = None;
-        assert_eq!(e.loan_match_fee_pull(&regular, true, false), 0.0);
-    }
-
-    #[test]
-    fn bigger_fee_pulls_harder() {
-        let e = Fixture::engine();
-        let small = Fixture::player_on_loan(Some(200), 50_000);
-        let big = Fixture::player_on_loan(Some(1_000), 50_000);
-        let small_pull = e.loan_match_fee_pull(&small, true, false);
-        let big_pull = e.loan_match_fee_pull(&big, true, false);
-        assert!(
-            big_pull > small_pull,
-            "a beefier fee is a stronger reason to start him (big {big_pull} vs small {small_pull})"
-        );
+    /// Linear ramp: 0.0 below `lo`, 1.0 at `hi`, allowed to overshoot up to
+    /// 2.0 for "deep into the danger zone" signals.
+    fn ramp(value: f32, lo: f32, hi: f32) -> f32 {
+        if value <= lo {
+            return 0.0;
+        }
+        let span = (hi - lo).max(1.0);
+        ((value - lo) / span).min(2.0)
     }
 }
 

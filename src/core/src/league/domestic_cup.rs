@@ -21,7 +21,8 @@ use crate::league::schedule::cup::CupCalendar;
 use crate::league::simulation::matchday::MatchdayCommitments;
 use crate::league::{
     CompetitionLevel, KickoffClock, League, LeagueBuildOutput, LeagueMatch, LeaguePendingState,
-    LeagueResult, LeagueTableResult, MatchStorage, Schedule, ScheduleItem, ScheduleTour,
+    LeagueRegulations, LeagueResult, LeagueTableResult, MatchStorage, Schedule, ScheduleItem,
+    ScheduleTour,
 };
 use crate::r#match::{MatchResult, MatchResultOutcome};
 use chrono::{Datelike, Duration, NaiveDate};
@@ -102,7 +103,8 @@ pub struct DomesticCup {
 }
 
 impl DomesticCup {
-    pub fn new(league: League) -> Self {
+    pub fn new(mut league: League) -> Self {
+        league.regulations.bench_size = LeagueRegulations::BENCH_TOP_DIVISIONS;
         DomesticCup {
             league,
             season_start_year: 0,
@@ -125,6 +127,12 @@ impl DomesticCup {
     /// team reputation first; team id breaks ties for determinism). Only
     /// `TeamType::Main` squads enter — B / Second / Reserve / youth sides
     /// are excluded even when they play in a real division.
+    /// Rounds from the first draw to the final, for the field the cup
+    /// was seeded from.
+    pub(crate) fn bracket_rounds(clubs: &[Club]) -> u8 {
+        cup::total_rounds(Self::seeded_participants(clubs).len())
+    }
+
     fn seeded_participants(clubs: &[Club]) -> Vec<u32> {
         let mut teams: Vec<(u32, u16)> = Vec::new();
         for club in clubs {
@@ -358,7 +366,7 @@ impl DomesticCup {
         // Bracket size resolves which round is the final, so the match
         // builder can scale importance by stage. Computed from the seeded
         // field that round one was drawn from.
-        let total_rounds = cup::total_rounds(Self::seeded_participants(clubs).len());
+        let total_rounds = Self::bracket_rounds(clubs);
         let scheduled = self.collect_today_matches(current_date, total_rounds);
         if scheduled.is_empty() {
             return LeagueBuildOutput {

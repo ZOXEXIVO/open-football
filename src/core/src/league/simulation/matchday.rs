@@ -1,14 +1,14 @@
 use crate::club::finance::RevenueModel;
 use crate::club::staff::perception::DevelopmentFormEvidence;
 use crate::context::GlobalContext;
-use crate::league::{League, LeagueMatch, LeagueMatchResultResult, LeagueTable, Schedule};
-use crate::r#match::squad::selection::helpers::PlayerAvailability;
-use crate::r#match::squad::selection::model::MatchSelectionGameModel;
-use crate::r#match::{
-    CompetitionKind, FixtureContext, Match, MatchResult, SelectionCompetition, SelectionContext,
+use crate::league::simulation::context::MatchdaySide;
+use crate::league::{
+    KnockoutStakes, KnockoutTieReading, League, LeagueMatch, LeagueMatchResultResult, LeagueTable,
+    Schedule, TableStakes,
 };
-use crate::{Club, ClubPhilosophy, MatchRuntime, Person, Player, Team, TeamType};
-use chrono::Duration;
+use crate::r#match::squad::selection::helpers::PlayerAvailability;
+use crate::r#match::{CompetitionKind, FixtureContext, Match, MatchResult, SelectionCompetition};
+use crate::{Club, MatchRuntime, Person, Player, Team, TeamType};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 use rayon::prelude::*;
@@ -99,39 +99,32 @@ impl League {
         knockout: bool,
         commitments: &MatchdayCommitments,
     ) -> Vec<Match> {
-        let today = ctx.simulation.date.date();
         let is_cup = self.is_cup;
         let lookup = MatchdayLookup::build(clubs);
+        // A table says what a fixture is worth to each side once for the
+        // whole matchday; a bracket says it per tie.
+        let table_stakes = if friendly || knockout {
+            FxHashMap::default()
+        } else {
+            self.table_stakes()
+        };
         // Each fixture's two squads are picked from shared reads only, so a
         // matchday's fixtures are built in parallel; the indexed collect keeps
         // them paired with `scheduled_matches` for `apply_matchday_results`.
         scheduled_matches
             .par_iter()
             .map(|scheduled_match| {
-                // Count upcoming competitive fixtures within 5 days for
-                // each side. A team with a cup tie three days from now
-                // has a reason to rotate today even if the league match
-                // would otherwise be high-importance.
-                let home_upcoming = self.schedule.count_matches_for_team_in_days(
-                    scheduled_match.home_team_id,
-                    today + Duration::days(1),
-                    5,
-                ) as u8;
-                let away_upcoming = self.schedule.count_matches_for_team_in_days(
-                    scheduled_match.away_team_id,
-                    today + Duration::days(1),
-                    5,
-                ) as u8;
                 Self::build_match(
                     scheduled_match,
                     clubs,
                     &lookup,
                     ctx,
                     &self.table,
+                    &table_stakes,
                     friendly,
                     knockout,
                     is_cup,
-                    (home_upcoming, away_upcoming),
+                    self.regulations.bench_size,
                     commitments,
                 )
             })
@@ -188,10 +181,11 @@ impl League {
         lookup: &MatchdayLookup<'_>,
         ctx: &GlobalContext<'_>,
         table: &LeagueTable,
+        table_stakes: &FxHashMap<u32, f32>,
         friendly: bool,
         knockout: bool,
         is_cup: bool,
-        upcoming_fixtures: (u8, u8),
+        bench_size: u8,
         commitments: &MatchdayCommitments,
     ) -> Match {
         let home_team = lookup
@@ -202,106 +196,58 @@ impl League {
             .team(scheduled_match.away_team_id)
             .expect("Away team not found");
 
-        // Match importance for squad selection decisions. A league game
-        // reads the table; continental ties build their own context and
-        // never reach this builder. A domestic cup tie scales importance by
-        // bracket stage and the reputation gap — early rounds rotate, finals
-        // demand the strongest XI — computed per side because the two clubs
-        // face different opponents.
         let date = ctx.simulation.date.date();
-        let domestic_cup_round = if knockout && is_cup {
-            scheduled_match
-                .cup_round
-                .map(|round| (round, scheduled_match.cup_total_rounds.unwrap_or(round)))
-        } else {
-            None
+        let home_club = lookup.club(home_team.club_id);
+        let away_club = lookup.club(away_team.club_id);
+        // Either club listing the other as a rival makes the fixture a derby.
+        let is_derby = match (home_club, away_club) {
+            (Some(h), Some(a)) => h.is_rival(a.id) || a.is_rival(h.id),
+            _ => false,
         };
 
+        // A tie with no round on it is the only one there is.
+        let bracket = knockout.then(|| {
+            let round = scheduled_match.cup_round.unwrap_or(1);
+            (round, scheduled_match.cup_total_rounds.unwrap_or(round))
+        });
         let home_rep = home_team.reputation.market_value_score();
         let away_rep = away_team.reputation.market_value_score();
 
-        let (home_base, away_base, home_competition, away_competition) = if friendly {
-            (
-                0.1,
-                0.1,
-                SelectionCompetition::Friendly,
-                SelectionCompetition::Friendly,
-            )
-        } else if let Some((round, total_rounds)) = domestic_cup_round {
-            (
-                Self::domestic_cup_importance(round, total_rounds, home_rep, away_rep),
-                Self::domestic_cup_importance(round, total_rounds, away_rep, home_rep),
-                SelectionCompetition::DomesticCup {
+        // What the fixture is worth is read for each side on its own: the
+        // two clubs stand at different places in a table and face different
+        // opponents in a bracket.
+        let stakes_of = |team_id: u32, own: u16, other: u16| -> f32 {
+            if friendly {
+                return MatchdaySide::FRIENDLY_STAKES;
+            }
+            let stakes = match bracket {
+                Some((round, total_rounds)) => KnockoutStakes::of(KnockoutTieReading {
                     round,
                     total_rounds,
-                    own_reputation: home_rep,
-                    opponent_reputation: away_rep,
-                },
-                SelectionCompetition::DomesticCup {
-                    round,
-                    total_rounds,
-                    own_reputation: away_rep,
-                    opponent_reputation: home_rep,
-                },
-            )
-        } else if knockout {
-            // Non-cup knockout run through the league scheduler keeps the
-            // historical high fixed importance.
-            (
-                0.9,
-                0.9,
-                SelectionCompetition::League,
-                SelectionCompetition::League,
-            )
-        } else {
-            let imp = Self::calculate_match_importance(table, home_team, away_team, date);
-            (
-                imp,
-                imp,
-                SelectionCompetition::League,
-                SelectionCompetition::League,
-            )
-        };
-
-        // Fixture congestion tilt: if a team has another competitive
-        // fixture within the next 5 days, dampen this match's importance
-        // for them so the rotation/development logic kicks in. Applied
-        // per team individually. A domestic cup final is floored so
-        // congestion can never rotate it down into a weak XI.
-        let congestion_dampen = |ups: u8| -> f32 {
-            if ups >= 2 {
-                0.55
-            } else if ups == 1 {
-                0.80
+                    opponent_ratio: other as f32 / own.max(1) as f32,
+                    aggregate_lead: None,
+                }),
+                None => table_stakes
+                    .get(&team_id)
+                    .copied()
+                    .unwrap_or(TableStakes::ROUTINE),
+            };
+            if is_derby {
+                TableStakes::with_rivalry(stakes)
             } else {
-                1.0
+                stakes
             }
         };
-        let final_floor = |competition: &SelectionCompetition| -> f32 {
-            match competition {
-                SelectionCompetition::DomesticCup {
-                    round,
-                    total_rounds,
-                    ..
-                } if *total_rounds <= 1 || *round >= *total_rounds => {
-                    Self::DOMESTIC_CUP_FINAL_IMPORTANCE_FLOOR
-                }
-                _ => 0.0,
-            }
+        let competition_of = |own: u16, other: u16| match bracket {
+            _ if friendly => SelectionCompetition::Friendly,
+            Some((round, total_rounds)) if is_cup => SelectionCompetition::DomesticCup {
+                round,
+                total_rounds,
+                own_reputation: own,
+                opponent_reputation: other,
+            },
+            _ => SelectionCompetition::League,
         };
-        let home_importance = (home_base * congestion_dampen(upcoming_fixtures.0))
-            .max(final_floor(&home_competition));
-        let away_importance = (away_base * congestion_dampen(upcoming_fixtures.1))
-            .max(final_floor(&away_competition));
-
-        // Surface each team's club philosophy to the selector so
-        // DevelopAndSell / LoanFocused sides actually put their archetype
-        // on the pitch, not just on paper.
-        let home_philosophy: Option<ClubPhilosophy> =
-            lookup.club(home_team.club_id).map(|c| c.philosophy);
-        let away_philosophy: Option<ClubPhilosophy> =
-            lookup.club(away_team.club_id).map(|c| c.philosophy);
-
         // Exact season length per side for the development minutes plan —
         // the busiest-player fallback under-reads in a rotated squad.
         let played_in_table = |team_id: u32| -> Option<f32> {
@@ -311,77 +257,37 @@ impl League {
                 .find(|r| r.team_id == team_id)
                 .map(|r| r.played as f32)
         };
-
-        // The goalkeeping department's word, carried into the team sheet:
-        // the declared pecking order and any live request to play a
-        // particular keeper. Only the side's own senior fixtures hear it —
-        // an academy side picks its keepers on its own rotation plan.
-        let fixture_standard = (home_team.playing_standard + away_team.playing_standard) * 0.5;
-        let keeper_brief = |team: &Team| {
-            if team.team_type != TeamType::Main {
-                return None;
-            }
-            lookup
-                .club(team.club_id)
-                .and_then(|c| c.keeper_selection_brief(date))
-                .map(|b| b.with_fixture_standard(fixture_standard))
-        };
-
-        let mut home_ctx = SelectionContext {
-            is_friendly: friendly,
+        let cup_slug = (is_cup && !friendly).then_some(scheduled_match.league_slug.as_str());
+        let home_side = MatchdaySide {
+            team: home_team,
+            club: home_club,
+            opponent: away_team,
+            home: true,
+            stakes: stakes_of(home_team.id, home_rep, away_rep),
+            competition: competition_of(home_rep, away_rep),
+            derby: is_derby,
+            friendly,
             date,
-            match_importance: home_importance,
-            philosophy: home_philosophy,
-            competition: home_competition,
-            game_model: None,
-            development_guest_ids: Vec::new(),
             season_matches_played: played_in_table(home_team.id),
-            keeper_brief: keeper_brief(home_team),
+            cup_slug,
+            bench_size,
         };
-        let mut away_ctx = SelectionContext {
-            is_friendly: friendly,
+        let away_side = MatchdaySide {
+            team: away_team,
+            club: away_club,
+            opponent: home_team,
+            home: false,
+            stakes: stakes_of(away_team.id, away_rep, home_rep),
+            competition: competition_of(away_rep, home_rep),
+            derby: is_derby,
+            friendly,
             date,
-            match_importance: away_importance,
-            philosophy: away_philosophy,
-            competition: away_competition,
-            game_model: None,
-            development_guest_ids: Vec::new(),
             season_matches_played: played_in_table(away_team.id),
-            keeper_brief: keeper_brief(away_team),
+            cup_slug,
+            bench_size,
         };
-
-        // Fixture-aware game model per side: the opponent block reads the
-        // opposing roster (pace / aerial / pressing / flank threat), the
-        // environment carries the venue, and congestion mirrors the same
-        // upcoming-fixture count the importance dampener uses. Friendlies
-        // skip it — the rotation selector never reads the model.
-        // Rivalry read for the derby classification — either club listing
-        // the other as a rival makes the fixture a derby.
-        let is_derby = match (
-            lookup.club(home_team.club_id),
-            lookup.club(away_team.club_id),
-        ) {
-            (Some(h), Some(a)) => h.is_rival(a.id) || a.is_rival(h.id),
-            _ => false,
-        };
-        if !friendly {
-            home_ctx.game_model = Some(MatchSelectionGameModel::build_for_fixture(
-                &home_ctx,
-                home_team,
-                away_team,
-                true,
-                upcoming_fixtures.0,
-                is_derby,
-            ));
-            away_ctx.game_model = Some(MatchSelectionGameModel::build_for_fixture(
-                &away_ctx,
-                away_team,
-                home_team,
-                false,
-                upcoming_fixtures.1,
-                is_derby,
-            ));
-        }
+        let mut home_ctx = home_side.selection_context();
+        let mut away_ctx = away_side.selection_context();
 
         let (home_squad, away_squad) = if friendly {
             let mut home_supplements = Self::collect_supplementary_players(
@@ -418,8 +324,20 @@ impl League {
             // Flag the overage picks as development guests so the rotation
             // selector admits them even when the roster is full — they are
             // here for match practice, not shortfall cover.
-            home_ctx.development_guest_ids = home_overage.iter().map(|p| p.id).collect();
-            away_ctx.development_guest_ids = away_overage.iter().map(|p| p.id).collect();
+            // So are the men the club put with the side the day before.
+            let guests = |overage: &[&Player], club: Option<&Club>, team_id: u32| -> Vec<u32> {
+                overage
+                    .iter()
+                    .map(|p| p.id)
+                    .chain(
+                        club.into_iter()
+                            .flat_map(|club| commitments.assigned_to(club, team_id))
+                            .map(|p| p.id),
+                    )
+                    .collect()
+            };
+            home_ctx.development_guest_ids = guests(&home_overage, home_club, home_team.id);
+            away_ctx.development_guest_ids = guests(&away_overage, away_club, away_team.id);
             home_supplements.extend(home_overage);
             away_supplements.extend(away_overage);
 
@@ -462,7 +380,7 @@ impl League {
             CompetitionKind::League
         };
         let mut fixture = FixtureContext::new(&scheduled_match.id, date, competition, knockout)
-            .with_importance((home_base + away_base) * 0.5)
+            .with_importance((home_side.stakes + away_side.stakes) * 0.5)
             .with_gate(RevenueModel::utilisation(
                 home_team.reputation.overall_score(),
                 1.0,
@@ -527,7 +445,9 @@ impl League {
                 t.players
                     .iter()
                     .filter(|p| {
-                        p.positions.is_goalkeeper() && Self::is_player_available(p, is_friendly)
+                        p.positions.is_goalkeeper()
+                            && Self::is_player_available(p, is_friendly)
+                            && !p.move_is_agreed()
                     })
                     .count()
             })
@@ -675,178 +595,6 @@ impl League {
         picked
     }
 
-    /// Lower bound a domestic cup final's importance is clamped to after the
-    /// congestion dampener. Kept just above the `BestEleven` selection-policy
-    /// threshold (0.82) rather than exactly on it, so the final stays a
-    /// strong-XI affair even if that threshold or the comparison ever shifts.
-    const DOMESTIC_CUP_FINAL_IMPORTANCE_FLOOR: f32 = 0.83;
-
-    /// Domestic-cup match importance for one side's squad selection.
-    /// Scales by bracket stage — early rounds rotate hard, semis and finals
-    /// demand a strong XI — and nudges up against a stronger opponent.
-    /// `own_rep`/`opp_rep` are the two sides' market-value scores. The
-    /// result is clamped per stage; the caller then applies the shared
-    /// congestion dampener (with a final-stage floor).
-    ///
-    /// Quarterfinals deliberately share the early/mid clamp band (max 0.62)
-    /// rather than getting their own higher band: a "last eight" tie against a
-    /// weak opponent should still be rotatable, while the stronger-opponent
-    /// nudge can lift it toward managed-minutes / strong-with-rotation.
-    fn domestic_cup_importance(round: u8, total_rounds: u8, own_rep: u16, opp_rep: u16) -> f32 {
-        let total = total_rounds.max(1);
-        let round_progress = round as f32 / total as f32;
-        let opponent_ratio = opp_rep as f32 / own_rep.max(1) as f32;
-
-        let is_final = total_rounds <= 1 || round >= total_rounds;
-        let is_semi = !is_final && round + 1 == total_rounds;
-        let is_quarter = !is_final && !is_semi && round + 2 == total_rounds;
-
-        let stage_base = if is_final {
-            0.95
-        } else if is_semi {
-            0.76
-        } else if is_quarter {
-            0.58
-        } else if round_progress < 0.40 {
-            0.30
-        } else if round_progress < 0.70 {
-            0.42
-        } else {
-            0.52
-        };
-
-        let opponent_adjust = if opponent_ratio < 0.45 {
-            -0.08
-        } else if opponent_ratio < 0.70 {
-            -0.04
-        } else if opponent_ratio <= 1.15 {
-            0.0
-        } else if opponent_ratio <= 1.50 {
-            0.08
-        } else {
-            0.14
-        };
-
-        let importance: f32 = stage_base + opponent_adjust;
-        if is_final {
-            importance.clamp(0.90, 0.98)
-        } else if is_semi {
-            importance.clamp(0.68, 0.86)
-        } else {
-            // Quarterfinal shares the early/mid clamp band.
-            importance.clamp(0.22, 0.62)
-        }
-    }
-
-    /// Calculate how important a match is for squad selection decisions.
-    /// Returns 0.0 (dead rubber) to 1.0 (must-win).
-    ///
-    /// Key principle: if a team has nothing to play for, importance drops
-    /// significantly — reserves and youth get chances.
-    fn calculate_match_importance(
-        table: &LeagueTable,
-        home_team: &Team,
-        away_team: &Team,
-        _date: NaiveDate,
-    ) -> f32 {
-        let total_teams = table.rows.len();
-        if total_teams == 0 {
-            return 0.5;
-        }
-
-        let home_row = table
-            .rows
-            .iter()
-            .enumerate()
-            .find(|(_, r)| r.team_id == home_team.id);
-        let away_row = table
-            .rows
-            .iter()
-            .enumerate()
-            .find(|(_, r)| r.team_id == away_team.id);
-
-        let (home_pos, home_played, home_points) = home_row
-            .map(|(i, r)| (i + 1, r.played as f32, r.points as i32))
-            .unwrap_or((total_teams / 2, 0.0, 0));
-
-        let away_pos = away_row.map(|(i, _)| i + 1).unwrap_or(total_teams / 2);
-
-        let total_matches = if total_teams > 1 {
-            ((total_teams - 1) * 2) as f32
-        } else {
-            1.0
-        };
-        let season_progress = (home_played / total_matches).clamp(0.0, 1.0);
-        let remaining_matches = (total_matches - home_played).max(0.0) as i32;
-
-        // Points gap to key positions
-        let top3_points = table.rows.get(2).map(|r| r.points as i32).unwrap_or(0);
-        let relegation_pos = total_teams.saturating_sub(3);
-        let relegation_points = table
-            .rows
-            .get(relegation_pos)
-            .map(|r| r.points as i32)
-            .unwrap_or(0);
-        // Can the team still catch top 3? (3 pts per remaining match)
-        let max_reachable = home_points + remaining_matches * 3;
-        let can_reach_top3 = max_reachable >= top3_points;
-
-        // Is the team safe from relegation? (gap too large to close)
-        let is_safe =
-            home_points > relegation_points + remaining_matches * 3 || home_pos <= total_teams / 2;
-        let is_in_danger = home_points <= relegation_points + 3 && home_pos > total_teams / 2;
-
-        // ── Determine importance ──
-
-        // Title contenders: fighting for top 3
-        if home_pos <= 3 && season_progress > 0.3 {
-            return if season_progress > 0.7 { 1.0 } else { 0.85 };
-        }
-
-        // Chasing top 3 and still mathematically possible
-        if home_pos <= 6 && can_reach_top3 && season_progress > 0.5 {
-            let gap = top3_points - home_points;
-            return if gap <= 6 { 0.85 } else { 0.7 };
-        }
-
-        // Relegation battle
-        if is_in_danger && season_progress > 0.3 {
-            return if season_progress > 0.7 { 1.0 } else { 0.85 };
-        }
-
-        // Direct rival: both in top 5 or both in bottom 5
-        let both_top = home_pos <= 5 && away_pos <= 5;
-        let both_bottom = home_pos > total_teams - 5 && away_pos > total_teams - 5;
-        if both_top || both_bottom {
-            return 0.8;
-        }
-
-        // ── Nothing to play for: dead rubber territory ──
-
-        // Safe from relegation + can't reach top 3 + late season = dead rubber
-        if is_safe && !can_reach_top3 && season_progress > 0.7 {
-            return 0.15;
-        }
-
-        // Same but mid-season: still rotate but less aggressively
-        if is_safe && !can_reach_top3 && season_progress > 0.5 {
-            return 0.3;
-        }
-
-        // Safe, can't reach top 3, early season — moderate rotation
-        if is_safe && !can_reach_top3 {
-            return 0.4;
-        }
-
-        // Early season: everyone still optimistic, moderate importance
-        if season_progress < 0.25 {
-            return 0.5;
-        }
-
-        // Default: standard competitive match
-        0.6
-    }
-
     fn is_player_available(player: &Player, is_friendly: bool) -> bool {
         if player.player_attributes.is_injured {
             return false;
@@ -867,6 +615,7 @@ impl League {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MatchdayCommitments {
     teams: FxHashSet<u32>,
+    date: NaiveDate,
 }
 
 impl MatchdayCommitments {
@@ -879,6 +628,7 @@ impl MatchdayCommitments {
                 .into_iter()
                 .flat_map(|s| s.teams_playing_on(date))
                 .collect(),
+            date,
         }
     }
 
@@ -886,10 +636,27 @@ impl MatchdayCommitments {
         self.teams.contains(&team_id)
     }
 
+    /// The players of the club's other sides it put with this one the day
+    /// before.
+    pub(crate) fn assigned_to<'a>(
+        &self,
+        club: &'a Club,
+        team_id: u32,
+    ) -> impl Iterator<Item = &'a Player> + use<'a> {
+        let date = self.date;
+        club.teams
+            .teams
+            .iter()
+            .filter(move |t| t.id != team_id)
+            .flat_map(|t| t.players.iter())
+            .filter(move |p| p.assigned_side_on(date) == Some(team_id))
+    }
+
     /// The club's players the assembling side may not borrow today: those
     /// whose own side plays, and — when a more senior side of the club
     /// plays too — everyone, because the club lends to one side a day and
-    /// the most senior is served first.
+    /// the most senior is served first. A player the club assigned the day
+    /// before is with that side and no other, whoever else plays.
     fn spoken_for(&self, club: &Club, assembling_team_id: u32) -> FxHashSet<u32> {
         let rank = |t: &Team| (t.team_type.seniority(), t.id);
         let outranked = club
@@ -906,8 +673,12 @@ impl MatchdayCommitments {
         club.teams
             .teams
             .iter()
-            .filter(|t| t.id != assembling_team_id && (outranked || self.plays(t.id)))
-            .flat_map(|t| t.players.iter().map(|p| p.id))
+            .flat_map(|t| t.players.iter().map(move |p| (t, p)))
+            .filter(|(t, p)| match p.assigned_side_on(self.date) {
+                Some(side) => side != assembling_team_id,
+                None => t.id != assembling_team_id && (outranked || self.plays(t.id)),
+            })
+            .map(|(_, p)| p.id)
             .collect()
     }
 }
@@ -952,6 +723,12 @@ impl MatchdayPool {
         } else {
             Vec::new()
         };
+
+        for p in commitments.assigned_to(club, team_id) {
+            if !reserves.iter().any(|r| r.id == p.id) {
+                reserves.push(p);
+            }
+        }
 
         for p in club
             .teams
@@ -1241,118 +1018,6 @@ impl KeeperCallUp {
 #[cfg(test)]
 mod tests {
     use super::{League, MatchdayCommitments};
-    use crate::r#match::{SelectionCompetition, SelectionContext, SelectionPolicy};
-
-    fn cup_ctx(
-        round: u8,
-        total_rounds: u8,
-        own: u16,
-        opp: u16,
-        importance: f32,
-    ) -> SelectionContext {
-        SelectionContext {
-            match_importance: importance,
-            competition: SelectionCompetition::DomesticCup {
-                round,
-                total_rounds,
-                own_reputation: own,
-                opponent_reputation: opp,
-            },
-            ..SelectionContext::default()
-        }
-    }
-
-    #[test]
-    fn domestic_cup_early_round_rotates() {
-        // Round 1 of 5 against an equal-reputation opponent: low importance,
-        // selector falls into CupRotation.
-        let imp = League::domestic_cup_importance(1, 5, 1000, 1000);
-        assert!(imp < 0.40, "early round importance should be low: {imp}");
-        assert_eq!(
-            SelectionPolicy::from_context(&cup_ctx(1, 5, 1000, 1000, imp)),
-            SelectionPolicy::CupRotation
-        );
-    }
-
-    #[test]
-    fn domestic_cup_final_is_best_eleven() {
-        // Round 5 of 5: the final demands the strongest available XI.
-        let imp = League::domestic_cup_importance(5, 5, 1000, 1000);
-        assert!(imp >= 0.90, "final importance should be high: {imp}");
-        assert_eq!(
-            SelectionPolicy::from_context(&cup_ctx(5, 5, 1000, 1000, imp)),
-            SelectionPolicy::BestEleven
-        );
-    }
-
-    #[test]
-    fn domestic_cup_strong_opponent_raises_importance() {
-        // A much stronger opponent (ratio > 1.5) in an early round lifts
-        // importance out of full youth-development territory.
-        let weak_equal = League::domestic_cup_importance(1, 5, 1000, 1000);
-        let strong_opp = League::domestic_cup_importance(1, 5, 1000, 1800);
-        assert!(
-            strong_opp > weak_equal,
-            "stronger opponent must raise importance: {strong_opp} vs {weak_equal}"
-        );
-        let policy = SelectionPolicy::from_context(&cup_ctx(1, 5, 1000, 1800, strong_opp));
-        assert!(
-            matches!(
-                policy,
-                SelectionPolicy::ManagedMinutes | SelectionPolicy::StrongWithRotation
-            ),
-            "strong opponent early cup should manage minutes, not full youth: {policy:?}"
-        );
-    }
-
-    #[test]
-    fn domestic_cup_importance_rises_monotonically_by_stage() {
-        // Equal opponents, 5-round bracket: importance must climb round by
-        // round, and the derived policy must walk up the rotation ladder.
-        let r1 = League::domestic_cup_importance(1, 5, 1000, 1000);
-        let r3 = League::domestic_cup_importance(3, 5, 1000, 1000);
-        let r4 = League::domestic_cup_importance(4, 5, 1000, 1000);
-        let r5 = League::domestic_cup_importance(5, 5, 1000, 1000);
-        assert!(
-            r1 < r3 && r3 < r4 && r4 < r5,
-            "importance must increase by stage: {r1} {r3} {r4} {r5}"
-        );
-
-        assert_eq!(
-            SelectionPolicy::from_context(&cup_ctx(1, 5, 1000, 1000, r1)),
-            SelectionPolicy::CupRotation
-        );
-        // Quarterfinal (round 3 of 5) lands in the managed/strong band.
-        assert!(matches!(
-            SelectionPolicy::from_context(&cup_ctx(3, 5, 1000, 1000, r3)),
-            SelectionPolicy::ManagedMinutes | SelectionPolicy::StrongWithRotation
-        ));
-        assert_eq!(
-            SelectionPolicy::from_context(&cup_ctx(4, 5, 1000, 1000, r4)),
-            SelectionPolicy::StrongWithRotation
-        );
-        assert_eq!(
-            SelectionPolicy::from_context(&cup_ctx(5, 5, 1000, 1000, r5)),
-            SelectionPolicy::BestEleven
-        );
-    }
-
-    #[test]
-    fn domestic_cup_final_floor_holds_under_congestion() {
-        // The importance formula caps the final at <=0.98, and the build
-        // path floors it above the BestEleven threshold even when congestion
-        // would dampen it.
-        let final_importance = League::domestic_cup_importance(4, 4, 1000, 1000);
-        assert!((0.90..=0.98).contains(&final_importance));
-        // Heavy congestion dampener (0.55) would pull it to ~0.52; the floor
-        // keeps a final a strong-XI affair.
-        let dampened = (final_importance * 0.55).max(League::DOMESTIC_CUP_FINAL_IMPORTANCE_FLOOR);
-        assert!(dampened >= 0.83);
-        assert_eq!(
-            SelectionPolicy::from_context(&cup_ctx(4, 4, 1000, 1000, dampened)),
-            SelectionPolicy::BestEleven
-        );
-    }
 
     // ========== Backup-goalkeeper borrowing ==========
     //
@@ -2178,5 +1843,483 @@ mod tests {
         mental.man_management = 16;
         mental.adaptability = 15;
         staff
+    }
+
+    // ========== What each side's selection is told ==========
+
+    use super::MatchdayLookup;
+    use crate::context::{GlobalContext, SimulationContext};
+    use crate::league::{
+        KnockoutStakes, KnockoutTieReading, LeagueMatch, LeagueTable, LeagueTableRow,
+        TableStakes,
+    };
+    use crate::r#match::{FieldSquad, Match};
+    use rustc_hash::FxHashMap;
+
+    fn md_full_squad(base: u32, ability: u8) -> Vec<Player> {
+        use PlayerPositionType::*;
+        [
+            Goalkeeper,
+            Goalkeeper,
+            DefenderLeft,
+            DefenderCenterLeft,
+            DefenderCenterRight,
+            DefenderRight,
+            DefenderCenter,
+            MidfielderLeft,
+            MidfielderCenterLeft,
+            MidfielderCenterRight,
+            MidfielderRight,
+            MidfielderCenter,
+            ForwardLeft,
+            ForwardRight,
+            Striker,
+            Striker,
+            DefenderLeft,
+            MidfielderCenter,
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, &position)| md_player(base + i as u32, position, ability))
+        .collect()
+    }
+
+    fn md_first_team(id: u32, club_id: u32, reputation: u16) -> Team {
+        let mut team = md_team(id, club_id, TeamType::Main, md_full_squad(id * 100, 120));
+        team.reputation = TeamReputation::new(reputation, reputation, reputation);
+        team
+    }
+
+    fn md_fixture(home: u32, away: u32, cup_round: Option<(u8, u8)>) -> LeagueMatch {
+        LeagueMatch {
+            id: format!("md_{home}_{away}"),
+            league_id: 1,
+            league_slug: "league".to_string(),
+            date: md_date().and_hms_opt(15, 0, 0).unwrap(),
+            home_team_id: home,
+            away_team_id: away,
+            result: None,
+            cup_round: cup_round.map(|(round, _)| round),
+            cup_total_rounds: cup_round.map(|(_, total)| total),
+        }
+    }
+
+    fn md_row(team_id: u32, played: u8, points: u8) -> LeagueTableRow {
+        LeagueTableRow {
+            team_id,
+            played,
+            win: points / 3,
+            draft: points % 3,
+            lost: played.saturating_sub(points / 3 + points % 3),
+            goal_scored: 0,
+            goal_concerned: 0,
+            points,
+            points_deduction: 0,
+        }
+    }
+
+    /// A top division of twenty with three relegated and seven continental
+    /// places, `rounds_left` of its 38 rounds still to play.
+    fn md_league(table: LeagueTable, rounds_left: u8) -> League {
+        use crate::league::{
+            DayMonthPeriod, LeagueSettings, Schedule, ScheduleItem, ScheduleTour, TableLine,
+        };
+        let mut league = League::new(
+            1,
+            "League".to_string(),
+            "league".to_string(),
+            1,
+            7000,
+            LeagueSettings {
+                season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                tier: 1,
+                promotion_spots: 0,
+                relegation_spots: 3,
+                league_group: None,
+                split_season: false,
+            },
+            false,
+        );
+        league.continental_lines = vec![TableLine::below(4, 0.95), TableLine::below(7, 0.8)];
+        let teams: Vec<u32> = table.rows.iter().map(|r| r.team_id).collect();
+        let mut tours = Vec::new();
+        for round in 0..rounds_left {
+            let mut tour = ScheduleTour::new(round + 1, teams.len() / 2);
+            for pair in teams.chunks(2) {
+                tour.items.push(ScheduleItem::new(
+                    1,
+                    "league".into(),
+                    pair[0],
+                    pair[1],
+                    (md_date() + chrono::Duration::days(i64::from(round) * 7))
+                        .and_hms_opt(15, 0, 0)
+                        .unwrap(),
+                    None,
+                ));
+            }
+            tours.push(tour);
+        }
+        league.schedule = Schedule { tours };
+        league.table = table;
+        league
+    }
+
+    fn md_build(clubs: &[Club], fixture: &LeagueMatch, league: &League, cup: bool) -> Match {
+        let ctx = GlobalContext::new(SimulationContext::new(
+            md_date().and_hms_opt(0, 0, 0).unwrap(),
+        ));
+        League::build_match(
+            fixture,
+            clubs,
+            &MatchdayLookup::build(clubs),
+            &ctx,
+            &league.table,
+            &league.table_stakes(),
+            false,
+            cup,
+            cup,
+            league.regulations.bench_size,
+            &MatchdayCommitments::default(),
+        )
+    }
+
+    #[test]
+    fn a_player_assigned_the_day_before_is_named_by_that_side_only() {
+        // First team and "2" side share a Saturday. The club put one of the
+        // first team's men with the "2" side on Friday.
+        const RELEASED: u32 = 117;
+        let mut main = md_first_team(1, 100, 5000);
+        let released = main
+            .players
+            .players
+            .iter_mut()
+            .find(|p| p.id == RELEASED)
+            .expect("the first team's last man");
+        released.on_matchday_assigned(md_date(), 2);
+        let second = md_team(2, 100, TeamType::Second, md_full_squad(200, 90));
+        let clubs = vec![
+            md_club(100, vec![main, second]),
+            md_club(300, vec![md_first_team(3, 300, 5000)]),
+            md_club(400, vec![md_first_team(4, 400, 5000)]),
+        ];
+        let commitments = md_commitments(&[1, 2]);
+
+        let pool = |team_id: u32, main_team: bool| {
+            super::MatchdayPool::offer(&clubs[0], team_id, false, main_team, md_date(), &commitments)
+        };
+        assert!(reserve_has(&pool(2, false), RELEASED), "offered to the side he was put with");
+        assert!(!reserve_has(&pool(1, true), RELEASED));
+
+        let league = md_league(LeagueTable::default(), 10);
+        let build = |home: u32, away: u32| {
+            let ctx = GlobalContext::new(SimulationContext::new(
+                md_date().and_hms_opt(0, 0, 0).unwrap(),
+            ));
+            League::build_match(
+                &md_fixture(home, away, None),
+                &clubs,
+                &MatchdayLookup::build(&clubs),
+                &ctx,
+                &league.table,
+                &league.table_stakes(),
+                false,
+                false,
+                false,
+                league.regulations.bench_size,
+                &commitments,
+            )
+        };
+        let named = |built: &Match| {
+            built
+                .home_squad
+                .main_squad
+                .iter()
+                .chain(built.home_squad.substitutes.iter())
+                .any(|p| p.id == RELEASED)
+        };
+        assert!(!named(&build(1, 3)), "his own side does not name him");
+        assert!(named(&build(2, 4)), "the side he was released to does");
+    }
+
+    #[test]
+    fn a_built_match_carries_what_each_selection_was_told() {
+        let giant = md_first_team(1, 100, 9000);
+        let minnow = md_first_team(2, 200, 2000);
+        let (giant_rep, minnow_rep) = (
+            giant.reputation.market_value_score(),
+            minnow.reputation.market_value_score(),
+        );
+        let clubs = vec![md_club(100, vec![giant]), md_club(200, vec![minnow])];
+        let built = md_build(
+            &clubs,
+            &md_fixture(1, 2, Some((1, 5))),
+            &md_league(LeagueTable::default(), 0),
+            true,
+        );
+        let worth = |own: u16, other: u16| {
+            KnockoutStakes::of(KnockoutTieReading {
+                round: 1,
+                total_rounds: 5,
+                opponent_ratio: f32::from(other) / f32::from(own),
+                aggregate_lead: None,
+            })
+        };
+
+        let home = FieldSquad::from_team(&built.home_squad);
+        let away = FieldSquad::from_team(&built.away_squad);
+        assert_eq!(home.selection.importance, worth(giant_rep, minnow_rep));
+        assert_eq!(away.selection.importance, worth(minnow_rep, giant_rep));
+        assert!(
+            away.selection.importance > home.selection.importance + 0.4,
+            "the minnow has far more riding on the tie than the giant"
+        );
+        assert_eq!(home.selection.room, 1.0 - home.selection.importance);
+        assert_eq!(home.selection.days_to_next, None, "no other fixture in sight");
+    }
+
+    /// A twenty-team table after 34 of 38 rounds: the leaders far clear, a
+    /// mid-table side that can neither reach the top seven nor be caught by
+    /// the bottom three, and a side one point above the drop.
+    fn md_late_season_table(mid_table: u32, in_danger: u32) -> LeagueTable {
+        let mut rows: Vec<LeagueTableRow> = (0..20u32)
+            .map(|place| {
+                let points = match place {
+                    0..=6 => 80 - place as u8 * 2,
+                    7..=13 => 50 - (place as u8 - 7),
+                    14..=16 => 33 - (place as u8 - 14),
+                    _ => 30 - (place as u8 - 17),
+                };
+                md_row(1000 + place, 34, points)
+            })
+            .collect();
+        rows[9].team_id = mid_table;
+        rows[16].team_id = in_danger;
+        LeagueTable {
+            rows,
+            ..LeagueTable::default()
+        }
+    }
+
+    #[test]
+    fn visitors_fighting_relegation_are_told_their_own_stakes() {
+        let settled = md_first_team(1, 100, 5000);
+        let threatened = md_first_team(2, 200, 5000);
+        let clubs = vec![md_club(100, vec![settled]), md_club(200, vec![threatened])];
+        let league = md_league(md_late_season_table(1, 2), 4);
+        let built = md_build(&clubs, &md_fixture(1, 2, None), &league, false);
+
+        let home = built.home_squad.selection.importance;
+        let away = built.away_squad.selection.importance;
+        assert!(
+            away >= 0.85,
+            "one point above the drop with four to play is near a must-win: {away}"
+        );
+        assert_eq!(
+            home,
+            TableStakes::PROFESSIONAL_FLOOR,
+            "the home side has nothing left to play for"
+        );
+    }
+
+    #[test]
+    fn a_loanee_is_not_named_against_his_parent_club() {
+        use crate::PlayerClubContract;
+
+        let mut borrower = md_first_team(1, 100, 5000);
+        let mut loanee = md_player(190, PlayerPositionType::Striker, 180);
+        loanee.contract_loan = Some(PlayerClubContract::new_loan(
+            50_000,
+            md_date() + chrono::Duration::days(200),
+            200,
+            2,
+            100,
+        ));
+        borrower.players.add(loanee);
+        let owner = md_first_team(2, 200, 5000);
+        let clubs = vec![md_club(100, vec![borrower]), md_club(200, vec![owner])];
+        let built = md_build(
+            &clubs,
+            &md_fixture(1, 2, None),
+            &md_league(md_late_season_table(1, 2), 4),
+            false,
+        );
+
+        let sheet = FieldSquad::from_team(&built.home_squad);
+        assert!(
+            !sheet.dressing_room().any(|id| id == 190),
+            "the best player in the squad is on loan from today's opponent and was named"
+        );
+    }
+
+    #[test]
+    fn a_continental_tie_hears_the_declared_keeper_order() {
+        use crate::continent::competitions::ChampionsLeague;
+
+        // The department sees the better goalkeeper; hidden ability says
+        // the other man.
+        let mut home = md_first_team(1, 100, 8000);
+        let mut declared = md_player(180, PlayerPositionType::Goalkeeper, 150);
+        declared.player_attributes.current_ability = 128;
+        declared.birth_date = md_date() - chrono::Duration::days(365 * 28);
+        let mut hidden_better = md_player(181, PlayerPositionType::Goalkeeper, 130);
+        hidden_better.player_attributes.current_ability = 134;
+        hidden_better.birth_date = md_date() - chrono::Duration::days(365 * 28);
+        let outfield: Vec<Player> = home
+            .players
+            .players
+            .drain(..)
+            .filter(|p| !p.positions.is_goalkeeper())
+            .collect();
+        home.players = PlayerCollection::new(
+            outfield
+                .into_iter()
+                .chain([declared, hidden_better])
+                .collect(),
+        );
+        home.staffs = StaffCollection::new(vec![md_goalkeeping_coach(900)]);
+        let mut home_club = md_club(100, vec![home]);
+        home_club.review_goalkeeping_department(md_date());
+        assert_eq!(home_club.keeper_plan().and_then(|p| p.number_one()), Some(180));
+
+        let clubs = vec![home_club, md_club(200, vec![md_first_team(2, 200, 8000)])];
+        let keeper = |built: &Match| {
+            built
+                .home_squad
+                .main_squad
+                .iter()
+                .find(|p| p.tactical_position.current_position == PlayerPositionType::Goalkeeper)
+                .map(|p| p.id)
+        };
+
+        let league = md_build(
+            &clubs,
+            &md_fixture(1, 2, None),
+            &md_league(md_late_season_table(1, 2), 4),
+            false,
+        );
+        assert_eq!(keeper(&league), Some(180), "the league fixture plays the declared one");
+
+        let mut competition = ChampionsLeague::new();
+        competition.matches.push(ContinentalMatch {
+            home_team: 100,
+            away_team: 200,
+            date: md_date(),
+            stage: CompetitionStage::GroupStage,
+            match_id: String::new(),
+            result: None,
+        });
+        let by_id: FxHashMap<u32, &Club> = clubs.iter().map(|c| (c.id, c)).collect();
+        let matchday =
+            competition.prepare_matchday(&by_id, md_date(), &MatchdayCommitments::default());
+        assert_eq!(
+            keeper(&matchday.matches[0]),
+            Some(180),
+            "the continental tie was not given the declared order"
+        );
+    }
+
+    // ========== What a continental tie is worth, and where a club sees it ==========
+
+    use crate::continent::competitions::{
+        CompetitionStage, CompetitionTier, ContinentalCompetitions, ContinentalFixture,
+        ContinentalMatch, GroupTable, KnockoutTie,
+    };
+
+    fn md_continental_tie(home: u32, away: u32, stage: CompetitionStage) -> ContinentalMatch {
+        ContinentalMatch {
+            home_team: home,
+            away_team: away,
+            date: md_date() + chrono::Duration::days(3),
+            stage,
+            match_id: String::new(),
+            result: None,
+        }
+    }
+
+    /// Clubs 100, 200, 300 and 400 after five of six group matches.
+    fn md_group(points: [u8; 4]) -> GroupTable {
+        let mut group = GroupTable::new(&[100, 200, 300, 400]);
+        for (row, points) in group.rows.iter_mut().zip(points) {
+            row.played = 5;
+            row.points = points;
+        }
+        group
+    }
+
+    fn md_continental_stakes(
+        tie: &ContinentalMatch,
+        groups: &[GroupTable],
+        knockout: &[KnockoutTie],
+    ) -> (f32, f32) {
+        let home = md_first_team(1, tie.home_team, 8000);
+        let away = md_first_team(2, tie.away_team, 8000);
+        ContinentalFixture {
+            tier: CompetitionTier::ChampionsLeague,
+            tie,
+            groups,
+            knockout,
+        }
+        .stakes(&home, &away)
+    }
+
+    #[test]
+    fn a_group_already_won_is_worth_little_to_the_winner_and_a_lot_to_a_chaser() {
+        // First is settled; third is a point behind second with one to play.
+        let groups = [md_group([15, 7, 6, 1])];
+        let tie = md_continental_tie(100, 300, CompetitionStage::GroupStage);
+        let (winner, chaser) = md_continental_stakes(&tie, &groups, &[]);
+        assert_eq!(winner, TableStakes::PROFESSIONAL_FLOOR);
+        assert!(chaser >= 0.8, "a point off qualifying with one to play: {chaser}");
+    }
+
+    #[test]
+    fn a_second_leg_reads_the_aggregate_for_both_sides() {
+        let tie = md_continental_tie(200, 100, CompetitionStage::RoundOf16);
+        let mut level = KnockoutTie::new(100, 200);
+        level.record_leg1(1, 1);
+        assert_eq!(md_continental_stakes(&tie, &[], &[level]), (1.0, 1.0));
+
+        let mut settled = KnockoutTie::new(100, 200);
+        settled.record_leg1(4, 0);
+        let (trailing, leading) = md_continental_stakes(&tie, &[], &[settled]);
+        assert!(leading < 0.5, "four goals ahead on aggregate: {leading}");
+        assert_eq!(trailing, leading);
+
+        let first_leg = md_continental_tie(100, 200, CompetitionStage::RoundOf16);
+        let (home, away) = md_continental_stakes(&first_leg, &[], &[KnockoutTie::new(100, 200)]);
+        assert!(home > 0.6 && home < 0.9 && home == away, "an even first leg: {home}");
+    }
+
+    #[test]
+    fn a_club_in_a_continental_group_has_the_tie_in_its_window() {
+        let clubs = vec![
+            md_club(100, vec![md_first_team(1, 100, 8000)]),
+            md_club(200, vec![md_first_team(2, 200, 8000)]),
+        ];
+        let by_id: FxHashMap<u32, &Club> = clubs.iter().map(|c| (c.id, c)).collect();
+        let mut competitions = ContinentalCompetitions::new();
+        competitions.champions_league.groups = vec![md_group([7, 7, 7, 3])];
+        let mut played = md_continental_tie(200, 100, CompetitionStage::GroupStage);
+        played.date = md_date() - chrono::Duration::days(14);
+        played.result = Some((1, 1));
+        competitions.champions_league.matches =
+            vec![played, md_continental_tie(100, 200, CompetitionStage::GroupStage)];
+
+        let runs = competitions.fixture_runs(md_date(), &by_id);
+        let run = &runs[&100];
+        assert_eq!(run.recent, vec![md_date() - chrono::Duration::days(14)]);
+        assert_eq!(run.upcoming.len(), 1);
+        assert_eq!(run.upcoming[0].date, md_date() + chrono::Duration::days(3));
+        assert!(
+            run.upcoming[0].importance > 0.8,
+            "three sides level for two places with one to play"
+        );
+
+        let mut team = md_first_team(1, 100, 8000);
+        team.fixture_window.continental = run.clone();
+        let week = team.fixture_window.week(md_date());
+        assert_eq!(week.to_next, Some(3));
+        assert_eq!(week.next_importance, run.upcoming[0].importance);
     }
 }

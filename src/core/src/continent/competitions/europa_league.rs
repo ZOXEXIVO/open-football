@@ -1,16 +1,12 @@
 use super::{
-    CompetitionStage, ContinentalMatch, ContinentalMatchday, ContinentalMatchweek,
-    EUROPA_LEAGUE_ID, GroupTable, KnockoutTie,
+    CompetitionStage, CompetitionTier, ContinentalFixture, ContinentalMatch, ContinentalMatchday,
+    ContinentalMatchweek, GroupTable, KnockoutTie,
 };
-use crate::club::finance::RevenueModel;
+use crate::Club;
 use crate::continent::ContinentalRankings;
 use crate::league::Season;
-use crate::league::simulation::matchday::{MatchdayCommitments, MatchdayPool};
-use crate::r#match::squad::selection::model::MatchSelectionGameModel;
-use crate::r#match::{
-    CompetitionKind, FixtureContext, Match, MatchResult, SelectionCompetition, SelectionContext,
-};
-use crate::{Club, TeamType};
+use crate::league::simulation::matchday::MatchdayCommitments;
+use crate::r#match::{Match, MatchResult};
 use chrono::{Datelike, NaiveDate, Weekday};
 use log::{debug, info};
 use rustc_hash::FxHashMap;
@@ -216,103 +212,14 @@ impl EuropaLeague {
 
         let engine_matches: Vec<Match> = todays_matches
             .iter()
-            .filter_map(|cm| {
-                let home_club = clubs.get(&cm.home_team)?;
-                let away_club = clubs.get(&cm.away_team)?;
-
-                let home_team = home_club.teams.teams.first()?;
-                let away_team = away_club.teams.teams.first()?;
-
-                // Same matchday pool the league builds — reserves, earned
-                // academy call-ups, the keeper room and the shortfall borrow.
-                // A club in a crisis names the same eighteen in Europe that it
-                // names on a Saturday.
-                let home_force = MatchdayPool::offer(
-                    home_club,
-                    home_team.id,
-                    false,
-                    home_team.team_type == TeamType::Main,
-                    date,
-                    commitments,
-                );
-                let away_force = MatchdayPool::offer(
-                    away_club,
-                    away_team.id,
-                    false,
-                    away_team.team_type == TeamType::Main,
-                    date,
-                    commitments,
-                );
-
-                let mut home_ctx = SelectionContext {
-                    is_friendly: false,
-                    date,
-                    match_importance: 0.9,
-                    philosophy: None,
-                    competition: SelectionCompetition::ContinentalCup,
-                    game_model: None,
-                    ..SelectionContext::default()
-                };
-                let mut away_ctx = SelectionContext {
-                    is_friendly: false,
-                    date,
-                    match_importance: 0.9,
-                    philosophy: None,
-                    competition: SelectionCompetition::ContinentalCup,
-                    game_model: None,
-                    ..SelectionContext::default()
-                };
-
-                // Fixture-aware game model per side (opponent roster threat
-                // axes + venue). Continental scheduling doesn't expose an
-                // upcoming-fixture count here, so congestion stays neutral.
-                let is_derby = home_club.is_rival(away_club.id) || away_club.is_rival(home_club.id);
-                home_ctx.game_model = Some(MatchSelectionGameModel::build_for_fixture(
-                    &home_ctx, home_team, away_team, true, 0, is_derby,
-                ));
-                away_ctx.game_model = Some(MatchSelectionGameModel::build_for_fixture(
-                    &away_ctx, away_team, home_team, false, 0, is_derby,
-                ));
-
-                let home_squad = home_team.get_enhanced_match_squad(&home_force, &home_ctx);
-                let away_squad = away_team.get_enhanced_match_squad(&away_force, &away_ctx);
-
-                let match_id = format!(
-                    "el_{}_{}_{}",
-                    date.format("%Y%m%d"),
-                    cm.home_team,
-                    cm.away_team
-                );
-
-                let is_knockout_stage = matches!(
-                    cm.stage,
-                    CompetitionStage::RoundOf16
-                        | CompetitionStage::QuarterFinals
-                        | CompetitionStage::SemiFinals
-                        | CompetitionStage::Final
-                );
-                let fixture = FixtureContext::new(
-                    &match_id,
-                    date,
-                    CompetitionKind::Continental,
-                    is_knockout_stage,
-                )
-                .with_importance(cm.stage.importance())
-                .on_continent(FixtureContext::EUROPE)
-                .with_gate(RevenueModel::utilisation(
-                    home_team.reputation.overall_score(),
-                    1.0,
-                    1.0,
-                ))
-                .with_rivalry(if is_derby { 1.0 } else { 0.0 });
-                Some(Match::make(
-                    match_id,
-                    EUROPA_LEAGUE_ID,
-                    EUROPA_LEAGUE_SLUG,
-                    home_squad,
-                    away_squad,
-                    fixture,
-                ))
+            .filter_map(|tie| {
+                ContinentalFixture {
+                    tier: CompetitionTier::EuropaLeague,
+                    tie,
+                    groups: &self.groups,
+                    knockout: &self.knockout_round,
+                }
+                .build(clubs, date, commitments)
             })
             .collect();
 

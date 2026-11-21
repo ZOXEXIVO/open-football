@@ -167,6 +167,7 @@ impl PlayerSummaryBuilder {
         let mut summary = PlayerSummary {
             player_id: player.id,
             club_id: club.id,
+            preferred_foot: player.preferred_foot,
             country_id: country.id,
             continent_id: country.continent_id,
             region: ctx.country_region,

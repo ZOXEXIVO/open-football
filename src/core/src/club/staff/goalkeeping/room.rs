@@ -37,6 +37,9 @@ use crate::{Player, PlayerSquadStatus};
 #[derive(Debug, Clone)]
 pub struct RoomKeeper {
     pub player_id: u32,
+    /// Here on loan: he takes his place in the order on his level, and the
+    /// succession, which concerns the keepers the club owns, looks past him.
+    pub borrowed: bool,
     /// The squad he is rostered with.
     pub team_id: u32,
     pub team_type: TeamType,
@@ -83,6 +86,7 @@ impl RoomKeeper {
         let cup = &player.cup_statistics;
         RoomKeeper {
             player_id: player.id,
+            borrowed: player.is_on_loan(),
             team_id,
             team_type,
             age: DateUtils::age(player.birth_date, today),
@@ -180,16 +184,17 @@ pub struct KeeperRoom {
 }
 
 impl KeeperRoom {
-    /// Assemble the room from `(team_id, team_type, player)` triples.
-    /// Non-keepers and keepers away on loan are skipped — a loaned keeper is
-    /// somebody else's team sheet this season.
+    /// Assemble the room from `(team_id, team_type, player)` triples: every
+    /// goalkeeper who can play for the club this season, a borrowed one
+    /// included. A keeper the club has lent out is rostered with his
+    /// borrower and is somebody else's team sheet.
     pub fn assemble<'a, I>(squads: I, today: NaiveDate) -> Self
     where
         I: IntoIterator<Item = (u32, TeamType, &'a Player)>,
     {
         let mut keepers: Vec<RoomKeeper> = squads
             .into_iter()
-            .filter(|(_, _, p)| p.positions.is_goalkeeper() && !p.is_on_loan())
+            .filter(|(_, _, p)| p.positions.is_goalkeeper())
             .map(|(team_id, team_type, p)| RoomKeeper::read(p, team_id, team_type, today))
             .collect();
         // Strongest first, with age as the tiebreak so the settled senior

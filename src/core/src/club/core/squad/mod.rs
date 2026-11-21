@@ -14,6 +14,7 @@ pub mod departure;
 mod depth;
 mod goalkeeping;
 mod loans;
+mod matchday;
 mod parked;
 mod pathway;
 mod promotion;
@@ -22,5 +23,7 @@ pub mod stranded;
 mod trim;
 mod utilization;
 
-pub use departure::SquadDepartures;
+pub use departure::{
+    DepartedPlayer, DepartureKind, KeyDeparture, ReplacementReadiness, SellerCover, SquadDepartures,
+};
 pub use stranded::{StrandedEffect, StrandedListing, StrandedMarket};

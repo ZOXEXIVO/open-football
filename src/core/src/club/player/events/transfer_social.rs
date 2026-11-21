@@ -126,6 +126,24 @@ fn cause_for_interest_kind(kind: TransferInterestKind) -> HappinessEventCause {
 }
 
 impl Player {
+    /// Approaches for him the club has on record: every time another
+    /// club's interest was put to him by name and has not yet faded.
+    pub fn approaches_recorded(&self) -> u8 {
+        self.happiness
+            .recent_events
+            .iter()
+            .filter(|event| {
+                event.context.as_ref().is_some_and(|context| {
+                    context
+                        .transfer_interest_context
+                        .as_ref()
+                        .is_some_and(|interest| interest.interested_club_id.is_some())
+                })
+            })
+            .count()
+            .min(usize::from(u8::MAX)) as u8
+    }
+
     /// An approach from `buyer_rep` has made it past the selling club's
     /// initial acceptance check, so it counts as real media-reported
     /// interest rather than a rumour. Flattery boost for ambitious

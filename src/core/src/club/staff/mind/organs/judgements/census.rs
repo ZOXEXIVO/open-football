@@ -288,13 +288,16 @@ fn selection_census() {
 
     // The pinned corpus. These are not aspirational numbers — they are
     // what the selector does today, recorded so a refactor that claims
-    // to change nothing can be held to it.
+    // to change nothing can be held to it. The same eleven as before the
+    // squad-status term left the score; the two strikers take each
+    // other's shirt.
     assert_eq!(
         starters,
-        vec![1, 3, 6, 7, 9, 12, 13, 15, 17, 20, 19],
+        vec![1, 3, 6, 7, 9, 12, 13, 15, 17, 19, 20],
         "starting XI moved"
     );
-    assert_eq!(bench, vec![2, 5, 16, 11, 4, 21, 10], "bench moved");
+    // The same seven; the men who cover a line are now named first.
+    assert_eq!(bench, vec![2, 4, 5, 11, 16, 21, 10], "bench moved");
     assert_eq!(result.omissions.len(), 10, "omission set moved");
 
     // The reason distribution §10 asks for, as an ordered list of

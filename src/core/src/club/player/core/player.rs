@@ -160,6 +160,14 @@ impl SquadStandingView {
     }
 }
 
+/// One day with one of his club's sides, staged by the club the day before
+/// and gone once the day has passed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MatchdayAssignment {
+    pub date: NaiveDate,
+    pub team_id: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct Player {
     //person data
@@ -317,6 +325,9 @@ pub struct Player {
     /// processing to emit shock events, check role fit, and record an
     /// implicit playing-time promise. Cleared once consumed.
     pub pending_signing: Option<PendingSigning>,
+
+    /// The side of his club he is with on one day, decided the day before.
+    pub matchday_assignment: Option<MatchdayAssignment>,
 
     /// Rolling competitive workload and form rating. Drives rotation
     /// decisions, injury risk, and form-based morale events.
@@ -1484,6 +1495,10 @@ impl Player {
             self.behaviour.try_increase();
         }
 
+        if self.matchday_assignment.is_some_and(|a| a.date <= now.date()) {
+            self.matchday_assignment = None;
+        }
+
         // First tick after a transfer: react to the new club — ambition /
         // salary shocks, role fit, implicit playing-time promise. No-op if
         // nothing is pending.
@@ -1710,6 +1725,36 @@ impl Player {
 
     pub fn is_on_loan(&self) -> bool {
         self.contract_loan.is_some()
+    }
+
+    /// A borrowed player does not face the club that owns him.
+    pub fn barred_against(&self, opponent_club_id: u32) -> bool {
+        self.contract_loan
+            .as_ref()
+            .and_then(|loan| loan.loan_from_club_id)
+            == Some(opponent_club_id)
+    }
+
+    /// The club has decided which of its sides he is with on `date`.
+    pub fn on_matchday_assigned(&mut self, date: NaiveDate, team_id: u32) {
+        self.matchday_assignment = Some(MatchdayAssignment { date, team_id });
+    }
+
+    /// The club has taken back what it decided for the day.
+    pub fn on_matchday_assignment_withdrawn(&mut self) {
+        self.matchday_assignment = None;
+    }
+
+    /// The side the club has put him with on `date`, when it has decided.
+    pub fn assigned_side_on(&self, date: NaiveDate) -> Option<u32> {
+        self.matchday_assignment
+            .filter(|a| a.date == date)
+            .map(|a| a.team_id)
+    }
+
+    /// His club has accepted a bid for him, or his transfer is agreed.
+    pub fn move_is_agreed(&self) -> bool {
+        self.statuses.has(PlayerStatusType::Bid) || self.statuses.has(PlayerStatusType::Trn)
     }
 
     /// Live appearances below which the season-end snapshot has already
@@ -1963,7 +2008,7 @@ impl Person for Player {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerPreferredFoot {
     Left,
     Right,

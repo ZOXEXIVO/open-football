@@ -31,8 +31,23 @@ impl PlayerDecisionHistory {
         "dec_board_loan_listed",
     ];
 
+    /// A sale the board itself demanded of the manager.
+    const FORCED_SALE: &'static str = "dec_board_forced_sale";
+
     pub fn new() -> Self {
         PlayerDecisionHistory { items: Vec::new() }
+    }
+
+    /// The last word on his being for sale was the board's own demand.
+    pub fn sale_was_demanded_by_the_board(&self) -> bool {
+        self.items
+            .iter()
+            .rev()
+            .find(|d| {
+                d.movement == Self::FORCED_SALE
+                    || Self::LISTING_MOVEMENTS.contains(&d.movement.as_str())
+            })
+            .is_some_and(|d| d.movement == Self::FORCED_SALE)
     }
 
     /// The most recent decision that listed him, whatever the register

@@ -42,6 +42,9 @@ pub struct KeeperCoachAuthority {
     /// without a goalkeeping coach: nobody is at the under-eighteens on
     /// Tuesday morning making a case for a sixteen-year-old.
     pub specialist_focus: f32,
+    /// How far into a cup the manager lets his deputy keep the gloves:
+    /// 1.0 is the final ([`CoachProfile::deputy_cup_reach`]).
+    pub cup_reach: f32,
 }
 
 impl KeeperCoachAuthority {
@@ -89,6 +92,7 @@ impl KeeperCoachAuthority {
         KeeperCoachAuthority {
             weight,
             specialist_focus: specialist,
+            cup_reach: profile.deputy_cup_reach(),
         }
     }
 
@@ -97,6 +101,7 @@ impl KeeperCoachAuthority {
         KeeperCoachAuthority {
             weight: Self::FLOOR,
             specialist_focus: 0.0,
+            cup_reach: CoachProfile::NEUTRAL_CUP_REACH,
         }
     }
 }
@@ -139,6 +144,9 @@ impl GoalkeepingDepartment {
     const LOAN_AGE: u8 = 19;
     /// Perceived confidence at or below which a keeper reads as shaken.
     const SHAKEN: f32 = -0.4;
+    /// How far above the football he is assured at a competition can be
+    /// and still be given to the deputy.
+    const DEPUTY_STEP_MAX: f32 = 0.16;
 
     /// Where a loan should take him: halfway from the football he is used
     /// to towards the first team's, so the spell builds his assurance
@@ -250,12 +258,21 @@ impl GoalkeepingDepartment {
         let third = order.get(2).copied();
 
         // ── The heir, and the clock behind him ──
-        let heir = number_one.and_then(|one| Self::find_heir(room, one));
+        // The succession is about the keepers the club owns: a borrowed
+        // number one goes back, and the man it has to replace is its own.
+        let incumbent = order.iter().copied().find(|k| !k.borrowed);
+        let heir = incumbent.and_then(|one| Self::find_heir(room, one));
         let succession = Self::succession_clock(
-            number_one,
+            incumbent,
             heir.and_then(|id| room.iter().find(|k| k.player_id == id)),
             today,
         );
+
+        // ── The deputy's competition ──
+        let deputy_cup_reach = number_one
+            .zip(deputy)
+            .filter(|(one, second)| Self::deputy_is_ready(room, one, second))
+            .map(|_| authority.cup_reach);
 
         // ── The pathway ──
         let ready_band =
@@ -326,11 +343,12 @@ impl GoalkeepingDepartment {
         let recommendations = Self::advise(
             room,
             &order,
+            incumbent,
             &pathway_picks,
             heir,
             succession,
             nominated,
-            previous,
+            deputy_cup_reach.is_some(),
         );
 
         Some(KeeperReviewOutcome {
@@ -344,7 +362,28 @@ impl GoalkeepingDepartment {
             nominee_assurance,
             recommendations,
             authority: authority.weight,
+            deputy_cup_reach,
         })
+    }
+
+    /// Whether the second keeper can be given a competition of his own:
+    /// old enough for a senior pitch, close enough to the number one that
+    /// the side does not drop, and not read as out of his depth at the
+    /// standard the first team plays.
+    fn deputy_is_ready(room: &KeeperRoom, number_one: &RoomKeeper, deputy: &RoomKeeper) -> bool {
+        if deputy.age < Self::START_AGE
+            || number_one.level as i16 - deputy.level as i16 > Self::DEPUTY_GAP_MAX
+        {
+            return false;
+        }
+        let read = &deputy.mindset;
+        if read.certainty <= 0.0 {
+            return true;
+        }
+        read.perceived_confidence > Self::SHAKEN
+            && room
+                .first_team_standard()
+                .is_none_or(|standard| standard - read.perceived_assurance <= Self::DEPUTY_STEP_MAX)
     }
 
     /// The declared number one, with the incumbent's standing respected.
@@ -411,6 +450,7 @@ impl GoalkeepingDepartment {
         // has.
         if let Some(named) = room
             .iter()
+            .filter(|k| !k.borrowed)
             .find(|k| k.named_heir_to == Some(number_one.player_id))
         {
             return Some(named.player_id);
@@ -418,6 +458,7 @@ impl GoalkeepingDepartment {
         let bar = number_one.level as f32 * Self::HEIR_REACH;
         room.iter()
             .filter(|k| k.player_id != number_one.player_id)
+            .filter(|k| !k.borrowed)
             .filter(|k| k.age <= Self::HEIR_MAX_AGE)
             .filter(|k| number_one.age.saturating_sub(k.age) >= Self::HEIR_AGE_GAP)
             .filter(|k| {
@@ -513,14 +554,16 @@ impl GoalkeepingDepartment {
     }
 
     /// Everything the goalkeeping coach has to say this month.
+    #[allow(clippy::too_many_arguments)]
     fn advise(
         room: &KeeperRoom,
         order: &[&RoomKeeper],
+        incumbent: Option<&RoomKeeper>,
         pathway: &[&RoomKeeper],
         heir: Option<u32>,
         succession: KeeperSuccession,
         nominated: Option<u32>,
-        _previous: &KeeperRoomPlan,
+        cup_declared: bool,
     ) -> Vec<KeeperRecommendation> {
         let mut out: Vec<KeeperRecommendation> = Vec::new();
 
@@ -528,9 +571,8 @@ impl GoalkeepingDepartment {
         let deputy = order.get(1).copied();
         let third = order.get(2).copied();
 
-        // The deputy owns the cup. Said every season, because it is a
-        // decision taken before the season and not a weekly preference.
-        if let Some(d) = deputy {
+        // The deputy owns the cup, where the club has declared it his.
+        if let Some(d) = deputy.filter(|_| cup_declared) {
             out.push(KeeperRecommendation::about(
                 KeeperAdvice::HandHimTheCup,
                 d.player_id,
@@ -556,16 +598,22 @@ impl GoalkeepingDepartment {
         // Is there actually a deputy, or only a body?
         match (number_one, deputy) {
             (Some(one), Some(d)) if one.level as i16 - d.level as i16 > Self::DEPUTY_GAP_MAX => {
-                out.push(KeeperRecommendation::club(
-                    KeeperAdvice::SignACredibleDeputy,
-                    KeeperUrgency::Pressing,
-                ));
+                out.push(
+                    KeeperRecommendation::club(
+                        KeeperAdvice::SignACredibleDeputy,
+                        KeeperUrgency::Pressing,
+                    )
+                    .measured_against(Some(one.level)),
+                );
             }
-            (Some(_), None) => {
-                out.push(KeeperRecommendation::club(
-                    KeeperAdvice::SignACredibleDeputy,
-                    KeeperUrgency::Urgent,
-                ));
+            (Some(one), None) => {
+                out.push(
+                    KeeperRecommendation::club(
+                        KeeperAdvice::SignACredibleDeputy,
+                        KeeperUrgency::Urgent,
+                    )
+                    .measured_against(Some(one.level)),
+                );
             }
             _ => {}
         }
@@ -581,17 +629,20 @@ impl GoalkeepingDepartment {
                     KeeperUrgency::Noted,
                 ));
             }
-            Some(t) if t.age > RoomKeeper::DEVELOPMENT_AGE && t.senior_apps == 0 => {
+            Some(t) if !t.borrowed && t.age > RoomKeeper::DEVELOPMENT_AGE && t.senior_apps == 0 => {
                 out.push(KeeperRecommendation::about(
                     KeeperAdvice::TimeToMoveHimOn,
                     t.player_id,
                     KeeperUrgency::Noted,
                 ));
                 if !room.has_senior_aged(KeeperAgeCurve::PEAK_UNTIL, 42) {
-                    out.push(KeeperRecommendation::club(
-                        KeeperAdvice::SignAnExperiencedThird,
-                        KeeperUrgency::Noted,
-                    ));
+                    out.push(
+                        KeeperRecommendation::club(
+                            KeeperAdvice::SignAnExperiencedThird,
+                            KeeperUrgency::Noted,
+                        )
+                        .measured_against(number_one.map(|k| k.level)),
+                    );
                 }
             }
             _ => {}
@@ -599,7 +650,7 @@ impl GoalkeepingDepartment {
 
         // The succession.
         if succession >= KeeperSuccession::Watch
-            && let Some(one) = number_one
+            && let Some(one) = incumbent
         {
             out.push(KeeperRecommendation::about(
                 KeeperAdvice::OpenTheSuccession,
@@ -623,27 +674,33 @@ impl GoalkeepingDepartment {
                 },
             ));
         } else if succession >= KeeperSuccession::Pressing {
-            out.push(KeeperRecommendation::club(
-                KeeperAdvice::SignAKeeperForTheFuture,
-                KeeperUrgency::Urgent,
-            ));
+            out.push(
+                KeeperRecommendation::club(
+                    KeeperAdvice::SignAKeeperForTheFuture,
+                    KeeperUrgency::Urgent,
+                )
+                .measured_against(number_one.map(|k| k.level)),
+            );
         }
 
         // Nobody coming at all — said even when the number one is young,
         // because a room with no age below him is a room that will have to
         // buy one in a hurry.
-        let has_future = room
-            .iter()
-            .any(|k| k.is_pathway_age() && number_one.is_some_and(|o| k.ceiling >= o.level));
+        let has_future = room.iter().any(|k| {
+            !k.borrowed && k.is_pathway_age() && number_one.is_some_and(|o| k.ceiling >= o.level)
+        });
         if !has_future
             && !out
                 .iter()
                 .any(|r| r.advice == KeeperAdvice::SignAKeeperForTheFuture)
         {
-            out.push(KeeperRecommendation::club(
-                KeeperAdvice::SignAKeeperForTheFuture,
-                KeeperUrgency::Noted,
-            ));
+            out.push(
+                KeeperRecommendation::club(
+                    KeeperAdvice::SignAKeeperForTheFuture,
+                    KeeperUrgency::Noted,
+                )
+                .measured_against(number_one.map(|k| k.level)),
+            );
         }
 
         // The academy.
@@ -674,7 +731,7 @@ impl GoalkeepingDepartment {
         // nonetheless third or fourth in a queue of one shirt.
         let blocked_by = order.len();
         for k in room.iter() {
-            if order.iter().any(|o| o.player_id == k.player_id) {
+            if k.borrowed || order.iter().any(|o| o.player_id == k.player_id) {
                 continue;
             }
             if k.age < Self::LOAN_AGE || k.age > RoomKeeper::DEVELOPMENT_AGE {

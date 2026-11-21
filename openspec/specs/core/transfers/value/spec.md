@@ -37,3 +37,30 @@ The system SHALL cap the wage a club can offer at the greatest of its own reputa
 #### Scenario: Concurrent negotiations reserve their share of the same tier envelope
 - **WHEN** a club has multiple open negotiations in the same brief tier on the same day
 - **THEN** each negotiation's ceiling reflects the tier envelope's remaining balance after reserving what the other open negotiations would draw if they completed
+
+### Requirement: Market value reads football played as a continuous record
+The part of a player's market value that comes from his football SHALL be a continuous function of how much he has
+played and how well, with no step between one count of appearances and the next.
+
+- For the same quality of performance, more football SHALL never lower the value.
+- A small sample SHALL be read with caution: one or two appearances, good or bad, SHALL move the value little.
+- The record SHALL carry the previous season with a weight that fades as the current season fills, so that the
+  value does not move on the day a season's statistics are archived.
+- A player with no football at all in the period SHALL be valued below one who has played regularly at the same
+  level, by an amount that grows with how long he has gone without.
+
+#### Scenario: A debut
+- **WHEN** a player with no appearances this season makes his first, with an ordinary rating
+- **THEN** his market value does not fall
+
+#### Scenario: One poor cameo
+- **WHEN** a player's only appearance is a poor twenty minutes
+- **THEN** his value moves by a small amount, not by a band
+
+#### Scenario: The season turns
+- **WHEN** a regular's season statistics are archived at the end of the season
+- **THEN** his market value on the next day is within a small margin of the day before
+
+#### Scenario: A year on the bench
+- **WHEN** two players of the same level and age differ only in that one played thirty matches and the other none
+- **THEN** the one who played is valued higher

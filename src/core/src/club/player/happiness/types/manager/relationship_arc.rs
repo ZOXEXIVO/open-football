@@ -184,6 +184,8 @@ pub struct ClubDirectionContext {
     /// the event — lets the renderer name the player when known.
     pub focal_player_id: Option<u32>,
     pub evidence: Vec<ClubDirectionEvidence>,
+    /// How much the thing that happened matters to this club, 0..1.
+    pub weight: f32,
 }
 
 impl ClubDirectionContext {
@@ -193,7 +195,13 @@ impl ClubDirectionContext {
             net_signings_window: None,
             focal_player_id: None,
             evidence: Vec::new(),
+            weight: 1.0,
         }
+    }
+
+    pub fn with_weight(mut self, weight: f32) -> Self {
+        self.weight = weight.clamp(0.0, 1.0);
+        self
     }
 
     pub fn with_net_signings(mut self, n: i8) -> Self {

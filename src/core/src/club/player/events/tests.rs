@@ -10,6 +10,7 @@ use super::types::{MatchOutcome, MatchParticipation, MatchTeamRef};
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::condition::InjuryRiskInputs;
+use crate::club::player::events::discipline::CompetitionFamily;
 use crate::club::player::mind::KickoffMind;
 use crate::club::player::player::Player;
 use crate::league::Season;
@@ -6760,7 +6761,7 @@ fn fans_stay_quiet_over_a_backup_being_linked() {
 fn accumulation_ban_and_serving_it_both_reach_the_feed() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     for _ in 0..5 {
-        p.on_match_disciplinary_result(1, 0, 5);
+        p.on_match_disciplinary_result(1, 0, 5, CompetitionFamily::Domestic);
     }
     assert!(p.player_attributes.is_banned);
     assert_eq!(
@@ -6768,7 +6769,7 @@ fn accumulation_ban_and_serving_it_both_reach_the_feed() {
         1,
         "the fifth booking must narrate the accumulation ban"
     );
-    p.serve_suspension_match();
+    p.serve_suspension_match(CompetitionFamily::Domestic);
     assert!(!p.player_attributes.is_banned);
     assert_eq!(
         count_events(&p, &HappinessEventType::SuspensionServed),
@@ -6782,7 +6783,7 @@ fn red_card_ban_does_not_double_narrate() {
     // The red-card moment is RedCardFallout's story — the accumulation
     // event must not fire on the red route.
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-    p.on_match_disciplinary_result(0, 1, 5);
+    p.on_match_disciplinary_result(0, 1, 5, CompetitionFamily::Domestic);
     assert!(p.player_attributes.is_banned);
     assert_eq!(
         count_events(&p, &HappinessEventType::BannedThroughAccumulation),
