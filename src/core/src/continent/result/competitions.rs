@@ -27,6 +27,7 @@ impl ContinentResult {
             (date.month() == 12 && date.day() == 15)
     }
 
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn conduct_competition_draws(&self, data: &mut SimulatorData, date: NaiveDate) {
         let continent_id = self.get_continent_id();
 
@@ -208,6 +209,7 @@ impl ContinentResult {
         qualified
     }
 
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn simulate_continental_competitions(
         &self,
         data: &mut SimulatorData,
@@ -353,7 +355,9 @@ impl ContinentResult {
         };
         let mut runs = {
             let clubs = Self::get_clubs_map(&continent.countries);
-            continent.continental_competitions.fixture_runs(date, &clubs)
+            continent
+                .continental_competitions
+                .fixture_runs(date, &clubs)
         };
         for club in continent
             .countries
@@ -605,7 +609,7 @@ impl ContinentResult {
 #[cfg(test)]
 mod qualification_tests {
     use super::*;
-    use crate::country::core::country::fixture_calendar_tests::country_with_first_teams;
+    use crate::country::country::fixture_calendar_tests::country_with_first_teams;
     use crate::league::LeagueTableRow;
 
     #[test]

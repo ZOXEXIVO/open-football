@@ -99,8 +99,7 @@ impl RestartShape {
         Self::opponents(players, taker).all(|p| {
             p.tactical_position.current_position.is_goalkeeper()
                 || ((p.position - spot).xy().norm() >= Self::RETREAT
-                    && p
-                        .set_piece_station
+                    && p.set_piece_station
                         .is_none_or(|s| (p.position - s).xy().norm() <= Self::ON_STATION))
         })
     }

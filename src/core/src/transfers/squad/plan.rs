@@ -28,7 +28,7 @@ use rustc_hash::FxHashMap;
 
 use chrono::{Datelike, Duration, NaiveDate, Weekday};
 
-use crate::club::core::{DepartedPlayer, DepartureKind};
+use crate::club::process::{DepartedPlayer, DepartureKind};
 use crate::transfers::squad::outlook::DepartureOutlook;
 use crate::transfers::value::PlayerValuationCalculator;
 
@@ -962,7 +962,11 @@ impl SquadPlanner {
             })
             .collect();
         at_risk.sort_by(|a, b| b.0.total_cmp(&a.0));
-        at_risk.into_iter().take(room).map(|(_, slot)| slot).collect()
+        at_risk
+            .into_iter()
+            .take(room)
+            .map(|(_, slot)| slot)
+            .collect()
     }
 
     /// Brief the groups whose BENCH is short of the plan, at tier C.

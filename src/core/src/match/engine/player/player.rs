@@ -4,35 +4,31 @@ use crate::club::player::traits::PlayerTrait;
 #[cfg(feature = "match-logs")]
 use crate::r#match::MatchTally;
 #[cfg(feature = "match-logs")]
-use crate::r#match::player::diagnostics::motion_diag::{self, M_PER_UNIT};
-#[cfg(feature = "match-logs")]
 use crate::r#match::MovementEffort;
 use crate::r#match::PlayerMatchEndStats;
-use crate::r#match::common_states::{
-    ChallengeKind, CounterPress, CounterPressCall, FatigueLoad, LostBall, RecoveryChallenge,
-    TackleEngagement,
-};
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::DefenderCondition;
+use crate::r#match::defenders::states::shared::DefenderCondition;
+use crate::r#match::engine::adherence::Adherence;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::stall::dead_ball_diag::MotionCensus;
-use crate::r#match::engine::adherence::Adherence;
-use crate::r#match::engine::zones::MatchZone;
-#[cfg(feature = "match-logs")]
-use crate::r#match::player::diagnostics::defender_census::BackLine;
 use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK, RunOff};
 use crate::r#match::engine::engine::MATCH_HALF_TIME_MS;
 use crate::r#match::engine::flow::touchline::TouchlineStand;
-use crate::r#match::engine::player::injury::{InjuryRisk, InjuryGrade};
+use crate::r#match::engine::player::injury::{InjuryGrade, InjuryRisk};
 use crate::r#match::engine::result::PlayerMatchPhysicalSnapshot;
 use crate::r#match::engine::tactics::TacticalPositions;
+use crate::r#match::engine::zones::MatchZone;
 use crate::r#match::events::EventCollection;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::ForwardCondition;
-use crate::r#match::goalkeepers::states::common::GoalkeeperCondition;
+use crate::r#match::forwarders::states::shared::ForwardCondition;
+use crate::r#match::goalkeepers::states::shared::GoalkeeperCondition;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::MidfielderCondition;
+use crate::r#match::midfielders::states::shared::MidfielderCondition;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::BackLine;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::motion_diag::{self, M_PER_UNIT};
 use crate::r#match::player::memory::PlayerMemory;
 use crate::r#match::player::state::{PlayerMatchState, PlayerState};
 use crate::r#match::player::statistics::MatchPlayerStatistics;
@@ -42,6 +38,10 @@ use crate::r#match::player::transition::TransitionSource;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::waypoints::census::WaypointCensus;
 use crate::r#match::player::waypoints::{TacticalRoutes, WaypointExit, WaypointManager};
+use crate::r#match::shared_states::{
+    ChallengeKind, CounterPress, CounterPressCall, FatigueLoad, LostBall, RecoveryChallenge,
+    TackleEngagement,
+};
 use crate::r#match::{
     ActivityIntensity, ConditionContext, GameTickContext, MatchContext, StateProcessingContext,
 };

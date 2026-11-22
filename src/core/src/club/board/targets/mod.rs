@@ -82,6 +82,7 @@ pub struct SeasonBudget;
 impl SeasonBudget {
     /// Size this season's transfer chest, wage mandate, squad limits and
     /// league expectation from the club's standing.
+    #[expect(clippy::too_many_lines)]
     pub fn derive(
         board_ctx: &BoardContext,
         vision: &ClubVision,

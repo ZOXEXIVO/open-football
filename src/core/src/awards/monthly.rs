@@ -347,6 +347,7 @@ impl MonthlyAwardsTick {
         })
     }
 
+    #[expect(clippy::too_many_lines)]
     fn apply(data: &mut SimulatorData, pending: Vec<PendingMonthlyAward>) {
         let now = data.date.date();
         for entry in pending {

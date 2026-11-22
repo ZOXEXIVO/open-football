@@ -56,6 +56,7 @@ pub struct PositionWeights;
 
 impl PositionWeights {
     /// Look up the 37-slot weight vector for an exact playing position.
+    #[expect(clippy::too_many_lines)]
     pub fn for_position(position: PlayerPositionType) -> [f32; SKILL_COUNT] {
         let mut w = [0.7f32; SKILL_COUNT];
         w[SK_MATCH_READINESS] = 0.0;

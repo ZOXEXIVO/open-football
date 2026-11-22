@@ -454,6 +454,7 @@ impl<'a> SquadReview<'a> {
     /// STEP 3 — the formation gaps become requests, and the planner turns them
     /// into the brief everything downstream funds from. Returns the ledger the
     /// rest of the review spends.
+    #[expect(clippy::too_many_lines)]
     fn open_briefs(&self) -> ReviewLedger {
         let club = self.club;
         let date = self.date;
@@ -1044,6 +1045,7 @@ impl<'a> SquadReview<'a> {
 
     /// STEP 4b — youth development signings. Elite and Continental clubs farm
     /// prospects actively; smaller ones sign the ones they can reach.
+    #[expect(clippy::too_many_lines)]
     fn youth_requests(&self, ledger: &mut ReviewLedger) {
         let club = self.club;
         let date = self.date;

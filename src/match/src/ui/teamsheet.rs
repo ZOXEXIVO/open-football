@@ -145,6 +145,7 @@ impl TeamSheet {
     }
 
     /// One club's sheet: its name, its eleven, and its bench under a rule.
+    #[expect(clippy::too_many_lines)]
     fn side(
         body: &mut RelatedSpawnerCommands<ChildOf>,
         faces: &Faces,

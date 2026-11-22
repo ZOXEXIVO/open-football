@@ -619,6 +619,7 @@ impl ListingBroadcast {
     /// [`DestinationAppeal`] rather than reputation alone: a prospect is placed
     /// where he will play and be coached, and no borrower should become a farm
     /// team.
+    #[expect(clippy::too_many_lines)]
     fn loan_destinations(
         country: &Country,
         b: &Broadcastable,

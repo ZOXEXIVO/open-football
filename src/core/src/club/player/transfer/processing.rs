@@ -1,10 +1,10 @@
 use crate::club::player::StuckCareerScan;
 use crate::club::player::adaptation::{AdaptationFailureSignals, AdaptationSquadContext};
 use crate::club::player::behaviour_config::HappinessConfig;
-use crate::club::player::core::player::TransferRequestReason;
 use crate::club::player::mind::{
     CareerArc, GoalBridge, GoalEvidence, GoalKind, GoalOrigin, GoalStatus, MindClock,
 };
+use crate::club::player::model::player::TransferRequestReason;
 use crate::club::player::player::Player;
 use crate::club::player::transfer::stage::{BigStagePull, BigStagePullContext};
 use crate::club::{Person, PlayerMailbox, PlayerResult, PlayerStatusType};
@@ -1412,6 +1412,7 @@ impl Player {
     /// Re-evaluate every reason every tick. A reason in the set *now* is
     /// unresolved; a reason that has gone silent has gone away — which is
     /// what lets `Req` clear only when nothing is left.
+    #[expect(clippy::too_many_lines)]
     fn active_transfer_reasons(
         &mut self,
         now: NaiveDate,
@@ -1893,9 +1894,9 @@ mod career_desire_tests {
     use super::*;
     use crate::club::player::adaptation::AdaptationFailureSignals;
     use crate::club::player::builder::PlayerBuilder;
-    use crate::club::player::core::player::SquadStandingView;
     use crate::club::player::language::{Language, PlayerLanguage};
     use crate::club::player::mind::{CareerDreamReview, CareerPlan, MindSituation, PlanStage};
+    use crate::club::player::model::player::SquadStandingView;
     use crate::club::player::transfer::request::TransferRequestStanding;
     use crate::shared::fullname::FullName;
     use crate::{
@@ -3666,7 +3667,7 @@ mod career_desire_tests {
 
     #[test]
     fn language_tutor_request_for_struggling_foreign_player() {
-        use crate::club::player::core::player::SquadSocialView;
+        use crate::club::player::model::player::SquadSocialView;
         let today = d(2026, 5, 1);
         let mut p = build(25, 12.0, 10.0, 10.0, 11.0, 30, 130, 5000, 90, today);
         // No local language proficiency. Adapt mid-band — pushes

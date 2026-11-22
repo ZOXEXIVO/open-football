@@ -24,7 +24,7 @@
 
 use super::catalog::GoalKind;
 use super::evidence::{GoalEvidence, GoalOrigin};
-use crate::club::player::core::player::TransferRequestReason;
+use crate::club::player::model::player::TransferRequestReason;
 
 /// How one legacy reason maps onto a want.
 #[derive(Debug, Clone, Copy)]

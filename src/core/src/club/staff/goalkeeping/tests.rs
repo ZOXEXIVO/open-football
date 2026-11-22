@@ -493,7 +493,12 @@ fn shaken_room(room: &mut KeeperRoom, shaken_id: u32) {
     for week in 0..3 {
         memory.observe(&match_seen(shaken_id, 1, week), &profile);
     }
-    room.perceive(&lead, 0.66, |_, player_id| (0.66, memory.get(player_id)), today());
+    room.perceive(
+        &lead,
+        0.66,
+        |_, player_id| (0.66, memory.get(player_id)),
+        today(),
+    );
 }
 
 #[test]
@@ -565,7 +570,12 @@ fn read_at(room: &mut KeeperRoom, keeper_id: u32, standard: f32) {
         seen.standard_of_football = standard;
         memory.observe(&seen, &profile);
     }
-    room.perceive(&lead, 0.70, |_, player_id| (standard, memory.get(player_id)), today());
+    room.perceive(
+        &lead,
+        0.70,
+        |_, player_id| (standard, memory.get(player_id)),
+        today(),
+    );
 }
 
 #[test]
@@ -588,7 +598,11 @@ fn a_blocked_twenty_year_old_is_loaned_to_the_level_between() {
     assert!(target > 0.58 && target < 0.70, "{target}");
 
     let unread = review(&fixture.assemble(), &KeeperRoomPlan::new());
-    assert_eq!(loan_aim(&unread), None, "an unread boy goes out on the club's ordinary terms");
+    assert_eq!(
+        loan_aim(&unread),
+        None,
+        "an unread boy goes out on the club's ordinary terms"
+    );
 }
 
 // ── The room counts every keeper who can play for the club ──
@@ -600,8 +614,16 @@ fn a_borrowed_keeper_clearly_better_than_the_clubs_own_is_declared_number_one() 
         .borrowed(2, 25, 150)
         .academy(3, 17, 80);
     let plan = review(&fixture.assemble(), &KeeperRoomPlan::new());
-    assert_eq!(plan.number_one(), Some(2), "the borrowed keeper takes his place on his level");
-    assert_eq!(plan.deputy(), Some(1), "and the best keeper the club owns is his deputy");
+    assert_eq!(
+        plan.number_one(),
+        Some(2),
+        "the borrowed keeper takes his place on his level"
+    );
+    assert_eq!(
+        plan.deputy(),
+        Some(1),
+        "and the best keeper the club owns is his deputy"
+    );
 }
 
 #[test]
@@ -611,7 +633,11 @@ fn the_succession_looks_past_a_borrowed_keeper() {
     // man goes back.
     let fixture = RoomFixture::new().senior(1, 35, 140).borrowed(2, 22, 132);
     let plan = review(&fixture.assemble(), &KeeperRoomPlan::new());
-    assert_eq!(plan.heir(), None, "a keeper who goes back in June is nobody's heir");
+    assert_eq!(
+        plan.heir(),
+        None,
+        "a keeper who goes back in June is nobody's heir"
+    );
     assert!(
         plan.succession() >= KeeperSuccession::Pressing,
         "and the clock runs on the keeper the club owns"
@@ -632,7 +658,12 @@ fn the_succession_looks_past_a_borrowed_keeper() {
 
 // ── The deputy's competition is declared once ──
 
-fn review_under(room: &KeeperRoom, previous: &KeeperRoomPlan, cup_reach: f32, on: NaiveDate) -> KeeperRoomPlan {
+fn review_under(
+    room: &KeeperRoom,
+    previous: &KeeperRoomPlan,
+    cup_reach: f32,
+    on: NaiveDate,
+) -> KeeperRoomPlan {
     let outcome = GoalkeepingDepartment::review(
         room,
         previous,
@@ -658,18 +689,31 @@ fn cup_tie(round: u8, total_rounds: u8) -> KeeperFixture {
 
 #[test]
 fn a_cup_declared_to_the_semi_final_is_the_deputys_to_the_semi_and_the_number_ones_final() {
-    let room = RoomFixture::new().senior(1, 29, 150).senior(2, 28, 138).assemble();
+    let room = RoomFixture::new()
+        .senior(1, 29, 150)
+        .senior(2, 28, 138)
+        .assemble();
     // Five rounds: the semi-final is three quarters of the way through.
     let plan = review_under(&room, &KeeperRoomPlan::new(), 0.75, today());
-    let declared = plan.deputy_competition().expect("a ready deputy is given the cup");
+    let declared = plan
+        .deputy_competition()
+        .expect("a ready deputy is given the cup");
     assert_eq!((declared.number_one, declared.deputy), (1, 2));
 
     let brief = KeeperSelectionBrief::from_plan(&plan, today());
     let both = [1, 2];
     for round in 1..=4 {
-        assert_eq!(brief.keeper_for(&cup_tie(round, 5), &both), Some(2), "round {round}");
+        assert_eq!(
+            brief.keeper_for(&cup_tie(round, 5), &both),
+            Some(2),
+            "round {round}"
+        );
     }
-    assert_eq!(brief.keeper_for(&cup_tie(5, 5), &both), Some(1), "the final");
+    assert_eq!(
+        brief.keeper_for(&cup_tie(5, 5), &both),
+        Some(1),
+        "the final"
+    );
     assert!(
         plan.advice_for(2)
             .any(|r| r.advice == KeeperAdvice::HandHimTheCup)
@@ -678,7 +722,10 @@ fn a_cup_declared_to_the_semi_final_is_the_deputys_to_the_semi_and_the_number_on
 
 #[test]
 fn a_manager_who_lets_him_finish_starts_the_deputy_in_the_final() {
-    let room = RoomFixture::new().senior(1, 29, 150).senior(2, 28, 138).assemble();
+    let room = RoomFixture::new()
+        .senior(1, 29, 150)
+        .senior(2, 28, 138)
+        .assemble();
     let plan = review_under(&room, &KeeperRoomPlan::new(), 1.0, today());
     let brief = KeeperSelectionBrief::from_plan(&plan, today());
     assert_eq!(brief.keeper_for(&cup_tie(5, 5), &[1, 2]), Some(2));
@@ -688,7 +735,10 @@ fn a_manager_who_lets_him_finish_starts_the_deputy_in_the_final() {
 fn a_deputy_who_is_not_ready_is_given_no_competition() {
     // A 17-year-old far below first-team standard is the only man behind
     // the number one.
-    let room = RoomFixture::new().senior(1, 29, 150).academy(2, 17, 90).assemble();
+    let room = RoomFixture::new()
+        .senior(1, 29, 150)
+        .academy(2, 17, 90)
+        .assemble();
     let plan = review_under(&room, &KeeperRoomPlan::new(), 1.0, today());
     assert_eq!(plan.deputy(), Some(2));
     assert!(plan.deputy_competition().is_none());
@@ -707,7 +757,10 @@ fn a_deputy_who_is_not_ready_is_given_no_competition() {
 
 #[test]
 fn the_declaration_stands_through_the_season_and_is_made_again_when_the_order_changes() {
-    let room = RoomFixture::new().senior(1, 29, 150).senior(2, 28, 138).assemble();
+    let room = RoomFixture::new()
+        .senior(1, 29, 150)
+        .senior(2, 28, 138)
+        .assemble();
     let first = review_under(&room, &KeeperRoomPlan::new(), 0.75, today());
     let declared_on = first.deputy_competition().unwrap().declared_on;
 
@@ -719,15 +772,24 @@ fn the_declaration_stands_through_the_season_and_is_made_again_when_the_order_ch
     assert_eq!((standing.reach, standing.declared_on), (0.75, declared_on));
 
     // A new deputy is a new declaration.
-    let changed = RoomFixture::new().senior(1, 29, 150).senior(3, 27, 140).assemble();
+    let changed = RoomFixture::new()
+        .senior(1, 29, 150)
+        .senior(3, 27, 140)
+        .assemble();
     let third = review_under(&changed, &second, 1.0, later);
     let renewed = third.deputy_competition().unwrap();
-    assert_eq!((renewed.deputy, renewed.reach, renewed.declared_on), (3, 1.0, later));
+    assert_eq!(
+        (renewed.deputy, renewed.reach, renewed.declared_on),
+        (3, 1.0, later)
+    );
 
     // And so is a new season.
     let next_season = today() + chrono::Duration::days(370);
     let fourth = review_under(&room, &first, 1.0, next_season);
-    assert_eq!(fourth.deputy_competition().unwrap().declared_on, next_season);
+    assert_eq!(
+        fourth.deputy_competition().unwrap().declared_on,
+        next_season
+    );
 }
 
 // ── The goalkeeper is the declared one ──
@@ -758,7 +820,11 @@ fn the_number_one_plays_every_fixture_that_is_not_the_deputys() {
     let brief = settled_brief();
     let all = [1, 2, 3];
     for stakes in [0.1, 0.45, 0.66, 0.9, 1.0] {
-        assert_eq!(brief.keeper_for(&league(stakes), &all), Some(1), "stakes {stakes}");
+        assert_eq!(
+            brief.keeper_for(&league(stakes), &all),
+            Some(1),
+            "stakes {stakes}"
+        );
     }
     // The cup is the deputy's up to the quarter-final of a five-round cup,
     // whoever the opponent is.
@@ -770,9 +836,21 @@ fn the_number_one_plays_every_fixture_that_is_not_the_deputys() {
 #[test]
 fn the_next_keeper_in_the_order_plays_when_the_declared_one_cannot() {
     let brief = settled_brief();
-    assert_eq!(brief.keeper_for(&league(0.7), &[2, 3]), Some(2), "the number one is injured");
+    assert_eq!(
+        brief.keeper_for(&league(0.7), &[2, 3]),
+        Some(2),
+        "the number one is injured"
+    );
     assert_eq!(brief.keeper_for(&league(0.7), &[3]), Some(3));
-    assert_eq!(brief.keeper_for(&cup_tie(1, 5), &[1, 3]), Some(1), "the deputy is injured");
-    assert_eq!(brief.keeper_for(&league(0.7), &[9]), None, "nobody in the order can play");
+    assert_eq!(
+        brief.keeper_for(&cup_tie(1, 5), &[1, 3]),
+        Some(1),
+        "the deputy is injured"
+    );
+    assert_eq!(
+        brief.keeper_for(&league(0.7), &[9]),
+        None,
+        "nobody in the order can play"
+    );
     assert_eq!(brief.next_in_order(&[2, 3]), Some(2));
 }

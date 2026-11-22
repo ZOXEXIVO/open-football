@@ -21,10 +21,10 @@
 //! that no tie-break can hide.
 
 use crate::club::PlayerPositionType;
-use crate::club::staff::{CoachSquadPlan, PlannedRole};
 use crate::club::staff::perception::{
     AbilityEstimator, CoachProfile, DevelopmentFormEvidence, PotentialEstimator,
 };
+use crate::club::staff::{CoachSquadPlan, PlannedRole};
 use crate::r#match::player::MatchPlayer;
 use crate::utils::DateUtils;
 use crate::{Player, PlayerStatusType, Tactics, TeamType};
@@ -33,8 +33,8 @@ use rustc_hash::FxHashMap;
 use std::cmp::Ordering;
 
 use super::helpers;
-use super::helpers::SlotFit;
 use super::helpers::KeeperAvailability;
+use super::helpers::SlotFit;
 
 /// Development-fixture selector. Built once per side per matchday by the
 /// public rotation API in `mod.rs`; owns the whole XI + bench pick.
@@ -101,6 +101,7 @@ impl DevelopmentSelection<'_> {
 
     /// Starting XI: planned keeper first, then per-slot picks balancing
     /// positional fit against each candidate's minutes deficit.
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn select_starting_eleven(&self, available: &[&Player]) -> Vec<MatchPlayer> {
         let mut squad: Vec<MatchPlayer> = Vec::with_capacity(helpers::DEFAULT_SQUAD_SIZE);
         let mut used_ids: Vec<u32> = Vec::new();

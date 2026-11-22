@@ -8,9 +8,9 @@ use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::{
     Achievement, CaptaincyAssigner, ChemistryContextBuilder, CompetitionType, MatchOutcome,
     MatchResultInfo, MentorshipProcessor, PlayingStandard, PreventiveRestPass, SquadLadder,
-    SquadSocialViewBuilder,
-    SquadStandingViewBuilder, SquadStatusUpdater, TeamBuilder, TeamCoachingScores,
-    TeamFixtureWindow, TeamLeagueHistory, TeamSocialDebug, TeamSocialSnapshot, TeamType,
+    SquadSocialViewBuilder, SquadStandingViewBuilder, SquadStatusUpdater, TeamBuilder,
+    TeamCoachingScores, TeamFixtureWindow, TeamLeagueHistory, TeamSocialDebug, TeamSocialSnapshot,
+    TeamType,
 };
 use crate::context::GlobalContext;
 use crate::shared::CurrencyValue;
@@ -364,7 +364,11 @@ impl Team {
         }
     }
 
-    pub(crate) fn revise_coach_squad_plan(&mut self, date: NaiveDate, development_lean: Option<f32>) {
+    pub(crate) fn revise_coach_squad_plan(
+        &mut self,
+        date: NaiveDate,
+        development_lean: Option<f32>,
+    ) {
         self.read_the_market();
         if !self
             .staffs

@@ -587,6 +587,7 @@ pub struct MoraleEventCatalog {
 }
 
 impl Default for MoraleEventCatalog {
+    #[expect(clippy::too_many_lines)]
     fn default() -> Self {
         // Magnitudes match the canonical (most common) inline value at each
         // emit site at the time of extraction. Multi-magnitude sites that
@@ -941,6 +942,7 @@ impl MoraleEventCatalog {
     /// Default magnitude for `source`. Lookup is a match arm — switching
     /// from a HashMap means O(1) without hashing and exhaustiveness checks
     /// flag missing variants if the enum grows.
+    #[expect(clippy::too_many_lines)]
     pub fn magnitude(&self, source: HappinessEventType) -> f32 {
         use crate::HappinessEventType::*;
         match source {

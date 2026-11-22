@@ -1,9 +1,9 @@
 pub mod collector;
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::slug::{PlayerPage, resolve_player_page};
-use crate::common::season_step::SeasonStep;
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::slug::{PlayerPage, resolve_player_page};
+use crate::shared::season_step::SeasonStep;
 use crate::player::events::PlayerEventsCounter;
 use crate::player::matches::collector::PlayerMatchCollector;
 use crate::player::newspaper::PlayerNewsCounter;
@@ -80,6 +80,7 @@ pub struct PlayerMatchResult {
     pub away_goals: u8,
 }
 
+#[expect(clippy::too_many_lines)]
 pub async fn player_matches_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<PlayerMatchesRequest>,

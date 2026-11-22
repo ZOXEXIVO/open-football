@@ -42,6 +42,7 @@ use crate::Team;
 use crate::club::staff::{CoachMatchObservation, CoachProfile};
 
 impl LeagueResult {
+    #[expect(clippy::too_many_lines)]
     pub(super) fn process_match_events<D: LeagueProcessAccess>(
         result: &mut MatchResult,
         data: &mut D,
@@ -235,6 +236,7 @@ impl LeagueResult {
     /// This is especially important for foreign loanees: once they return
     /// home, active country-local scouting can no longer see them, but clubs
     /// should still remember the player by id and profile.
+    #[expect(clippy::too_many_lines)]
     fn record_match_scouting_memory<D: LeagueProcessAccess>(
         details: &MatchResultRaw,
         data: &mut D,
@@ -454,6 +456,7 @@ impl LeagueResult {
     ///   CleanSheetFee  → flat bonus for GK on a clean sheet
     ///
     /// Bonuses are charged to the employing club as a player-wage expense.
+    #[expect(clippy::too_many_lines)]
     fn process_contract_bonuses<D: LeagueProcessAccess>(
         result: &MatchResult,
         details: &MatchResultRaw,
@@ -660,6 +663,7 @@ impl LeagueResult {
     /// effectiveness; per-player magnitude uses personality (pressure,
     /// temperament, important_matches) via
     /// `club::team::talks::team_talks::apply_team_talk`.
+    #[expect(clippy::too_many_lines)]
     fn apply_matchday_team_talks<D: LeagueProcessAccess>(
         result: &MatchResult,
         details: &MatchResultRaw,
@@ -920,6 +924,7 @@ impl LeagueResult {
     /// We update underlying relations and emit at most two visible
     /// happiness events per player per match, so the player history
     /// surfaces meaningful incidents without overwhelming readers.
+    #[expect(clippy::too_many_lines)]
     fn apply_match_relationship_updates<D: LeagueProcessAccess>(
         result: &MatchResult,
         details: &MatchResultRaw,
@@ -1781,6 +1786,7 @@ impl MoraleRatingShaper {
     }
 }
 
+#[expect(clippy::too_many_lines)]
 fn compute_effective_ratings<D: LeagueProcessAccess>(
     details: &MatchResultRaw,
     data: &D,
@@ -2169,6 +2175,7 @@ fn reputation_weights<D: LeagueProcessAccess>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_lines)]
 fn dispatch_match_outcomes<D: LeagueProcessAccess>(
     side: &FieldSquad,
     team_scored: u8,

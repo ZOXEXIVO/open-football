@@ -2,7 +2,6 @@
 //! safety nets, the standing-ball notification dance, and the per-tick
 //! ownership claim that decides who is on the ball.
 
-use crate::r#match::engine::officiating::restart_shape::RestartShape;
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::ball::ball::flight::motion::Carrier;
@@ -11,15 +10,16 @@ use crate::r#match::engine::ball::ball::{
     AerialReach, AwaitedRestart, Ball, CONTROL_DISTANCE, LOOSE_CLAIM_DISTANCE, PlayerReach,
     RestartQuiet,
 };
+use crate::r#match::engine::officiating::restart_shape::RestartShape;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::psychology::lapse::lapse_diag;
 use crate::r#match::engine::psychology::{ActionLapse, LapseFamily, PsychState};
 use crate::r#match::events::EventCollection;
-use crate::r#match::common_states::{
-    BlockChallenge, ChallengeKind, ChallengeMoment, TackleDecision, TackleOutcome,
-};
 use crate::r#match::player::events::{FoulCommitted, FoulSource, PlayerEvent};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::shared_states::{
+    BlockChallenge, ChallengeKind, ChallengeMoment, TackleDecision, TackleOutcome,
+};
 use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart};
 use nalgebra::Vector3;
 use std::env::var;
@@ -871,7 +871,10 @@ impl Ball {
         striker_id: u32,
         events: &mut EventCollection,
     ) -> bool {
-        if !self.offside_snapshot.is_some_and(|snap| snap.flags(striker_id)) {
+        if !self
+            .offside_snapshot
+            .is_some_and(|snap| snap.flags(striker_id))
+        {
             return false;
         }
         let Some(offender) = players.iter().find(|p| p.id == striker_id) else {
@@ -1191,6 +1194,7 @@ impl Ball {
         start + (velocity / speed) * BallRoll::range(speed)
     }
 
+    #[expect(clippy::too_many_lines)]
     fn try_pass_target_claim(
         &mut self,
         context: &MatchContext,
@@ -1741,6 +1745,7 @@ impl Ball {
         notified_players
     }
 
+    #[expect(clippy::too_many_lines)]
     fn check_ball_ownership(
         &mut self,
         context: &MatchContext,
@@ -2059,8 +2064,7 @@ impl Ball {
         // bigger absolute edge the higher up the pyramid the match is
         // played; the scores are of squads measured against the standard
         // of the match (`MatchStandard::measure`), so it does not.
-        let takeover_margin =
-            |owner_score: f32| owner_score * (TAKEOVER_ADVANTAGE_THRESHOLD - 1.0);
+        let takeover_margin = |owner_score: f32| owner_score * (TAKEOVER_ADVANTAGE_THRESHOLD - 1.0);
 
         // Minute derived from cached tick — `current_tick_cached` is
         // refreshed every tick via `update*`, so it tracks the same
@@ -2163,10 +2167,11 @@ impl Ball {
                 // Ownership change approved - reset duration and set cooldown
                 #[cfg(feature = "match-logs")]
                 if self.current_owner.is_some() {
-                    context
-                        .defender_census
-                        .borrow_mut()
-                        .tag_take(TakeRule::ScanTakeover, player.id, self.current_tick_cached);
+                    context.defender_census.borrow_mut().tag_take(
+                        TakeRule::ScanTakeover,
+                        player.id,
+                        self.current_tick_cached,
+                    );
                 }
                 self.previous_owner = self.current_owner;
                 self.current_owner = Some(player.id);

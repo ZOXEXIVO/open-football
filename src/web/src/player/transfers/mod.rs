@@ -1,7 +1,7 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::slug::{PlayerPage, resolve_player_page};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::slug::{PlayerPage, resolve_player_page};
 use crate::player::events::PlayerEventsCounter;
 use crate::player::newspaper::PlayerNewsCounter;
 use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
@@ -229,6 +229,7 @@ fn listing_status_to_key(status: &TransferListingStatus) -> &'static str {
     }
 }
 
+#[expect(clippy::too_many_lines)]
 pub async fn player_transfers_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<PlayerTransfersRequest>,

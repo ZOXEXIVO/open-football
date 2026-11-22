@@ -203,10 +203,14 @@ impl Player {
             );
         let left_out = matches!(ctx.scope, SelectionDecisionScope::LeftOutOfMatchdaySquad);
 
-        let magnitude = compute_drop_magnitude(self, &ctx);
+        let reaction = MatchDropReaction {
+            player: self,
+            ctx: &ctx,
+        };
+        let magnitude = reaction.magnitude();
         let severity = HappinessEventSeverity::from_magnitude(magnitude);
-        let cause = drop_cause(&ctx);
-        let follow_up = drop_follow_up(self, &ctx);
+        let cause = reaction.cause();
+        let follow_up = reaction.follow_up();
         let mut event_ctx =
             HappinessEventContext::new(cause, severity, HappinessEventScope::MatchDay);
         if let Some(fu) = follow_up {
@@ -310,7 +314,7 @@ impl Player {
         // every downstream consumer of `effective_rating` saw the
         // dampened value, leaving the user staring at two different
         // numbers for the same match.
-        let s = stats_bucket_mut(self, o, home_slug);
+        let s = self.match_stats_bucket_mut(o, home_slug);
         s.record_match_line(
             o.stats,
             o.effective_rating,
@@ -385,6 +389,19 @@ impl Player {
             return;
         }
 
+        self.record_competitive_milestones(o);
+        self.record_red_card_fallout(o);
+        self.record_performance_memories(o);
+        self.record_first_club_goal(o);
+        self.record_scored_against_former_club(o);
+        self.record_substitute_impact(o);
+        self.record_clean_sheet_pride(o);
+        self.record_rating_debrief(o);
+        self.record_fan_and_media_reactions(o);
+        self.record_derby_outcome(o);
+    }
+
+    fn record_competitive_milestones(&mut self, o: &MatchOutcome<'_>) {
         // Senior debut, drought tracking, milestones — derived purely
         // from the post-match competitive totals so we don't add a
         // per-match history Vec. Cooldowns gate against duplicate fires
@@ -395,7 +412,9 @@ impl Player {
         self.record_hat_tricks(o);
         self.record_fans_chant_and_media_pressure(o);
         self.record_leadership_emergence(o);
+    }
 
+    fn record_red_card_fallout(&mut self, o: &MatchOutcome<'_>) {
         // Sent off — embarrassing, plus the suspension fallout. Flat hit.
         if o.stats.red_cards > 0 {
             let mp = MatchPerfContextBuilder::costly_error(self, o);
@@ -416,7 +435,9 @@ impl Player {
             );
             self.remember_match(EpisodeKind::SentOff, ActorRef::NONE, o);
         }
+    }
 
+    fn record_performance_memories(&mut self, o: &MatchOutcome<'_>) {
         // What the match itself says about him. A costly error is a goal
         // his own failure gave away — an error that led to one, a flapped
         // cross, an own goal — never a low rating with the defence to blame.
@@ -443,7 +464,9 @@ impl Player {
         {
             self.remember_match(EpisodeKind::MatchSavingDisplay, ActorRef::NONE, o);
         }
+    }
 
+    fn record_first_club_goal(&mut self, o: &MatchOutcome<'_>) {
         // First competitive goal for this club. Read against everything
         // he has done for the club across every spell there — frozen
         // seasons, this season's closed spells and the live buckets — so
@@ -483,7 +506,9 @@ impl Player {
                 self.remember_match(EpisodeKind::FirstGoalForClub, ActorRef::NONE, o);
             }
         }
+    }
 
+    fn record_scored_against_former_club(&mut self, o: &MatchOutcome<'_>) {
         // Scored against the club that sold him — one of football's
         // permanent story beats. Competitive matches only; keyed on the
         // opponent CLUB id against `sold_from` (the selling club), which
@@ -504,7 +529,9 @@ impl Player {
                 );
             }
         }
+    }
 
+    fn record_substitute_impact(&mut self, o: &MatchOutcome<'_>) {
         // Substitute impact: came on and made it count. Skip if already
         // tagged POM — no point double-firing for the same standout shift.
         if !o.is_motm
@@ -532,7 +559,9 @@ impl Player {
                 happiness_ctx,
             );
         }
+    }
 
+    fn record_clean_sheet_pride(&mut self, o: &MatchOutcome<'_>) {
         // Clean sheet pride for goalkeepers and defenders — both roles
         // genuinely care about a shutout. Starters get the full event;
         // unused subs aren't on the field but still share the team result
@@ -561,18 +590,25 @@ impl Player {
                 happiness_ctx,
             );
         }
+    }
 
-        // Match-rating debrief. The catastrophic floor is now its own event
-        // (`CostlyMistake`) instead of overloaded ManagerCriticism, mid-low
-        // ratings still fire the manager event for a routine talking-to,
-        // and the derby effect is moved out to `DerbyHero` / `DerbyDefeat`
-        // so we don't double-count derby weight on top of personal form.
-        if o.stats.match_rating >= 1.0 {
-            if o.effective_rating < 5.5 {
-                let extra = (5.5 - o.effective_rating).clamp(0.0, 2.0);
-                let mut mp = MatchPerformanceEventContext::new(
-                    MatchPerformanceKind::CostlyErrorUnderPressure,
-                )
+    fn record_rating_debrief(&mut self, o: &MatchOutcome<'_>) {
+        if o.stats.match_rating < 1.0 {
+            return;
+        }
+        if o.effective_rating < 5.5 {
+            self.record_costly_mistake(o);
+        } else if o.effective_rating < 6.3 {
+            self.record_manager_criticism(o);
+        } else if o.effective_rating >= 7.5 {
+            self.record_manager_encouragement(o);
+        }
+    }
+
+    fn record_costly_mistake(&mut self, o: &MatchOutcome<'_>) {
+        let extra = (5.5 - o.effective_rating).clamp(0.0, 2.0);
+        let mut mp =
+            MatchPerformanceEventContext::new(MatchPerformanceKind::CostlyErrorUnderPressure)
                 .with_rating(o.effective_rating)
                 .with_minutes(o.stats.minutes_played)
                 .with_team_won(o.team_won)
@@ -580,132 +616,148 @@ impl Player {
                 .with_derby(o.is_derby)
                 .with_cup(o.is_cup)
                 .with_evidence(MatchPerformanceEvidence::LowRating);
-                if o.is_derby {
-                    mp = mp.with_evidence(MatchPerformanceEvidence::DerbyFixture);
-                }
-                if o.is_cup {
-                    mp = mp.with_evidence(MatchPerformanceEvidence::CupTie);
-                }
-                if self.attributes.pressure <= 7.0 {
-                    mp = mp.with_evidence(MatchPerformanceEvidence::LowPressurePersonality);
-                }
-                let happiness_ctx = HappinessEventContext::new(
-                    HappinessEventCause::PoorFormPressure,
-                    HappinessEventSeverity::from_magnitude(2.0 + extra),
-                    HappinessEventScope::MatchDay,
-                )
-                .with_match_performance_context(mp);
-                self.happiness.add_event_with_context(
-                    HappinessEventType::CostlyMistake,
-                    -(2.0 + extra),
-                    None,
-                    happiness_ctx,
-                );
-            } else if o.effective_rating < 6.3 {
-                let mag = -(2.0 + (6.3 - o.effective_rating).clamp(0.0, 0.8));
-                let recent_mgr_criticism = self.happiness.recent_events.iter().any(|e| {
-                    e.event_type == HappinessEventType::ManagerCriticism && e.days_ago <= 30
-                });
-                // Concrete football reason picked from the post-match
-                // outcome. Computed independently of whether earlier
-                // criticism is on file — the reason is the stable
-                // identity the cooldown gate keys on, while
-                // `recent_mgr_criticism` only escalates tone /
-                // follow-up below. Conflating "repeated incident" into
-                // the reason itself would silently bypass the
-                // reason-aware cooldown the next match (a new reason
-                // would appear to fire from the gate's perspective).
-                let reason = if o.stats.red_cards > 0 {
-                    ManagerCriticismReason::PublicComplaint
-                } else if self.skills.mental.work_rate <= 8.0 {
-                    ManagerCriticismReason::PoorPressing
-                } else if self.skills.mental.teamwork <= 8.0 {
-                    ManagerCriticismReason::MissedAssignment
-                } else if self.attributes.professionalism <= 8.0 {
-                    ManagerCriticismReason::PoorBodyLanguage
-                } else {
-                    ManagerCriticismReason::IgnoredTacticalInstruction
-                };
-                let topic = match reason {
-                    ManagerCriticismReason::PoorBodyLanguage => ManagerInteractionTopic::Attitude,
-                    ManagerCriticismReason::IgnoredTacticalInstruction
-                    | ManagerCriticismReason::MissedAssignment
-                    | ManagerCriticismReason::PoorPressing => ManagerInteractionTopic::Tactical,
-                    ManagerCriticismReason::PublicComplaint => ManagerInteractionTopic::Discipline,
-                    _ => ManagerInteractionTopic::Performance,
-                };
-                let tone = if recent_mgr_criticism {
-                    ManagerInteractionTone::Stern
-                } else {
-                    ManagerInteractionTone::Honest
-                };
-                let acceptance = if self.skills.mental.determination >= 15.0 {
-                    PlayerAcceptance::Motivated
-                } else if self.attributes.professionalism <= 8.0 {
-                    PlayerAcceptance::Resented
-                } else {
-                    PlayerAcceptance::Discouraged
-                };
-                let mctx = ManagerInteractionEventContext::new(topic, tone, acceptance)
-                    .with_criticism_reason(reason)
-                    .with_match_rating(o.effective_rating)
-                    .with_repeated_recently(recent_mgr_criticism);
-                let happiness_ctx = HappinessEventContext::new(
-                    HappinessEventCause::PoorFormPressure,
-                    HappinessEventSeverity::from_magnitude(mag),
-                    HappinessEventScope::MatchDay,
-                )
-                .with_manager_interaction_context(mctx)
-                .with_follow_up(if recent_mgr_criticism {
-                    HappinessEventFollowUp::DressingRoomDamageRisk
-                } else {
-                    HappinessEventFollowUp::ManagerInterventionRisk
-                });
-                // Reason-aware 14-day cooldown — only the SAME criticism
-                // reason inside the window is throttled. A poor-form
-                // stretch that earned a "PoorPressing" row will let a
-                // subsequent red-card "PublicComplaint" through, since
-                // they're materially different manager talks. The
-                // suppressed magnitude still wears the player down via
-                // a durable hidden form-pressure accumulator (read in
-                // `recalculate_morale`); we don't push to
-                // `adjust_morale` directly because the next weekly
-                // recalculation rebuilds morale from factors + events
-                // and would silently drop a transient nudge.
-                let blocked_by_reason = self
-                    .happiness
-                    .has_recent_manager_criticism_with_reason(reason, 14);
-                let emitted = if blocked_by_reason {
-                    false
-                } else {
-                    self.happiness.add_event_with_context(
-                        HappinessEventType::ManagerCriticism,
-                        mag,
-                        None,
-                        happiness_ctx,
-                    );
-                    true
-                };
-                if !emitted {
-                    self.happiness.accumulate_hidden_form_pressure(mag);
-                }
-            } else if o.effective_rating >= 7.5 {
-                let mag = 1.5 + (o.effective_rating - 7.5).clamp(0.0, 2.5);
-                let event_ctx = MatchSupportContextBuilder::manager_encouragement(self, o, mag);
-                self.happiness.add_event_with_context_and_cooldown(
-                    HappinessEventType::ManagerEncouragement,
-                    mag,
-                    None,
-                    event_ctx,
-                    14,
-                );
-            }
+        if o.is_derby {
+            mp = mp.with_evidence(MatchPerformanceEvidence::DerbyFixture);
         }
+        if o.is_cup {
+            mp = mp.with_evidence(MatchPerformanceEvidence::CupTie);
+        }
+        if self.attributes.pressure <= 7.0 {
+            mp = mp.with_evidence(MatchPerformanceEvidence::LowPressurePersonality);
+        }
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::PoorFormPressure,
+            HappinessEventSeverity::from_magnitude(2.0 + extra),
+            HappinessEventScope::MatchDay,
+        )
+        .with_match_performance_context(mp);
+        self.happiness.add_event_with_context(
+            HappinessEventType::CostlyMistake,
+            -(2.0 + extra),
+            None,
+            happiness_ctx,
+        );
+    }
 
-        // ── Decisive goal / fan / media reactions ───────────────────
+    fn record_manager_criticism(&mut self, o: &MatchOutcome<'_>) {
+        let mag = -(2.0 + (6.3 - o.effective_rating).clamp(0.0, 0.8));
+        let recent_mgr_criticism = self
+            .happiness
+            .recent_events
+            .iter()
+            .any(|e| e.event_type == HappinessEventType::ManagerCriticism && e.days_ago <= 30);
+        // Concrete football reason picked from the post-match
+        // outcome. Computed independently of whether earlier
+        // criticism is on file — the reason is the stable
+        // identity the cooldown gate keys on, while
+        // `recent_mgr_criticism` only escalates tone /
+        // follow-up below. Conflating "repeated incident" into
+        // the reason itself would silently bypass the
+        // reason-aware cooldown the next match (a new reason
+        // would appear to fire from the gate's perspective).
+        let reason = if o.stats.red_cards > 0 {
+            ManagerCriticismReason::PublicComplaint
+        } else if self.skills.mental.work_rate <= 8.0 {
+            ManagerCriticismReason::PoorPressing
+        } else if self.skills.mental.teamwork <= 8.0 {
+            ManagerCriticismReason::MissedAssignment
+        } else if self.attributes.professionalism <= 8.0 {
+            ManagerCriticismReason::PoorBodyLanguage
+        } else {
+            ManagerCriticismReason::IgnoredTacticalInstruction
+        };
+        let topic = match reason {
+            ManagerCriticismReason::PoorBodyLanguage => ManagerInteractionTopic::Attitude,
+            ManagerCriticismReason::IgnoredTacticalInstruction
+            | ManagerCriticismReason::MissedAssignment
+            | ManagerCriticismReason::PoorPressing => ManagerInteractionTopic::Tactical,
+            ManagerCriticismReason::PublicComplaint => ManagerInteractionTopic::Discipline,
+            _ => ManagerInteractionTopic::Performance,
+        };
+        let tone = if recent_mgr_criticism {
+            ManagerInteractionTone::Stern
+        } else {
+            ManagerInteractionTone::Honest
+        };
+        let acceptance = if self.skills.mental.determination >= 15.0 {
+            PlayerAcceptance::Motivated
+        } else if self.attributes.professionalism <= 8.0 {
+            PlayerAcceptance::Resented
+        } else {
+            PlayerAcceptance::Discouraged
+        };
+        let mctx = ManagerInteractionEventContext::new(topic, tone, acceptance)
+            .with_criticism_reason(reason)
+            .with_match_rating(o.effective_rating)
+            .with_repeated_recently(recent_mgr_criticism);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::PoorFormPressure,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::MatchDay,
+        )
+        .with_manager_interaction_context(mctx)
+        .with_follow_up(if recent_mgr_criticism {
+            HappinessEventFollowUp::DressingRoomDamageRisk
+        } else {
+            HappinessEventFollowUp::ManagerInterventionRisk
+        });
+        // Reason-aware 14-day cooldown — only the SAME criticism
+        // reason inside the window is throttled. A poor-form
+        // stretch that earned a "PoorPressing" row will let a
+        // subsequent red-card "PublicComplaint" through, since
+        // they're materially different manager talks. The
+        // suppressed magnitude still wears the player down via
+        // a durable hidden form-pressure accumulator (read in
+        // `recalculate_morale`); we don't push to
+        // `adjust_morale` directly because the next weekly
+        // recalculation rebuilds morale from factors + events
+        // and would silently drop a transient nudge.
+        let blocked_by_reason = self
+            .happiness
+            .has_recent_manager_criticism_with_reason(reason, 14);
+        let emitted = if blocked_by_reason {
+            false
+        } else {
+            self.happiness.add_event_with_context(
+                HappinessEventType::ManagerCriticism,
+                mag,
+                None,
+                happiness_ctx,
+            );
+            true
+        };
+        if !emitted {
+            self.happiness.accumulate_hidden_form_pressure(mag);
+        }
+    }
+
+    fn record_manager_encouragement(&mut self, o: &MatchOutcome<'_>) {
+        let mag = 1.5 + (o.effective_rating - 7.5).clamp(0.0, 2.5);
+        let event_ctx = MatchSupportContextBuilder::manager_encouragement(self, o, mag);
+        self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::ManagerEncouragement,
+            mag,
+            None,
+            event_ctx,
+            14,
+        );
+    }
+
+    fn record_fan_and_media_reactions(&mut self, o: &MatchOutcome<'_>) {
         let cfg = HappinessConfig::default();
         let had_contribution = o.stats.goals > 0 || o.stats.assists > 0;
+        self.record_decisive_goal(o, &cfg, had_contribution);
+        self.record_fan_praise(o, &cfg, had_contribution);
+        self.record_fan_criticism(o, &cfg);
+        self.record_media_praise(o, &cfg);
+    }
 
+    fn record_decisive_goal(
+        &mut self,
+        o: &MatchOutcome<'_>,
+        cfg: &HappinessConfig,
+        had_contribution: bool,
+    ) {
         // DecisiveGoal — scored or assisted in a single-goal team win.
         // Captures the late winner / only-goal-of-the-game moment without
         // needing minute-of-goal data. Cooldown 14d so a hot scoring run
@@ -722,7 +774,14 @@ impl Player {
                 .add_event_with_cooldown(HappinessEventType::DecisiveGoal, mag, 14);
             self.remember_match(EpisodeKind::DecisiveGoal, ActorRef::NONE, o);
         }
+    }
 
+    fn record_fan_praise(
+        &mut self,
+        o: &MatchOutcome<'_>,
+        cfg: &HappinessConfig,
+        had_contribution: bool,
+    ) {
         // FanPraise — supporters latch onto a stand-out display. Triggered
         // by POM, an excellent rating, or a goal/assist contribution in a
         // win. Reputation-amplified so high-profile players feel it more.
@@ -742,7 +801,9 @@ impl Player {
                 21,
             );
         }
+    }
 
+    fn record_fan_criticism(&mut self, o: &MatchOutcome<'_>, cfg: &HappinessConfig) {
         // FanCriticism — fans turn on a poor display, especially in
         // defeat or after a red card. Amplified by controversy/low
         // temperament; dampened by professionalism (settles ego).
@@ -777,7 +838,9 @@ impl Player {
                 21,
             );
         }
+    }
 
+    fn record_media_praise(&mut self, o: &MatchOutcome<'_>, cfg: &HappinessConfig) {
         // MediaPraise — strictly rarer than fan reaction; only fires for
         // a genuinely elite shift or a story-defining moment. Cooldown
         // 30d so press inches don't pile up week after week.
@@ -811,7 +874,10 @@ impl Player {
                 30,
             );
         }
+    }
 
+    fn record_derby_outcome(&mut self, o: &MatchOutcome<'_>) {
+        let cfg = HappinessConfig::default();
         // Derby outcome — proper rivalry-day events instead of recycled
         // manager talks. DerbyHero is reserved for standout performers
         // (scored, assisted, POM, ≥7.5 rating, or GK/DEF clean sheet
@@ -1134,16 +1200,45 @@ impl Player {
             }
         }
     }
+
+    /// Pick the right `PlayerStatistics` bucket for the match — league,
+    /// cup, or pre-season friendly — so the call site reads declaratively.
+    ///
+    /// Cup matches route into the per-competition bucket keyed by the
+    /// match's competition slug; the rolled-up `cup_statistics` aggregate is
+    /// rebuilt from those buckets in `on_match_played` once recording is
+    /// done.
+    fn match_stats_bucket_mut<'a>(
+        &'a mut self,
+        o: &MatchOutcome<'_>,
+        home_slug: &str,
+    ) -> &'a mut PlayerStatistics {
+        if o.is_cup {
+            self.cup_competition_statistics_mut(o.competition_slug)
+        } else if o.is_friendly {
+            &mut self.friendly_statistics
+        } else if let Some(team) = o
+            .played_for
+            .as_ref()
+            .filter(|t| !home_slug.is_empty() && t.slug != home_slug)
+        {
+            // Borrowed league appearance for another of the club's teams —
+            // book it under that team (stored in the player's history) so it
+            // surfaces as its own career-history row.
+            self.statistics_history.secondary_team_statistics_mut(
+                o.match_season_year,
+                team.slug,
+                team.name,
+                team.reputation,
+                team.league_slug,
+                team.league_name,
+            )
+        } else {
+            &mut self.statistics
+        }
+    }
 }
 
-/// Pick the right `PlayerStatistics` bucket for the match — league,
-/// cup, or pre-season friendly — so the call sites read declaratively
-/// (`stats_bucket_mut(p, o).goals += …`).
-///
-/// Cup matches route into the per-competition bucket keyed by the
-/// match's competition slug; the rolled-up `cup_statistics` aggregate is
-/// rebuilt from those buckets in `on_match_played` once recording is
-/// done.
 /// First-official-appearance detector: a young player's first official
 /// football is his senior debut. Youth-league fixtures are
 /// friendly-flagged and book into the friendly bucket, so for a
@@ -1175,195 +1270,182 @@ impl SeniorDebut {
     }
 }
 
-fn stats_bucket_mut<'a>(
-    player: &'a mut Player,
-    o: &MatchOutcome<'_>,
-    home_slug: &str,
-) -> &'a mut PlayerStatistics {
-    if o.is_cup {
-        player.cup_competition_statistics_mut(o.competition_slug)
-    } else if o.is_friendly {
-        &mut player.friendly_statistics
-    } else if let Some(team) = o
-        .played_for
-        .as_ref()
-        .filter(|t| !home_slug.is_empty() && t.slug != home_slug)
-    {
-        // Borrowed league appearance for another of the club's teams —
-        // book it under that team (stored in the player's history) so it
-        // surfaces as its own career-history row.
-        player.statistics_history.secondary_team_statistics_mut(
-            o.match_season_year,
-            team.slug,
-            team.name,
-            team.reputation,
-            team.league_slug,
-            team.league_name,
-        )
-    } else {
-        &mut player.statistics
-    }
+/// Reaction to a structured match omission: the magnitude, cause, and
+/// follow-up the `MatchDropped` event carries, read together from the
+/// player's status and the selection context.
+struct MatchDropReaction<'a> {
+    player: &'a Player,
+    ctx: &'a MatchSelectionContext,
 }
 
-/// Magnitude scaling for `MatchDropped` events with structured
-/// context. The base hurts more for players who *expected* to feature
-/// (KeyPlayer / FirstTeamRegular), softens for protective scopes
-/// (rest, returning from injury, low-importance rotation), and bumps
-/// for repeated omissions. Friendlies always dampen — a missed
-/// pre-season run-out doesn't sting like a league snub.
-fn compute_drop_magnitude(player: &Player, ctx: &MatchSelectionContext) -> f32 {
-    let cfg = HappinessConfig::default();
-    let base = cfg.catalog.magnitude(HappinessEventType::MatchDropped);
+impl MatchDropReaction<'_> {
+    /// Magnitude scaling for `MatchDropped` events with structured
+    /// context. The base hurts more for players who *expected* to feature
+    /// (KeyPlayer / FirstTeamRegular), softens for protective scopes
+    /// (rest, returning from injury, low-importance rotation), and bumps
+    /// for repeated omissions. Friendlies always dampen — a missed
+    /// pre-season run-out doesn't sting like a league snub.
+    fn magnitude(&self) -> f32 {
+        let cfg = HappinessConfig::default();
+        let base = cfg.catalog.magnitude(HappinessEventType::MatchDropped);
 
-    let status = player
-        .contract
-        .as_ref()
-        .map(|c| c.squad_status.clone())
-        .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
-    let status_mul = match status {
-        PlayerSquadStatus::KeyPlayer => 2.4,
-        PlayerSquadStatus::FirstTeamRegular => 1.7,
-        PlayerSquadStatus::FirstTeamSquadRotation => 1.0,
-        PlayerSquadStatus::HotProspectForTheFuture => 0.7,
-        PlayerSquadStatus::MainBackupPlayer => 0.6,
-        _ => 0.5,
-    };
+        let status = self
+            .player
+            .contract
+            .as_ref()
+            .map(|c| c.squad_status.clone())
+            .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
+        let status_mul = match status {
+            PlayerSquadStatus::KeyPlayer => 2.4,
+            PlayerSquadStatus::FirstTeamRegular => 1.7,
+            PlayerSquadStatus::FirstTeamSquadRotation => 1.0,
+            PlayerSquadStatus::HotProspectForTheFuture => 0.7,
+            PlayerSquadStatus::MainBackupPlayer => 0.6,
+            _ => 0.5,
+        };
 
-    let scope_mul = match ctx.scope {
-        SelectionDecisionScope::LeftOutOfMatchdaySquad => 1.4,
-        SelectionDecisionScope::DroppedToBench => 1.1,
-        SelectionDecisionScope::UnusedSubstitute => 0.7,
-        SelectionDecisionScope::Rested => 0.4,
-        SelectionDecisionScope::Rotation => 0.5,
-        SelectionDecisionScope::UnavailableButNotInjured => 0.8,
-    };
+        let scope_mul = match self.ctx.scope {
+            SelectionDecisionScope::LeftOutOfMatchdaySquad => 1.4,
+            SelectionDecisionScope::DroppedToBench => 1.1,
+            SelectionDecisionScope::UnusedSubstitute => 0.7,
+            SelectionDecisionScope::Rested => 0.4,
+            SelectionDecisionScope::Rotation => 0.5,
+            SelectionDecisionScope::UnavailableButNotInjured => 0.8,
+        };
 
-    let reason_mul = match ctx.reason {
-        SelectionOmissionReason::FatigueManagement
-        | SelectionOmissionReason::FitnessProtection
-        | SelectionOmissionReason::ReturningFromInjury => 0.5,
-        SelectionOmissionReason::LowMatchImportanceRotation => 0.6,
-        SelectionOmissionReason::TacticalMismatch
-        | SelectionOmissionReason::PositionFitIssue
-        | SelectionOmissionReason::NoNaturalRoleInFormation
-        | SelectionOmissionReason::TeammatePreferredForTacticalBalance => 1.0,
-        SelectionOmissionReason::PoorRecentForm
-        | SelectionOmissionReason::ManagerDoesNotTrustPlayer => 1.3,
-        SelectionOmissionReason::TeammatePreferredOnAbility
-        | SelectionOmissionReason::TeammatePreferredOnForm
-        | SelectionOmissionReason::TeammatePreferredOnFitness
-        | SelectionOmissionReason::TeammatePreferredOnTrust => 1.0,
-        SelectionOmissionReason::SquadStatusMismatch => 1.4,
-        SelectionOmissionReason::DisciplinarySelection => 1.2,
-        SelectionOmissionReason::NewcomerStillIntegrating => 0.7,
-        SelectionOmissionReason::BenchBalance => 0.6,
-        SelectionOmissionReason::LowerMatchReadiness => 0.8,
-        // Opponent / role-duty / lineup-balance / bench-scenario reads
-        // are all tactical / planning-driven explanations — they sting
-        // less than a perceived-ability drop because the player can
-        // see the football reason.
-        SelectionOmissionReason::OpponentMatchupMismatch
-        | SelectionOmissionReason::LineupBalanceCall
-        | SelectionOmissionReason::BenchScenarioCoverage => 0.9,
-        // A medical-caution call carries the same gentleness as the
-        // existing fitness-protection variant.
-        SelectionOmissionReason::MedicalRecurrenceRisk => 0.5,
-        // An eligibility-rule block isn't a coaching judgement at all —
-        // the player accepts the rule and the morale hit is minimal.
-        SelectionOmissionReason::EligibilityRuleBlock => 0.4,
-        // A player rested because he's agreed / is close to a move understands
-        // the protection and is leaving anyway — almost no morale hit.
-        SelectionOmissionReason::RestedDueToAgreedTransfer => 0.4,
-        // Benching a disaffected want-away player is a consequence of his own
-        // stance; he's already unhappy, so it's a moderate, not severe, hit.
-        SelectionOmissionReason::OmittedDueToDisaffection => 0.9,
-        // Being frozen out is the worst of them, and not because of one
-        // team sheet: it is the player finding out that there will not be
-        // a next one either.
-        SelectionOmissionReason::FrozenOutByManager => 1.8,
-    };
+        let reason_mul = match self.ctx.reason {
+            SelectionOmissionReason::FatigueManagement
+            | SelectionOmissionReason::FitnessProtection
+            | SelectionOmissionReason::ReturningFromInjury => 0.5,
+            SelectionOmissionReason::LowMatchImportanceRotation => 0.6,
+            SelectionOmissionReason::TacticalMismatch
+            | SelectionOmissionReason::PositionFitIssue
+            | SelectionOmissionReason::NoNaturalRoleInFormation
+            | SelectionOmissionReason::TeammatePreferredForTacticalBalance => 1.0,
+            SelectionOmissionReason::PoorRecentForm
+            | SelectionOmissionReason::ManagerDoesNotTrustPlayer => 1.3,
+            SelectionOmissionReason::TeammatePreferredOnAbility
+            | SelectionOmissionReason::TeammatePreferredOnForm
+            | SelectionOmissionReason::TeammatePreferredOnFitness
+            | SelectionOmissionReason::TeammatePreferredOnTrust => 1.0,
+            SelectionOmissionReason::SquadStatusMismatch => 1.4,
+            SelectionOmissionReason::DisciplinarySelection => 1.2,
+            SelectionOmissionReason::NewcomerStillIntegrating => 0.7,
+            SelectionOmissionReason::BenchBalance => 0.6,
+            SelectionOmissionReason::LowerMatchReadiness => 0.8,
+            // Opponent / role-duty / lineup-balance / bench-scenario reads
+            // are all tactical / planning-driven explanations — they sting
+            // less than a perceived-ability drop because the player can
+            // see the football reason.
+            SelectionOmissionReason::OpponentMatchupMismatch
+            | SelectionOmissionReason::LineupBalanceCall
+            | SelectionOmissionReason::BenchScenarioCoverage => 0.9,
+            // A medical-caution call carries the same gentleness as the
+            // existing fitness-protection variant.
+            SelectionOmissionReason::MedicalRecurrenceRisk => 0.5,
+            // An eligibility-rule block isn't a coaching judgement at all —
+            // the player accepts the rule and the morale hit is minimal.
+            SelectionOmissionReason::EligibilityRuleBlock => 0.4,
+            // A player rested because he's agreed / is close to a move understands
+            // the protection and is leaving anyway — almost no morale hit.
+            SelectionOmissionReason::RestedDueToAgreedTransfer => 0.4,
+            // Benching a disaffected want-away player is a consequence of his own
+            // stance; he's already unhappy, so it's a moderate, not severe, hit.
+            SelectionOmissionReason::OmittedDueToDisaffection => 0.9,
+            // Being frozen out is the worst of them, and not because of one
+            // team sheet: it is the player finding out that there will not be
+            // a next one either.
+            SelectionOmissionReason::FrozenOutByManager => 1.8,
+        };
 
-    let repeat_mul = if ctx.repeated { 1.4 } else { 1.0 };
-    let friendly_mul = if ctx.is_friendly { 0.3 } else { 1.0 };
-    let importance_mul = (0.5_f32 + ctx.match_importance).clamp(0.5, 1.4);
-    // A rotation call the manager took the time to explain lands very
-    // differently from a silent snub — "I'm resting you for Saturday"
-    // is man-management, not a demotion.
-    let briefed_mul = if ctx.explained_by_coach { 0.45 } else { 1.0 };
-    // New-manager review window: in the first weeks after a managerial
-    // change (the NewManagerBounce event is the squad-wide marker) a
-    // benching reads as the new man trying things, not a verdict —
-    // everyone in the room knows it.
-    let review_window_mul = if player
-        .happiness
-        .has_recent_event(&HappinessEventType::NewManagerBounce, 56)
-    {
-        0.5
-    } else {
-        1.0
-    };
+        let repeat_mul = if self.ctx.repeated { 1.4 } else { 1.0 };
+        let friendly_mul = if self.ctx.is_friendly { 0.3 } else { 1.0 };
+        let importance_mul = (0.5_f32 + self.ctx.match_importance).clamp(0.5, 1.4);
+        // A rotation call the manager took the time to explain lands very
+        // differently from a silent snub — "I'm resting you for Saturday"
+        // is man-management, not a demotion.
+        let briefed_mul = if self.ctx.explained_by_coach {
+            0.45
+        } else {
+            1.0
+        };
+        // New-manager review window: in the first weeks after a managerial
+        // change (the NewManagerBounce event is the squad-wide marker) a
+        // benching reads as the new man trying things, not a verdict —
+        // everyone in the room knows it.
+        let review_window_mul = if self
+            .player
+            .happiness
+            .has_recent_event(&HappinessEventType::NewManagerBounce, 56)
+        {
+            0.5
+        } else {
+            1.0
+        };
 
-    base * status_mul
-        * scope_mul
-        * reason_mul
-        * repeat_mul
-        * friendly_mul
-        * importance_mul
-        * briefed_mul
-        * review_window_mul
-}
-
-fn drop_cause(ctx: &MatchSelectionContext) -> HappinessEventCause {
-    match ctx.reason {
-        SelectionOmissionReason::TacticalMismatch
-        | SelectionOmissionReason::PositionFitIssue
-        | SelectionOmissionReason::NoNaturalRoleInFormation
-        | SelectionOmissionReason::TeammatePreferredForTacticalBalance => {
-            HappinessEventCause::TacticalDisagreement
-        }
-        SelectionOmissionReason::PoorRecentForm => HappinessEventCause::PoorFormPressure,
-        SelectionOmissionReason::TeammatePreferredOnAbility
-        | SelectionOmissionReason::TeammatePreferredOnForm
-        | SelectionOmissionReason::TeammatePreferredOnFitness
-        | SelectionOmissionReason::TeammatePreferredOnTrust => {
-            HappinessEventCause::PositionalRivalry
-        }
-        SelectionOmissionReason::ManagerDoesNotTrustPlayer => {
-            HappinessEventCause::LeadershipDispute
-        }
-        SelectionOmissionReason::DisciplinarySelection => HappinessEventCause::PersonalityClash,
-        SelectionOmissionReason::NewcomerStillIntegrating => {
-            HappinessEventCause::AdaptationIsolation
-        }
-        _ => HappinessEventCause::Other,
+        base * status_mul
+            * scope_mul
+            * reason_mul
+            * repeat_mul
+            * friendly_mul
+            * importance_mul
+            * briefed_mul
+            * review_window_mul
     }
-}
 
-/// Pick the "what may happen next" hint that fits the scope. Repeated
-/// drops escalate to the dressing-room damage warning; one-off
-/// rotation calls keep the calmer "likely to settle" copy.
-fn drop_follow_up(player: &Player, ctx: &MatchSelectionContext) -> Option<HappinessEventFollowUp> {
-    if ctx.repeated {
-        return Some(HappinessEventFollowUp::DressingRoomDamageRisk);
+    fn cause(&self) -> HappinessEventCause {
+        match self.ctx.reason {
+            SelectionOmissionReason::TacticalMismatch
+            | SelectionOmissionReason::PositionFitIssue
+            | SelectionOmissionReason::NoNaturalRoleInFormation
+            | SelectionOmissionReason::TeammatePreferredForTacticalBalance => {
+                HappinessEventCause::TacticalDisagreement
+            }
+            SelectionOmissionReason::PoorRecentForm => HappinessEventCause::PoorFormPressure,
+            SelectionOmissionReason::TeammatePreferredOnAbility
+            | SelectionOmissionReason::TeammatePreferredOnForm
+            | SelectionOmissionReason::TeammatePreferredOnFitness
+            | SelectionOmissionReason::TeammatePreferredOnTrust => {
+                HappinessEventCause::PositionalRivalry
+            }
+            SelectionOmissionReason::ManagerDoesNotTrustPlayer => {
+                HappinessEventCause::LeadershipDispute
+            }
+            SelectionOmissionReason::DisciplinarySelection => HappinessEventCause::PersonalityClash,
+            SelectionOmissionReason::NewcomerStillIntegrating => {
+                HappinessEventCause::AdaptationIsolation
+            }
+            _ => HappinessEventCause::Other,
+        }
     }
-    if matches!(
-        ctx.scope,
-        SelectionDecisionScope::Rested | SelectionDecisionScope::Rotation
-    ) {
-        return Some(HappinessEventFollowUp::LikelyToSettle);
+
+    /// Pick the "what may happen next" hint that fits the scope. Repeated
+    /// drops escalate to the dressing-room damage warning; one-off
+    /// rotation calls keep the calmer "likely to settle" copy.
+    fn follow_up(&self) -> Option<HappinessEventFollowUp> {
+        if self.ctx.repeated {
+            return Some(HappinessEventFollowUp::DressingRoomDamageRisk);
+        }
+        if matches!(
+            self.ctx.scope,
+            SelectionDecisionScope::Rested | SelectionDecisionScope::Rotation
+        ) {
+            return Some(HappinessEventFollowUp::LikelyToSettle);
+        }
+        let status = self
+            .player
+            .contract
+            .as_ref()
+            .map(|c| c.squad_status.clone())
+            .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
+        if matches!(
+            status,
+            PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
+        ) {
+            return Some(HappinessEventFollowUp::ManagerInterventionRisk);
+        }
+        Some(HappinessEventFollowUp::LikelyToSettle)
     }
-    let status = player
-        .contract
-        .as_ref()
-        .map(|c| c.squad_status.clone())
-        .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
-    if matches!(
-        status,
-        PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
-    ) {
-        return Some(HappinessEventFollowUp::ManagerInterventionRisk);
-    }
-    Some(HappinessEventFollowUp::LikelyToSettle)
 }
 
 /// Builder for the structured `HappinessEventContext` payloads that

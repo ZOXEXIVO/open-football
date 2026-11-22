@@ -1,25 +1,25 @@
 use crate::PlayerPositionType;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::engine::shot_gate_stats;
+use crate::r#match::engine::engine::stuck_exit_stats;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{
+use crate::r#match::forwarders::states::shared::{
     ActivityIntensity, ForwardCondition, ForwardRead, ForwardShot,
 };
-use crate::r#match::midfielders::states::common::{CarryHeading, LaneAhead};
+use crate::r#match::midfielders::states::shared::{CarryHeading, LaneAhead};
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::forward_census::{
     ForwardCensus, FwdLimit, FwdRequest, FwdVerdict,
 };
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::player::strategies::common::players::ops::clearance::TouchlineCall;
-use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay};
-use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
+use crate::r#match::player::strategies::players::skills::SkillCurve;
+use crate::r#match::player::strategies::shared::passing::{FlankAction, FlankPlay};
+use crate::r#match::player::strategies::shared::players::ops::clearance::TouchlineCall;
+use crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::{
     BallCarry, ShotDecision, evaluate_forward_shot_decision,
 };
-use crate::r#match::player::strategies::players::skills::SkillCurve;
-#[cfg(feature = "match-logs")]
-use crate::r#match::engine::engine::shot_gate_stats;
-use crate::r#match::engine::engine::stuck_exit_stats;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -35,6 +35,7 @@ const PENALTY_AREA_DEPTH: f32 = 132.0;
 pub struct ForwardRunningState {}
 
 impl StateProcessingHandler for ForwardRunningState {
+    #[expect(clippy::too_many_lines)]
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // `Running` is the man on the ball; without it the read answers.
         if !ctx.player.has_ball(ctx) {
@@ -164,8 +165,8 @@ impl StateProcessingHandler for ForwardRunningState {
         // can't progress → lay off) without abandoning the attack
         // every time the team enters possession mode.
         let under_pressure = ctx.player().pressure().is_under_immediate_pressure();
-        let stuck = ctx.players().opponents().nearby(15.0).count() >= 2
-            && !self.has_open_space_ahead(ctx);
+        let stuck =
+            ctx.players().opponents().nearby(15.0).count() >= 2 && !self.has_open_space_ahead(ctx);
         if !under_pressure
             && stuck
             && distance_to_goal > 50.0
@@ -234,11 +235,7 @@ impl StateProcessingHandler for ForwardRunningState {
         if distance_to_goal <= ForwardShot::POINT_BLANK {
             let point_blank = evaluate_forward_shot_decision(ctx, "FWD_RUN_POINT_BLANK");
             #[cfg(feature = "match-logs")]
-            ForwardCensus::note_shot_site(
-                ctx,
-                FwdRequest::PointBlank,
-                Self::verdict(&point_blank),
-            );
+            ForwardCensus::note_shot_site(ctx, FwdRequest::PointBlank, Self::verdict(&point_blank));
             match point_blank {
                 ShotDecision::Shoot { reason } => {
                     // Inside the box this is a FINISH, not a shot from
@@ -293,9 +290,7 @@ impl StateProcessingHandler for ForwardRunningState {
                             ForwardCensus::note_limit(ctx, FwdLimit::PointBlankPatience);
                             ForwardCensus::note_pass_site(ctx, FwdRequest::PassOther);
                         }
-                        return Some(StateChangeResult::with_forward_state(
-                            ForwardState::Passing,
-                        ));
+                        return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
                     }
                     return None;
                 }
@@ -413,9 +408,7 @@ impl StateProcessingHandler for ForwardRunningState {
                     if under_pressure {
                         #[cfg(feature = "match-logs")]
                         ForwardCensus::note_pass_site(ctx, FwdRequest::PassAfterHold);
-                        return Some(StateChangeResult::with_forward_state(
-                            ForwardState::Passing,
-                        ));
+                        return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
                     }
                     // Stay in Running — keep dribbling toward goal.
                     // Don't return None unconditionally: fall through
@@ -495,12 +488,12 @@ impl StateProcessingHandler for ForwardRunningState {
             || !self.has_open_space_ahead(ctx);
         if distance_to_goal < 130.0 && fwd_stuck
             && let Some(runner) =
-                crate::r#match::player::strategies::common::players::ops::forward_shot_decision::find_cutback_to_arriving_runner(ctx)
+                crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::find_cutback_to_arriving_runner(ctx)
             {
                 #[cfg(feature = "match-logs")]
                 {
                     use std::sync::atomic::Ordering;
-                    crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::FWD_CUTBACK.fetch_add(1, Ordering::Relaxed);
+                    crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::mid_run_diag::FWD_CUTBACK.fetch_add(1, Ordering::Relaxed);
                     ForwardCensus::note_pass_site(ctx, FwdRequest::Cutback);
                 }
                 return Some(StateChangeResult::with_forward_state_and_event(
@@ -1478,5 +1471,4 @@ impl ForwardRunningState {
             .max_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(t, _)| t)
     }
-
 }

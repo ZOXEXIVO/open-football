@@ -8,17 +8,15 @@ use crate::{Player, Tactics};
 use chrono::NaiveDate;
 use log::debug;
 
+use super::SelectionCompetition;
 use super::balance::{BalanceSwapPass, LineupBalanceScorer, ObjectiveResolver};
 use super::bench_scenarios::{BenchScenarioPlan, BenchScenarioScorer};
 use super::helpers;
 use super::helpers::SlotFit;
 use super::lines::PitchLine;
-use super::model::{
-    EligibilityEvaluator, MatchSelectionGameModel, MatchTypeSignal,
-};
+use super::model::{EligibilityEvaluator, MatchSelectionGameModel, MatchTypeSignal};
 use super::role_duty::{OpponentMatchupScorer, RoleDutyFitScorer, TacticalDuty};
 use super::scoring::{ScoringEngine, SlotScoreBreakdown};
-use super::SelectionCompetition;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Ordering;
 
@@ -112,6 +110,7 @@ impl SelectionScoringContext<'_> {
     }
 
     /// Select the best starting 11 for competitive matches.
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn select_starting_eleven(
         &self,
         team_id: u32,
@@ -498,9 +497,8 @@ impl SelectionScoringContext<'_> {
         };
         // A second goalkeeper is named only where the bench is long
         // enough to afford one.
-        let outfield_seat = |p: &Player| {
-            size >= Self::SECOND_KEEPER_BENCH || !p.positions.is_goalkeeper()
-        };
+        let outfield_seat =
+            |p: &Player| size >= Self::SECOND_KEEPER_BENCH || !p.positions.is_goalkeeper();
 
         // 1. The goalkeeper.
         if size > 0
@@ -1114,6 +1112,7 @@ impl SelectionScoringContext<'_> {
         bonus
     }
 
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn bench_role_fit(&self, player: &Player, role: BenchRole) -> f32 {
         let has = |pos: PlayerPositionType| player.positions.has_position(pos);
         let has_any = |targets: &[PlayerPositionType]| targets.iter().any(|&p| has(p));

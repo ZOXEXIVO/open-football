@@ -530,6 +530,7 @@ impl<'a> ClubScan<'a> {
 
     /// The observation, the monitoring row, and — when the scout rates him and
     /// the move could credibly go public — the interest the club shows out loud.
+    #[expect(clippy::too_many_lines)]
     fn file_observation(
         &mut self,
         assignment: &ScoutingAssignment,

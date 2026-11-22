@@ -31,6 +31,7 @@ impl Features {
     /// gets behind it. The root is measured from the outline at its own
     /// height instead, so it is always tucked under the head and no gap of
     /// background can open between the lobe and the jaw.
+    #[expect(clippy::too_many_lines)]
     pub fn ears(c: &mut Canvas, l: &Landmarks, t: &Tones) {
         let e = &l.ear;
         let top = e.top;
@@ -204,6 +205,7 @@ impl Features {
         }
     }
 
+    #[expect(clippy::too_many_lines)]
     pub fn eyes(c: &mut Canvas, l: &Landmarks, t: &Tones, id: &Identity, aggr: f32) {
         let es = &l.eye_shape;
         let ey = l.eye;
@@ -602,6 +604,7 @@ impl Features {
         c.ellipse(cx, ny + 2.9, 2.6, 1.2, t.skin_dk2, 0.34, Blur::Fine, 0.0);
     }
 
+    #[expect(clippy::too_many_lines)]
     pub fn mouth(c: &mut Canvas, l: &Landmarks, t: &Tones, id: &Identity, aggr: f32) {
         let cx = l.cx;
         let ms = &l.mouth_shape;

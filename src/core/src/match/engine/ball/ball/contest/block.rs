@@ -4,23 +4,23 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
 #[cfg(feature = "match-logs")]
-use crate::r#match::engine::ball::ball::diagnostics::delivery_diag::TouchKind;
-#[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::block_diag::{
     BEHIND_BALL, BEYOND_LOOKAHEAD, BlockDiag, CANDIDATES, FIRED, IN_WINDOW, OPP_SEEN,
     OUTSIDE_CORRIDOR, PERP_SUM_X100, SHOTS_SEEN, TOO_HIGH,
 };
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::diagnostics::delivery_diag::TouchKind;
 use crate::r#match::engine::ball::ball::flight::motion::Carrier;
 use crate::r#match::engine::ball::ball::flight::roll::BallRoll;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::strike_diag::{GrantPath, StrikeCensus};
-#[cfg(feature = "match-logs")]
-use crate::r#match::player::diagnostics::defender_census::{DeflectionKind, TakeRule};
 use crate::r#match::engine::ball::ball::{
     AerialReach, Ball, BlockContact, CONTROL_DISTANCE, GRAVITY_PER_TICK, PlayerReach,
 };
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
 use crate::r#match::events::EventCollection;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::{DeflectionKind, TakeRule};
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext as EffSkillCtx, effective_skill,
@@ -97,6 +97,7 @@ impl Ball {
     /// - Block:     shot-targeted; one roll per shot, a deflection
     ///
     /// Both are scoped to unowned balls with `in_flight_state > 0`.
+    #[expect(clippy::too_many_lines)]
     pub fn try_block_shot(
         &mut self,
         context: &MatchContext,
@@ -431,6 +432,7 @@ impl Ball {
         BallRoll::speed_to_rest_at(rest).min(arrived)
     }
 
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn resolve_block(
         &mut self,
         blocker_id: u32,
@@ -658,7 +660,9 @@ impl Ball {
             // Solved to the line alone it would leave at a walking pace and
             // be collected by the men around the block: it goes out because
             // it leaves them, never faster than it came.
-            let speed = (ball_velocity_2d * 0.6).clamp(3.0, 6.0).min(ball_velocity_2d);
+            let speed = (ball_velocity_2d * 0.6)
+                .clamp(3.0, 6.0)
+                .min(ball_velocity_2d);
             self.velocity.x = (dx / dist) * speed;
             self.velocity.y = (dy / dist) * speed;
             self.sink_to_ground();
@@ -743,7 +747,9 @@ impl Ball {
         // blocker booked as previous owner (see the loose branch above).
         self.last_rebound_tick = tick;
         self.previous_owner = Some(blocker_id);
-        let unlucky_speed = (ball_velocity_2d * 0.50).clamp(1.5, 3.5).min(ball_velocity_2d);
+        let unlucky_speed = (ball_velocity_2d * 0.50)
+            .clamp(1.5, 3.5)
+            .min(ball_velocity_2d);
         self.velocity.x = shot_dir_x * unlucky_speed * 0.7;
         self.velocity.y = shot_dir_y * unlucky_speed * 0.7;
         self.sink_to_ground();

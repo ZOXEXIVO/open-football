@@ -1,16 +1,16 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{
+use crate::r#match::defenders::states::shared::{
     ActivityIntensity, DefenderCondition, DefenderRead, DefensiveLine, LineStep, ReadLevel,
 };
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{FoulCommitted, FoulSource, PlayerEvent};
-use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
-use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
-use crate::r#match::player::strategies::common::states::{
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::player::strategies::shared::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::shared::players::ops::marker_evasion::MarkerEvasion;
+use crate::r#match::player::strategies::shared::states::{
     ContactFoul, MarkEngagement, StationKeeping,
 };
-use crate::r#match::player::strategies::common::team::KeeperVoice;
-use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::player::strategies::shared::team::KeeperVoice;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,

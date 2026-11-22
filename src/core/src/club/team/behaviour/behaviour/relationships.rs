@@ -13,6 +13,7 @@ impl TeamBehaviour {
     /// Reputation dynamics: star players command respect or create tension
     /// High-reputation players are admired by professional teammates but
     /// resented by ambitious players who feel overshadowed
+    #[expect(clippy::too_many_lines)]
     pub(super) fn process_reputation_dynamics(
         players: &PlayerCollection,
         result: &mut TeamBehaviourResult,

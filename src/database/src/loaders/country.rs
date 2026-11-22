@@ -396,7 +396,7 @@ mod tests {
         // Portuguese player offered a job in Brazil. Fluency (or missing
         // language data) used to make both offers identical here.
         use core::club::player::language::{Language, LanguageProfile};
-        use core::country::core::builder::CountryBuilder;
+        use core::country::builder::CountryBuilder;
         use core::transfers::gate::{
             AppraisalConfig, OfferKind, OfferViewBuilder, PlayerOfferAppraisal, PlayerStance,
         };

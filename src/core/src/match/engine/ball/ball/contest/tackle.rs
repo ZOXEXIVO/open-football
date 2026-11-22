@@ -7,12 +7,12 @@
 //! nearly always does — and the ball it knocks away is a second ball for
 //! whoever gets there, or a throw-in when the challenge is on the line.
 
-use crate::r#match::common_states::TackleEngagement;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::delivery_diag::TouchKind;
 use crate::r#match::engine::ball::ball::flight::roll::BallRoll;
 use crate::r#match::engine::ball::ball::{Ball, MAX_OWNER_TRACK_DISTANCE};
 use crate::r#match::engine::flow::rng::MatchRng;
+use crate::r#match::shared_states::TackleEngagement;
 use crate::r#match::{MatchPlayer, PassOriginRestart};
 use nalgebra::Vector3;
 

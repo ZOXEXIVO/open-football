@@ -20,10 +20,10 @@ use crate::{
 };
 use chrono::NaiveDate;
 
+use super::SelectionCompetition;
 use super::helpers::SlotFit;
 use super::model::MatchSelectionGameModel;
 use super::scoring::{ScoringEngine, SlotScoreBreakdown};
-use super::SelectionCompetition;
 use crate::HappinessEventType;
 
 /// Output of the omissions builder — one entry per important
@@ -496,10 +496,7 @@ impl RoleReading {
     /// Find the best position in the formation for a player. `None` if
     /// none of the formation slots match the player's known positions —
     /// signals "no natural role" to the reason chooser.
-    fn best_natural_position(
-        player: &Player,
-        tactics: &Tactics,
-    ) -> Option<PlayerPositionType> {
+    fn best_natural_position(player: &Player, tactics: &Tactics) -> Option<PlayerPositionType> {
         let mut best: Option<(PlayerPositionType, u8)> = None;
         for &pos in tactics.positions() {
             let level = player.positions.get_level(pos);
@@ -527,9 +524,10 @@ impl RoleReading {
                 SelectionRole::CentralMidfielder
             }
             AttackingMidfielderCenter => SelectionRole::AttackingMidfielder,
-            AttackingMidfielderLeft | AttackingMidfielderRight | MidfielderLeft | MidfielderRight => {
-                SelectionRole::Winger
-            }
+            AttackingMidfielderLeft
+            | AttackingMidfielderRight
+            | MidfielderLeft
+            | MidfielderRight => SelectionRole::Winger,
             Striker | ForwardCenter | ForwardLeft | ForwardRight => SelectionRole::Striker,
             _ => SelectionRole::Other,
         }

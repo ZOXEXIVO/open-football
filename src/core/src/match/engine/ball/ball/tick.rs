@@ -112,6 +112,7 @@ impl Ball {
         }
     }
 
+    #[expect(clippy::too_many_lines)]
     pub fn update(
         &mut self,
         context: &mut MatchContext,

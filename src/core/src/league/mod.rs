@@ -1,7 +1,7 @@
 pub mod awards;
-pub mod core;
 pub mod domestic_cup;
 pub mod ladder;
+pub mod model;
 pub mod news;
 pub mod playoff;
 pub mod result;
@@ -20,9 +20,9 @@ pub use awards::{
     PlayerOfTheWeekSelector, SeasonAwardSelector, SeasonAwardsSnapshot, TeamOfTheWeekAward,
     TeamOfTheWeekSelector, TeamOfTheWeekSlot, TeamOfTheYearAward,
 };
-pub use core::*;
 pub use domestic_cup::{CupHistoryEntry, DomesticCup};
 pub use ladder::LeagueLadder;
+pub use model::*;
 pub use news::{ChartsDesk, LeagueNewsroom};
 pub use playoff::{
     CROSS_BRACKET, GroupStanding, LeaguePlayoff, PlayoffRoundLabel, PlayoffSeries, PlayoffStage,

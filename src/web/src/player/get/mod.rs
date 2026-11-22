@@ -1,10 +1,10 @@
 pub mod ai_report;
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::friendly_source::FriendlySourceSlug;
-use crate::common::potential_stars::{PotentialStarsView, StarRating};
-use crate::common::slug::{PlayerPage, resolve_player_page};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::friendly_source::FriendlySourceSlug;
+use crate::shared::potential_stars::{PotentialStarsView, StarRating};
+use crate::shared::slug::{PlayerPage, resolve_player_page};
 use crate::player::events::PlayerEventsCounter;
 use crate::player::newspaper::PlayerNewsCounter;
 use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
@@ -297,6 +297,7 @@ impl PlayerStatusDto {
     }
 }
 
+#[expect(clippy::too_many_lines)]
 pub async fn player_get_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<PlayerGetRequest>,

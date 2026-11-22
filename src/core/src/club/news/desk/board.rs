@@ -162,6 +162,7 @@ impl BoardroomDesk {
     /// speculative pieces (the hunt, the pursuit, the manager's future)
     /// stand down on any week it was not, because a paper does not run
     /// "will he survive?" beside the news that he did not.
+    #[expect(clippy::too_many_lines)]
     fn file_affairs(
         out: &mut Vec<NewsStory>,
         affairs: &ClubAffairLog,

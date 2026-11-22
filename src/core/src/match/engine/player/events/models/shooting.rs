@@ -132,7 +132,8 @@ impl ShootingEventBuilder {
 
         let ball = &ctx.tick_context.ball;
         let now = ctx.current_tick();
-        if ball.last_rebound_tick > 0 && now.saturating_sub(ball.last_rebound_tick) <= REBOUND_WINDOW
+        if ball.last_rebound_tick > 0
+            && now.saturating_sub(ball.last_rebound_tick) <= REBOUND_WINDOW
         {
             return ShotType::Rebound;
         }
@@ -150,7 +151,12 @@ impl ShootingEventBuilder {
         }) {
             return ShotType::Cutback;
         }
-        let keeper = ctx.players().opponents().goalkeeper().next().map(|gk| gk.id);
+        let keeper = ctx
+            .players()
+            .opponents()
+            .goalkeeper()
+            .next()
+            .map(|gk| gk.id);
         let pressed = ctx
             .players()
             .opponents()

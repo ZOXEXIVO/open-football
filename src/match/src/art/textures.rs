@@ -2927,6 +2927,7 @@ impl Textures {
     /// support turns up in, so it is dealt several tiles rather than one: a
     /// real stand is mostly coats, with the club's colour running through it
     /// in enough quantity to tell you whose ground you are at.
+    #[expect(clippy::too_many_lines)]
     pub fn crowd(
         images: &mut Assets<Image>,
         home: Color,

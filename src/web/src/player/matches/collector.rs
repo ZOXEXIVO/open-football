@@ -14,7 +14,7 @@
 
 use super::{PlayerMatchItem, PlayerMatchResult};
 use crate::I18n;
-use crate::common::played_fixture::PlayedFixture;
+use crate::shared::played_fixture::PlayedFixture;
 use chrono::NaiveDateTime;
 use core::league::season::Season;
 use core::r#match::MatchResult;

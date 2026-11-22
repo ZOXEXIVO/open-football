@@ -275,6 +275,7 @@ impl TeamBehaviour {
     /// Monthly training-direction pass: progress existing personal
     /// plans, then let the coach set at most one retraining plan and
     /// one fitness block per squad per month.
+    #[expect(clippy::too_many_lines)]
     pub(super) fn process_training_direction(
         players: &mut PlayerCollection,
         staffs: &StaffCollection,

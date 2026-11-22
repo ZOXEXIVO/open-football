@@ -451,6 +451,7 @@ impl LeagueResult {
     /// !is_friendly` and not a continental competition); friendlies and
     /// continental cups never reach here.
     #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_lines)]
     pub(super) fn record_domestic_cup_showcase_scouting<D: LeagueProcessAccess>(
         details: &MatchResultRaw,
         data: &mut D,

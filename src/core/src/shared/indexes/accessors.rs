@@ -352,6 +352,7 @@ impl SimulatorData {
     /// player transfers UI to show *who* is watching, not just *which
     /// club*. Sort order is: clubs with active scout monitoring first
     /// (by latest observation), then everyone else by club name.
+    #[expect(clippy::too_many_lines)]
     pub fn player_monitoring_details(&self, player_id: u32) -> Vec<PlayerMonitoringDetail> {
         let mut out: Vec<PlayerMonitoringDetail> = Vec::new();
 
@@ -1473,7 +1474,7 @@ mod interested_clubs_tests {
     use super::*;
     use crate::Player;
     use crate::academy::ClubAcademy;
-    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::competitions::global::GlobalCompetitions;
     use crate::continent::Continent;
     use crate::country::Country;

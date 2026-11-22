@@ -324,7 +324,6 @@ impl BalanceSwapPass {
         self.max_slot_loss_tight
             + (self.max_slot_loss_loose - self.max_slot_loss_tight) * room.clamp(0.0, 1.0)
     }
-
 }
 
 /// Stateless helper that picks the objective from the game model when

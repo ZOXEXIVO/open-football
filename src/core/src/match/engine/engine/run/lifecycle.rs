@@ -77,6 +77,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// any replay test that needs exact-seed control over today's
     /// date.
     #[allow(unreachable_code)]
+    #[expect(clippy::too_many_lines)]
     pub fn play_with_config(
         mut left_squad: MatchSquad,
         mut right_squad: MatchSquad,
@@ -321,6 +322,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     // Match state loop
     // ───────────────────────────────────────────────────────────────────────
 
+    #[expect(clippy::too_many_lines)]
     pub(in crate::r#match::engine::engine) fn play_inner(
         field: &mut MatchField,
         context: &mut MatchContext,

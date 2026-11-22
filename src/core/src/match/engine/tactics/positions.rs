@@ -52,6 +52,7 @@ impl TacticalPositions {
         });
     }
 
+    #[expect(clippy::too_many_lines)]
     fn generate_waypoints_for_position(
         position: PlayerPositionType,
         side: Option<PlayerSide>,

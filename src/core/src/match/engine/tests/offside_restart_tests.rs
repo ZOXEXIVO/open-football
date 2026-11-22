@@ -248,7 +248,10 @@ fn a_rebound_off_the_keeper_to_the_offside_man_is_offside() {
     let keeper = field
         .players
         .iter()
-        .find(|p| p.side == Some(PlayerSide::Right) && p.tactical_position.current_position.is_goalkeeper())
+        .find(|p| {
+            p.side == Some(PlayerSide::Right)
+                && p.tactical_position.current_position.is_goalkeeper()
+        })
         .map(|p| p.id)
         .unwrap();
     let tick = context.current_tick();
@@ -264,7 +267,10 @@ fn a_defender_playing_it_deliberately_ends_the_offside() {
     let defender = field
         .players
         .iter()
-        .find(|p| p.side == Some(PlayerSide::Right) && !p.tactical_position.current_position.is_goalkeeper())
+        .find(|p| {
+            p.side == Some(PlayerSide::Right)
+                && !p.tactical_position.current_position.is_goalkeeper()
+        })
         .map(|p| p.id)
         .unwrap();
     gains_it(&mut field, &mut context, defender);

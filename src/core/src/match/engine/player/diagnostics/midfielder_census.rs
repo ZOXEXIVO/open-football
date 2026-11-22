@@ -12,7 +12,6 @@
 
 use crate::PlayerFieldPositionGroup;
 use crate::PlayerPositionType;
-use crate::r#match::common_states::{ChallengeKind, TackleEngagement};
 use crate::r#match::engine::ball::ball::{AerialReach, PlayerReach};
 use crate::r#match::engine::teamplay::plans::attack::AttackPlan;
 use crate::r#match::engine::teamplay::possession::TeamPossession;
@@ -22,6 +21,7 @@ use crate::r#match::player::diagnostics::defender_census::{
     HeaderRule, SpellEnd,
 };
 use crate::r#match::player::state::PlayerState;
+use crate::r#match::shared_states::{ChallengeKind, TackleEngagement};
 use crate::r#match::{
     MatchField, MatchPlayer, MatchTally, PenaltyArea, PlayerSide, StateProcessingContext,
     StateProcessingResult,

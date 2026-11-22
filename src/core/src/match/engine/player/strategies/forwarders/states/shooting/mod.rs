@@ -1,10 +1,10 @@
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{
+use crate::r#match::forwarders::states::shared::{
     ActivityIntensity, ForwardCondition, ForwardRead,
 };
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
-use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
+use crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
 use crate::r#match::{
@@ -19,7 +19,9 @@ impl StateProcessingHandler for ForwardShootingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Must have possession to shoot
         if !ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_forward_state(ForwardRead::released(ctx)));
+            return Some(StateChangeResult::with_forward_state(
+                ForwardRead::released(ctx),
+            ));
         }
 
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();

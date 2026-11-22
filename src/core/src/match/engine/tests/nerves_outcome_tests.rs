@@ -7,10 +7,10 @@ use super::goal_celebration_tests::squad;
 use crate::r#match::engine::ball::ball::{PassOriginRestart, PhaseOrigin};
 use crate::r#match::engine::goal::GOAL_WIDTH as GOAL_MOUTH_HALF_WIDTH;
 use crate::r#match::engine::psychology::PsychState;
-use crate::r#match::player::strategies::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::engine::result::Score;
 use crate::r#match::events::{EventCollection, EventDispatcher};
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
+use crate::r#match::player::strategies::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::ops::xg::ShotType;
 use crate::r#match::{
     GameTickContext, MatchContext, MatchField, MatchPlayerCollection, MatchPlayerLite, PlayerSide,
@@ -116,7 +116,9 @@ fn late_ticks(head: PsychState, running: bool, ticks: u64) -> u32 {
     let marker = field
         .players
         .iter()
-        .find(|p| p.side == Some(PlayerSide::Left) && p.tactical_position.current_position.is_defender())
+        .find(|p| {
+            p.side == Some(PlayerSide::Left) && p.tactical_position.current_position.is_defender()
+        })
         .map(|p| p.id)
         .expect("a home defender");
     let man = home_forward(&field) + 100;
@@ -165,8 +167,15 @@ fn a_nervous_marker_is_late_to_more_runs() {
         true,
         12_000,
     );
-    assert!(nervous > settled * 2, "late {nervous} ticks nervous against {settled} settled");
-    assert_eq!(late_ticks(PsychState::default(), false, 3_000), 0, "a man jogging is not lost");
+    assert!(
+        nervous > settled * 2,
+        "late {nervous} ticks nervous against {settled} settled"
+    );
+    assert_eq!(
+        late_ticks(PsychState::default(), false, 3_000),
+        0,
+        "a man jogging is not lost"
+    );
 }
 
 /// A penalty is the taker's miss until it goes in as a penalty.
@@ -185,10 +194,19 @@ fn a_penalty_is_a_miss_until_it_goes_in() {
 
     let team = field.get_player(taker).unwrap().team_id;
     let tick = context.current_tick();
-    field.ball.phase_origin = Some(PhaseOrigin::open(PassOriginRestart::Penalty, team, taker, tick));
+    field.ball.phase_origin = Some(PhaseOrigin::open(
+        PassOriginRestart::Penalty,
+        team,
+        taker,
+        tick,
+    ));
     let mut data = ResultMatchPositionData::empty();
     let mut events = EventCollection::with_capacity(2);
     events.add_player_event(PlayerEvent::Goal(taker, false));
     EventDispatcher::dispatch(&mut events, &mut field, &mut context, &mut data, true);
-    assert!(context.penalty_misses.is_empty(), "{:?}", context.penalty_misses);
+    assert!(
+        context.penalty_misses.is_empty(),
+        "{:?}",
+        context.penalty_misses
+    );
 }

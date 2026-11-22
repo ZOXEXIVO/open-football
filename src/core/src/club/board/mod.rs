@@ -9,7 +9,7 @@
 //!
 //! One submodule per concern:
 //!
-//! * [`core`] — the board itself and the passes it runs
+//! * [`process`] — the board itself and the passes it runs
 //! * [`vision`] — the brief the manager is judged against
 //! * [`chairman`] — the temperament in the chair
 //! * [`ownership`] — who owns the club and how they exercise power
@@ -32,15 +32,15 @@
 
 pub mod chairman;
 pub mod context;
-pub mod core;
 pub mod decision;
 pub mod governance;
 pub mod infrastructure;
-pub mod mandate;
 pub mod manager;
+pub mod mandate;
 mod mood;
 pub mod ownership;
 pub mod pressure;
+pub mod process;
 pub mod promise;
 pub mod relationship;
 mod result;
@@ -56,15 +56,15 @@ pub mod vision;
 
 pub use chairman::*;
 pub use context::*;
-pub use core::*;
 pub use decision::*;
 pub use governance::*;
 pub use infrastructure::*;
-pub use mandate::*;
 pub use manager::*;
+pub use mandate::*;
 pub use mood::*;
 pub use ownership::*;
 pub use pressure::*;
+pub use process::*;
 pub use promise::*;
 pub use relationship::*;
 pub use result::*;

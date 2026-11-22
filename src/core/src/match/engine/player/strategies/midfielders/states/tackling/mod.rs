@@ -3,7 +3,7 @@ use crate::r#match::engine::psychology::lapse::lapse_diag;
 use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{
+use crate::r#match::midfielders::states::shared::{
     ActivityIntensity, MidfielderCondition, MidfielderRead,
 };
 #[cfg(feature = "match-logs")]
@@ -11,11 +11,11 @@ use crate::r#match::player::diagnostics::defender_census::ChallengeOutcome;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::midfielder_census::{MidfielderCensus, TackleTake};
 use crate::r#match::player::events::{FoulCommitted, FoulSeverity, FoulSource, PlayerEvent};
-use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
-use crate::r#match::player::strategies::common::states::{
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::player::strategies::shared::players::ops::midfielder_skill::MidfielderSkillProfile;
+use crate::r#match::player::strategies::shared::states::{
     BlockChallenge, ChallengeKind, ClosingPoint, RecoveryChallenge, TackleDecision, TackleOutcome,
 };
-use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchContext, MatchPlayerLite, PlayerSide, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -215,12 +215,11 @@ impl MidfielderTacklingState {
             base_foul *= 0.70;
         }
         // His head scales what is left — see defenders/tackling.
-        let foul_chance =
-            ActionLapse::scaled(
-                LapseFamily::Challenge,
-                base_foul.max(0.005),
-                ctx.context.psychology.get(ctx.player.id),
-            );
+        let foul_chance = ActionLapse::scaled(
+            LapseFamily::Challenge,
+            base_foul.max(0.005),
+            ctx.context.psychology.get(ctx.player.id),
+        );
 
         let committed_foul = rng.random::<f32>() < foul_chance;
         #[cfg(feature = "match-logs")]

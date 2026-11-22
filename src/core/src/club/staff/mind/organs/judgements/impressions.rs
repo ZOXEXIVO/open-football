@@ -20,8 +20,7 @@
 //! [`impression_lens`]: super::impression_lens
 
 use crate::club::staff::perception::{
-    CoachProfile, PlayerImpression, RecentMove, RecentMoveType, date_to_week, perception_noise_raw,
-    seeded_decision,
+    CoachProfile, PerceptionNoise, PlayerImpression, RecentMove, RecentMoveType,
 };
 use crate::{Player, Staff, TeamType};
 use chrono::NaiveDate;
@@ -70,7 +69,7 @@ impl CoachDecisionState {
             profile: CoachProfile::from_staff(staff),
             impressions: FxHashMap::default(),
             coach_id: staff.id,
-            current_week: date_to_week(date),
+            current_week: PerceptionNoise::week(date),
             squad_satisfaction: 0.5,
             weeks_since_last_change: 0,
             trigger_pressure: 0.0,
@@ -88,7 +87,7 @@ impl CoachDecisionState {
     pub fn bind(&mut self, coach_id: u32, profile: CoachProfile, date: NaiveDate) {
         self.coach_id = coach_id;
         self.profile = profile;
-        self.current_week = date_to_week(date);
+        self.current_week = PerceptionNoise::week(date);
     }
 
     /// Has this state ever been bound to a coach?
@@ -99,6 +98,7 @@ impl CoachDecisionState {
 
     /// Update or create impression. Visibility-based skipping, sticky drift,
     /// overreaction mechanics, trust decay, emotional heat accumulation.
+    #[expect(clippy::too_many_lines)]
     pub fn update_impression(&mut self, player: &Player, date: NaiveDate, team_type: &TeamType) {
         let new_quality = self.perceived_quality(player, date);
         let new_readiness = self.match_readiness(player);
@@ -144,7 +144,7 @@ impl CoachDecisionState {
             let skip_seed = coach_seed
                 .wrapping_mul(player.id)
                 .wrapping_add(current_week.wrapping_mul(0xA77E));
-            if seeded_decision(skip_prob, skip_seed) {
+            if PerceptionNoise::seeded_decision(skip_prob, skip_seed) {
                 impression.coach_trust = (impression.coach_trust - 0.05).clamp(0.0, 10.0);
                 impression.weeks_in_squad = impression.weeks_in_squad.saturating_add(1);
                 impression.last_updated = date;
@@ -237,7 +237,7 @@ impl CoachDecisionState {
 
         // Perception drift
         let drift_noise =
-            perception_noise_raw(coach_seed, player.id, current_week.wrapping_add(0xDFFF))
+            PerceptionNoise::raw(coach_seed, player.id, current_week.wrapping_add(0xDFFF))
                 * 0.12
                 * (1.0 - judging_accuracy);
         impression.bias.perception_drift =
@@ -246,7 +246,7 @@ impl CoachDecisionState {
         // Bias decay
         impression.bias.quality_offset *= 0.98;
         let offset_noise =
-            perception_noise_raw(coach_seed, player.id, current_week.wrapping_add(0xD01F))
+            PerceptionNoise::raw(coach_seed, player.id, current_week.wrapping_add(0xD01F))
                 * 0.05
                 * (1.0 - judging_accuracy);
         impression.bias.quality_offset =
@@ -315,7 +315,7 @@ impl CoachDecisionState {
 
     /// Record a move for inertia tracking
     pub fn record_move(&mut self, player_id: u32, move_type: RecentMoveType, date: NaiveDate) {
-        let week = date_to_week(date);
+        let week = PerceptionNoise::week(date);
         let impression = self
             .impressions
             .entry(player_id)

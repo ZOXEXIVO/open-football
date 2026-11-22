@@ -192,8 +192,12 @@ mod tests {
         let fouler = Vector3::new(156.0, 270.0, 0.0);
         let keeper = (Vector3::new(10.0, 272.0, 0.0), true);
         let beaten = (Vector3::new(200.0, 260.0, 0.0), false);
-        let threat =
-            CounterAttackThreat::from_positions(carrier, goal, fouler, [keeper, beaten].into_iter());
+        let threat = CounterAttackThreat::from_positions(
+            carrier,
+            goal,
+            fouler,
+            [keeper, beaten].into_iter(),
+        );
         assert!(threat.lane_open);
         assert_eq!(threat.defenders_behind_ball, 0, "the keeper is not cover");
         assert!(threat.is_obvious_opportunity());

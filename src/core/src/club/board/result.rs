@@ -131,6 +131,7 @@ impl BoardResult {
         }
     }
 
+    #[expect(clippy::too_many_lines)]
     pub fn process<D: LeagueProcessAccess>(&self, data: &mut D) {
         if self.club_id == 0 {
             return;
@@ -457,6 +458,7 @@ impl BoardResult {
     /// transfer/wage budget adjustments, approved facility upgrades, and a
     /// takeover cash injection. Other variants (meetings, sackings, search,
     /// rumours, demands) are informational or handled by legacy fields.
+    #[expect(clippy::too_many_lines)]
     fn apply_decisions(decisions: &[BoardDecision], club: &mut Club, today: NaiveDate) {
         for decision in decisions {
             match decision {

@@ -561,6 +561,7 @@ impl Ball {
     /// owned/unowned counters) but the ball physically stays put.
     /// The anchor resets whenever the ball travels outside the radius,
     /// so normal play keeps advancing the anchor every few ticks.
+    #[expect(clippy::too_many_lines)]
     pub(in crate::r#match::engine::ball::ball) fn detect_position_stall(
         &mut self,
         players: &[MatchPlayer],

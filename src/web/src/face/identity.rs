@@ -189,6 +189,7 @@ pub struct Identity {
 }
 
 impl Identity {
+    #[expect(clippy::too_many_lines)]
     pub fn draw(rng: &mut AppearanceRng, dist: SkinDist, age: u8) -> Identity {
         let look = Appearance::draw(rng, dist);
         let ph = look.phenotype;

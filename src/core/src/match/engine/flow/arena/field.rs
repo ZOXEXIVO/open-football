@@ -1,11 +1,11 @@
 use crate::Tactics;
 use crate::club::staff::CoachMatchSnapshot;
 use crate::r#match::ball::Ball;
-use crate::r#match::common_states::CounterPress;
 use crate::r#match::engine::flow::arena::formation_variant::{
     FormationLine, FormationVariant, VacatedSlot,
 };
 use crate::r#match::engine::flow::touchline::{Bench, SubstitutionBreak, TouchlineStand};
+use crate::r#match::shared_states::CounterPress;
 use crate::r#match::{
     FieldSquad, MatchFieldSize, MatchPlayer, MatchSquad, PlayerSide, TransitionSource,
 };

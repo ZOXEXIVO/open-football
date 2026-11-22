@@ -1,14 +1,13 @@
-use crate::r#match::common_states::ShapeTempo;
-use crate::r#match::defenders::states::common::{DefensiveRecovery, DefensiveSlot};
+use crate::r#match::defenders::states::shared::{DefensiveRecovery, DefensiveSlot};
 use crate::r#match::defenders::states::{
     DefenderAttackingCornerState, DefenderClearingState, DefenderCoveringState,
     DefenderCrossingState, DefenderHeadingState, DefenderHoldingLineState,
     DefenderInterceptingState, DefenderJockeyingState, DefenderMarkingState,
-    DefenderOverlappingState,
-    DefenderPassingState, DefenderPressingState, DefenderPushingUpState,
+    DefenderOverlappingState, DefenderPassingState, DefenderPressingState, DefenderPushingUpState,
     DefenderReturningState, DefenderRunningState, DefenderShootingState, DefenderStandingState,
     DefenderTacklingState, DefenderTakeBallState, DefenderTrackingBackState, DefenderWalkingState,
 };
+use crate::r#match::shared_states::ShapeTempo;
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use nalgebra::Vector3;
 use std::fmt::Result;
@@ -134,11 +133,12 @@ impl DefenderStrategies {
         };
         // A man holding the shape moves at the pace the play asks of him
         // (`ShapeTempo`): the state chooses where, the tempo how fast.
-        let tempo = (state.holds_the_shape() && ShapeTempo::applies(&state_processor.ctx())).then(|| {
-            let ctx = state_processor.ctx();
-            let slot = DefensiveSlot::point(&ctx);
-            (ShapeTempo::to(&ctx, slot), slot, ctx.player.position)
-        });
+        let tempo =
+            (state.holds_the_shape() && ShapeTempo::applies(&state_processor.ctx())).then(|| {
+                let ctx = state_processor.ctx();
+                let slot = DefensiveSlot::point(&ctx);
+                (ShapeTempo::to(&ctx, slot), slot, ctx.player.position)
+            });
 
         let mut result = Self::dispatch(state, state_processor);
         // An imposed movement with its own effort floor (keeper release

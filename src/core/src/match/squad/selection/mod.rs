@@ -19,8 +19,8 @@ use crate::club::staff::{
     ShareClimate, StrategyDeriver, StrategyInputs,
 };
 use crate::club::team::ClubWeek;
-use crate::league::LeagueRegulations;
 use crate::club::{ClubPhilosophy, PlayerPositionType, Staff};
+use crate::league::LeagueRegulations;
 use crate::r#match::player::MatchPlayer;
 use crate::{Person, Player, Tactics, Team, TeamType};
 use chrono::NaiveDate;
@@ -30,13 +30,15 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 
 use helpers::*;
-use model::{EligibilityDecision, EligibilityEvaluator, FixtureEligibility, MatchSelectionGameModel};
+use model::{
+    EligibilityDecision, EligibilityEvaluator, FixtureEligibility, MatchSelectionGameModel,
+};
 use rotation::{DevelopmentSelection, DevelopmentStakes, MatchInvolvement};
 use scoring::ScoringEngine;
 
 use chrono::Utc;
-pub use omissions::OmittedPlayer;
 pub use lines::PitchLine;
+pub use omissions::OmittedPlayer;
 pub use room::FixtureRoom;
 
 pub struct SquadSelector;
@@ -295,6 +297,7 @@ impl SquadSelector {
         Self::select_with_tactics_context(team, staff, reserve_players, tactics.borrow(), ctx)
     }
 
+    #[expect(clippy::too_many_lines)]
     pub fn select_with_tactics_context(
         team: &Team,
         staff: &Staff,
@@ -617,6 +620,7 @@ impl SquadSelector {
         )
     }
 
+    #[expect(clippy::too_many_lines)]
     pub fn select_for_rotation_with_context(
         team: &Team,
         staff: &Staff,

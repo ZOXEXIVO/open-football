@@ -1,21 +1,20 @@
 use super::CountryResult;
 use super::transfers::settlement::TransferClauseSettler;
-use crate::ContractBonusType;
 use crate::PlayerContractProposal;
 use crate::club::CareerRunway;
 use crate::club::SquadDepartures;
-use crate::club::core::{DepartedPlayer, DepartureKind};
 use crate::club::board::mandate::SigningMandate;
 use crate::club::board::{BoardTransferConcern, BoardTransferDecision};
-use crate::club::finance::ParachuteEntitlement;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::events::TransferCompletion;
 use crate::club::player::mind::SpellChange;
+use crate::club::process::{DepartedPlayer, DepartureKind};
 use crate::club::staff::SeparationCause;
 use crate::club::staff::SpellCloser;
 use crate::club::staff::perception::AbilityEstimator;
 use crate::club::team::reputation::{Achievement, AchievementType};
 use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
+use crate::country::process::PromotionRelegationSwap;
 use crate::league::LeagueLadder;
 use crate::transfers::MarketMap;
 use crate::transfers::deal::offer::PromisedSquadStatus;
@@ -33,12 +32,11 @@ use crate::utils::{DateUtils, FormattingUtils};
 use crate::world::SimulatorData;
 use crate::world::bootstrap::ClubIdentity;
 use crate::{
-    AwardReputationInput, AwardReputationKind, Club, ClubResult, Country, HappinessEventCause,
-    HappinessEventContext, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
-    LoanEventContext, LoanEventKind, LoanSpellRecord, Person, Player, PlayerClubContract,
-    PlayerFieldPositionGroup, PlayerHappiness, PlayerMessage, PlayerMessageType, PlayerSquadStatus,
-    RetirementReason, SeasonOutcomeContext, SeasonOutcomeKind, StaffPosition, Team, TeamInfo,
-    TeamType, TrophyEventContext, TrophyKind,
+    Club, ClubResult, Country, HappinessEventCause, HappinessEventContext, HappinessEventScope,
+    HappinessEventSeverity, HappinessEventType, LoanEventContext, LoanEventKind, LoanSpellRecord,
+    Person, Player, PlayerClubContract, PlayerFieldPositionGroup, PlayerHappiness, PlayerMessage,
+    PlayerMessageType, PlayerSquadStatus, RetirementReason, SeasonOutcomeContext,
+    SeasonOutcomeKind, StaffPosition, Team, TeamInfo, TeamType,
 };
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
@@ -145,109 +143,43 @@ impl WarehousedLoans {
 }
 
 impl CountryResult {
-    pub(crate) fn process_end_of_period(
+    pub(crate) fn process_season_awards(
         country: &mut Country,
+        _club_results: &[ClubResult],
         date: NaiveDate,
-        club_results: &[ClubResult],
     ) {
-        // Get season dates from league settings
-        let season = country.season_dates();
-
-        if season.is_season_end(date) {
-            debug!("End of season processing");
-
-            Self::process_season_awards(country, club_results, date);
-            // NOTE: loan returns are handled in a separate phase (process_loan_returns)
-            // that runs AFTER club results, so ClubResult references remain valid
-            Self::process_player_retirements(country, date);
-        }
-
-        // Monthly check: retire players who are past max retirement age
-        // so they don't linger on teams until season end
-        if DateUtils::is_month_beginning(date) && date.month() as u8 != season.end_month {
-            Self::process_overdue_retirements(country, date);
-        }
-
-        // Monthly reputation decay — teams that aren't achieving anything
-        // drift back toward the mean. Runs on the 1st regardless of season.
-        if DateUtils::is_month_beginning(date) {
-            for club in &mut country.clubs {
-                for team in club.teams.iter_mut() {
-                    team.on_month_tick();
-                }
-            }
-        }
-
-        // Monthly parent-side renewal pass. Mirrors the per-club
-        // `ContractRenewalManager::run` that runs inside `Club::simulate`,
-        // but reaches across rosters to find players this club has loaned
-        // out — those are invisible to the per-club loop because they
-        // physically live at the borrower.
-        if DateUtils::is_month_beginning(date) {
-            Self::process_parent_loan_renewals(country, date);
-        }
-
-        // Promotion/relegation: runs on the 1st of the month AFTER the latest
-        // non-friendly league in the country has finished its season. Using
-        // the tier-1 end date alone can fire before lower tiers are done,
-        // leaving their final_table empty and silently skipping the swap.
-        let latest_end_month = country
-            .leagues
-            .leagues
-            .iter()
-            .filter(|l| !l.friendly)
-            .map(|l| l.settings.season_ending_half.to_month)
-            .max()
-            .unwrap_or(season.end_month);
-        let promo_month = if latest_end_month == 12 {
-            1u8
-        } else {
-            latest_end_month + 1
-        };
-        if DateUtils::is_month_beginning(date) && date.month() as u8 == promo_month {
-            // Age parachute entitlements before the swap runs: a club
-            // relegated *this* season is then stamped back to season zero
-            // below, and one whose three seasons are up drops off.
-            Self::age_parachute_entitlements(country);
-            Self::process_promotion_relegation(country, date);
-        }
-
-        // Late-season relegation-fear audit — runs once a month, scoped
-        // to the second half of the season for tier-1+ leagues. Players
-        // in the bottom (relegation_spots + 1) of the live table feel it.
-        if DateUtils::is_month_beginning(date) {
-            Self::process_relegation_fear_audit(country, date);
-            Self::process_administration_sanctions(country);
-        }
-
-        if date.month() == 12 && date.day() == 31 {
-            Self::process_year_end_finances(country);
-        }
-    }
-
-    fn process_season_awards(country: &mut Country, _club_results: &[ClubResult], date: NaiveDate) {
         debug!("Processing season awards");
 
-        // Build team_id -> club index mapping
-        let team_to_club: FxHashMap<u32, usize> = country
+        let team_to_club = Self::team_to_club(country);
+        let ladder = LeagueLadder::new(&country.leagues.leagues);
+        let (trophies, events) = Self::collect_trophy_events(country, &ladder);
+        Self::apply_trophy_awards(country, trophies, date);
+
+        let club_awards = Self::collect_club_awards(country, &team_to_club);
+        Self::apply_club_awards(country, club_awards);
+
+        for (team_id, event, prestige) in events {
+            Self::apply_team_squad_event(country, team_id, event, 365, prestige, date);
+        }
+        Self::reset_disciplinary_state(country);
+    }
+
+    fn team_to_club(country: &Country) -> FxHashMap<u32, usize> {
+        country
             .clubs
             .iter()
             .enumerate()
-            .flat_map(|(ci, club)| club.teams.iter().map(move |t| (t.id, ci)))
-            .collect();
-        let ladder = LeagueLadder::new(&country.leagues.leagues);
+            .flat_map(|(club_idx, club)| club.teams.iter().map(move |team| (team.id, club_idx)))
+            .collect()
+    }
 
-        // Trophy reputation boost: league champions and promoted sides get
-        // a durable rep bump that lingers for 2 seasons (see Achievement).
-        // Collected before the prize-money loop so we don't mix concerns.
-        // Per-player happiness events triggered by the same final tables.
-        // (team_id, event, prestige) — prestige lets a lower-tier league
-        // title fire `TrophyWon` at a smaller magnitude so it doesn't
-        // compete with the promotion emotion that's the real headline.
-        // Parallel collect across leagues — leagues are independent and
-        // the body is read-only against shared league state. The two
-        // per-league vecs are folded into a single tuple to keep the
-        // rayon collect simple, then flattened serially below.
+    fn collect_trophy_events(
+        country: &Country,
+        ladder: &LeagueLadder,
+    ) -> (
+        Vec<(u32, AchievementType)>,
+        Vec<(u32, HappinessEventType, f32)>,
+    ) {
         let per_league: Vec<_> = country
             .leagues
             .leagues
@@ -257,66 +189,34 @@ impl CountryResult {
                     return None;
                 }
                 let table = match &league.final_table {
-                    Some(t) if !t.is_empty() => t,
+                    Some(table) if !table.is_empty() => table,
                     _ => return None,
                 };
 
                 let mut trophies: Vec<(u32, AchievementType)> = Vec::new();
                 let mut events: Vec<(u32, HappinessEventType, f32)> = Vec::new();
-
-                // In a league that sends sides up (Championship-style
-                // setups), the title is real silverware but promotion is the
-                // career-visible moment, so `TrophyWon` is softened. Promotion
-                // itself is felt at the swap, by exactly the sides it moves
-                // up — a reserve champion or a group allotted fewer places
-                // than it declares has nothing to celebrate.
                 let sends_sides_up = ladder.promoted_from_table(league) > 0;
-                // Grouped competitions with a playoff crown their champion
-                // through the bracket (MLS Cup, Torneo Apertura/Clausura)
-                // — topping a zone/conference table is not a title, so no
-                // trophy fires here. The playoff winner fan-out lives in
-                // `process_playoff_winner_awards`.
                 let playoff_crowned = league
                     .settings
                     .league_group
                     .as_ref()
-                    .is_some_and(|g| g.playoff.is_some());
+                    .is_some_and(|group| group.playoff.is_some());
                 if let Some(champion) = table.first().filter(|_| !playoff_crowned) {
                     trophies.push((champion.team_id, AchievementType::LeagueTitle));
-                    let trophy_prestige = if sends_sides_up { 0.6 } else { 1.0 };
-                    events.push((
-                        champion.team_id,
-                        HappinessEventType::TrophyWon,
-                        trophy_prestige,
-                    ));
+                    let prestige = if sends_sides_up { 0.6 } else { 1.0 };
+                    events.push((champion.team_id, HappinessEventType::TrophyWon, prestige));
                 }
 
-                // Continental qualification — only top-tier leagues feed
-                // continental competitions. Heuristic, intentionally:
-                // `continent::result::competitions::collect_*_qualified_clubs`
-                // is the authoritative qualification source, but it indexes by
-                // *continental ranking* rather than league reputation, and it
-                // runs as part of the autumn draw — there's no clean signal
-                // queryable here at end-of-season for which clubs got the
-                // letters in the post.
-                //
-                // The reputation bands below mirror the *spot counts* that
-                // collector hands out (top-4 country = 7 European spots, next
-                // 4 country tier = 4, smaller top flights = 2), so a player at
-                // a club that genuinely qualifies will reliably hit this
-                // happiness event. Bottom flights and friendlies skip.
-                //
-                // Skip position 0 (title winner already gets `TrophyWon`,
-                // which subsumes European qualification — no double-counting).
                 if league.settings.tier == 1 {
-                    let mut europe_spots = 0usize;
-                    if league.reputation >= 7000 {
-                        europe_spots = 7; // CL top 4 + EL/UECL slots
+                    let europe_spots = if league.reputation >= 7000 {
+                        7
                     } else if league.reputation >= 5000 {
-                        europe_spots = 4; // top-4 cup-tier qualification
+                        4
                     } else if league.reputation >= 3000 {
-                        europe_spots = 2; // 2 spots in modest top flights
-                    }
+                        2
+                    } else {
+                        0
+                    };
                     for row in table.iter().take(europe_spots).skip(1) {
                         events.push((row.team_id, HappinessEventType::QualifiedForEurope, 1.0));
                     }
@@ -326,79 +226,80 @@ impl CountryResult {
             })
             .collect();
 
-        let mut trophy_awards: Vec<(u32, AchievementType)> = Vec::new();
-        let mut player_team_events: Vec<(u32, HappinessEventType, f32)> = Vec::new();
-        for (mut t, mut e) in per_league {
-            trophy_awards.append(&mut t);
-            player_team_events.append(&mut e);
+        let mut trophy_awards = Vec::new();
+        let mut player_team_events = Vec::new();
+        for (mut trophies, mut events) in per_league {
+            trophy_awards.append(&mut trophies);
+            player_team_events.append(&mut events);
         }
-        for (team_id, ach_type) in trophy_awards {
+        (trophy_awards, player_team_events)
+    }
+
+    fn apply_trophy_awards(
+        country: &mut Country,
+        trophies: Vec<(u32, AchievementType)>,
+        date: NaiveDate,
+    ) {
+        for (team_id, achievement) in trophies {
             if let Some(club) = country
                 .clubs
                 .iter_mut()
-                .find(|c| c.teams.iter().any(|t| t.id == team_id))
+                .find(|club| club.teams.iter().any(|team| team.id == team_id))
             {
-                Self::award_trophy(club, team_id, ach_type, date);
+                Self::award_trophy(club, team_id, achievement, date);
             }
         }
+    }
 
-        // Collect awards per club: (club_idx, prize_money, tv_money)
+    fn collect_club_awards(
+        country: &Country,
+        team_to_club: &FxHashMap<u32, usize>,
+    ) -> FxHashMap<usize, (i64, i64)> {
         let mut club_awards: FxHashMap<usize, (i64, i64)> = FxHashMap::default();
-
         for league in &country.leagues.leagues {
             if league.friendly {
                 continue;
             }
-
             let table = match &league.final_table {
-                Some(t) if !t.is_empty() => t,
+                Some(table) if !table.is_empty() => table,
                 _ => continue,
             };
-
             let total_teams = table.len();
             let prize_pool = league.financials.prize_pool;
             let tv_deal = league.financials.tv_deal_total;
-
             if prize_pool == 0 && tv_deal == 0 {
                 continue;
             }
 
-            // Calculate normalization factor: sum of (1 - i/n)^2
             let total_shares: f64 = (0..total_teams)
-                .map(|i| {
-                    let r = i as f64 / (total_teams - 1).max(1) as f64;
-                    (1.0 - r).powi(2)
+                .map(|position| {
+                    let ratio = position as f64 / (total_teams - 1).max(1) as f64;
+                    (1.0 - ratio).powi(2)
                 })
                 .sum();
 
             for (position, row) in table.iter().enumerate() {
-                let club_idx = match team_to_club.get(&row.team_id) {
-                    Some(&idx) => idx,
-                    None => continue,
+                let Some(&club_idx) = team_to_club.get(&row.team_id) else {
+                    continue;
                 };
-
-                // Prize money: quadratic decay by position (top-heavy)
                 let share = if total_teams > 1 {
-                    let pos_ratio = position as f64 / (total_teams - 1) as f64;
-                    (1.0 - pos_ratio).powi(2)
+                    let ratio = position as f64 / (total_teams - 1) as f64;
+                    (1.0 - ratio).powi(2)
                 } else {
                     1.0
                 };
-
                 let prize_amount = (prize_pool as f64 * share / total_shares) as i64;
-
-                // TV money: 50% equal + 50% merit-based
                 let tv_equal = tv_deal / (2 * total_teams as i64);
                 let tv_merit = (tv_deal as f64 * 0.5 * share / total_shares) as i64;
-                let tv_amount = tv_equal + tv_merit;
-
                 let entry = club_awards.entry(club_idx).or_insert((0, 0));
                 entry.0 += prize_amount;
-                entry.1 += tv_amount;
+                entry.1 += tv_equal + tv_merit;
             }
         }
+        club_awards
+    }
 
-        // Apply awards to clubs
+    fn apply_club_awards(country: &mut Country, club_awards: FxHashMap<usize, (i64, i64)>) {
         for (club_idx, (prize, tv)) in club_awards {
             let club = &mut country.clubs[club_idx];
             if prize > 0 {
@@ -412,20 +313,9 @@ impl CountryResult {
                 club.name, prize, tv
             );
         }
+    }
 
-        // Per-player season events. One pass over the (team_id, event,
-        // prestige) queue we built alongside the trophy collection, with
-        // a generous 365-day cooldown so the same milestone never fires
-        // twice in a season even if end-of-period happens to tick on
-        // consecutive days.
-        for (team_id, event, prestige) in player_team_events {
-            Self::apply_team_squad_event(country, team_id, event, 365, prestige, date);
-        }
-
-        // Reset the per-player disciplinary running counter (yellow-
-        // card tally). Active suspensions are preserved — a player
-        // who picked up a red on the final matchday still serves it
-        // in the new season, matching real FA / FIFA conventions.
+    fn reset_disciplinary_state(country: &mut Country) {
         for club in &mut country.clubs {
             for team in club.teams.iter_mut() {
                 for player in team.players.iter_mut() {
@@ -519,371 +409,6 @@ impl CountryResult {
                         player.on_continental_qualification_satisfaction();
                     }
                 }
-            }
-        }
-    }
-
-    /// Emit the domestic cup winner-trophy fan-out for the country's cup.
-    ///
-    /// Unlike league-title silverware (which lands on every player in the
-    /// champion roster), cup medals are tied to *appearance*: a player
-    /// only gets the event + award if they actually featured in the
-    /// winning campaign. Eligibility is read from
-    /// `cup_statistics_by_competition[cup_slug]` — which `process_local`
-    /// has already populated by the time this runs in the parallel tick,
-    /// including final-day starters and used substitutes. Unused
-    /// substitutes, January signings who never made the bench, and
-    /// youth players merely registered won't have an entry and so get
-    /// nothing — matching how real-football medals are awarded.
-    ///
-    /// Must be invoked AFTER the day's `LeagueResult::process_local` pass
-    /// — otherwise the final's appearances aren't on the player yet and
-    /// the entire winning XI silently fails the eligibility check.
-    ///
-    /// Idempotent across ticks via the `DomesticCup::award_emitted_*`
-    /// markers — the post-final daily tick re-enters this helper but
-    /// `should_emit_winner_award` returns `None` on the second visit.
-    pub(crate) fn process_domestic_cup_winner_awards(country: &mut Country, date: NaiveDate) {
-        // Snapshot every cup-side fact the awards path needs in one
-        // pass so the later mutation of `country.clubs` doesn't have to
-        // overlap with a borrow of `country.domestic_cup`. The set of
-        // players who appeared in the final is read from the cup's own
-        // match storage (which holds `MatchResultRaw.left/right_team_players`
-        // squads written by the engine), so the final-bonus flag stays
-        // self-contained.
-        struct CupSnapshot {
-            winner_team_id: u32,
-            cup_slug: String,
-            cup_name: String,
-            cup_league_id: u32,
-            cup_reputation: u16,
-            final_appearance_ids: rustc_hash::FxHashSet<u32>,
-        }
-        let snapshot = {
-            let cup = match country.domestic_cup.as_ref() {
-                Some(c) => c,
-                None => return,
-            };
-            let Some(winner_team_id) = cup.should_emit_winner_award(&country.clubs) else {
-                return;
-            };
-            // Build a roster snapshot of who took to the pitch in the
-            // final (starter or used substitute) on the winning side.
-            // If the final's `MatchResult.details` aren't available
-            // (e.g. an in-progress save, or details trimmed by storage
-            // retention), the set is empty — the bonus is just skipped,
-            // not a hard error.
-            let mut final_ids = FxHashSet::default();
-            if let Some((home_id, away_id)) = cup.champion_final_pairing(&country.clubs)
-                && let Some(last_tour) = cup.league.schedule.tours.last()
-                && let Some(item) = last_tour.items.first()
-                && let Some(mr) = cup.league.matches.get(&item.id)
-                && let Some(details) = mr.details.as_ref()
-            {
-                let winning_squad = if winner_team_id == home_id {
-                    Some(&details.left_team_players)
-                } else if winner_team_id == away_id {
-                    Some(&details.right_team_players)
-                } else {
-                    None
-                };
-                if let Some(squad) = winning_squad {
-                    for id in &squad.main {
-                        final_ids.insert(*id);
-                    }
-                    for id in &squad.substitutes_used {
-                        final_ids.insert(*id);
-                    }
-                }
-            }
-            CupSnapshot {
-                winner_team_id,
-                cup_slug: cup.league.slug.clone(),
-                cup_name: cup.league.name.clone(),
-                cup_league_id: cup.league.id,
-                cup_reputation: cup.league.reputation,
-                final_appearance_ids: final_ids,
-            }
-        };
-
-        // Pre-check: collect the eligible player ids on the winning
-        // roster BEFORE firing any team / board / player side effects.
-        // Without this an "all unused subs" champion (zero eligible
-        // players, e.g. a save loaded mid-final) would still hand the
-        // team a trophy achievement and the board a long-term-goal tick,
-        // and — because the cup's `award_emitted_*` marker only fires on
-        // success — those side effects would repeat every tick until
-        // somebody picked up a cup app. The fix is to read eligibility
-        // first and bail out entirely when nobody qualifies.
-        struct EligiblePlayer {
-            player_id: u32,
-            apps: u16,
-            starts: u16,
-            sub_apps: u16,
-            goals: u16,
-            assists: u16,
-            clean_sheets: u16,
-            avg_rating: f32,
-            final_appearance: bool,
-        }
-        let mut eligible: Vec<EligiblePlayer> = Vec::new();
-        for club in country.clubs.iter() {
-            for team in club.teams.iter() {
-                if team.id != snapshot.winner_team_id {
-                    continue;
-                }
-                for player in team.players.iter() {
-                    let Some(idx) = player
-                        .cup_statistics_by_competition
-                        .iter()
-                        .position(|c| c.competition_slug == snapshot.cup_slug)
-                    else {
-                        continue;
-                    };
-                    let stats = &player.cup_statistics_by_competition[idx].statistics;
-                    if stats.total_games() == 0 {
-                        continue;
-                    }
-                    let pos_group = player.position().position_group();
-                    let realistic = stats.average_rating_realistic(pos_group);
-                    let avg_rating = if realistic > 0.0 {
-                        realistic
-                    } else {
-                        stats.weighted_average_rating()
-                    };
-                    eligible.push(EligiblePlayer {
-                        player_id: player.id,
-                        apps: stats.total_games(),
-                        starts: stats.played,
-                        sub_apps: stats.played_subs,
-                        goals: stats.goals,
-                        assists: stats.assists,
-                        clean_sheets: stats.clean_sheets,
-                        avg_rating,
-                        final_appearance: snapshot.final_appearance_ids.contains(&player.id),
-                    });
-                }
-            }
-        }
-
-        if eligible.is_empty() {
-            // No one to award. Leave the cup marker unset so the next
-            // tick (once `process_local` has caught up) can fire the
-            // achievement + awards once instead of duplicating them.
-            debug!(
-                "Domestic cup {} resolved (winner team {}) but no eligible players this tick — \
-                 deferring achievement + awards",
-                snapshot.cup_name, snapshot.winner_team_id
-            );
-            return;
-        }
-
-        // Base prestige rises with the cup's reputation — a small-country
-        // cup lands near 0.70, an elite domestic cup (FA Cup / Copa del
-        // Rey) lands near 1.05–1.15. Players' involvement multiplier (see
-        // below) further scales this per player.
-        let rep_norm = (snapshot.cup_reputation as f32 / 10_000.0).clamp(0.0, 1.0);
-        let base_prestige = (0.70 + 0.45 * rep_norm).clamp(0.70, 1.15);
-
-        // Mutating pass: fire team + board achievement once, then walk
-        // the precomputed eligible set and emit per-player events +
-        // award impact. The eligibility map (player_id → EligiblePlayer)
-        // lets the player loop avoid re-deriving the cup stats.
-        let eligibility: rustc_hash::FxHashMap<u32, EligiblePlayer> =
-            eligible.into_iter().map(|e| (e.player_id, e)).collect();
-
-        for club in country.clubs.iter_mut() {
-            let club_id = club.id;
-            let mut club_owns_winner = false;
-            for team in club.teams.iter_mut() {
-                if team.id != snapshot.winner_team_id {
-                    continue;
-                }
-                club_owns_winner = true;
-                team.on_season_trophy(Achievement::new(AchievementType::CupWin, date, 8));
-
-                for player in team.players.iter_mut() {
-                    let Some(e) = eligibility.get(&player.id) else {
-                        continue;
-                    };
-                    // Cup-specific involvement multiplier — replaces
-                    // the generic `season_participation_factor` for
-                    // this event so a player whose only football this
-                    // year was three cup ties still feels the medal,
-                    // while a single-cameo player gets a softer emit.
-                    // A final appearance lifts the involvement floor
-                    // by 0.10 (capped at 1.10) so a 1-app sub who came
-                    // off the bench in the final isn't lumped in with
-                    // a 1-app early-round cameo.
-                    let base_involvement: f32 = match e.apps {
-                        1 => 0.65,
-                        2 => 0.80,
-                        _ => 0.95,
-                    };
-                    let final_bonus: f32 = if e.final_appearance { 0.10 } else { 0.0 };
-                    let involvement = (base_involvement + final_bonus).min(1.10_f32);
-                    let effective_prestige = (base_prestige * involvement).min(1.10);
-
-                    let trophy_ctx = TrophyEventContext::new(TrophyKind::DomesticCup)
-                        .with_competition_id(snapshot.cup_league_id)
-                        .with_competition_slug(snapshot.cup_slug.clone())
-                        .with_competition_name(snapshot.cup_name.clone())
-                        .with_winner_team_id(snapshot.winner_team_id)
-                        .with_apps(e.apps)
-                        .with_starts(e.starts)
-                        .with_used_sub_apps(e.sub_apps)
-                        .with_goals(e.goals)
-                        .with_assists(e.assists)
-                        .with_clean_sheets(e.clean_sheets)
-                        .with_final_appearance(e.final_appearance);
-                    let trophy_ctx = if e.avg_rating > 0.0 {
-                        trophy_ctx.with_avg_rating(e.avg_rating)
-                    } else {
-                        trophy_ctx
-                    };
-
-                    // Distinct happiness event from the league title's
-                    // `TrophyWon` so a double-winning side's cooldown
-                    // doesn't collapse the two emits into one.
-                    player.on_trophy_won_with_context(
-                        HappinessEventType::DomesticCupWon,
-                        trophy_ctx,
-                        365,
-                        effective_prestige,
-                        true, // skip season-participation — folded into involvement
-                        date,
-                    );
-                    // A cup medal is a night he remembers, filed against
-                    // the club he won it with.
-                    player.remember_season_outcome(
-                        &HappinessEventType::DomesticCupWon,
-                        club_id,
-                        date,
-                    );
-
-                    let mut input = AwardReputationInput::new()
-                        .with_league_id(snapshot.cup_league_id)
-                        .with_league_reputation(snapshot.cup_reputation)
-                        .with_matches_played(e.apps);
-                    if e.avg_rating > 0.0 {
-                        input = input.with_avg_rating(e.avg_rating);
-                    }
-                    player.apply_award_reputation_impact(
-                        AwardReputationKind::DomesticCupWinner,
-                        input,
-                        date,
-                    );
-                }
-            }
-            if club_owns_winner {
-                club.board.on_achievement(AchievementType::CupWin);
-            }
-        }
-
-        if let Some(cup) = country.domestic_cup.as_mut() {
-            cup.mark_winner_award_emitted(snapshot.winner_team_id, date);
-        }
-    }
-
-    /// Emit the champion fan-out for resolved grouped-competition playoffs
-    /// (MLS Cup, Torneo Apertura/Clausura) plus the Supporters' Shield for
-    /// MLS-format competitions. The playoff champion IS the competition's
-    /// league title — the zone/conference table toppers get no title of
-    /// their own (see the `playoff_crowned` guard in
-    /// `process_season_awards`).
-    ///
-    /// Runs daily; idempotent via the playoff's own `award_emitted_*` /
-    /// `shield_award_emitted_*` markers, so it is a no-op on every tick
-    /// where nothing new has resolved.
-    pub(crate) fn process_playoff_winner_awards(country: &mut Country, date: NaiveDate) {
-        for idx in 0..country.playoffs.len() {
-            // Champion trophy — squad-wide, participation-scaled.
-            let champion = {
-                let pf = &country.playoffs[idx];
-                pf.should_emit_winner_award().map(|winner| {
-                    (
-                        winner,
-                        pf.league.id,
-                        pf.league.slug.clone(),
-                        pf.league.name.clone(),
-                        pf.league.reputation,
-                    )
-                })
-            };
-            if let Some((winner_team_id, league_id, slug, name, reputation)) = champion {
-                let rep_norm = (reputation as f32 / 10_000.0).clamp(0.0, 1.0);
-                let prestige = (0.80 + 0.40 * rep_norm).clamp(0.80, 1.20);
-                for club in country.clubs.iter_mut() {
-                    let club_id = club.id;
-                    let mut owns_winner = false;
-                    for team in club.teams.iter_mut() {
-                        if team.id != winner_team_id {
-                            continue;
-                        }
-                        owns_winner = true;
-                        team.on_season_trophy(Achievement::new(
-                            AchievementType::LeagueTitle,
-                            date,
-                            8,
-                        ));
-                        for player in team.players.iter_mut() {
-                            let trophy_ctx = TrophyEventContext::new(TrophyKind::LeagueTitle)
-                                .with_competition_id(league_id)
-                                .with_competition_slug(slug.clone())
-                                .with_competition_name(name.clone())
-                                .with_winner_team_id(winner_team_id);
-                            player.on_trophy_won_with_context(
-                                HappinessEventType::TrophyWon,
-                                trophy_ctx,
-                                365,
-                                prestige,
-                                false,
-                                date,
-                            );
-                            player.remember_season_outcome(
-                                &HappinessEventType::TrophyWon,
-                                club_id,
-                                date,
-                            );
-                        }
-                    }
-                    if owns_winner {
-                        club.board.on_achievement(AchievementType::LeagueTitle);
-                    }
-                }
-                country.playoffs[idx].mark_winner_award_emitted(winner_team_id, date);
-            }
-
-            // Supporters' Shield — best regular-season record, awarded the
-            // moment the playoff seeds (i.e. when every group finished).
-            let shield = {
-                let pf = &country.playoffs[idx];
-                pf.should_emit_shield_award()
-                    .map(|team_id| (team_id, pf.league.id))
-            };
-            if let Some((shield_team_id, league_id)) = shield {
-                for club in country.clubs.iter_mut() {
-                    for team in club.teams.iter_mut() {
-                        if team.id != shield_team_id {
-                            continue;
-                        }
-                        for player in team.players.iter_mut() {
-                            let trophy_ctx = TrophyEventContext::new(TrophyKind::LeagueTitle)
-                                .with_competition_id(league_id)
-                                .with_competition_name("Supporters' Shield".to_string())
-                                .with_winner_team_id(shield_team_id);
-                            player.on_trophy_won_with_context(
-                                HappinessEventType::TrophyWon,
-                                trophy_ctx,
-                                365,
-                                0.6,
-                                false,
-                                date,
-                            );
-                        }
-                    }
-                }
-                country.playoffs[idx].mark_shield_award_emitted();
             }
         }
     }
@@ -1029,143 +554,163 @@ impl CountryResult {
         }
     }
 
-    /// Read-only scan: find players with expired loan contracts in this country.
     fn scan_expired_loans(
         data: &SimulatorData,
         country_id: u32,
         date: NaiveDate,
     ) -> Vec<LoanReturnEvent> {
         let country = match data.country(country_id) {
-            Some(c) => c,
+            Some(country) => country,
             None => return Vec::new(),
         };
 
-        let leagues = &country.leagues.leagues;
-        let league_info = |lid: u32| -> (&str, &str) {
-            leagues
-                .iter()
-                .find(|l| l.id == lid)
-                .map(|l| (l.name.as_str(), l.slug.as_str()))
-                .unwrap_or(("", ""))
-        };
-
         let mut events = Vec::new();
-
         for club in &country.clubs {
-            // Cheap short-circuit: most days most clubs have zero expiring
-            // loans, and we'd otherwise clone the main team + league strings
-            // unconditionally. Scan first, then allocate.
-            // Pass when the club holds ANY loaned-in player, not just an
-            // expiring one: a non-expiring surplus loan can still be drained
-            // early (see the warehouse check below), so it must reach the
-            // per-team scan rather than be short-circuited away here.
-            let has_loan_activity = club.teams.iter().any(|team| {
-                team.players.iter().any(|player| {
-                    player
-                        .contract_loan
-                        .as_ref()
-                        .map(|lc| lc.loan_from_club_id.is_some())
-                        .unwrap_or(false)
-                })
-            });
-            if !has_loan_activity {
+            if !Self::has_loan_activity(club) {
                 continue;
             }
+            events.extend(Self::expired_loan_events(data, country, club, date));
+        }
+        events
+    }
 
-            // Build the main-team / league strings once per club, not once
-            // per player that needs returning.
-            let main_team = club.teams.main();
-            let main_name = main_team.map(|t| t.name.clone());
-            let main_slug = main_team.map(|t| t.slug.clone());
-            let main_reputation = main_team.map(|t| t.reputation.world);
-            let (main_league_name, main_league_slug) = main_team
-                .and_then(|t| t.league_id)
-                .map(|lid| {
-                    let (n, s) = league_info(lid);
-                    (n.to_owned(), s.to_owned())
-                })
-                .unwrap_or_default();
+    fn has_loan_activity(club: &Club) -> bool {
+        club.teams.iter().any(|team| {
+            team.players.iter().any(|player| {
+                player
+                    .contract_loan
+                    .as_ref()
+                    .is_some_and(|contract| contract.loan_from_club_id.is_some())
+            })
+        })
+    }
 
-            for team in club.teams.iter() {
-                let (team_name, team_slug, team_reputation) =
-                    if team.team_type == TeamType::Main || main_name.is_none() {
-                        (team.name.clone(), team.slug.clone(), team.reputation.world)
-                    } else {
-                        (
-                            main_name.clone().unwrap_or_default(),
-                            main_slug.clone().unwrap_or_default(),
-                            main_reputation.unwrap_or(0),
-                        )
-                    };
+    fn expired_loan_events(
+        data: &SimulatorData,
+        country: &Country,
+        club: &Club,
+        date: NaiveDate,
+    ) -> Vec<LoanReturnEvent> {
+        let (main_name, main_slug, main_reputation, main_league_name, main_league_slug) =
+            Self::borrowing_identity(country, club);
+        let mut events = Vec::new();
 
-                // Warehoused-loan drain: a borrower that over-loaned a
-                // position sends back the surplus loaned-in stock early,
-                // alongside the loans that have simply expired.
-                let warehoused = WarehousedLoans::for_team(team);
-
-                for player in team.players.iter() {
-                    let Some(ref loan_contract) = player.contract_loan else {
-                        continue;
-                    };
-                    let Some(parent_club_id) = loan_contract.loan_from_club_id else {
-                        continue;
-                    };
-                    let expiring = loan_contract.expiration <= date;
-                    if !(expiring || warehoused.is_surplus(player, date)) {
-                        continue;
-                    }
-                    let mut event = LoanReturnEvent {
-                        player_id: player.id,
-                        borrowing_club_id: club.id,
-                        parent_club_id,
-                        borrowing_info: TeamInfo {
-                            name: team_name.clone(),
-                            slug: team_slug.clone(),
-                            reputation: team_reputation,
-                            league_name: main_league_name.clone(),
-                            league_slug: main_league_slug.clone(),
-                        },
-                        buyout: None,
-                        turned_down: None,
-                        declined_buyout: None,
-                    };
-                    // Option / obligation-to-buy — only a naturally
-                    // expiring loan can carry one (the warehouse drain
-                    // never touches option loans). An obligation binds
-                    // the clubs; an option the board approves still has
-                    // to be signed by him.
-                    let decision = if expiring {
-                        Self::decide_loan_buyout(club, player, loan_contract, date)
-                    } else {
-                        None
-                    };
-                    match decision {
-                        Some(LoanBuyoutDecision::TurnedDown(concern)) => {
-                            event.turned_down = Some(concern);
-                        }
-                        Some(LoanBuyoutDecision::Buy(buyout)) if buyout.obligation => {
-                            event.buyout = Some(buyout);
-                        }
-                        Some(LoanBuyoutDecision::Buy(buyout)) => match Self::buyout_refusal(
-                            data,
-                            country,
-                            club,
-                            player,
-                            parent_club_id,
-                            buyout.fee,
-                            date,
-                        ) {
-                            Some(cause) => event.declined_buyout = Some(cause),
-                            None => event.buyout = Some(buyout),
-                        },
-                        None => {}
-                    }
+        for team in club.teams.iter() {
+            let (team_name, team_slug, team_reputation) =
+                if team.team_type == TeamType::Main || main_name.is_none() {
+                    (team.name.clone(), team.slug.clone(), team.reputation.world)
+                } else {
+                    (
+                        main_name.clone().unwrap_or_default(),
+                        main_slug.clone().unwrap_or_default(),
+                        main_reputation.unwrap_or(0),
+                    )
+                };
+            let borrowing_info = TeamInfo {
+                name: team_name,
+                slug: team_slug,
+                reputation: team_reputation,
+                league_name: main_league_name.clone(),
+                league_slug: main_league_slug.clone(),
+            };
+            let warehoused = WarehousedLoans::for_team(team);
+            for player in team.players.iter() {
+                if let Some(event) = Self::loan_return_event(
+                    data,
+                    country,
+                    club,
+                    player,
+                    &warehoused,
+                    date,
+                    &borrowing_info,
+                ) {
                     events.push(event);
                 }
             }
         }
-
         events
+    }
+
+    fn borrowing_identity(
+        country: &Country,
+        club: &Club,
+    ) -> (Option<String>, Option<String>, Option<u16>, String, String) {
+        let main_team = club.teams.main();
+        let main_name = main_team.map(|team| team.name.clone());
+        let main_slug = main_team.map(|team| team.slug.clone());
+        let main_reputation = main_team.map(|team| team.reputation.world);
+        let (main_league_name, main_league_slug) = main_team
+            .and_then(|team| team.league_id)
+            .and_then(|league_id| {
+                country
+                    .leagues
+                    .leagues
+                    .iter()
+                    .find(|league| league.id == league_id)
+                    .map(|league| (league.name.clone(), league.slug.clone()))
+            })
+            .unwrap_or_default();
+        (
+            main_name,
+            main_slug,
+            main_reputation,
+            main_league_name,
+            main_league_slug,
+        )
+    }
+
+    fn loan_return_event(
+        data: &SimulatorData,
+        country: &Country,
+        club: &Club,
+        player: &Player,
+        warehoused: &WarehousedLoans,
+        date: NaiveDate,
+        borrowing_info: &TeamInfo,
+    ) -> Option<LoanReturnEvent> {
+        let loan_contract = player.contract_loan.as_ref()?;
+        let parent_club_id = loan_contract.loan_from_club_id?;
+        let expiring = loan_contract.expiration <= date;
+        if !(expiring || warehoused.is_surplus(player, date)) {
+            return None;
+        }
+
+        let mut event = LoanReturnEvent {
+            player_id: player.id,
+            borrowing_club_id: club.id,
+            parent_club_id,
+            borrowing_info: borrowing_info.clone(),
+            buyout: None,
+            turned_down: None,
+            declined_buyout: None,
+        };
+        let decision = if expiring {
+            Self::decide_loan_buyout(club, player, loan_contract, date)
+        } else {
+            None
+        };
+        match decision {
+            Some(LoanBuyoutDecision::TurnedDown(concern)) => {
+                event.turned_down = Some(concern);
+            }
+            Some(LoanBuyoutDecision::Buy(buyout)) if buyout.obligation => {
+                event.buyout = Some(buyout);
+            }
+            Some(LoanBuyoutDecision::Buy(buyout)) => match Self::buyout_refusal(
+                data,
+                country,
+                club,
+                player,
+                parent_club_id,
+                buyout.fee,
+                date,
+            ) {
+                Some(cause) => event.declined_buyout = Some(cause),
+                None => event.buyout = Some(buyout),
+            },
+            None => {}
+        }
+        Some(event)
     }
 
     /// The borrower's answer to a stored option / obligation to buy as the
@@ -1322,16 +867,16 @@ impl CountryResult {
             obligation,
             mandate,
         } = buyout;
-        let Some((bci, bcoi, bcli, bti)) = data.find_club_main_team(event.borrowing_club_id) else {
+        let Some(borrowing) = data.find_club_main_team(event.borrowing_club_id) else {
             Self::execute_loan_return(data, event, date, true);
             return;
         };
-        let Some((pci, pcoi, pcli, pti)) = data.find_club_main_team(event.parent_club_id) else {
+        let Some(parent) = data.find_club_main_team(event.parent_club_id) else {
             Self::execute_loan_return(data, event, date, true);
             return;
         };
 
-        let affordable = data.continents[bci].countries[bcoi].clubs[bcli]
+        let affordable = data.continents[borrowing.0].countries[borrowing.1].clubs[borrowing.2]
             .finance
             .can_afford_transfer(fee as f64);
         if !obligation && !affordable {
@@ -1339,8 +884,6 @@ impl CountryResult {
                 "Loan option lapsed: club {} cannot afford {} for player {}",
                 event.borrowing_club_id, fee, event.player_id
             );
-            // The money the board heard was not there by the time it paid:
-            // still the board's refusal, on his record like any other.
             let turned_down = LoanReturnEvent {
                 turned_down: Some(BoardTransferConcern::ExceedsTransferBudget),
                 ..event
@@ -1349,52 +892,100 @@ impl CountryResult {
             return;
         }
 
-        // Parent-side TeamInfo + both league reputations for the
-        // history row and the contract-valuation context.
-        let (parent_info, selling_league_reputation) = {
-            let country = &data.continents[pci].countries[pcoi];
-            let team = &country.clubs[pcli].teams.teams[pti];
-            let league = team
-                .league_id
-                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid));
-            (
-                TeamInfo {
-                    name: team.name.clone(),
-                    slug: team.slug.clone(),
-                    reputation: team.reputation.world,
-                    league_name: league.map(|l| l.name.clone()).unwrap_or_default(),
-                    league_slug: league.map(|l| l.slug.clone()).unwrap_or_default(),
-                },
-                league.map(|l| l.reputation).unwrap_or(0),
-            )
-        };
-        let buying_league_reputation = {
-            let country = &data.continents[bci].countries[bcoi];
-            country.clubs[bcli].teams.teams[bti]
-                .league_id
-                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-                .map(|l| l.reputation)
-                .unwrap_or(0)
+        let (parent_info, selling_reputation, buying_reputation) =
+            Self::buyout_team_info(data, borrowing, parent);
+        Self::book_loan_buyout(data, borrowing, parent, &event, fee, date);
+        Self::complete_loan_buyout(
+            data,
+            event,
+            parent,
+            fee,
+            &parent_info,
+            buying_reputation,
+            selling_reputation,
+            mandate,
+            date,
+        );
+    }
+
+    fn buyout_team_info(
+        data: &SimulatorData,
+        borrowing: (usize, usize, usize, usize),
+        parent: (usize, usize, usize, usize),
+    ) -> (TeamInfo, u16, u16) {
+        let (bci, bcoi, bcli, bti) = borrowing;
+        let (pci, pcoi, pcli, pti) = parent;
+        let parent_country = &data.continents[pci].countries[pcoi];
+        let parent_team = &parent_country.clubs[pcli].teams.teams[pti];
+        let parent_league = parent_team.league_id.and_then(|league_id| {
+            parent_country
+                .leagues
+                .leagues
+                .iter()
+                .find(|league| league.id == league_id)
+        });
+        let parent_info = TeamInfo {
+            name: parent_team.name.clone(),
+            slug: parent_team.slug.clone(),
+            reputation: parent_team.reputation.world,
+            league_name: parent_league
+                .map(|league| league.name.clone())
+                .unwrap_or_default(),
+            league_slug: parent_league
+                .map(|league| league.slug.clone())
+                .unwrap_or_default(),
         };
 
-        // Fee booking: buyer amortizes the purchase, seller banks it.
-        // The obligated variant always books the cash: options were
-        // affordability-checked above, and a binding obligation pays
-        // regardless of budget headroom — the fallible variant returned
-        // false for a budget-short borrower and silently minted the fee
-        // (seller credited, buyer never debited).
+        let borrowing_country = &data.continents[bci].countries[bcoi];
+        let buying_reputation = borrowing_country.clubs[bcli].teams.teams[bti]
+            .league_id
+            .and_then(|league_id| {
+                borrowing_country
+                    .leagues
+                    .leagues
+                    .iter()
+                    .find(|league| league.id == league_id)
+            })
+            .map(|league| league.reputation)
+            .unwrap_or(0);
+        (
+            parent_info,
+            parent_league.map(|league| league.reputation).unwrap_or(0),
+            buying_reputation,
+        )
+    }
+
+    fn book_loan_buyout(
+        data: &mut SimulatorData,
+        borrowing: (usize, usize, usize, usize),
+        parent: (usize, usize, usize, usize),
+        event: &LoanReturnEvent,
+        fee: u32,
+        date: NaiveDate,
+    ) {
+        let (bci, bcoi, bcli, _) = borrowing;
+        let (pci, pcoi, pcli, _) = parent;
         data.continents[bci].countries[bcoi].clubs[bcli]
             .finance
             .register_obligated_purchase(fee as f64, 4);
-        // A buyout is a sale. The parent was not picking him, so the fact
-        // it is told carries the money and little else.
         if let Some(departed) = data.player(event.player_id).map(|player| {
             DepartedPlayer::away(player, DepartureKind::BoughtOut, date).for_fee(fee as f64)
         }) {
             data.continents[pci].countries[pcoi].clubs[pcli].on_player_departed(&departed);
         }
+    }
 
-        // Mutate the player in place — he stays in the borrower roster.
+    fn complete_loan_buyout(
+        data: &mut SimulatorData,
+        event: LoanReturnEvent,
+        parent: (usize, usize, usize, usize),
+        fee: u32,
+        parent_info: &TeamInfo,
+        buying_league_reputation: u16,
+        selling_league_reputation: u16,
+        mandate: SigningMandate,
+        date: NaiveDate,
+    ) {
         let Some((ci, coi, cli, ti)) = data.find_player_position(event.player_id) else {
             return;
         };
@@ -1403,14 +994,14 @@ impl CountryResult {
                 .players
                 .players
                 .iter_mut()
-                .find(|p| p.id == event.player_id)
+                .find(|player| player.id == event.player_id)
             else {
                 return;
             };
             let obligations = player.drain_sell_on_obligations();
             player.complete_transfer(TransferCompletion {
-                from: &parent_info,
-                history_source: &parent_info,
+                from: parent_info,
+                history_source: parent_info,
                 to: &event.borrowing_info,
                 fee: fee as f64,
                 date,
@@ -1422,20 +1013,10 @@ impl CountryResult {
                 record_sell_on: None,
                 personal_terms: None,
                 mandate: Some(mandate),
-                // Buyout of a player already in this dressing room — no
-                // arrival reception of any kind (pending is cleared below).
                 source_is_rival: false,
-                // The buyout narrates itself with the richer row below —
-                // suppress the generic "permanent transfer" stamp so the
-                // register shows one decision, not two, for one event.
                 record_decision: false,
-                // History closes the ACTIVE loan spell at the borrower and
-                // opens a permanent spell there — the generic from → to
-                // recording drained the loan-season stats into a phantom
-                // parent row and left the loan spell active forever.
                 loan_buyout: true,
             });
-            // No new-club arrival shock: he never changed dressing rooms.
             player.pending_signing = None;
             player.decision_history.add_move(
                 date,
@@ -1451,7 +1032,7 @@ impl CountryResult {
             obligations
         };
 
-        // Route prior sell-on obligations out of the parent's proceeds.
+        let (pci, pcoi, pcli, _) = parent;
         for obligation in &obligations {
             let payout = fee as f64 * obligation.percentage as f64;
             if payout <= 0.0 {
@@ -1483,56 +1064,64 @@ impl CountryResult {
         date: NaiveDate,
         record_return: bool,
     ) {
-        /// A season of starts at a decent standard: the record that says
-        /// he can play, whatever his birth year.
-        const PROVING_STARTS: u16 = 12;
-        const PROVING_RATING: f32 = 6.5;
-        /// How much of the slight a man with his whole career ahead of
-        /// him still feels.
-        const YOUNGEST_STILL_MINDS: f32 = 0.35;
-
-        // Find parent club location first — abort early if missing
-        let parent_pos = data.find_club_main_team(event.parent_club_id);
-        if parent_pos.is_none() {
+        let Some(parent_pos) = data.find_club_main_team(event.parent_club_id) else {
             debug!(
                 "Loan return skipped: parent club {} not found for player {}",
                 event.parent_club_id, event.player_id
             );
             return;
-        }
-
-        // Build parent TeamInfo before mutating data — needed by record_loan_return
-        // to create a current-season entry if one was drained by season-end snapshot.
-        let (pci, pcoi, pcli, pti) = parent_pos.unwrap();
-        let parent_info = {
-            let country = &data.continents[pci].countries[pcoi];
-            let club = &country.clubs[pcli];
-            let team = &club.teams.teams[pti];
-            let league_info = team
-                .league_id
-                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-                .map(|l| (l.name.clone(), l.slug.clone()))
-                .unwrap_or_default();
-            TeamInfo {
-                name: team.name.clone(),
-                slug: team.slug.clone(),
-                reputation: team.reputation.world,
-                league_name: league_info.0,
-                league_slug: league_info.1,
-            }
         };
+        let parent_info = Self::parent_loan_team_info(data, parent_pos);
+        let Some((mut player, borrower_country_id)) = Self::take_loaned_player(data, &event, date)
+        else {
+            return;
+        };
+        let (spell, loan_band, loan_apps, loan_rating) =
+            Self::record_loan_spell(&mut player, &event, &parent_info, date);
+        Self::place_returned_player(
+            data,
+            player,
+            &event,
+            parent_pos,
+            &parent_info,
+            spell,
+            loan_band,
+            borrower_country_id,
+            loan_apps,
+            loan_rating,
+            record_return,
+            date,
+        );
+    }
 
-        // Take player from wherever they are
+    fn parent_loan_team_info(
+        data: &SimulatorData,
+        parent_pos: (usize, usize, usize, usize),
+    ) -> TeamInfo {
+        let (pci, pcoi, pcli, pti) = parent_pos;
+        let country = &data.continents[pci].countries[pcoi];
+        let team = &country.clubs[pcli].teams.teams[pti];
+        let league = team
+            .league_id
+            .and_then(|league_id| country.leagues.leagues.iter().find(|l| l.id == league_id));
+        TeamInfo {
+            name: team.name.clone(),
+            slug: team.slug.clone(),
+            reputation: team.reputation.world,
+            league_name: league.map(|l| l.name.clone()).unwrap_or_default(),
+            league_slug: league.map(|l| l.slug.clone()).unwrap_or_default(),
+        }
+    }
+
+    fn take_loaned_player(
+        data: &mut SimulatorData,
+        event: &LoanReturnEvent,
+        date: NaiveDate,
+    ) -> Option<(Player, u32)> {
         let player_pos = data.find_player_position(event.player_id);
-        // Where he actually spent the spell, read before he is moved: the
-        // parent's placement ledger is keyed on the country, and once he
-        // is home the only club anybody can see is the one he came back to.
         let borrower_country_id = player_pos
             .map(|(ci, coi, _, _)| data.continents[ci].countries[coi].id)
             .unwrap_or(0);
-        // The borrowing manager's spell with him ends here. The parent
-        // club's does not — his was suspended, not closed, and it resumes
-        // when the player walks back through the door.
         let departed = player_pos.and_then(|(ci, coi, cli, _)| {
             DepartedPlayer::read(
                 &data.continents[ci].countries[coi].clubs[cli],
@@ -1550,16 +1139,11 @@ impl CountryResult {
             );
         }
         let mut player = match player_pos {
-            Some((ci, coi, cli, ti)) => {
-                match data.continents[ci].countries[coi].clubs[cli].teams.teams[ti]
-                    .players
-                    .take_player(&event.player_id)
-                {
-                    Some(p) => p,
-                    None => return,
-                }
-            }
-            None => return,
+            Some((ci, coi, cli, ti)) => data.continents[ci].countries[coi].clubs[cli].teams.teams
+                [ti]
+                .players
+                .take_player(&event.player_id)?,
+            None => return None,
         };
         if let (Some((ci, coi, cli, _)), Some(departed)) = (player_pos, departed.as_ref()) {
             data.continents[ci].countries[coi].clubs[cli].on_player_departed(departed);
@@ -1570,9 +1154,15 @@ impl CountryResult {
         if let Some(cause) = event.declined_buyout {
             player.on_buyout_declined(cause, date);
         }
+        Some((player, borrower_country_id))
+    }
 
-        // Capture the loan-spell record before `on_loan_return` freezes
-        // and resets the borrower-season statistics.
+    fn record_loan_spell(
+        player: &mut Player,
+        event: &LoanReturnEvent,
+        parent_info: &TeamInfo,
+        date: NaiveDate,
+    ) -> (LoanSpellRecord, f32, u16, f32) {
         let loan_starts = player.statistics.played;
         let loan_apps = player.statistics.played + player.statistics.played_subs;
         let loan_rating = player
@@ -1581,13 +1171,9 @@ impl CountryResult {
         let loan_spell_days = player
             .contract_loan
             .as_ref()
-            .and_then(|l| l.started)
-            .map(|s| (date - s).num_days())
+            .and_then(|loan| loan.started)
+            .map(|started| (date - started).num_days())
             .unwrap_or(0);
-        // The record the club reads on the way home, captured here for
-        // the same reason as the numbers above it: `on_loan_return`
-        // freezes and resets the borrower season, and nothing downstream
-        // can recover what he did while he was away.
         let spell = LoanSpellRecord::new(
             loan_starts,
             loan_apps,
@@ -1596,12 +1182,6 @@ impl CountryResult {
             loan_rating,
             loan_spell_days,
         );
-        // A goalkeeper's spell cannot be read off the goals column: he
-        // comes home with none of them however well he kept, and every
-        // report of a keeper's loan said exactly that about him. The
-        // shut-outs and the goals that went past him are his record,
-        // and they are frozen with the rest of the borrowing season a
-        // few lines below this.
         let spell = if matches!(
             player.position().position_group(),
             PlayerFieldPositionGroup::Goalkeeper
@@ -1611,10 +1191,7 @@ impl CountryResult {
             spell
         };
 
-        player.on_loan_return(&event.borrowing_info, &parent_info, date);
-        // The borrowing club is behind him for good; the club that owns
-        // him never stopped owning him, so his plan and what he wanted
-        // back here both survive the spell away.
+        player.on_loan_return(&event.borrowing_info, parent_info, date);
         player.on_spell_change(
             SpellChange::loan_return(
                 event.borrowing_club_id,
@@ -1625,89 +1202,20 @@ impl CountryResult {
         );
         player.contract_loan = None;
         player.happiness = PlayerHappiness::new();
-        // The canonical transient reset — the wholesale `statuses.clear()`
-        // this replaces also wiped durable flags outside the documented
-        // club-change list (see `reset_on_club_change`, the single
-        // transient-status list every completion chokepoint runs).
         player.reset_on_club_change();
 
-        // A senior who was first-choice on loan and comes home to a
-        // fringe role doesn't get a fully clean slate — the return he
-        // didn't choose is the first mood of the new parent spell, and
-        // it feeds the stuck-career machinery from day one.
-        let fringe_at_parent = player
-            .contract
-            .as_ref()
-            .map(|c| {
-                matches!(
-                    c.squad_status,
-                    PlayerSquadStatus::MainBackupPlayer | PlayerSquadStatus::NotNeeded
-                )
-            })
-            .unwrap_or(false);
-        // What the spell was worth is the record, not the birthday: a
-        // season of starts at a decent standard is a man proving he can
-        // play, at any age. What differs is what he came home to.
-        let proved_himself = loan_starts >= PROVING_STARTS && loan_rating >= PROVING_RATING;
-        let runway = CareerRunway::at(DateUtils::age(player.birth_date, date));
-        if fringe_at_parent && proved_himself {
-            // Proved it, and came home to the bench anyway. It costs him
-            // in proportion to how little career he has left to spend
-            // waiting — a boy minds, a twenty-nine-year-old minds more.
-            let magnitude = HappinessConfig::default()
-                .catalog
-                .unsettled_after_loan_return
-                * (1.0f32 - runway).max(YOUNGEST_STILL_MINDS);
-            player
-                .happiness
-                .add_event(HappinessEventType::UnsettledAfterLoanReturn, magnitude);
-        } else if proved_himself {
-            // He went out to be found out and came back a footballer,
-            // into a shirt that is his — quiet confidence rather than
-            // grievance. The record keeps working after this beat fades:
-            // the frozen loan spell raises his own playing-time bar
-            // (`own_expected_start_share`) and feeds the monthly
-            // returnee-breakthrough audit if the parent never gives him
-            // the minutes his record earned.
-            let magnitude = HappinessConfig::default().catalog.returned_from_loan_proven;
-            player
-                .happiness
-                .add_event(HappinessEventType::ReturnedFromLoanProven, magnitude);
-        } else if (loan_apps >= 8 && loan_rating < 6.2)
-            || (loan_spell_days >= 120 && loan_apps <= 4)
-        {
-            // The failure branch: a real sample of matches clearly below
-            // the water line, or a real spell he barely featured in. He
-            // comes home with his confidence knocked — deeper for a
-            // player who handles pressure poorly, shrugged off faster by
-            // the thick-skinned. The mentor-support and resilience arcs
-            // are the way back; the club-side verdict on the failed bet
-            // stays with the stalled-prospect / listing pipelines.
-            let pressure01 = (player.attributes.pressure / 20.0).clamp(0.0, 1.0);
-            let magnitude = HappinessConfig::default()
-                .catalog
-                .returned_from_loan_deflated
-                * (1.3 - 0.6 * pressure01);
-            player
-                .happiness
-                .add_event(HappinessEventType::ReturnedFromLoanDeflated, magnitude);
-        }
+        Self::apply_loan_return_mood(
+            player,
+            loan_starts,
+            loan_apps,
+            loan_rating,
+            loan_spell_days,
+            date,
+        );
 
-        // The loan report. Every return files one, including the ones
-        // none of the mood branches above fit — a spell that ended in a
-        // shrug is still a season of a player's career, and reading it
-        // back is how the parent club decides what he is now. Carries
-        // the whole record, so the feed can say "34 games, 9 goals,
-        // 7.12" instead of "returned from loan".
         let spell_verdict = spell.verdict;
-        // The spell is over and he has read it too. What a man does next
-        // after a season away is his own decision, held on his plan.
-        // The band he played it at travels with the verdict: a level he
-        // has held for a season is one he has proved he belongs at, and
-        // it is the floor he will not go below if the next answer is a
-        // permanent drop.
         let loan_band = LevelBand::at_reputation(
-            AbilityEstimator::observable_level(&player),
+            AbilityEstimator::observable_level(player),
             player.position().position_group(),
             (event.borrowing_info.reputation as f32 / 10_000.0).clamp(0.0, 1.0),
         );
@@ -1718,10 +1226,6 @@ impl CountryResult {
             .with_loan_days_elapsed(spell.days)
             .with_actual_apps(spell.appearances)
             .with_spell(spell);
-        // Cause/scope follow the other loan events: the judgement is the
-        // club's, not a dressing-room incident, and the loan renderer
-        // intercepts on the loan context before the generic cause line
-        // is ever consulted.
         let review_ctx = HappinessEventContext::new(
             HappinessEventCause::Other,
             HappinessEventSeverity::Minor,
@@ -1734,10 +1238,70 @@ impl CountryResult {
             None,
             review_ctx,
         );
+        (spell, loan_band, loan_apps, loan_rating)
+    }
 
-        // A loan running its course is a club decision too — the player
-        // comes home. Only genuine returns stamp this; an early recall
-        // records its own `dec_loan_recalled` row at the call site.
+    fn apply_loan_return_mood(
+        player: &mut Player,
+        loan_starts: u16,
+        loan_apps: u16,
+        loan_rating: f32,
+        loan_spell_days: i64,
+        date: NaiveDate,
+    ) {
+        let fringe_at_parent = player
+            .contract
+            .as_ref()
+            .map(|contract| {
+                matches!(
+                    contract.squad_status,
+                    PlayerSquadStatus::MainBackupPlayer | PlayerSquadStatus::NotNeeded
+                )
+            })
+            .unwrap_or(false);
+        let proved_himself = loan_starts >= 12 && loan_rating >= 6.5;
+        let runway = CareerRunway::at(DateUtils::age(player.birth_date, date));
+        if fringe_at_parent && proved_himself {
+            let magnitude = HappinessConfig::default()
+                .catalog
+                .unsettled_after_loan_return
+                * (1.0f32 - runway).max(0.35);
+            player
+                .happiness
+                .add_event(HappinessEventType::UnsettledAfterLoanReturn, magnitude);
+        } else if proved_himself {
+            let magnitude = HappinessConfig::default().catalog.returned_from_loan_proven;
+            player
+                .happiness
+                .add_event(HappinessEventType::ReturnedFromLoanProven, magnitude);
+        } else if (loan_apps >= 8 && loan_rating < 6.2)
+            || (loan_spell_days >= 120 && loan_apps <= 4)
+        {
+            let pressure01 = (player.attributes.pressure / 20.0).clamp(0.0, 1.0);
+            let magnitude = HappinessConfig::default()
+                .catalog
+                .returned_from_loan_deflated
+                * (1.3 - 0.6 * pressure01);
+            player
+                .happiness
+                .add_event(HappinessEventType::ReturnedFromLoanDeflated, magnitude);
+        }
+    }
+
+    fn place_returned_player(
+        data: &mut SimulatorData,
+        mut player: Player,
+        event: &LoanReturnEvent,
+        parent_pos: (usize, usize, usize, usize),
+        parent_info: &TeamInfo,
+        spell: LoanSpellRecord,
+        loan_band: f32,
+        borrower_country_id: u32,
+        loan_apps: u16,
+        loan_rating: f32,
+        record_return: bool,
+        date: NaiveDate,
+    ) {
         if record_return {
             player.decision_history.add_move(
                 date,
@@ -1747,8 +1311,34 @@ impl CountryResult {
                 "dec_loan_returned",
             );
         }
+        Self::add_returned_player(
+            data,
+            player,
+            event,
+            parent_pos,
+            spell,
+            loan_band,
+            borrower_country_id,
+            loan_apps,
+            loan_rating,
+            date,
+        );
+    }
 
-        // Place at parent club
+    #[allow(clippy::too_many_arguments)]
+    fn add_returned_player(
+        data: &mut SimulatorData,
+        player: Player,
+        event: &LoanReturnEvent,
+        parent_pos: (usize, usize, usize, usize),
+        spell: LoanSpellRecord,
+        loan_band: f32,
+        borrower_country_id: u32,
+        loan_apps: u16,
+        loan_rating: f32,
+        date: NaiveDate,
+    ) {
+        let (pci, pcoi, pcli, pti) = parent_pos;
         debug!(
             "Loan return: player {} from club {} back to club {}",
             event.player_id, event.borrowing_club_id, event.parent_club_id
@@ -1756,30 +1346,16 @@ impl CountryResult {
         data.continents[pci].countries[pcoi].clubs[pcli].teams.teams[pti]
             .players
             .add(player);
-
-        // The parent reads the spell and says what he is now — promotion
-        // with a promise, another season away with a purpose, or the
-        // market. The club owns the decision; this pass only states that
-        // he is home.
         data.continents[pci].countries[pcoi].clubs[pcli].on_loanee_returned(
             event.player_id,
             &spell,
             loan_band,
             date,
         );
-        // …and what the destination itself was worth. A country that gave
-        // him a season of football is one the club goes back to; one that
-        // sat him on a bench is one it thinks twice about.
         if borrower_country_id != data.continents[pci].countries[pcoi].id {
             data.continents[pci].countries[pcoi].clubs[pcli]
                 .on_loanee_returned_from(borrower_country_id, spell.start_share());
         }
-
-        // And his own manager picks the relationship back up. The spell was
-        // suspended rather than closed when he went out, so nothing has to
-        // be rebuilt — what is new is a season of football the coach did
-        // not watch, which enters his read as the reports he actually gets
-        // rather than as matches he was at.
         if let Some(coach) = data.continents[pci].countries[pcoi].clubs[pcli]
             .teams
             .main_mut()
@@ -1950,12 +1526,12 @@ impl CountryResult {
 
     /// Monthly backstop: players past the age any career runs to retire
     /// now rather than lingering in a squad until the season-end verdict.
-    fn process_overdue_retirements(country: &mut Country, date: NaiveDate) {
+    pub(crate) fn process_overdue_retirements(country: &mut Country, date: NaiveDate) {
         let retiring = Self::retirements(country, |player| player.overdue_retirement(date));
         Self::retire_players(country, retiring, date);
     }
 
-    fn process_player_retirements(country: &mut Country, date: NaiveDate) {
+    pub(crate) fn process_player_retirements(country: &mut Country, date: NaiveDate) {
         debug!("Processing player retirements");
         let retiring = Self::retirements(country, |player| player.season_end_retirement(date));
         Self::retire_players(country, retiring, date);
@@ -2012,7 +1588,7 @@ impl CountryResult {
         }
     }
 
-    fn process_year_end_finances(country: &mut Country) {
+    pub(crate) fn process_year_end_finances(country: &mut Country) {
         debug!("Processing year-end finances");
 
         country.clubs.par_iter_mut().for_each(|club| {
@@ -2044,7 +1620,7 @@ impl CountryResult {
     /// wage bill and then having it cancelled would be a dominant strategy.
     /// Applied exactly once per administration via the `deduction_applied`
     /// memo on the club's state.
-    fn process_administration_sanctions(country: &mut Country) {
+    pub(crate) fn process_administration_sanctions(country: &mut Country) {
         // Collect first: applying the deduction needs a mutable borrow of
         // the league table while the club is also borrowed mutably.
         let mut pending: Vec<(u32, u32, u8)> = Vec::new();
@@ -2098,7 +1674,7 @@ impl CountryResult {
     /// that have run their three years. Runs immediately before the
     /// promotion/relegation swap, which then re-stamps this season's
     /// relegated clubs at season zero.
-    fn age_parachute_entitlements(country: &mut Country) {
+    pub(crate) fn age_parachute_entitlements(country: &mut Country) {
         for club in &mut country.clubs {
             if let Some(entitlement) = club.finance.parachute {
                 club.finance.parachute = entitlement.advanced();
@@ -2106,7 +1682,7 @@ impl CountryResult {
         }
     }
 
-    fn process_promotion_relegation(country: &mut Country, date: NaiveDate) {
+    pub(crate) fn process_promotion_relegation(country: &mut Country, date: NaiveDate) {
         // Collect league info: (league_id, tier, relegation_spots, promotion_spots)
         let league_info: Vec<(u32, u8, u8, u8)> = country
             .leagues
@@ -2244,7 +1820,11 @@ impl CountryResult {
                 (lower_id, top)
             })
             .collect();
-        let deepest = lower_tops.iter().map(|(_, top)| top.len()).max().unwrap_or(0);
+        let deepest = lower_tops
+            .iter()
+            .map(|(_, top)| top.len())
+            .max()
+            .unwrap_or(0);
         let mut promoted: Vec<(u32, u32)> = Vec::new();
         for rank in 0..deepest {
             for (lower_id, top) in &lower_tops {
@@ -2272,7 +1852,10 @@ impl CountryResult {
         let mut vacancies: Vec<(u32, usize)> = split
             .iter()
             .map(|&(lower_id, _)| {
-                let sent = promoted.iter().filter(|&&(_, from)| from == lower_id).count();
+                let sent = promoted
+                    .iter()
+                    .filter(|&&(_, from)| from == lower_id)
+                    .count();
                 (lower_id, sent)
             })
             .collect();
@@ -2459,298 +2042,30 @@ impl CountryResult {
         promoted: &[(u32, u32)],
         promoted_club_ids: &mut Vec<u32>,
     ) {
-        let relegated_to: FxHashMap<u32, u32> = relegated.iter().copied().collect();
-        let relegated_team_ids: Vec<u32> = relegated.iter().map(|&(team, _)| team).collect();
-        let promoted_team_ids: Vec<u32> = promoted.iter().map(|&(team, _)| team).collect();
-        let mut lower_ids: Vec<u32> = relegated
-            .iter()
-            .chain(promoted)
-            .map(|&(_, lower)| lower)
-            .collect();
-        lower_ids.sort_unstable();
-        lower_ids.dedup();
-
-        let swap_count = relegated_team_ids.len().max(1);
+        let swap = PromotionRelegationSwap::new(country, date, tier1_id, relegated, promoted);
 
         promoted_club_ids.extend(
             country
                 .clubs
                 .iter()
-                .filter(|c| {
-                    c.teams
+                .filter(|club| {
+                    club.teams
                         .teams
                         .iter()
-                        .any(|t| promoted_team_ids.contains(&t.id))
+                        .any(|team| swap.promoted_team_ids.contains(&team.id))
                 })
-                .map(|c| c.id),
+                .map(|club| club.id),
         );
 
-        // Snapshot per-team final standing so the per-player
-        // relegation event can carry SeasonOutcomeContext (final
-        // position, points, gap to safety) without re-borrowing
-        // the league inside the upcoming `&mut country.clubs` loop.
-        let relegation_outcome_by_team: FxHashMap<u32, (u8, u16, i16)> = country
-            .leagues
-            .leagues
-            .iter()
-            .find(|l| l.id == tier1_id)
-            .and_then(|l| l.final_table.as_ref())
-            .map(|table| {
-                let total = table.len();
-                let safety_idx = total.saturating_sub(swap_count);
-                let safety_points: u16 = table
-                    .get(safety_idx.saturating_sub(1))
-                    .map(|r| r.effective_points() as u16)
-                    .unwrap_or(0);
-                table
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, r)| relegated_team_ids.contains(&r.team_id))
-                    .map(|(idx, r)| {
-                        let pos = (idx + 1) as u8;
-                        let pts = r.effective_points() as u16;
-                        let gap = pts as i16 - safety_points as i16;
-                        (r.team_id, (pos, pts, gap))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        // Build a tier-2 club expectation map: clubs that finished
-        // inside the promotion window (top promotion_spots + a couple
-        // of playoff places) "expected" promotion. NonPromotionRelease
-        // only activates for those — finishing 18th in the second tier
-        // shouldn't trigger any player's escape clause.
-        let promotion_window_team_ids: Vec<u32> = country
-            .leagues
-            .leagues
-            .iter()
-            .filter(|l| lower_ids.contains(&l.id))
-            .filter_map(|l| {
-                let t = l.final_table.as_ref()?;
-                let window = (l.settings.promotion_spots as usize + 2).min(t.len());
-                Some(t.iter().take(window).map(|r| r.team_id).collect::<Vec<_>>())
-            })
-            .flatten()
-            .collect();
-
-        // Division the relegated clubs are falling out of — the pool
-        // their parachute payments are a share of.
-        let vacated_tier: u8 = country
-            .leagues
-            .leagues
-            .iter()
-            .find(|l| l.id == tier1_id)
-            .map(|l| l.settings.tier.max(1))
-            .unwrap_or(1);
-        // Ranked groups of one tier (Russian Division A Gold above Silver)
-        // trade sides without anyone changing tier — no revenue is lost or
-        // regained, so parachutes are neither granted nor ended.
-        let crosses_tier = country
-            .leagues
-            .leagues
-            .iter()
-            .filter(|l| lower_ids.contains(&l.id))
-            .any(|l| l.settings.tier > vacated_tier);
-        // A side in a senior division (Castilla, Jong Ajax, Zenit 2) moves
-        // on its own result alone; only youth and friendly sides follow
-        // their first team down or up.
-        let senior_league_ids: FxHashSet<u32> = country
-            .leagues
-            .leagues
-            .iter()
-            .filter(|l| !l.friendly)
-            .map(|l| l.id)
-            .collect();
-
-        // Swap league_ids on teams and move sub-teams to matching friendly league
         for club in &mut country.clubs {
-            let mut new_main_league_id: Option<u32> = None;
-            // Aggregate one-shot bonus payouts owed for this season's
-            // outcome. Charged to the club after the team loops so we
-            // only hold a single mut borrow at a time.
-            let mut bonus_total: i64 = 0;
-
-            for team in &mut club.teams.teams {
-                if let Some(&lower_id) = relegated_to.get(&team.id) {
-                    info!(
-                        "⬇️ Relegation: team {} ({}) moves to league {}",
-                        team.name, team.id, lower_id
-                    );
-                    team.move_to_league(lower_id);
-                    if team.team_type == TeamType::Main {
-                        new_main_league_id = Some(lower_id);
-                    }
-                    // Year-defining wound — emit per player. The upward
-                    // counterpart fires once the whole swap has run.
-                    // Inline emit (we hold &mut to team here, so the
-                    // Self::apply_team_squad_event helper which takes
-                    // &mut country would conflict).
-                    let outcome = relegation_outcome_by_team.get(&team.id).copied();
-                    for player in team.players.iter_mut() {
-                        let mut ctx = SeasonOutcomeContext::new(SeasonOutcomeKind::Relegated)
-                            .with_league(tier1_id);
-                        if let Some((pos, pts, gap)) = outcome {
-                            ctx = ctx
-                                .with_final_position(pos)
-                                .with_points(pts)
-                                .with_points_to_safety(gap);
-                        }
-                        player.on_season_outcome(
-                            HappinessEventType::Relegated,
-                            365,
-                            1.0,
-                            date,
-                            ctx,
-                        );
-                        // Activate any RelegationWageDecrease and
-                        // RelegationFeeRelease clauses on the player's
-                        // contract. Each helper consumes the matching
-                        // clause so subsequent relegations don't double-apply.
-                        if let Some(c) = player.contract.as_mut() {
-                            let _ = c.apply_relegation_wage_decrease();
-                            let _ = c.take_relegation_release();
-                        }
-                    }
-                } else if promoted_team_ids.contains(&team.id) {
-                    info!(
-                        "⬆️ Promotion: team {} ({}) moves to league {}",
-                        team.name, team.id, tier1_id
-                    );
-                    team.move_to_league(tier1_id);
-                    if team.team_type == TeamType::Main {
-                        new_main_league_id = Some(tier1_id);
-                    }
-                    // Symmetric to the relegation hooks above —
-                    // PromotionWageIncrease bumps salary; players
-                    // also keep their existing contracts (no clause
-                    // for "release on promotion").
-                    for player in team.players.iter_mut() {
-                        if let Some(c) = player.contract.as_mut() {
-                            let _ = c.apply_promotion_wage_increase();
-                            // PromotionFee bonus is paid out as a
-                            // one-shot lump sum to every player on
-                            // the promoted team who has the bonus.
-                            for bonus in &c.bonuses {
-                                if matches!(bonus.bonus_type, ContractBonusType::PromotionFee)
-                                    && bonus.value > 0
-                                {
-                                    bonus_total += bonus.value as i64;
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    // Survival in a tier-1 league with relegation
-                    // places: pay AvoidRelegationFee bonuses if the
-                    // team was at risk this season. Approximated by
-                    // "team carries the clause" — the bonus is only
-                    // installed on contracts when the club expected
-                    // a relegation battle.
-                    let in_tier1_with_relegation = team.league_id == Some(tier1_id);
-                    if in_tier1_with_relegation {
-                        for player in team.players.iter_mut() {
-                            if let Some(c) = player.contract.as_mut() {
-                                for bonus in &c.bonuses {
-                                    if matches!(
-                                        bonus.bonus_type,
-                                        ContractBonusType::AvoidRelegationFee
-                                    ) && bonus.value > 0
-                                    {
-                                        bonus_total += bonus.value as i64;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // NonPromotionRelease activates only for clubs that
-            // genuinely expected to go up — finished inside the
-            // promotion window — and didn't. Mid-table and
-            // bottom-of-tier-2 clubs are excluded so a player's
-            // escape clause doesn't fire just because the club is
-            // in the wrong league.
-            let club_was_in_window = club
-                .teams
-                .teams
-                .iter()
-                .any(|t| promotion_window_team_ids.contains(&t.id));
-            let club_was_promoted = club
-                .teams
-                .teams
-                .iter()
-                .any(|t| promoted_team_ids.contains(&t.id));
-            if club_was_in_window && !club_was_promoted {
-                for team in &mut club.teams.teams {
-                    if team.league_id.is_some_and(|id| lower_ids.contains(&id)) {
-                        for player in team.players.iter_mut() {
-                            if let Some(c) = player.contract.as_mut() {
-                                let _ = c.take_non_promotion_release();
-                            }
-                        }
-                    }
-                }
-            }
-
-            if bonus_total > 0 {
-                club.finance.balance.push_expense_player_wages(bonus_total);
-            }
-
-            // Parachute payments. A relegated club keeps a declining
-            // share of the division it left for three seasons; a
-            // promoted club's entitlement ends the moment it goes back
-            // up. Without this, dropping a division is a ~90% revenue
-            // cut against a wage bill fixed by contracts already signed
-            // — arithmetically unsurvivable, and the reason relegated
-            // clubs used to spiral straight to insolvency. The revenue at
-            // stake is the first team's: a B team crossing a tier neither
-            // costs the club a division's money nor wins it back.
-            let first_team_in =
-                |ids: &[u32]| club.teams.main().is_some_and(|t| ids.contains(&t.id));
-            let first_team_relegated = first_team_in(&relegated_team_ids);
-            let first_team_promoted = first_team_in(&promoted_team_ids);
-            if crosses_tier {
-                if first_team_relegated {
-                    club.finance.parachute = Some(ParachuteEntitlement {
-                        from_tier: vacated_tier,
-                        seasons_elapsed: 0,
-                    });
-                } else if first_team_promoted {
-                    club.finance.parachute = None;
-                }
-            }
-
-            // Move sub-teams to the matching youth league of the new main league
-            if let Some(new_league_id) = new_main_league_id {
-                for team in &mut club.teams.teams {
-                    if team.team_type != TeamType::Main
-                        && !team
-                            .league_id
-                            .is_some_and(|id| senior_league_ids.contains(&id))
-                    {
-                        let type_offset = match team.team_type {
-                            TeamType::U18 => 100000,
-                            TeamType::U19 => 110000,
-                            TeamType::U20 => 120000,
-                            TeamType::U21 => 130000,
-                            TeamType::U23 => 140000,
-                            _ => 200000, // B/Reserve teams use generic friendly league
-                        };
-                        team.move_to_league(new_league_id + type_offset);
-                    }
-                }
-            }
+            swap.swap_club(club);
         }
 
-        // Promotion is felt by exactly the sides that went up — nobody
-        // knows who they are until the swap has run.
-        for &team_id in &promoted_team_ids {
+        for &team_id in &swap.promoted_team_ids {
             if let Some(club) = country
                 .clubs
                 .iter_mut()
-                .find(|c| c.teams.iter().any(|t| t.id == team_id))
+                .find(|club| club.teams.iter().any(|team| team.id == team_id))
             {
                 Self::award_trophy(club, team_id, AchievementType::Promotion, date);
             }
@@ -2773,7 +2088,7 @@ impl CountryResult {
     /// The cooldown on `RelegationFear` is 30 days, so this monthly scan
     /// produces at most one event per player per month even if their team
     /// fluctuates around the line.
-    fn process_relegation_fear_audit(country: &mut Country, date: NaiveDate) {
+    pub(crate) fn process_relegation_fear_audit(country: &mut Country, date: NaiveDate) {
         // Collect (team_id, in_zone, near_zone) from each non-friendly
         // league with a meaningful relegation slot count and enough
         // season progress to register pressure.
@@ -2858,8 +2173,10 @@ impl CountryResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TrophyKind;
     use crate::academy::ClubAcademy;
     use crate::club::board::mandate::MandatePurpose;
+    use crate::club::finance::ParachuteEntitlement;
     use crate::club::mind::organs::memory::EpisodeKind;
     use crate::club::player::builder::PlayerBuilder;
     use crate::club::player::mind::CareerArc;
@@ -3739,7 +3056,13 @@ mod tests {
             .clubs
             .iter_mut()
             .find(|c| c.id == 200)
-            .and_then(|c| c.teams.teams[0].players.players.iter_mut().find(|p| p.id == 55))
+            .and_then(|c| {
+                c.teams.teams[0]
+                    .players
+                    .players
+                    .iter_mut()
+                    .find(|p| p.id == 55)
+            })
             .unwrap();
         if let Some(loan) = loanee.contract_loan.as_mut() {
             loan.loan_future_fee_obligation = true;
@@ -4290,7 +3613,11 @@ mod tests {
                 .find(|t| t.id == team_id)
                 .and_then(|t| t.league_id)
         };
-        assert_eq!(league_of(100), Some(2), "the B team stays below its first team");
+        assert_eq!(
+            league_of(100),
+            Some(2),
+            "the B team stays below its first team"
+        );
         assert_eq!(league_of(21), Some(1), "the next eligible side goes up");
         assert_eq!(league_of(13), Some(2));
         assert_eq!(league_of(10), Some(1));
@@ -5370,7 +4697,7 @@ mod tests {
         let cup = make_resolved_cup_2team(800_000_001, "test-cup", 6500, 10, 20, 2026);
         let mut country = build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
 
-        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
+        country.on_domestic_cup_winner_awards(d(2027, 5, 20));
 
         let winner = country.clubs.iter().find(|c| c.id == 100).unwrap();
         let appeared = &winner.teams.teams[0].players.players[0];
@@ -5422,7 +4749,7 @@ mod tests {
         let cup = make_resolved_cup_2team(800_000_002, "test-cup", 7000, 10, 20, 2026);
         let mut country = build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
 
-        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
+        country.on_domestic_cup_winner_awards(d(2027, 5, 20));
 
         let winner = country.clubs.iter().find(|c| c.id == 100).unwrap();
         let sub_only = &winner.teams.teams[0].players.players[0];
@@ -5451,8 +4778,8 @@ mod tests {
         let mut country = build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
 
         // Two ticks: the day of the final + the day after.
-        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
-        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 21));
+        country.on_domestic_cup_winner_awards(d(2027, 5, 20));
+        country.on_domestic_cup_winner_awards(d(2027, 5, 21));
 
         let winner = country.clubs.iter().find(|c| c.id == 100).unwrap();
         let starter = &winner.teams.teams[0].players.players[0];
@@ -5550,7 +4877,7 @@ mod tests {
             cup,
         );
 
-        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
+        country.on_domestic_cup_winner_awards(d(2027, 5, 20));
 
         let winner = country.clubs.iter().find(|c| c.id == 100).unwrap();
         let starter = &winner.teams.teams[0].players.players[0];
@@ -5598,7 +4925,7 @@ mod tests {
         let cup = make_resolved_cup_2team(800_000_005, "test-cup", 7500, 10, 20, 2026);
         let mut country = build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
 
-        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
+        country.on_domestic_cup_winner_awards(d(2027, 5, 20));
 
         let starter = &country
             .clubs
@@ -5652,8 +4979,8 @@ mod tests {
             .home;
 
         // Two ticks, neither of which has any eligible player.
-        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
-        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 21));
+        country.on_domestic_cup_winner_awards(d(2027, 5, 20));
+        country.on_domestic_cup_winner_awards(d(2027, 5, 21));
 
         let team = &country
             .clubs
@@ -5727,7 +5054,7 @@ mod tests {
 
         let mut country = build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
 
-        CountryResult::process_domestic_cup_winner_awards(&mut country, final_date);
+        country.on_domestic_cup_winner_awards(final_date);
 
         let players = &country
             .clubs
@@ -5785,7 +5112,7 @@ mod tests {
         let cup = make_resolved_cup_2team(800_000_008, "test-cup", 7000, 10, 20, 2026);
         let mut country = build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
 
-        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
+        country.on_domestic_cup_winner_awards(d(2027, 5, 20));
 
         let starter = &country
             .clubs

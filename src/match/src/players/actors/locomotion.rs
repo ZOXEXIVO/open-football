@@ -35,6 +35,7 @@ impl PlayerActor {
         self.vertical_speed = 0.0;
     }
 
+    #[expect(clippy::too_many_lines)]
     pub(super) fn advance_locomotion(
         &mut self,
         track: Option<&Track>,

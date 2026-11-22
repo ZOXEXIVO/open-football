@@ -1,7 +1,7 @@
-use crate::r#match::common_states::LooseBallChase;
-use crate::r#match::defenders::states::common::{
+use crate::r#match::defenders::states::shared::{
     ActivityIntensity, DefenderCondition, DefenderRead, Interception, ReadLevel,
 };
+use crate::r#match::shared_states::LooseBallChase;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,

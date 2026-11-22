@@ -951,7 +951,7 @@ mod pending_signal_delivery_tests {
 
     use super::*;
     use crate::academy::ClubAcademy;
-    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::competitions::global::GlobalCompetitions;
     use crate::continent::Continent;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};

@@ -2,8 +2,8 @@
 
 use chrono::NaiveDate;
 
-use crate::club::core::DepartedPlayer;
 use crate::club::player::contract::PlayerSquadStatus;
+use crate::club::process::DepartedPlayer;
 use crate::transfers::pipeline::TransferNeedPriority;
 use crate::{ClubPhilosophy, PlayerPositionType, PlayerPreferredFoot};
 
@@ -194,17 +194,26 @@ impl Vacancy {
 
     /// The foot a shirt on one side of the pitch asks for, when the man
     /// who left had it.
-    fn foot_for(shirt: PlayerPositionType, foot: PlayerPreferredFoot) -> Option<PlayerPreferredFoot> {
+    fn foot_for(
+        shirt: PlayerPositionType,
+        foot: PlayerPreferredFoot,
+    ) -> Option<PlayerPreferredFoot> {
         use PlayerPositionType::*;
         let side = match shirt {
-            DefenderLeft | DefenderCenterLeft | WingbackLeft | MidfielderLeft
-            | MidfielderCenterLeft | AttackingMidfielderLeft | ForwardLeft => {
-                PlayerPreferredFoot::Left
-            }
-            DefenderRight | DefenderCenterRight | WingbackRight | MidfielderRight
-            | MidfielderCenterRight | AttackingMidfielderRight | ForwardRight => {
-                PlayerPreferredFoot::Right
-            }
+            DefenderLeft
+            | DefenderCenterLeft
+            | WingbackLeft
+            | MidfielderLeft
+            | MidfielderCenterLeft
+            | AttackingMidfielderLeft
+            | ForwardLeft => PlayerPreferredFoot::Left,
+            DefenderRight
+            | DefenderCenterRight
+            | WingbackRight
+            | MidfielderRight
+            | MidfielderCenterRight
+            | AttackingMidfielderRight
+            | ForwardRight => PlayerPreferredFoot::Right,
             _ => return None,
         };
         (foot == side).then_some(side)
@@ -214,7 +223,7 @@ impl Vacancy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::club::core::DepartureKind;
+    use crate::club::process::DepartureKind;
     use crate::club::staff::PlannedRole;
     use chrono::Duration;
 
@@ -254,19 +263,30 @@ mod tests {
             }
         }
 
-        fn reading(philosophy: ClubPhilosophy, budget: f64, days_left: Option<i64>) -> VacancyReading {
+        fn reading(
+            philosophy: ClubPhilosophy,
+            budget: f64,
+            days_left: Option<i64>,
+        ) -> VacancyReading {
             VacancyReading {
                 philosophy,
                 baseline_level: 120,
                 budget,
                 window: days_left.map(|left| {
-                    (Self::day() - Duration::days(40), Self::day() + Duration::days(left))
+                    (
+                        Self::day() - Duration::days(40),
+                        Self::day() + Duration::days(left),
+                    )
                 }),
                 today: Self::day(),
             }
         }
 
-        fn brief(departed: DepartedPlayer, recycled: f64, reading: &VacancyReading) -> VacancyBrief {
+        fn brief(
+            departed: DepartedPlayer,
+            recycled: f64,
+            reading: &VacancyReading,
+        ) -> VacancyBrief {
             Vacancy::of(&departed, recycled).unwrap().brief(reading)
         }
     }
@@ -285,22 +305,42 @@ mod tests {
     #[test]
     fn an_heir_at_his_level_closes_the_vacancy_and_a_lesser_man_does_not() {
         let vacancy = Vacancy::of(&Gone::first_choice(), 40_000_000.0).unwrap();
-        let holder = |level: u8, signed_since: bool| Some(ShirtHolder { level, signed_since });
-        assert_eq!(vacancy.judge(holder(154, false), Gone::day()), VacancyOutcome::HeldFromWithin);
-        assert_eq!(vacancy.judge(holder(140, false), Gone::day()), VacancyOutcome::Search);
+        let holder = |level: u8, signed_since: bool| {
+            Some(ShirtHolder {
+                level,
+                signed_since,
+            })
+        };
+        assert_eq!(
+            vacancy.judge(holder(154, false), Gone::day()),
+            VacancyOutcome::HeldFromWithin
+        );
+        assert_eq!(
+            vacancy.judge(holder(140, false), Gone::day()),
+            VacancyOutcome::Search
+        );
         assert_eq!(vacancy.judge(None, Gone::day()), VacancyOutcome::Search);
         assert_eq!(
             vacancy.judge(None, Gone::day() + Duration::days(400)),
             VacancyOutcome::Lapsed
         );
-        assert_eq!(vacancy.judge(holder(140, true), Gone::day()), VacancyOutcome::Filled);
+        assert_eq!(
+            vacancy.judge(holder(140, true), Gone::day()),
+            VacancyOutcome::Filled
+        );
     }
 
     #[test]
     fn a_squad_player_who_leaves_asks_for_little() {
         let vacancy = Vacancy::of(&Gone::cover(), 1_000_000.0).unwrap();
         assert_eq!(
-            vacancy.judge(Some(ShirtHolder { level: 100, signed_since: false }), Gone::day()),
+            vacancy.judge(
+                Some(ShirtHolder {
+                    level: 100,
+                    signed_since: false
+                }),
+                Gone::day()
+            ),
             VacancyOutcome::AsksForLittle
         );
     }
@@ -309,7 +349,11 @@ mod tests {
     fn a_star_above_the_divisions_standard_is_replaced_near_his_own_level() {
         let reading = Gone::reading(ClubPhilosophy::SignToCompete, 40_000_000.0, Some(30));
         let brief = Gone::brief(Gone::first_choice(), 40_000_000.0, &reading);
-        assert!(brief.level >= 150, "sought at {}, the division asks 120", brief.level);
+        assert!(
+            brief.level >= 150,
+            "sought at {}, the division asks 120",
+            brief.level
+        );
         assert_eq!(brief.position, PlayerPositionType::ForwardLeft);
     }
 
@@ -349,10 +393,16 @@ mod tests {
             money,
             &Gone::reading(ClubPhilosophy::DevelopAndSell, money, Some(30)),
         );
-        assert!(develop.age_band.1 < 27, "younger than the man of 27 who left");
+        assert!(
+            develop.age_band.1 < 27,
+            "younger than the man of 27 who left"
+        );
         assert!(develop.age_band.1 < compete.age_band.1);
         assert!(develop.min_level < compete.min_level);
-        assert_eq!(develop.level, compete.level, "aimed at the same level in the end");
+        assert_eq!(
+            develop.level, compete.level,
+            "aimed at the same level in the end"
+        );
     }
 
     #[test]
@@ -403,7 +453,10 @@ mod tests {
         let mut previous = at(0);
         for left in 1..=70 {
             let now = at(left);
-            assert!(now <= previous && previous - now < 0.02, "a step at {left} days");
+            assert!(
+                now <= previous && previous - now < 0.02,
+                "a step at {left} days"
+            );
             previous = now;
         }
     }
@@ -411,7 +464,9 @@ mod tests {
     #[test]
     fn urgency_follows_how_much_he_mattered() {
         let reading = Gone::reading(ClubPhilosophy::Balanced, 0.0, Some(14));
-        let star = Vacancy::of(&Gone::first_choice(), 0.0).unwrap().urgency(&reading);
+        let star = Vacancy::of(&Gone::first_choice(), 0.0)
+            .unwrap()
+            .urgency(&reading);
         let squad = Vacancy::of(&Gone::cover(), 0.0).unwrap().urgency(&reading);
         assert!(star > squad * 4.0, "{star} against {squad}");
     }

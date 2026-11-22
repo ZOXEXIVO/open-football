@@ -182,6 +182,7 @@ impl ScoutingPass {
         by_group
     }
 
+    #[expect(clippy::too_many_lines)]
     pub fn assign_scouts(
         country: &mut Country,
         world: WorldPool<'_>,
@@ -346,6 +347,7 @@ impl ScoutingPass {
     // Step 3.5: Assign Scouts to Youth/Reserve Matches
     // ============================================================
 
+    #[expect(clippy::too_many_lines)]
     pub fn assign_scouts_to_matches(country: &mut Country, current_date: NaiveDate) {
         let mut actions: Vec<MatchScoutAssignmentAction> = Vec::new();
 
@@ -703,6 +705,7 @@ impl ScoutingPass {
     /// What the scout writes down, once the gate has let this player
     /// through. Assessment is from visible skills and match performance —
     /// never hidden potential — with the error narrowed for a live viewing.
+    #[expect(clippy::too_many_lines)]
     fn record_observation(
         country: &Country,
         club: &Club,
@@ -1212,6 +1215,7 @@ impl ScoutingPass {
     /// player in the country PER TARGET (twice — once more inside
     /// `local_interest_signal`); now the beats are resolved in one parallel
     /// read pass and stamped in one parallel walk.
+    #[expect(clippy::too_many_lines)]
     fn apply_scouting_results(
         country: &mut Country,
         staged_per_club: Vec<ClubScoutingStaged>,

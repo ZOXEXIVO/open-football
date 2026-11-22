@@ -1,4 +1,3 @@
-pub mod common;
 pub mod creating_space;
 pub mod cross_receiving;
 pub mod crossing;
@@ -14,6 +13,7 @@ pub mod pressing;
 pub mod returning;
 pub mod running;
 pub mod running_in_behind;
+pub mod shared;
 pub mod shooting;
 pub mod standing;
 pub mod state;

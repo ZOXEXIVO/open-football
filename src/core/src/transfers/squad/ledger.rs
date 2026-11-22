@@ -506,6 +506,7 @@ impl AssetLedger {
     /// one of those reasons alone, which is exactly how real sales cluster.
     /// Asset protection is NOT overridden here: an entry is acceptance
     /// readiness, and the auto-listing sweeps keep their own vetoes.
+    #[expect(clippy::too_many_lines)]
     pub fn build(
         rows: &[AssetRow],
         ctx: &LedgerContext,
@@ -953,9 +954,8 @@ mod sell_list_tests {
 
     #[test]
     fn his_departments_advice_counts_toward_a_listing_and_does_not_make_one_alone() {
-        let build = |row: AssetRow| {
-            AssetLedger::build(&[row], &Fx::ctx(), &ClubBoard::new(), Fx::date())
-        };
+        let build =
+            |row: AssetRow| AssetLedger::build(&[row], &Fx::ctx(), &ClubBoard::new(), Fx::date());
         // A third keeper deep in the queue: not marketed for that alone.
         let mut third = Fx::settled_core(27);
         third.group = PlayerFieldPositionGroup::Goalkeeper;
@@ -1109,10 +1109,17 @@ mod seller_answer_tests {
 
     #[test]
     fn a_ready_seller_asks_nothing_extra_and_an_unready_one_asks_more_as_the_window_closes() {
-        assert_eq!(ReplacementScarcity::lift(1.0, 0.9, 0.0), 0.0, "an heir in the building");
+        assert_eq!(
+            ReplacementScarcity::lift(1.0, 0.9, 0.0),
+            0.0,
+            "an heir in the building"
+        );
         let three_weeks = ReplacementScarcity::lift(0.0, 0.9, 0.0);
         let deadline = ReplacementScarcity::lift(0.0, 0.9, 1.0);
-        assert!(three_weeks >= 0.15, "clearly more than his value: {three_weeks}");
+        assert!(
+            three_weeks >= 0.15,
+            "clearly more than his value: {three_weeks}"
+        );
         assert!(deadline > three_weeks);
         let mut previous = ReplacementScarcity::lift(0.0, 0.9, 0.5);
         for step in 1..=20 {
@@ -1120,7 +1127,10 @@ mod seller_answer_tests {
             assert!(now < previous, "readiness at {step}/20 asks less");
             previous = now;
         }
-        assert!(ReplacementScarcity::lift(0.0, 0.2, 0.0) < three_weeks, "a squad man less");
+        assert!(
+            ReplacementScarcity::lift(0.0, 0.2, 0.0) < three_weeks,
+            "a squad man less"
+        );
     }
 
     #[test]
@@ -1130,7 +1140,13 @@ mod seller_answer_tests {
         assert!(record > 0.1, "{record}");
         assert_eq!(FreshIncome::lift(2_000_000.0, asking, false), 0.0);
         assert_eq!(FreshIncome::lift(0.0, asking, false), 0.0);
-        assert!(FreshIncome::lift(100_000_000.0, asking, true) > record, "replacing a man it sold");
-        assert!(FreshIncome::lift(1_000_000_000.0, asking, false) <= 0.15, "saturating");
+        assert!(
+            FreshIncome::lift(100_000_000.0, asking, true) > record,
+            "replacing a man it sold"
+        );
+        assert!(
+            FreshIncome::lift(1_000_000_000.0, asking, false) <= 0.15,
+            "saturating"
+        );
     }
 }

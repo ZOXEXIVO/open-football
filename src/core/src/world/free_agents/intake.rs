@@ -1,8 +1,8 @@
 use crate::club::SquadDepartures;
-use crate::club::core::{DepartedPlayer, DepartureKind};
 use crate::club::player::calculators::{FreeAgentReleaseReason, WageCalculator};
 use crate::club::player::mind::SpellChange;
 use crate::club::player::transfer::ReleaseContext;
+use crate::club::process::{DepartedPlayer, DepartureKind};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::pipeline::approach::ApproachPass;
@@ -38,6 +38,7 @@ impl SimulatorData {
     /// Loanees are skipped (their `contract` is the parent-club contract
     /// and stays `Some` during the loan), as are retired players (already
     /// removed from team rosters by the retirement pipeline).
+    #[expect(clippy::too_many_lines)]
     pub fn sweep_released_to_free_agents(&mut self) {
         let date = self.date.date();
         let released: Vec<Player> = self
@@ -257,7 +258,7 @@ mod free_agent_release_reason_tests {
     //! never all collapsed into "released by mutual agreement".
     use super::*;
     use crate::academy::ClubAcademy;
-    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::competitions::global::GlobalCompetitions;
     use crate::continent::Continent;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};

@@ -1104,6 +1104,7 @@ impl PlayerStatisticsHistory {
     /// so the gap-fill correctly continues the "career home" thread
     /// for a player who quietly spent multiple missed seasons in a
     /// non-owning team.
+    #[expect(clippy::too_many_lines)]
     fn flush_prior_season_seeds(
         &mut self,
         target_season_start: u16,
@@ -1348,6 +1349,7 @@ impl PlayerStatisticsHistory {
 
     // ── Season end: drain current → frozen items, then seed new season ──
 
+    #[expect(clippy::too_many_lines)]
     pub fn record_season_end(
         &mut self,
         season: Season,

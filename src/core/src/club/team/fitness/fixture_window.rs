@@ -177,7 +177,13 @@ impl TeamFixtureWindow {
             .iter()
             .position(|f| to < f.date)
             .unwrap_or(upcoming.len());
-        upcoming.insert(at, UpcomingFixture { date: to, importance });
+        upcoming.insert(
+            at,
+            UpcomingFixture {
+                date: to,
+                importance,
+            },
+        );
     }
 
     /// The side has a fixture of any kind on `date`.
@@ -198,7 +204,10 @@ impl TeamFixtureWindow {
     }
 
     pub fn next_after(&self, today: NaiveDate) -> Option<NaiveDate> {
-        self.upcoming().map(|f| f.date).filter(|d| *d >= today).min()
+        self.upcoming()
+            .map(|f| f.date)
+            .filter(|d| *d >= today)
+            .min()
     }
 
     pub fn previous_before(&self, today: NaiveDate) -> Option<NaiveDate> {
@@ -289,10 +298,18 @@ mod tests {
     fn a_moved_fixture_is_read_on_its_new_day_at_once() {
         let mut moved = window(d(10, 5), &[d(10, 10), d(10, 14), d(10, 17)]);
         moved.on_fixture_moved(d(10, 14), d(10, 6));
-        assert_eq!(moved.competes_on(d(10, 6)), Some(CompetitionFamily::Domestic));
+        assert_eq!(
+            moved.competes_on(d(10, 6)),
+            Some(CompetitionFamily::Domestic)
+        );
         assert_eq!(moved.competes_on(d(10, 14)), None);
         assert_eq!(
-            moved.domestic.upcoming.iter().map(|f| f.date).collect::<Vec<_>>(),
+            moved
+                .domestic
+                .upcoming
+                .iter()
+                .map(|f| f.date)
+                .collect::<Vec<_>>(),
             vec![d(10, 6), d(10, 10), d(10, 17)]
         );
     }

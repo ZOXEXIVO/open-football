@@ -756,6 +756,7 @@ impl ForeignLoanScan {
     }
 
     /// `None` when this club is not in the cross-border market at all.
+    #[expect(clippy::too_many_lines)]
     fn borrower<'a>(
         country: &'a Country,
         club_idx: usize,
@@ -1220,6 +1221,7 @@ impl ForeignLoanScan {
     }
 
     /// The single writer: open a negotiation for every approach the clubs made.
+    #[expect(clippy::too_many_lines)]
     fn commit(country: &mut Country, date: NaiveDate, actions: Vec<ForeignLoanAction>) {
         if actions.is_empty() {
             return;

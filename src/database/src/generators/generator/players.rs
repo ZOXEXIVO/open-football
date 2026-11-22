@@ -154,6 +154,7 @@ impl PositionRoleQueue {
 use super::DatabaseGenerator;
 
 impl DatabaseGenerator {
+    #[expect(clippy::too_many_lines)]
     pub(super) fn generate_players(
         player_generator: &PlayerGenerator,
         country_id: u32,

@@ -1727,6 +1727,7 @@ impl Pitch {
     /// over: a rig that can be walked round the ground would otherwise find a
     /// hole in it. [`Bank`] takes the one in the way back out again.
     #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_lines)]
     fn spawn_ground(
         commands: &mut Commands,
         meshes: &mut Assets<Mesh>,

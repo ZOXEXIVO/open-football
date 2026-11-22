@@ -195,6 +195,7 @@ impl TeamBehaviourResult {
         }
     }
 
+    #[expect(clippy::too_many_lines)]
     fn process_manager_talks<D: LeagueProcessAccess>(&self, data: &mut D) {
         let sim_date = data.date().date();
 
@@ -459,6 +460,7 @@ impl PlayerBehaviourResult {
         }
     }
 
+    #[expect(clippy::too_many_lines)]
     pub fn process<D: LeagueProcessAccess>(&self, data: &mut D) {
         let sim_date = data.date().date();
 

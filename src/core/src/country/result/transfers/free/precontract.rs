@@ -1121,7 +1121,7 @@ mod tests {
 
 #[cfg(test)]
 mod pre_contract_badge_tests {
-    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,

@@ -76,6 +76,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
     }
 
+    #[expect(clippy::too_many_lines)]
     pub(in crate::r#match::engine::engine) fn evaluate_coaches(
         field: &MatchField,
         context: &mut MatchContext,
@@ -229,6 +230,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// mutates the `tactical_home` / `tactical_away` fields on
     /// `MatchContext`. `tick_interval` is how many ticks elapsed since
     /// the last refresh — rolling counters scale with it.
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn refresh_tactical_states(
         field: &mut MatchField,
         context: &mut MatchContext,

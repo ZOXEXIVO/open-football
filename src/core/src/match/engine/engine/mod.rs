@@ -42,8 +42,8 @@ use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::result::ResultMatchPositionData;
 use crate::r#match::{
     AttackPlan, AttackRefreshInputs, CoachCard, DefenceRefreshInputs, DefensivePlan,
-    GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState,
-    Outlook, PenaltyShootoutKick, Score, ShapeRefreshInputs, Situation, SquadFit, StateManager,
+    GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState, Outlook,
+    PenaltyShootoutKick, Score, ShapeRefreshInputs, Situation, SquadFit, StateManager,
     SubstitutionInfo, TacticalRefreshInputs, TeamPins, TeamShape, TeamTacticalState,
 };
 use crate::{MatchRuntime, PlayerFieldPositionGroup};
@@ -311,9 +311,9 @@ mod types;
 // the engine root re-exports this module with a glob, so it has to stay
 // reachable as `crate::r#match::phase_prof`.
 pub use diagnostics::phase_prof;
-pub use diagnostics::state_counters::{shot_gate_stats, stuck_exit_stats};
 #[cfg(feature = "match-logs")]
 pub use diagnostics::state_counters::tackle_stats;
+pub use diagnostics::state_counters::{shot_gate_stats, stuck_exit_stats};
 
 // …and the spacing census the harness reads, on the same footing as the
 // other `match-logs` diagnostics re-exported from the crate root.

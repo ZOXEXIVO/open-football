@@ -636,7 +636,8 @@ mod tests {
     /// nobody booked, and a manager of exactly average temperament. The
     /// baseline every other case is a displacement from.
     fn pressure(minute: u32, goal_diff: i32) -> BenchPressure {
-        let mut p = SubstitutionUrgency::read(minute, goal_diff, &[], &[], &CoachCard::neutral(), 0, 0);
+        let mut p =
+            SubstitutionUrgency::read(minute, goal_diff, &[], &[], &CoachCard::neutral(), 0, 0);
         p.total -= p.temperament;
         p.temperament = 0.0;
         p

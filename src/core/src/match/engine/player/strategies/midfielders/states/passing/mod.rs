@@ -1,16 +1,16 @@
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{
+use crate::r#match::midfielders::states::shared::{
     ActivityIntensity, MidfieldPlay, MidfieldRole, MidfielderCondition, MidfielderRead, Opportunity,
 };
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::player::strategies::common::passing::ThroughBall;
-use crate::r#match::player::strategies::common::players::ops::clearance::TouchlineCall;
-use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
+use crate::r#match::player::strategies::players::skills::SkillCurve;
+use crate::r#match::player::strategies::shared::passing::ThroughBall;
+use crate::r#match::player::strategies::shared::players::ops::clearance::TouchlineCall;
+use crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
-use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
-use crate::r#match::player::strategies::players::skills::SkillCurve;
+use crate::r#match::player::strategies::shared::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
     Ball, ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,

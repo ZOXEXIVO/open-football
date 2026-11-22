@@ -123,6 +123,7 @@ impl ScoutingRegion {
     /// Get transfer corridor weights from this region.
     /// Returns (target_region, weight) pairs — higher weight = more likely to scout there.
     /// Models real-world transfer corridors (Africa→Europe, SouthAmerica→Europe, etc.)
+    #[expect(clippy::too_many_lines)]
     pub fn transfer_corridors(&self) -> &'static [(ScoutingRegion, u8)] {
         match self {
             // European clubs: strong corridors to S.America, W.Africa, E.Europe

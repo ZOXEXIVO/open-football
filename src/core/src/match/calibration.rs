@@ -7,12 +7,12 @@
 //! details and the match's own [`MatchTally`] — so matches played in
 //! parallel can be recorded in any order.
 
-use crate::r#match::engine::player::injury::InjuryGrade;
-use crate::r#match::player::statistics::MatchStatisticType;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::delivery_diag::DeliveryCensus;
+use crate::r#match::engine::player::injury::InjuryGrade;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::result::team_census::LedgerState;
+use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{GoalOrigin, MatchResultRaw, MatchTally, PassOriginRestart, PeriodKind};
 
 #[derive(Debug, Default, Clone)]
@@ -346,7 +346,8 @@ impl MatchCalibrationStats {
         let goals = result.goal_timeline();
         self.timeline
             .absorb(&GoalTimeline::read(&goals, result.match_time_ms));
-        let first_half_ends = 45 * 60_000 + result.tally.added_time_ms[PeriodKind::FirstHalf.index()];
+        let first_half_ends =
+            45 * 60_000 + result.tally.added_time_ms[PeriodKind::FirstHalf.index()];
         let second_half_ends = first_half_ends
             + 45 * 60_000
             + result.tally.added_time_ms[PeriodKind::SecondHalf.index()];
@@ -367,6 +368,7 @@ impl MatchCalibrationStats {
         }
     }
 
+    #[expect(clippy::too_many_lines)]
     pub fn report_lines(&self) -> Vec<CalibrationLine> {
         let n = self.matches.max(1) as f64;
         let per = |v: f64| v / n;
@@ -405,13 +407,38 @@ impl MatchCalibrationStats {
         let mut lines = vec![
             line("goals/match", per(all_goals as f64), 2.3, 3.4),
             line("shots/match", per(self.shots as f64), 18.0, 32.0),
-            line("shots-on-target %", ratio(self.shots_on_target, self.shots), 0.28, 0.42),
+            line(
+                "shots-on-target %",
+                ratio(self.shots_on_target, self.shots),
+                0.28,
+                0.42,
+            ),
             line("xG/match", per(self.xg_total), 2.2, 3.4),
-            line("save %", ratio(self.saves, self.shots_on_target), 0.62, 0.76),
-            line("pass-completion %", ratio(self.passes_completed, self.passes_attempted), 0.75, 0.88),
+            line(
+                "save %",
+                ratio(self.saves, self.shots_on_target),
+                0.62,
+                0.76,
+            ),
+            line(
+                "pass-completion %",
+                ratio(self.passes_completed, self.passes_attempted),
+                0.75,
+                0.88,
+            ),
             line("crosses/match", per(self.crosses as f64), 22.0, 45.0),
-            line("cross-completion %", ratio(self.crosses_completed, self.crosses), 0.18, 0.32),
-            line("dribbles attempted/match", per(self.dribbles_attempted as f64), 20.0, 45.0),
+            line(
+                "cross-completion %",
+                ratio(self.crosses_completed, self.crosses),
+                0.18,
+                0.32,
+            ),
+            line(
+                "dribbles attempted/match",
+                per(self.dribbles_attempted as f64),
+                20.0,
+                45.0,
+            ),
             line(
                 "dribble success %",
                 ratio(self.dribbles_succeeded, self.dribbles_attempted),
@@ -420,23 +447,88 @@ impl MatchCalibrationStats {
             ),
             line("miscontrols/match", per(self.miscontrols as f64), 8.0, 18.0),
             line("key passes/match", per(self.key_passes as f64), 12.0, 28.0),
-            line("progressive passes/match", per(self.progressive_passes as f64), 30.0, 90.0),
-            line("progressive carries/match", per(self.progressive_carries as f64), 12.0, 40.0),
-            line("successful pressures/match", per(self.successful_pressures as f64), 20.0, 45.0),
-            line("errors leading to shot/match", per(self.errors_leading_to_shot as f64), 1.0, 4.0),
-            line("errors leading to goal/match", per(self.errors_leading_to_goal as f64), 0.05, 0.35),
+            line(
+                "progressive passes/match",
+                per(self.progressive_passes as f64),
+                30.0,
+                90.0,
+            ),
+            line(
+                "progressive carries/match",
+                per(self.progressive_carries as f64),
+                12.0,
+                40.0,
+            ),
+            line(
+                "successful pressures/match",
+                per(self.successful_pressures as f64),
+                20.0,
+                45.0,
+            ),
+            line(
+                "errors leading to shot/match",
+                per(self.errors_leading_to_shot as f64),
+                1.0,
+                4.0,
+            ),
+            line(
+                "errors leading to goal/match",
+                per(self.errors_leading_to_goal as f64),
+                0.05,
+                0.35,
+            ),
             line("fouls/match", per(self.fouls as f64), 18.0, 32.0),
-            line("yellow-cards/match", per(self.yellow_cards as f64), 2.5, 5.5),
+            line(
+                "yellow-cards/match",
+                per(self.yellow_cards as f64),
+                2.5,
+                5.5,
+            ),
             line("red-cards/match", per(self.red_cards as f64), 0.08, 0.28),
             line("offsides/match", per(self.offsides as f64), 2.0, 6.0),
-            line("corners/match", restarts(PassOriginRestart::Corner), 7.0, 13.0),
-            line("throw-ins/match", restarts(PassOriginRestart::ThrowIn), 30.0, 55.0),
-            line("goal-kicks/match", restarts(PassOriginRestart::GoalKick), 10.0, 22.0),
-            line("penalties/match", restarts(PassOriginRestart::Penalty), 0.18, 0.35),
-            line("penalty goals/match", per(self.penalty_goals as f64), 0.12, 0.30),
+            line(
+                "corners/match",
+                restarts(PassOriginRestart::Corner),
+                7.0,
+                13.0,
+            ),
+            line(
+                "throw-ins/match",
+                restarts(PassOriginRestart::ThrowIn),
+                30.0,
+                55.0,
+            ),
+            line(
+                "goal-kicks/match",
+                restarts(PassOriginRestart::GoalKick),
+                10.0,
+                22.0,
+            ),
+            line(
+                "penalties/match",
+                restarts(PassOriginRestart::Penalty),
+                0.18,
+                0.35,
+            ),
+            line(
+                "penalty goals/match",
+                per(self.penalty_goals as f64),
+                0.12,
+                0.30,
+            ),
             line("own goals/match", per(self.own_goals as f64), 0.04, 0.16),
-            line("set-piece goal share", ratio(self.set_piece_goals, all_goals), 0.20, 0.36),
-            line("ball-in-play minutes/match", minutes(self.tally.ball_in_play_ms), 52.0, 62.0),
+            line(
+                "set-piece goal share",
+                ratio(self.set_piece_goals, all_goals),
+                0.20,
+                0.36,
+            ),
+            line(
+                "ball-in-play minutes/match",
+                minutes(self.tally.ball_in_play_ms),
+                52.0,
+                62.0,
+            ),
             line(
                 "first-half added minutes",
                 minutes(self.tally.added_time_ms[PeriodKind::FirstHalf.index()]),
@@ -463,25 +555,74 @@ impl MatchCalibrationStats {
                 0.25,
                 0.45,
             ),
-            line("home win % (equal teams)", ratio(self.home_wins, decided), 0.42, 0.48),
-            line("draw % (equal teams)", ratio(self.draws, decided), 0.23, 0.30),
-            line("away win % (equal teams)", ratio(self.away_wins, decided), 0.27, 0.34),
-            line("goal correlation (equal teams)", self.goal_correlation(), -0.08, 0.08),
-            line("draw surplus over independent", self.draw_surplus(), -0.03, 0.03),
-            line("lead/trail scoring rate <62'", self.timeline.lead_trail_ratio(0), 0.75, 1.33),
-            line("lead/trail scoring rate >=62'", self.timeline.lead_trail_ratio(1), 0.75, 1.33),
+            line(
+                "home win % (equal teams)",
+                ratio(self.home_wins, decided),
+                0.42,
+                0.48,
+            ),
+            line(
+                "draw % (equal teams)",
+                ratio(self.draws, decided),
+                0.23,
+                0.30,
+            ),
+            line(
+                "away win % (equal teams)",
+                ratio(self.away_wins, decided),
+                0.27,
+                0.34,
+            ),
+            line(
+                "goal correlation (equal teams)",
+                self.goal_correlation(),
+                -0.08,
+                0.08,
+            ),
+            line(
+                "draw surplus over independent",
+                self.draw_surplus(),
+                -0.03,
+                0.03,
+            ),
+            line(
+                "lead/trail scoring rate <62'",
+                self.timeline.lead_trail_ratio(0),
+                0.75,
+                1.33,
+            ),
+            line(
+                "lead/trail scoring rate >=62'",
+                self.timeline.lead_trail_ratio(1),
+                0.75,
+                1.33,
+            ),
             tracked(
                 "go-ahead goals level in 15' %",
-                ratio(self.timeline.go_ahead_equalised as u64, self.timeline.go_ahead as u64),
+                ratio(
+                    self.timeline.go_ahead_equalised as u64,
+                    self.timeline.go_ahead as u64,
+                ),
                 0.0,
             ),
-            tracked("level in 15' if independent %", equalised_if_independent, 0.0),
+            tracked(
+                "level in 15' if independent %",
+                equalised_if_independent,
+                0.0,
+            ),
             tracked(
                 "lead changes hands % matches",
-                ratio(self.timeline.matches_with_lead_change as u64, self.matches as u64),
+                ratio(
+                    self.timeline.matches_with_lead_change as u64,
+                    self.matches as u64,
+                ),
                 0.0,
             ),
-            tracked("lead changes if independent %", lead_change_if_independent, 0.0),
+            tracked(
+                "lead changes if independent %",
+                lead_change_if_independent,
+                0.0,
+            ),
             tracked("goal share 0-15'", profile(0), 0.11),
             tracked("goal share 15-30'", profile(1), 0.14),
             tracked("goal share 30-45'", profile(2), 0.16),
@@ -515,7 +656,11 @@ impl MatchCalibrationStats {
                 0.15,
                 0.35,
             ));
-            lines.push(tracked("open-play deliveries a team", per(open_play as f64) / 2.0, 16.5));
+            lines.push(tracked(
+                "open-play deliveries a team",
+                per(open_play as f64) / 2.0,
+                16.5,
+            ));
             lines.push(tracked(
                 "open-play deliveries blocked (approx.)",
                 ratio(delivery.open_play_blocked() as u64, open_play as u64),
@@ -532,8 +677,15 @@ impl MatchCalibrationStats {
             for (name, halves) in DeliveryCensus::THROW_LINES.iter().zip(delivery.throw_ins) {
                 lines.push(tracked(name, per(halves.iter().sum::<u32>() as f64), 0.0));
             }
-            for (name, outcomes) in DeliveryCensus::OWN_GOAL_LINES.iter().zip(delivery.own_goals) {
-                lines.push(tracked(name, per(outcomes[DeliveryCensus::OWN_GOAL] as f64), 0.0));
+            for (name, outcomes) in DeliveryCensus::OWN_GOAL_LINES
+                .iter()
+                .zip(delivery.own_goals)
+            {
+                lines.push(tracked(
+                    name,
+                    per(outcomes[DeliveryCensus::OWN_GOAL] as f64),
+                    0.0,
+                ));
             }
             let motion = &self.tally.outfield_motion;
             let minutes_played = motion.ticks as f64 / 6000.0;
@@ -713,7 +865,8 @@ impl MatchCalibrationStats {
         if n < 2.0 {
             return 0.0;
         }
-        let mean = |pick: fn(&(u8, u8)) -> u8| self.scores.iter().map(|s| pick(s) as f64).sum::<f64>() / n;
+        let mean =
+            |pick: fn(&(u8, u8)) -> u8| self.scores.iter().map(|s| pick(s) as f64).sum::<f64>() / n;
         let (mean_home, mean_away) = (mean(|s| s.0), mean(|s| s.1));
         let (mut covariance, mut var_home, mut var_away) = (0.0, 0.0, 0.0);
         for &(home, away) in &self.scores {
@@ -745,7 +898,11 @@ impl MatchCalibrationStats {
                 draws += 1.0;
             }
         }
-        let independent: f64 = home.iter().zip(away.iter()).map(|(h, a)| (h / n) * (a / n)).sum();
+        let independent: f64 = home
+            .iter()
+            .zip(away.iter())
+            .map(|(h, a)| (h / n) * (a / n))
+            .sum();
         draws / n - independent
     }
 
@@ -892,8 +1049,14 @@ mod tests {
             stats.record(&scoreline(&goals));
         }
         let misses: Vec<&str> = stats.out_of_range().iter().map(|l| l.name).collect();
-        assert!(misses.contains(&"goal correlation (equal teams)"), "{misses:?}");
-        assert!(misses.contains(&"draw surplus over independent"), "{misses:?}");
+        assert!(
+            misses.contains(&"goal correlation (equal teams)"),
+            "{misses:?}"
+        );
+        assert!(
+            misses.contains(&"draw surplus over independent"),
+            "{misses:?}"
+        );
     }
 
     #[test]
@@ -905,7 +1068,10 @@ mod tests {
         }
         assert_eq!(line(&stats, "lead/trail scoring rate >=62'"), 0.0);
         let misses: Vec<&str> = stats.out_of_range().iter().map(|l| l.name).collect();
-        assert!(misses.contains(&"lead/trail scoring rate >=62'"), "{misses:?}");
+        assert!(
+            misses.contains(&"lead/trail scoring rate >=62'"),
+            "{misses:?}"
+        );
     }
 
     #[test]

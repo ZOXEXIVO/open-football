@@ -11,8 +11,8 @@ pub mod ledger;
 mod loans;
 pub mod minutes;
 pub mod needs;
-pub mod plan;
 pub mod outlook;
+pub mod plan;
 mod review;
 pub mod standing;
 
@@ -840,6 +840,7 @@ impl SquadReviewPass {
     // Step 2: Squad Evaluation - Coach-driven, formation-based
     // ============================================================
 
+    #[expect(clippy::too_many_lines)]
     pub fn evaluate_squads(country: &mut Country, date: NaiveDate) {
         let is_window_start = MarketCadence::is_window_start_for(&country.code, date);
         // Three cadences now reach this pass. The window ones are unchanged
@@ -1394,6 +1395,7 @@ impl SquadReviewPass {
     /// (on-loan, manager-pinned, same-window, plan-protected, already
     /// listed / already planned for) is respected so nothing the
     /// calibration-sensitive branches decided is overridden.
+    #[expect(clippy::too_many_lines)]
     fn identify_stalled_prospects(
         squad: &[SquadPlayerInfo],
         date: NaiveDate,
@@ -1798,7 +1800,7 @@ mod stalled_prospect_tests {
     use crate::Person;
     use crate::club::academy::ClubAcademy;
     use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
-    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::club::team::squad::SquadAssetClass;
     use crate::context::HomeLeagueTable;
     use crate::league::Season;
@@ -2702,8 +2704,8 @@ mod goalkeeper_prospect_tests {
     //! double up.
     use super::*;
     use crate::academy::ClubAcademy;
-    use crate::club::core::{DepartedPlayer, DepartureKind};
-    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::model::builder::PlayerBuilder;
+    use crate::club::process::{DepartedPlayer, DepartureKind};
     use crate::club::staff::perception::AbilityEstimator;
     use crate::context::HomeLeagueTable;
     use crate::shared::fullname::FullName;
@@ -2897,7 +2899,9 @@ mod goalkeeper_prospect_tests {
         main.staffs = StaffCollection::new(vec![manager]);
 
         club.review_goalkeeping_department(GkFx::date());
-        let plan = club.keeper_plan().expect("the department has reviewed the room");
+        let plan = club
+            .keeper_plan()
+            .expect("the department has reviewed the room");
         assert!(plan.wants(KeeperAdvice::SignACredibleDeputy));
         let number_one = plan
             .recruitment_advice()
@@ -2923,7 +2927,12 @@ mod goalkeeper_prospect_tests {
             .iter()
             .filter(|r| r.position.position_group() == PlayerFieldPositionGroup::Goalkeeper)
             .collect();
-        assert_eq!(keeper_searches.len(), 1, "one keeper search: {:?}", eval.requests);
+        assert_eq!(
+            keeper_searches.len(),
+            1,
+            "one keeper search: {:?}",
+            eval.requests
+        );
         let search = keeper_searches[0];
         assert_eq!(search.reason, TransferNeedReason::DepthCover);
         assert_eq!(search.ideal_ability, number_one - 8, "of deputy standard");
@@ -3038,7 +3047,9 @@ mod goalkeeper_prospect_tests {
             "judged against the starter himself"
         );
         assert!(
-            eval.requests.iter().all(|r| r.reason != TransferNeedReason::Replacement),
+            eval.requests
+                .iter()
+                .all(|r| r.reason != TransferNeedReason::Replacement),
             "a watch, not a search"
         );
     }
@@ -3048,20 +3059,29 @@ mod goalkeeper_prospect_tests {
         let mut club = SaleFx::club(140);
         let departed = SaleFx::sell(&mut club, SaleFx::STRIKER, 40_000_000.0);
         assert!(departed.first_choice);
-        assert!(club.transfer_plan.has_unread_vacancy(), "recorded on the day");
+        assert!(
+            club.transfer_plan.has_unread_vacancy(),
+            "recorded on the day"
+        );
 
         let eval = SaleFx::review(&club, SaleFx::tuesday() + chrono::Duration::days(1));
         let searches = SaleFx::replacements(&eval);
         assert_eq!(searches.len(), 1, "{:?}", eval.requests);
         let search = searches[0];
         assert_eq!(search.position, departed.shirt);
-        assert_eq!(search.ideal_ability, departed.level, "measured from the man who left");
+        assert_eq!(
+            search.ideal_ability, departed.level,
+            "measured from the man who left"
+        );
         assert_eq!(
             search.budget_allocation,
             40_000_000.0 * ClubFinances::reinvest_share_for(&club.philosophy),
             "the share of his fee the club recycled"
         );
-        assert_eq!(eval.vacancies, vec![(SaleFx::STRIKER, VacancyOutcome::Search)]);
+        assert_eq!(
+            eval.vacancies,
+            vec![(SaleFx::STRIKER, VacancyOutcome::Search)]
+        );
     }
 
     #[test]
@@ -3069,13 +3089,22 @@ mod goalkeeper_prospect_tests {
         let mut club = SaleFx::club(180);
         SaleFx::sell(&mut club, SaleFx::STRIKER, 40_000_000.0);
         let eval = SaleFx::review(&club, SaleFx::tuesday() + chrono::Duration::days(1));
-        assert!(SaleFx::replacements(&eval).is_empty(), "no search for the shirt");
-        assert_eq!(eval.vacancies, vec![(SaleFx::STRIKER, VacancyOutcome::HeldFromWithin)]);
+        assert!(
+            SaleFx::replacements(&eval).is_empty(),
+            "no search for the shirt"
+        );
+        assert_eq!(
+            eval.vacancies,
+            vec![(SaleFx::STRIKER, VacancyOutcome::HeldFromWithin)]
+        );
 
         for (player_id, outcome) in eval.vacancies {
             club.transfer_plan.on_vacancy_reviewed(player_id, outcome);
         }
-        assert!(club.transfer_plan.vacancies.is_empty(), "and nothing held back for it");
+        assert!(
+            club.transfer_plan.vacancies.is_empty(),
+            "and nothing held back for it"
+        );
     }
 
     #[test]
@@ -3085,7 +3114,11 @@ mod goalkeeper_prospect_tests {
         assert!(departed.importance() < 0.3, "{}", departed.importance());
         let eval = SaleFx::review(&club, SaleFx::tuesday() + chrono::Duration::days(1));
         assert!(SaleFx::replacements(&eval).is_empty());
-        assert!(eval.vacancies.iter().all(|(id, outcome)| *id == 21 && outcome.closes()));
+        assert!(
+            eval.vacancies
+                .iter()
+                .all(|(id, outcome)| *id == 21 && outcome.closes())
+        );
     }
 
     #[test]
@@ -3108,7 +3141,11 @@ mod goalkeeper_prospect_tests {
         let plan = &mut club.transfer_plan;
         plan.open_replacement_search(replacement);
 
-        assert_eq!(plan.transfer_requests.len(), 1, "the older search is not kept beside it");
+        assert_eq!(
+            plan.transfer_requests.len(),
+            1,
+            "the older search is not kept beside it"
+        );
         let search = &plan.transfer_requests[0];
         assert_eq!(search.id, 7);
         assert_eq!(search.reason, TransferNeedReason::Replacement);
@@ -3130,7 +3167,11 @@ mod goalkeeper_prospect_tests {
         assert!(!club.transfer_plan.has_unread_vacancy());
         let january = NaiveDate::from_ymd_opt(2027, 1, 2).unwrap();
         let eval = SaleFx::review(&club, january);
-        assert_eq!(SaleFx::replacements(&eval).len(), 1, "raised again when the next one opens");
+        assert_eq!(
+            SaleFx::replacements(&eval).len(),
+            1,
+            "raised again when the next one opens"
+        );
     }
 
     /// The Juventus case: a club whose number one is deep into his

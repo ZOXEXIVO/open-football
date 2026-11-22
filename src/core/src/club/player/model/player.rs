@@ -1,0 +1,2132 @@
+use crate::PlayerSquadStatus;
+use crate::TeamType;
+use crate::club::player::adaptation::PendingSigning;
+use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::player::builder::PlayerBuilder;
+use crate::club::player::calculators::FreeAgentReleaseReason;
+use crate::club::player::development::PlayerDevelopment;
+use crate::club::player::growth::PlayerGrowth;
+use crate::club::player::happiness::{
+    ClubMoraleContext, PlayingTimeFrustrationConfig, TeamSeasonState,
+};
+use crate::club::player::injury::processing::MedicalStaffQuality;
+use crate::club::player::interaction::ManagerInteractionLog;
+use crate::club::player::language::{LanguageProfile, PlayerLanguage};
+use crate::club::player::load::PlayerLoad;
+use crate::club::player::mailbox::PlayerContractAsk;
+use crate::club::player::mind::{
+    ActorRef, EncodingInputs, EpisodeKind, MindSituation, MindTickContext, NationalStanding,
+    PlayerMind,
+};
+use crate::club::player::plan::PlayerPlan;
+use crate::club::player::rapport::PlayerRapport;
+use crate::club::player::statistics::{MatchExperienceBackground, StuckCareerScan};
+use crate::club::player::traits::PlayerTrait;
+use crate::club::player::transfer::availability::AvailabilityMarketState;
+use crate::club::player::transfer::free::{FreeAgentMarketState, PreContractAgreement};
+use crate::club::player::transfer::processing::TransferDesireContext;
+use crate::club::player::transfer::request::TransferRequestStanding;
+use crate::club::staff::perception::PotentialEstimator;
+use crate::club::{
+    PersonBehaviour, PlayerAttributes, PlayerClubContract, PlayerMailbox, PlayerResult,
+    PlayerSkills, PlayerTraining,
+};
+use crate::context::GlobalContext;
+use crate::shared::fullname::FullName;
+use crate::transfers::HomePull;
+use crate::transfers::ScoutingRegion;
+use crate::utils::DateUtils;
+use crate::{
+    CompetitionStatistics, IndividualTrainingPlan, InternationalStatistics, NationalTeamLevel,
+    Person, PersonAttributes, PlayerDecisionHistory, PlayerHappiness, PlayerPositionType,
+    PlayerPositions, PlayerStatCompetitionKind, PlayerStatistics, PlayerStatisticsHistory,
+    PlayerStatus, PlayerStatusType, PlayerTrainingHistory, PlayerValueCalculator, Relations,
+};
+use crate::{
+    HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
+    HappinessEventType, ManagerInteractionEventContext, ManagerInteractionTone,
+    ManagerInteractionTopic, PersonalAdaptationEventContext, PersonalAdaptationKind,
+    PlayerAcceptance, PlayerAwardsCount, PromiseKind,
+};
+use chrono::Duration;
+use chrono::NaiveDate;
+use std::fmt::{Display, Formatter, Result};
+
+/// A sell-on promise owed to a previous seller on the next permanent sale.
+/// Stacks: a player can accumulate multiple obligations from different past
+/// clubs. Capped at 3 to prevent unbounded growth over long careers.
+#[derive(Debug, Clone)]
+pub struct SellOnObligation {
+    pub beneficiary_club_id: u32,
+    pub percentage: f32,
+}
+
+/// Snapshot of squad-level social context computed once per weekly
+/// tick at the team level and read by the desire / adaptation pipeline.
+/// Cleared when the player transfers — a new club rebuilds it on its
+/// next week's pre-tick.
+#[derive(Debug, Clone, Default)]
+pub struct SquadSocialView {
+    /// Number of senior squad teammates who share the player's primary
+    /// nationality (country_id match). Capped at u8::MAX.
+    pub same_nationality_teammates: u8,
+    /// Number of senior squad teammates who speak any language this
+    /// player speaks at conversational level (≥40) or natively. Capped
+    /// at u8::MAX.
+    pub same_language_teammates: u8,
+}
+
+impl SquadSocialView {
+    pub fn same_language_or_nationality(&self) -> u8 {
+        self.same_nationality_teammates
+            .saturating_add(self.same_language_teammates)
+    }
+}
+
+/// Where a player stands in his own dressing room.
+///
+/// The sibling of [`SquadSocialView`], and written by the same weekly
+/// team pre-tick, for the same reason: none of it can be worked out from
+/// inside a `Player`. Who picks the side, who else wants his shirt, how
+/// good that man is and how old — a player's whole read of his own
+/// prospects is a comparison against people, and `Player::simulate` only
+/// ever holds one player.
+///
+/// Everything here is **observable**: ranks come from
+/// [`AbilityEstimator::observable_level`], never from the hidden ability
+/// digit. A player is no better a judge of a teammate than a coach is.
+///
+/// Cleared on transfer — a new club rebuilds it on its next weekly pass.
+///
+/// [`AbilityEstimator::observable_level`]: crate::club::staff::perception::AbilityEstimator::observable_level
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SquadStandingView {
+    /// The man who picks the side. 0 when the bench is vacant.
+    pub head_coach_id: u32,
+    /// His place in the queue at his own position group, 1-based.
+    /// 1 = first choice on merit. 0 = unknown.
+    pub pecking_rank: u8,
+    /// How many others are in that queue.
+    pub rivals_at_position: u8,
+    /// The best of them — the man in his shirt, or the man chasing it.
+    /// 0 when he has the group to himself.
+    pub top_rival_id: u32,
+    /// That rival's age. A twenty-year-old behind a thirty-three-year-old
+    /// is waiting his turn; the same gap against a peer is a career
+    /// problem.
+    pub top_rival_age: u8,
+    /// His observable level minus that rival's, clamped to ±100.
+    /// Positive means he is the better player and is not being picked.
+    pub rival_gap: i8,
+    pub is_captain: bool,
+    pub is_vice_captain: bool,
+    /// Where he sits in the squad's pay order, 1-based. 0 = unknown.
+    pub wage_rank: u8,
+    /// How many players are in the pay order at all.
+    pub squad_size: u8,
+    /// What he looks like from outside — 1..200, from
+    /// `AbilityEstimator::observable_level`. 0 = unranked. Computed here
+    /// because the ranking needs it anyway, and read by the mind so a
+    /// player judges what the club can teach him against the player he
+    /// actually is.
+    pub observable_level: u8,
+    /// The best coaching the club can give him, 0–20: the strongest of
+    /// the technical / mental / fitness benches, or goalkeeping for a
+    /// keeper. What decides whether staying here is still teaching him
+    /// anything.
+    pub coaching_ceiling: u8,
+    /// The squad he is registered with. Whether the minutes on his
+    /// ledger were first-team football at all is read through it.
+    pub squad_tier: TeamType,
+}
+
+impl SquadStandingView {
+    /// Is he first choice at his position on merit?
+    #[inline]
+    pub fn is_first_choice(&self) -> bool {
+        self.pecking_rank == 1
+    }
+
+    /// Where he sits in the pay order, 0..1 — 1.0 for the top earner,
+    /// 0.0 for the lowest. Neutral 0.5 when unknown, so a squad that has
+    /// never been ranked reads as "no view" rather than as poverty.
+    pub fn wage_standing(&self) -> f32 {
+        if self.wage_rank == 0 || self.squad_size <= 1 {
+            return 0.5;
+        }
+        let rank = (self.wage_rank - 1) as f32;
+        let last = (self.squad_size - 1) as f32;
+        (1.0 - rank / last).clamp(0.0, 1.0)
+    }
+}
+
+/// One day with one of his club's sides, staged by the club the day before
+/// and gone once the day has passed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MatchdayAssignment {
+    pub date: NaiveDate,
+    pub team_id: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct Player {
+    //person data
+    pub id: u32,
+    pub full_name: FullName,
+    pub birth_date: NaiveDate,
+    pub country_id: u32,
+    /// Continent id of the player's nationality country. Denormalised
+    /// from the country lookup at world-load / player-generation time so
+    /// the desire pipeline doesn't need to walk the simulator world.
+    /// `None` = not seeded (a regen born after load); gates that read it
+    /// fail closed. NEVER `0` for "unknown" — continent 0 is AFRICA
+    /// (`ScoutingRegion::from_country`), so a sentinel zero silently sent
+    /// every African abroad to his CLUB's tournament calendar.
+    pub nationality_continent_id: Option<u32>,
+    /// Footballing region of the player's **nationality** — never his
+    /// club's. Denormalised in the same world-load pass as
+    /// `nationality_continent_id`, because the region needs the country
+    /// CODE and a player's own country is unreachable from inside another
+    /// country's borrow.
+    ///
+    /// This is what lets a Brazilian at Arsenal read as a South American
+    /// to the loan market instead of as a Western European, which is the
+    /// whole reason the loan home could never happen. `None` = not seeded
+    /// (a regen born after load); [`Player::home_region`] degrades to a
+    /// continent-only classification rather than lying.
+    pub nationality_region: Option<ScoutingRegion>,
+    /// How badly he wants to go home, read once a week when the mind
+    /// builds its picture. See [`HomePull`] — the market pool reads these
+    /// fields instead of rebuilding a `MindSituation` per player per day.
+    pub home_pull: HomePull,
+    pub behaviour: PersonBehaviour,
+    pub attributes: PersonAttributes,
+
+    //player data
+    pub happiness: PlayerHappiness,
+    pub statuses: PlayerStatus,
+    pub skills: PlayerSkills,
+    pub contract: Option<PlayerClubContract>,
+    pub contract_loan: Option<PlayerClubContract>,
+    pub positions: PlayerPositions,
+    pub preferred_foot: PlayerPreferredFoot,
+    pub foots: PlayerFoots,
+    pub player_attributes: PlayerAttributes,
+    pub mailbox: PlayerMailbox,
+    pub training: PlayerTraining,
+    pub training_history: PlayerTrainingHistory,
+    pub relations: Relations,
+
+    pub statistics: PlayerStatistics,
+    pub friendly_statistics: PlayerStatistics,
+    /// Last league slug a friendly match was recorded under for this
+    /// player. Set by `record_match_appearance` whenever a friendly is
+    /// booked (youth leagues are flagged friendly, so a U21 player's
+    /// league games land here too). Read by `drain_match_stats` to
+    /// stamp the canonical Friendly ledger entry with the real source
+    /// league — so a player loaned to a senior team who plays youth
+    /// friendlies keeps the "U19 League" breakdown label after the
+    /// loan is cancelled or returned. `None` means no friendly has
+    /// been recorded this spell; the drain falls back to the team's
+    /// league_slug (generic pre-season friendly).
+    pub friendly_source_slug: Option<String>,
+    /// Rolled-up cup tally across every competition the player has
+    /// featured in this spell — recomputed from
+    /// `cup_statistics_by_competition` after each cup appearance. Kept as
+    /// a flat field so the many aggregate readers (milestones, awards,
+    /// development, squad selection, team totals) stay unchanged.
+    pub cup_statistics: PlayerStatistics,
+    /// Per-competition cup breakdown, the source of truth behind
+    /// `cup_statistics`. One entry per cup the player has appeared in,
+    /// tagged with the competition slug so the player overview can label
+    /// each line with the real competition instead of a single fixed row.
+    pub cup_statistics_by_competition: Vec<CompetitionStatistics>,
+    /// National-team appearances, one slice per (season, level,
+    /// competition). Deliberately NOT part of `statistics_history`: a cap
+    /// is earned for a country, not for an employer, so nothing about a
+    /// transfer, a loan or a season-end drain may touch it and the club
+    /// career totals never absorb it. Written by the national-team match
+    /// sweep; see [`InternationalStatistics`].
+    pub international_statistics: Vec<InternationalStatistics>,
+    pub statistics_history: PlayerStatisticsHistory,
+    pub decision_history: PlayerDecisionHistory,
+
+    /// What he remembers, what he concluded from it, and where he stands
+    /// with everyone who has mattered.
+    ///
+    /// Unlike every other per-club field on this struct, the mind is
+    /// **not** reset by `reset_on_club_change` — a career is the one
+    /// thing a player carries between clubs, and the point of the organ
+    /// is that a return ten years later still means something. See
+    /// [`PlayerMind`] and `docs/player_mind.md`.
+    pub mind: PlayerMind,
+
+    /// Personal development plan set by the coaching staff — position
+    /// retraining toward a thin squad spot, a fitness block for the
+    /// injury-prone. `None` for the overwhelming majority; assigned and
+    /// progressed by the monthly training-direction pass.
+    pub individual_training: Option<IndividualTrainingPlan>,
+
+    /// Languages the player speaks, with proficiency levels.
+    pub languages: Vec<PlayerLanguage>,
+
+    /// Set when a player transfers/loans to a new club. Used by season snapshot
+    /// to detect recently transferred players and avoid phantom history entries.
+    ///
+    /// Visibility narrowed to `pub(crate)` — read via `Player::last_transfer_date()`.
+    /// Mutation is internal (set by `on_transfer` / `on_loan` / `on_loan_return`).
+    pub(crate) last_transfer_date: Option<NaiveDate>,
+
+    /// The club's strategic intent for this signing.
+    /// Set when a player is permanently transferred. Protects the player from
+    /// being sold before the club has given them a fair evaluation.
+    pub plan: Option<PlayerPlan>,
+
+    /// Clubs this player supports or has an affinity for (like FM's "Favoured Clubs").
+    /// Affects willingness to join, morale when playing for them, etc.
+    pub favorite_clubs: Vec<u32>,
+
+    /// The club that sold this player and the fee paid.
+    /// Prevents unrealistic buy-back scenarios where a club sells a player
+    /// cheaply and then buys them back at a huge markup one season later.
+    pub sold_from: Option<(u32, f64)>, // (club_id, fee_paid)
+
+    /// Active sell-on clauses attached to this player. On the next permanent
+    /// sale, each entry routes `percentage * fee` back to `club_id` before
+    /// the selling club banks its income. Populated by `complete_transfer`
+    /// when the inbound offer carried a `SellOnClause`; drained on sale.
+    pub sell_on_obligations: Vec<SellOnObligation>,
+
+    /// Signature moves — trained traits that bias in-match decisions.
+    pub traits: Vec<PlayerTrait>,
+
+    /// Manager override forcing this player into the starting XI on every
+    /// match where they're available (not injured, banned, suspended). The
+    /// squad selector treats them as a hard pick before scoring runs, and
+    /// the in-match sub logic refuses to pull them off for fatigue or
+    /// development reasons (critical injuries still force the swap).
+    pub is_force_match_selection: bool,
+
+    /// Rapport with the coaches who have trained this player.
+    pub rapport: PlayerRapport,
+
+    /// Promises the manager has made to this player (playing time etc.).
+    /// Verified weekly — kept promises reinforce the manager relationship,
+    /// broken ones erode it and tank morale.
+    pub promises: Vec<ManagerPromise>,
+
+    /// Bounded log of recent manager-player conversations. Drives
+    /// per-topic cooldowns, credibility, and "stop telling me the same
+    /// thing" detection in the talk picker.
+    pub interactions: ManagerInteractionLog,
+
+    /// Transient transfer context — set by the transfer pipeline when this
+    /// player moves to a new club, consumed by the player's own weekly
+    /// processing to emit shock events, check role fit, and record an
+    /// implicit playing-time promise. Cleared once consumed.
+    pub pending_signing: Option<PendingSigning>,
+
+    /// The side of his club he is with on one day, decided the day before.
+    pub matchday_assignment: Option<MatchdayAssignment>,
+
+    /// Rolling competitive workload and form rating. Drives rotation
+    /// decisions, injury risk, and form-based morale events.
+    pub load: PlayerLoad,
+
+    /// What he is growing into and what has built him so far. The only
+    /// owner of how his attributes change.
+    pub development: PlayerDevelopment,
+
+    /// The player's own stated terms after turning down a proposal.
+    /// Lets the next club offer converge on a deal the player would sign,
+    /// rather than guessing from scratch. Cleared when a deal is accepted.
+    pub pending_contract_ask: Option<PlayerContractAsk>,
+
+    /// A pre-contract agreed with a future club, effective when the
+    /// current deal expires. The player keeps playing under his current
+    /// contract; the country-level expiry pass executes the free transfer
+    /// to the agreed club rather than letting him hit the open pool. Read
+    /// via [`Player::pending_pre_contract`]; cleared on any club change
+    /// (see `reset_on_club_change`) and on renewal.
+    pub(crate) pending_pre_contract: Option<PreContractAgreement>,
+
+    /// Baseline of `player_attributes.international_apps` on the most
+    /// recent monthly bonus pass. The InternationalCapFee bonus pays the
+    /// (current - baseline) cap delta and bumps this to the new total —
+    /// so re-running the pass within the same month is a no-op.
+    pub last_intl_caps_paid: u16,
+
+    /// True if this player was produced by a runtime generator (random squad
+    /// fill, youth intake, synthetic national-team filler). False when loaded
+    /// from the source database. Useful for filtering, telemetry, and UI hints.
+    ///
+    /// Visibility narrowed to `pub(crate)` — read it via `Player::is_generated()`.
+    /// Mutation is internal (set once by `PlayerBuilder::generated`).
+    pub(crate) generated: bool,
+
+    /// Lifetime tally of awards won, across all seasons. Bumped by
+    /// `apply_award_reputation_impact` — the single funnel every award
+    /// path goes through. Drives the Awards tab dashboard.
+    pub awards_count: PlayerAwardsCount,
+
+    /// Visibility narrowed to `pub(crate)` — read via `Player::is_retired()`.
+    /// Mutation is internal (set by end-of-season retirement processing).
+    pub(crate) retired: bool,
+
+    /// The player has announced retirement from INTERNATIONAL football —
+    /// he keeps playing club football, but the national-team callup pass
+    /// no longer considers him. Set once by the career-stage detector.
+    pub international_retired: bool,
+
+    /// Durable market-state snapshot kept while the player is a free
+    /// agent. Read via `Player::free_agent_state()`. Mutation is owner-
+    /// side via `on_release` / `on_offer_received` / `clear_free_agent_state`
+    /// — defined in `crate::club::player::transfer::free`.
+    pub(crate) free_agent_state: Option<FreeAgentMarketState>,
+
+    /// Durable market-discovery state kept while the player is a *signed*
+    /// but available player — transfer-listed, requested, unhappy, or
+    /// loan-listed. Read via `Player::availability_market_state()`.
+    /// Mutation is owner-side via `ensure_availability_state` /
+    /// `on_availability_interest` / `on_availability_blocked` /
+    /// `clear_availability_state`, defined in
+    /// `crate::club::player::transfer::availability`. The
+    /// signed-side mirror of `free_agent_state`.
+    pub(crate) availability_market: Option<AvailabilityMarketState>,
+
+    /// Snapshot of compatriot / shared-language teammate counts written
+    /// by the team's weekly pre-tick. Read by the desire pipeline; not
+    /// persisted across saves and not cloned with the player on transfer.
+    /// Cleared on transfer so a new club rebuilds it on its next tick.
+    pub squad_social_view: Option<SquadSocialView>,
+
+    /// Snapshot of where he stands in his own squad — who picks the side,
+    /// who else wants his shirt, what the coaching here can still teach
+    /// him. Written by the same weekly team pre-tick as
+    /// `squad_social_view`, read by the mind. Cleared on transfer.
+    pub squad_standing_view: Option<SquadStandingView>,
+
+    /// The reasons behind a transfer request (`Req` status), or the last
+    /// ones he gave while a request outlives them. Cleared on transfer.
+    pub transfer_request_reasons: Vec<TransferRequestReason>,
+    /// How long those reasons have held, which is what makes and ends the
+    /// request. Cleared on transfer.
+    pub transfer_request: TransferRequestStanding,
+
+    /// How strongly this player is currently drawn toward a bigger
+    /// competition, 0..1 — the score from
+    /// [`crate::club::player::transfer::BigStagePull`], refreshed by the
+    /// weekly desire tick.
+    ///
+    /// Most of the pull's effect is silent: well below the level that
+    /// produces a mood or a request, a player will still *listen* when a
+    /// stronger league comes calling, and hold out a little longer for one
+    /// when it hasn't. Storing the score is what lets the market read that
+    /// inclination instead of only ever seeing the loud cases. Cleared on
+    /// transfer — the new club is a new stage.
+    pub big_stage_inclination: f32,
+
+    /// One-shot career latch: set the first time the player makes a senior
+    /// competitive appearance, so the `SeniorDebut` milestone fires exactly
+    /// once across the whole career. `self.statistics` / `self.cup_statistics`
+    /// are wiped at every season / transfer boundary, so a per-spell
+    /// appearance count can't distinguish a genuine debut from the opening
+    /// match of a new season — this flag can. Players loaded or generated
+    /// already past [`Player::ASSUMED_SENIOR_DEBUT_AGE`] (or carrying recorded
+    /// senior history) start `true` so an established arrival never gets a
+    /// phantom debut on their first simulated match. Read/written only by
+    /// `record_senior_debut`; initialised at construction.
+    pub(crate) made_senior_debut: bool,
+
+    /// Why this player's contract was cleared by a club-driven exit, set
+    /// the moment the contract is torn up / walked / released. The daily
+    /// free-agent sweep reads it to stamp a faithful transfer-history
+    /// reason instead of inferring every cleared-contract exit as a mutual
+    /// agreement. Consumed (cleared) by `reset_on_club_change` once the
+    /// player has actually left for the pool. `None` for a natural expiry.
+    /// Read via [`Player::release_reason`]; set via [`Player::set_release_reason`].
+    pub(crate) release_reason: Option<FreeAgentReleaseReason>,
+}
+
+/// Why a player has an active transfer request. The set is bounded so
+/// the renderer can attribute the request to the right narrative axis,
+/// and `process_transfer_desire` keeps `Req` alive while at least one
+/// reason is unresolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferRequestReason {
+    /// Behaviour band crossed `is_poor` — character / discipline issues.
+    PoorBehaviour,
+    /// Long-running `Unh` status (>30 days).
+    LongUnhappiness,
+    /// Ambition fit deeply red and `Unh` >14 days — structural mismatch.
+    AmbitionMismatch,
+    /// Severe, settled prestige mismatch — an ambitious player has clearly
+    /// outgrown his club's stature and wants to step up, even without
+    /// active unhappiness. Distinct from `AmbitionMismatch`, which needs a
+    /// spell of `Unh` on top; this fires on the structural deficit alone.
+    OutgrownClub,
+    /// Long service at ONE club breeds a desire for a new challenge — a
+    /// settled, ambitious player who has been somewhere many years wants a
+    /// fresh test elsewhere even if the club still fits him. Tenure-driven,
+    /// distinct from `OutgrownClub` (a club beneath his stature).
+    NewChallenge,
+    /// Salary unhappiness past the request horizon (540-730d).
+    SalaryUnresolved,
+    /// Chronic homesickness mood + low morale / club_fit.
+    ReturnHome,
+    /// European-competition mood lingered past the request horizon.
+    EuropeanAmbition,
+    /// Copa Libertadores ambition mood lingered past the request horizon.
+    CopaLibertadoresAmbition,
+    /// Post-relegation exodus mood lingered — a quality player wants to
+    /// keep playing at the level the club just lost.
+    RelegationEscape,
+    /// A good player in a league well below the elite tier wants to test
+    /// himself in a stronger league — even when his current CLUB is
+    /// locally big. Keys off the league/country reputation gap, not club
+    /// size (`OutgrownClub`) or continental football (`EuropeanAmbition`).
+    /// This is the "big fish in a weak or isolated league" pull that the
+    /// club-reputation prestige model misses: a locally-big club satisfies
+    /// the ambition-vs-club-size check while the league itself remains a
+    /// competitive ceiling.
+    WantsStrongerLeague,
+    /// Seasons have gone by without first-team football and the player
+    /// wants to go and actually play — accepting a SMALLER club if that
+    /// is where the shirt is. Every other reason points a player upward
+    /// or sideways (a bigger club, a stronger league, a continental
+    /// stage); this is the only one that points down, and without it a
+    /// perennial backup at a giant had no way to ask out at all: his
+    /// club is too big to have outgrown, his league too strong to want
+    /// to leave. The step-down machinery downstream — market resignation,
+    /// availability strength, the plausibility gates — is all reachable
+    /// only from a real request, so this variant is what opens it.
+    WantsFirstTeamFootball,
+    /// His manager turned down his playing-time talk.
+    RefusedPlayingTime,
+    /// Friction with his manager came to a head.
+    FellOutWithManager,
+}
+
+impl TransferRequestReason {
+    /// Does it ask for somewhere bigger than here? A man who has arrived
+    /// raises none of these.
+    pub fn asks_for_a_bigger_stage(self) -> bool {
+        matches!(
+            self,
+            TransferRequestReason::AmbitionMismatch
+                | TransferRequestReason::OutgrownClub
+                | TransferRequestReason::NewChallenge
+                | TransferRequestReason::EuropeanAmbition
+                | TransferRequestReason::CopaLibertadoresAmbition
+                | TransferRequestReason::WantsStrongerLeague
+        )
+    }
+}
+
+/// What the manager committed to. Each variant carries everything the
+/// verifier needs to decide whether the promise was kept — most use
+/// `baseline_apps` plus a per-kind threshold, but role / positional
+/// promises read additional state at verification time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagerPromiseKind {
+    /// "You'll play more" — kept if appearances since the promise meet
+    /// the per-kind cadence (≥1 per ~10 days).
+    PlayingTime,
+    /// "You'll start" — kept if starts since the promise hit the target
+    /// share of total competitive matches.
+    StartingRole,
+    /// "You'll play in your preferred position" — kept while the team's
+    /// formation includes the player's primary position group.
+    PreferredPosition,
+    /// "You'll be central to how we play" — kept when the player is a
+    /// KeyPlayer / FirstTeamRegular AND has accrued top-tier minutes.
+    TacticalRole,
+    /// Loanee promise: parent club expects minutes / development. Kept
+    /// when the loanee is on track to meet the loan_min_appearances target.
+    LoanDevelopment,
+    /// "If a suitable offer comes in, you can leave" — kept by the next
+    /// transfer window arriving without a hard refusal recorded.
+    TransferPermission,
+    /// "We'll discuss new terms by the deadline" — kept when a contract
+    /// renewal / extension was opened before the date.
+    ContractReview,
+    /// "You'll be on the leadership path" — kept by being given
+    /// captain / vice-captain status before deadline.
+    Captaincy,
+}
+
+/// What the manager committed to. The historical signature only stored
+/// `baseline_apps`; new kinds reach for `target_value` (a kind-specific
+/// metric — share of starts, minutes, capacity %), `made_by_staff_id`
+/// for crediting/blaming the right coach when a manager change happens
+/// during the window, and `credibility_at_creation` to scale how badly a
+/// broken promise hurts (cheap, off-the-cuff promises shouldn't tank
+/// morale the way a formal commitment does).
+#[derive(Debug, Clone)]
+pub struct ManagerPromise {
+    pub kind: ManagerPromiseKind,
+    pub made_on: NaiveDate,
+    pub deadline: NaiveDate,
+    /// Official appearances across league and cup at promise creation.
+    pub baseline_apps: u16,
+    /// Snapshot of official starts at promise time. Lets
+    /// StartingRole tell appearances apart from starts.
+    pub baseline_starts: u16,
+    /// Eligible team fixtures at creation, including unused bench / omissions.
+    pub baseline_eligible: u16,
+    /// Whether the baseline used tracked club-spell opportunities.
+    pub baseline_tracked: bool,
+    /// Kind-specific target. Interpretation per kind:
+    ///   - PlayingTime: minimum apps in the window (0 → derive from days).
+    ///   - StartingRole: required starts/eligible team fixtures ratio × 100.
+    ///   - LoanDevelopment: minimum apps from loan_min_appearances.
+    ///   - others: 0, verifier reads other state.
+    pub target_value: u16,
+    /// Coach who made the promise. Survives manager changes — a successor
+    /// shouldn't be punished for promises that pre-date their arrival.
+    pub made_by_staff_id: Option<u32>,
+    /// Credibility 0..100 at the moment of the promise — see
+    /// `Player::promise_credibility`. Scales kept/broken magnitudes:
+    /// a low-credibility promise broken hurts less (player half-expected
+    /// it); a high-credibility promise broken hurts more.
+    pub credibility_at_creation: u8,
+    /// How important the promise was to the player (0..100). Drives the
+    /// magnitude of kept/broken events. Derived from squad_status,
+    /// ambition, and personality at creation.
+    pub importance_to_player: u8,
+    /// True if the promise was made publicly (press conference, captain
+    /// announcement). Public promises broken cause media & dressing-room
+    /// fallout that private ones don't.
+    pub is_public: bool,
+}
+
+impl Player {
+    pub fn builder() -> PlayerBuilder {
+        PlayerBuilder::new()
+    }
+
+    /// Age by which a professional has almost always already made their
+    /// senior debut. Players created at or above it start the simulation
+    /// flagged as already-debuted, so the one-shot `SeniorDebut` milestone
+    /// stays reserved for genuine academy breakthroughs rather than firing
+    /// for established arrivals on their first simulated match.
+    pub const ASSUMED_SENIOR_DEBUT_AGE: u32 = 21;
+
+    /// Whether a player created at `age` (with `has_senior_history` recorded
+    /// career stats) should be treated as having made their senior debut
+    /// before the simulation began. Centralises the construction-time policy
+    /// so every generator path agrees.
+    pub fn presumed_already_debuted(age: u32, has_senior_history: bool) -> bool {
+        has_senior_history || age >= Self::ASSUMED_SENIOR_DEBUT_AGE
+    }
+
+    // ========================================================
+    // Accessor API
+    // --------------------------------------------------------
+    // The fields below this struct are still `pub` for backward
+    // compatibility — many call sites and Askama templates read them
+    // directly, and narrowing visibility is a separate sweep that touches
+    // every web template.
+    //
+    // **New code should prefer these accessors.** They give us a single
+    // place to:
+    //   • intercept reads (e.g. for caching, telemetry, lazy compute);
+    //   • change underlying storage (skills as a registry, happiness as
+    //     an event-sourced log) without breaking callers;
+    //   • narrow visibility incrementally — once every consumer goes
+    //     through accessors, the underlying field can flip to `pub(crate)`
+    //     in one change.
+    //
+    // Naming: the immutable accessor matches the field name; the mutable
+    // accessor uses a `_mut` suffix.
+    // ========================================================
+
+    pub fn skills(&self) -> &PlayerSkills {
+        &self.skills
+    }
+
+    pub fn attributes(&self) -> &PersonAttributes {
+        &self.attributes
+    }
+    pub fn attributes_mut(&mut self) -> &mut PersonAttributes {
+        &mut self.attributes
+    }
+
+    pub fn player_attributes(&self) -> &PlayerAttributes {
+        &self.player_attributes
+    }
+    pub fn player_attributes_mut(&mut self) -> &mut PlayerAttributes {
+        &mut self.player_attributes
+    }
+
+    pub fn happiness(&self) -> &PlayerHappiness {
+        &self.happiness
+    }
+    pub fn happiness_mut(&mut self) -> &mut PlayerHappiness {
+        &mut self.happiness
+    }
+
+    pub fn statuses(&self) -> &PlayerStatus {
+        &self.statuses
+    }
+    pub fn statuses_mut(&mut self) -> &mut PlayerStatus {
+        &mut self.statuses
+    }
+
+    pub fn statistics(&self) -> &PlayerStatistics {
+        &self.statistics
+    }
+    pub fn statistics_mut(&mut self) -> &mut PlayerStatistics {
+        &mut self.statistics
+    }
+
+    pub fn cup_statistics(&self) -> &PlayerStatistics {
+        &self.cup_statistics
+    }
+
+    /// Current-season statistics across **all** competitions — league
+    /// (full-season, blended across intra-club Main↔B/Second spells via
+    /// the history ledger), domestic + continental cups, and friendlies —
+    /// rolled into one [`PlayerStatistics`]. The squad table reads apps,
+    /// goals and average rating from this single sample so every column
+    /// reflects the same set of matches: appearance count and average
+    /// rating can no longer disagree about which games count (e.g. a
+    /// player with only cup/friendly minutes used to show apps but a
+    /// blank "-" league-only rating).
+    ///
+    /// Rating is minutes-weighted via [`PlayerStatistics::merge_from`], so
+    /// a handful of friendly cameos drag the blended average far less than
+    /// a season of league starts.
+    pub fn current_season_all_statistics(&self) -> PlayerStatistics {
+        let mut combined = self
+            .statistics_history
+            .current_season_stats(&self.statistics);
+        combined.merge_from(&self.cup_statistics);
+        combined.merge_from(&self.friendly_statistics);
+        combined
+    }
+
+    /// Mutable handle on this competition's cup-stats bucket, creating an
+    /// empty one the first time the player appears in it. Match recording
+    /// books cup appearances here (keyed by the match's `league_slug`)
+    /// rather than into a single shared bucket.
+    pub fn cup_competition_statistics_mut(&mut self, slug: &str) -> &mut PlayerStatistics {
+        if let Some(idx) = self
+            .cup_statistics_by_competition
+            .iter()
+            .position(|c| c.competition_slug == slug)
+        {
+            return &mut self.cup_statistics_by_competition[idx].statistics;
+        }
+        self.cup_statistics_by_competition
+            .push(CompetitionStatistics {
+                competition_slug: slug.to_string(),
+                statistics: PlayerStatistics::default(),
+            });
+        &mut self
+            .cup_statistics_by_competition
+            .last_mut()
+            .expect("entry just pushed")
+            .statistics
+    }
+
+    /// Mutable handle on one national-team stat slice, creating an empty
+    /// one the first time the player appears in that (season, level,
+    /// competition). The national-team match sweep books caps here.
+    pub fn international_statistics_mut(
+        &mut self,
+        season_start_year: u16,
+        level: NationalTeamLevel,
+        country_id: u32,
+        competition_name: &str,
+    ) -> &mut PlayerStatistics {
+        if let Some(idx) = self.international_statistics.iter().position(|s| {
+            s.season_start_year == season_start_year
+                && s.level == level
+                && s.competition_name == competition_name
+        }) {
+            return &mut self.international_statistics[idx].statistics;
+        }
+        self.international_statistics.push(InternationalStatistics {
+            season_start_year,
+            level,
+            country_id,
+            competition_name: competition_name.to_string(),
+            statistics: PlayerStatistics::default(),
+        });
+        &mut self
+            .international_statistics
+            .last_mut()
+            .expect("entry just pushed")
+            .statistics
+    }
+
+    /// Rebuild the rolled-up `cup_statistics` aggregate from the
+    /// per-competition breakdown. Called after a cup appearance is booked
+    /// so every reader of the aggregate keeps seeing the full cup tally
+    /// while the per-competition lines remain the source of truth.
+    pub fn recompute_cup_statistics(&mut self) {
+        let mut agg = PlayerStatistics::default();
+        for comp in &self.cup_statistics_by_competition {
+            agg.merge_from(&comp.statistics);
+        }
+        self.cup_statistics = agg;
+    }
+    pub fn friendly_statistics(&self) -> &PlayerStatistics {
+        &self.friendly_statistics
+    }
+    pub fn statistics_history(&self) -> &PlayerStatisticsHistory {
+        &self.statistics_history
+    }
+
+    pub fn contract(&self) -> Option<&PlayerClubContract> {
+        self.contract.as_ref()
+    }
+    pub fn contract_loan(&self) -> Option<&PlayerClubContract> {
+        self.contract_loan.as_ref()
+    }
+
+    pub fn plan(&self) -> Option<&PlayerPlan> {
+        self.plan.as_ref()
+    }
+    pub fn promises(&self) -> &[ManagerPromise] {
+        &self.promises
+    }
+    pub fn traits(&self) -> &[PlayerTrait] {
+        &self.traits
+    }
+
+    pub fn relations(&self) -> &Relations {
+        &self.relations
+    }
+    pub fn rapport(&self) -> &PlayerRapport {
+        &self.rapport
+    }
+    pub fn load(&self) -> &PlayerLoad {
+        &self.load
+    }
+
+    pub fn favorite_clubs(&self) -> &[u32] {
+        &self.favorite_clubs
+    }
+    pub fn languages(&self) -> &[PlayerLanguage] {
+        &self.languages
+    }
+
+    /// The footballing region his passport belongs to.
+    ///
+    /// Prefers the seeded value; falls back to a continent-only
+    /// classification for a player generated after world load, which is
+    /// exact for South America and Oceania and approximate elsewhere.
+    /// `None` only when even the continent is unknown — the callers then
+    /// use his club's region, which is the honest "no view".
+    ///
+    /// No `!= 0` guard: the continent is an `Option` precisely because 0
+    /// is Africa, and the guard read every African passport as unstamped.
+    pub fn home_region(&self) -> Option<ScoutingRegion> {
+        self.nationality_region.or_else(|| {
+            self.nationality_continent_id
+                .map(|continent_id| ScoutingRegion::from_country(continent_id, ""))
+        })
+    }
+
+    /// His languages as the market reads them.
+    pub fn language_profile(&self) -> LanguageProfile {
+        LanguageProfile::from_languages(&self.languages)
+    }
+    pub fn last_transfer_date(&self) -> Option<NaiveDate> {
+        self.last_transfer_date
+    }
+    pub fn is_retired(&self) -> bool {
+        self.retired
+    }
+    pub fn is_generated(&self) -> bool {
+        self.generated
+    }
+
+    /// Why this player's contract was cleared by a club-driven exit, if an
+    /// exit path recorded one. `None` for a player still under contract or
+    /// one whose deal lapsed naturally. The free-agent sweep reads this to
+    /// choose the transfer-history reason.
+    pub fn release_reason(&self) -> Option<FreeAgentReleaseReason> {
+        self.release_reason
+    }
+
+    /// Record why this player's contract was cleared. Called by every
+    /// club-driven exit path (head-coach termination, surplus trim,
+    /// failed-renewal release, academy age-out) at the moment the contract
+    /// is removed, so the sweep can stamp the matching reason. Cleared by
+    /// `reset_on_club_change` once the player has left for the pool.
+    pub fn set_release_reason(&mut self, reason: FreeAgentReleaseReason) {
+        self.release_reason = Some(reason);
+    }
+
+    /// Canonical URL segment for this player: `{id}-{ascii-folded-name}`.
+    /// Falls back to just the id when the name folds to nothing (e.g. all
+    /// punctuation), so every player is guaranteed a resolvable URL.
+    pub fn slug(&self) -> String {
+        let name_slug = self.full_name.slug();
+        if name_slug.is_empty() {
+            self.id.to_string()
+        } else {
+            format!("{}-{}", self.id, name_slug)
+        }
+    }
+
+    /// Is this player protected from being targeted by other clubs?
+    ///
+    /// A player signed during the currently open transfer window cannot be
+    /// sold in that same window. Between windows, the pipeline gate already
+    /// blocks transfers. The `PlayerPlan` then governs the next window.
+    ///
+    /// `current_window` is `Some((start, end))` when a transfer window is
+    /// open, `None` otherwise.
+    pub fn is_transfer_protected(
+        &self,
+        date: NaiveDate,
+        current_window: Option<(NaiveDate, NaiveDate)>,
+    ) -> bool {
+        // Manager has pinned this player to the squad — no outbound move
+        // is acceptable, full stop. Same predicate the recommendation
+        // pipeline, negotiation initiator, and seller-side offer
+        // evaluation all read, so every flow refuses uniformly. The pin
+        // applies only to contracted players: once the contract ends the
+        // player is a free agent and a stale pin must not block their
+        // ability to move to a new club.
+        if self.is_force_match_selection && self.contract.is_some() {
+            return true;
+        }
+
+        // Same-window protection: signed during this open window → protected
+        if let (Some(transfer_date), Some((window_start, window_end))) =
+            (self.last_transfer_date, current_window)
+            && transfer_date >= window_start
+            && transfer_date <= window_end
+        {
+            return true;
+        }
+
+        // Club has a signing plan — don't poach until the plan concludes
+        if self.signing_protection_active(date) {
+            return true;
+        }
+
+        false
+    }
+
+    /// Record a new manager promise — minimal-info path. Kept for legacy
+    /// callers (transfer-shock pipeline, older talk results). New code
+    /// should use [`Player::record_promise_full`] so credibility &
+    /// importance are anchored honestly at creation time.
+    pub fn record_promise(
+        &mut self,
+        kind: ManagerPromiseKind,
+        made_on: NaiveDate,
+        horizon_days: i64,
+    ) {
+        self.record_promise_full(kind, made_on, horizon_days, None, None, false);
+    }
+
+    /// Record a promise with full context. Deduped — only the freshest
+    /// promise of any given kind survives. `target_value`'s meaning is
+    /// per-kind (see `ManagerPromiseKind` docs).
+    pub fn record_promise_full(
+        &mut self,
+        kind: ManagerPromiseKind,
+        made_on: NaiveDate,
+        horizon_days: i64,
+        made_by_staff_id: Option<u32>,
+        target_value: Option<u16>,
+        is_public: bool,
+    ) {
+        let deadline = made_on + Duration::days(horizon_days);
+        let usage = super::usage::PlayerUsage::of(self);
+        let baseline_apps = usage.appearances;
+        let baseline_starts = usage.starts;
+        let credibility = self.promise_credibility(kind, made_by_staff_id);
+        let importance = self.promise_importance(kind);
+        let target = target_value.unwrap_or_else(|| default_target(kind, &self.contract));
+        self.promises.retain(|p| p.kind != kind);
+        self.promises.push(ManagerPromise {
+            kind,
+            made_on,
+            deadline,
+            baseline_apps,
+            baseline_starts,
+            baseline_eligible: usage.eligible,
+            baseline_tracked: usage.tracked,
+            target_value: target,
+            made_by_staff_id,
+            credibility_at_creation: credibility,
+            importance_to_player: importance,
+            is_public,
+        });
+    }
+
+    /// 0..100 estimate of how believable a fresh promise of this kind is.
+    /// Reads the actual squad situation: a "you'll start" promise to a
+    /// fourth-choice CB at a club whose first three are all top-rated has
+    /// low credibility regardless of how charming the manager is.
+    /// `made_by_staff_id` lets us factor in the existing rapport / staff
+    /// relation with the speaker.
+    pub fn promise_credibility(
+        &self,
+        kind: ManagerPromiseKind,
+        made_by_staff_id: Option<u32>,
+    ) -> u8 {
+        let mut score: i32 = 60;
+
+        // Existing trust baseline — staff relation [-100, 100] + rapport
+        // up to ±20.
+        if let Some(staff_id) = made_by_staff_id {
+            if let Some(rel) = self.relations.get_staff(staff_id) {
+                score += (rel.level / 4.0) as i32; // ±25
+            }
+            let rapport = self
+                .rapport
+                .coaches
+                .iter()
+                .find(|c| c.coach_id == staff_id)
+                .map(|c| c.score)
+                .unwrap_or(0);
+            score += (rapport / 5) as i32; // ±20
+        }
+
+        // Squad-status fit — a KeyPlayer being told they'll start is
+        // already nearly a tautology; the same promise to a NotNeeded
+        // squad filler is barely credible.
+        if let Some(c) = self.contract.as_ref() {
+            score += match c.squad_status {
+                PlayerSquadStatus::KeyPlayer => 15,
+                PlayerSquadStatus::FirstTeamRegular => 8,
+                PlayerSquadStatus::FirstTeamSquadRotation => 0,
+                PlayerSquadStatus::MainBackupPlayer => -5,
+                PlayerSquadStatus::HotProspectForTheFuture => -2,
+                PlayerSquadStatus::DecentYoungster => -8,
+                PlayerSquadStatus::NotNeeded => -20,
+                _ => -3,
+            };
+        }
+
+        // Recent broken-promise overhang — a manager who just broke one
+        // can't credibly promise the next.
+        let recent_broken = self
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::PromiseBroken && e.days_ago <= 90)
+            .count() as i32;
+        score -= recent_broken * 12;
+
+        // Kind-specific clamps. Captaincy and TransferPermission are
+        // structurally weaker — they require board / market events the
+        // manager doesn't fully control.
+        match kind {
+            ManagerPromiseKind::Captaincy => score -= 8,
+            ManagerPromiseKind::TransferPermission => score -= 6,
+            ManagerPromiseKind::ContractReview => score -= 4,
+            _ => {}
+        }
+
+        score.clamp(0, 100) as u8
+    }
+
+    /// How much this promise matters to the player (0..100). Drives the
+    /// kept/broken magnitudes — a TransferPermission promise to a
+    /// disengaged squad filler is worth less than the same promise to an
+    /// ambitious world-rep 6000 player who came on the understanding he
+    /// could leave next summer.
+    fn promise_importance(&self, kind: ManagerPromiseKind) -> u8 {
+        let ambition = self.attributes.ambition;
+        let mut score: i32 = 50;
+        score += ((ambition - 10.0) * 2.0) as i32;
+        match kind {
+            ManagerPromiseKind::PlayingTime
+            | ManagerPromiseKind::StartingRole
+            | ManagerPromiseKind::TacticalRole => score += 10,
+            ManagerPromiseKind::LoanDevelopment => score += 15,
+            ManagerPromiseKind::Captaincy => score += 5,
+            ManagerPromiseKind::TransferPermission => {
+                // High-rep players staying through a window only on this
+                // promise care intensely; bench fillers don't.
+                let world_rep = self.player_attributes.world_reputation as i32;
+                score += (world_rep / 200).clamp(0, 30);
+            }
+            ManagerPromiseKind::ContractReview => score += 8,
+            ManagerPromiseKind::PreferredPosition => score += 6,
+        }
+        score.clamp(0, 100) as u8
+    }
+
+    /// Evaluate every promise whose deadline has passed. Kept lifts the
+    /// manager relationship and emits PromiseKept; broken hits both and
+    /// emits PromiseBroken. Magnitudes scale by importance & credibility:
+    /// breaking a big, believable promise is the worst outcome; breaking
+    /// a low-credibility one the player half-expected stings less.
+    /// `club_id` is the club he is at, for tagging the memory episodes a
+    /// kept or broken promise lays down. `None` when unresolved — the
+    /// episode is still recorded against the coach, it just carries no
+    /// club cue.
+    #[expect(clippy::too_many_lines)]
+    pub fn verify_promises(&mut self, now: NaiveDate, club_id: Option<u32>) {
+        if self.promises.is_empty() {
+            return;
+        }
+        let usage = super::usage::PlayerUsage::of(self);
+        let mut kept_weight: f32 = 0.0;
+        let mut broken_weight: f32 = 0.0;
+        // Who made each promise that came due, and how much it mattered.
+        // The morale path only needs the aggregate weight; memory needs
+        // the person — a broken promise is not a bad week, it is a fact
+        // about a man, and it has to be filed against him.
+        let mut kept_by: Vec<(u32, f32)> = Vec::new();
+        let mut broken_by: Vec<(u32, f32)> = Vec::new();
+
+        // Compute helpers needed across multiple variants. Captaincy is
+        // tracked at squad/Relations level, not on the player, so we use
+        // a CaptaincyAwarded event recorded since the promise was made
+        // as the visible signal.
+        let captaincy_awarded_recently = |window_days: i64| {
+            self.happiness.recent_events.iter().any(|e| {
+                e.event_type == HappinessEventType::CaptaincyAwarded
+                    && e.days_ago as i64 <= window_days.max(0)
+            })
+        };
+
+        // Pure-data check — formation isn't known here. Default to "kept"
+        // unless a RoleMismatch event fired in the last 60 days.
+        let in_preferred_pos = !self
+            .happiness
+            .recent_events
+            .iter()
+            .any(|e| e.event_type == HappinessEventType::RoleMismatch && e.days_ago <= 60);
+
+        // Snapshot whether a KeyPlayer / FirstTeamRegular status currently
+        // holds — drives TacticalRole verification.
+        let high_status = matches!(
+            self.contract.as_ref().map(|c| &c.squad_status),
+            Some(PlayerSquadStatus::KeyPlayer) | Some(PlayerSquadStatus::FirstTeamRegular)
+        );
+
+        // Loan-min-apps target lives on the contract; pull once.
+        let loan_min_apps = self
+            .contract_loan
+            .as_ref()
+            .and_then(|c| c.loan_min_appearances);
+
+        // Match-opportunity gate for playing-time promises. A "you'll
+        // play" / loan-development promise must not be judged broken until
+        // the club has actually played eligible official matches the
+        // player was overlooked for AND the grace / sample rules are met.
+        // Until then the promise stays pending rather than firing a
+        // PromiseBroken on calendar time alone.
+        let pt_cfg = PlayingTimeFrustrationConfig::default();
+        let pt_opp = self.playing_time_opportunity(now);
+        let pt_status = self.contract.as_ref().map(|c| c.squad_status.clone());
+        let playing_time_judgeable = pt_opp
+            .can_judge(pt_status.as_ref(), &pt_cfg, loan_min_apps)
+            .is_some();
+
+        self.promises.retain(|p| {
+            if now < p.deadline {
+                return true;
+            }
+            if p.involvement_progress(usage, loan_min_apps).is_some()
+                && p.usage_since_promise(usage).eligible == 0
+            {
+                return true;
+            }
+            let delta_apps = p.usage_since_promise(usage).appearances;
+            let days = (p.deadline - p.made_on).num_days().max(1) as u16;
+
+            let kept = match p.kind {
+                ManagerPromiseKind::PlayingTime
+                | ManagerPromiseKind::StartingRole
+                | ManagerPromiseKind::LoanDevelopment => p
+                    .involvement_progress(usage, loan_min_apps)
+                    .is_some_and(|(delivered, required)| delivered >= required),
+                ManagerPromiseKind::PreferredPosition => in_preferred_pos,
+                ManagerPromiseKind::TacticalRole => {
+                    let required = (days / 10).max(2);
+                    high_status && delta_apps >= required
+                }
+                ManagerPromiseKind::TransferPermission => {
+                    // Kept by default unless a recent TransferBidRejected
+                    // event tagged the player saying "no".
+                    !self.happiness.recent_events.iter().any(|e| {
+                        e.event_type == HappinessEventType::TransferBidRejected
+                            && e.days_ago <= (now - p.made_on).num_days().max(0) as u16
+                    })
+                }
+                ManagerPromiseKind::ContractReview => {
+                    // Kept if a contract event landed in the window.
+                    self.happiness.recent_events.iter().any(|e| {
+                        matches!(
+                            e.event_type,
+                            HappinessEventType::ContractRenewal | HappinessEventType::ContractOffer
+                        ) && e.days_ago <= (now - p.made_on).num_days().max(0) as u16
+                    })
+                }
+                ManagerPromiseKind::Captaincy => {
+                    captaincy_awarded_recently((now - p.made_on).num_days())
+                }
+            };
+
+            // Zero-match invariant: a playing-time / loan-development
+            // promise can't be "broken" before the club has given the
+            // player real eligible match opportunities and the grace /
+            // sample rules are satisfied. Keep it pending instead of
+            // firing a PromiseBroken on elapsed days alone.
+            if !kept
+                && matches!(
+                    p.kind,
+                    ManagerPromiseKind::PlayingTime | ManagerPromiseKind::LoanDevelopment
+                )
+                && !playing_time_judgeable
+            {
+                return true;
+            }
+
+            // Importance × credibility weighting. Kept lifts ~half as
+            // hard as a broken promise hurts ("hard to build, easy to lose")
+            // mirroring the rapport asymmetry.
+            let importance_w = p.importance_to_player as f32 / 100.0;
+            let credibility_w = p.credibility_at_creation as f32 / 100.0;
+            let public_w = if p.is_public { 1.3 } else { 1.0 };
+            let weight = importance_w * (0.5 + credibility_w) * public_w;
+            if kept {
+                kept_weight += weight;
+                if let Some(staff_id) = p.made_by_staff_id {
+                    kept_by.push((staff_id, weight));
+                }
+            } else {
+                broken_weight += weight;
+                if let Some(staff_id) = p.made_by_staff_id {
+                    broken_by.push((staff_id, weight));
+                }
+            }
+            false
+        });
+
+        // File the outcome against the man who gave his word.
+        //
+        // Importance carries straight into how deeply this lands: a
+        // promise the player cared about, broken, is one of the few
+        // things in a career he will still be able to tell you about a
+        // decade later. That is `relevance` doing its job — the same
+        // event against a promise he barely wanted barely registers.
+        if !kept_by.is_empty() || !broken_by.is_empty() {
+            let mind_ctx = self.mind_context(now, club_id);
+            for (staff_id, weight, kind) in kept_by
+                .iter()
+                .map(|(id, w)| (*id, *w, EpisodeKind::ManagerPromiseKept))
+                .chain(
+                    broken_by
+                        .iter()
+                        .map(|(id, w)| (*id, *w, EpisodeKind::ManagerPromiseBroken)),
+                )
+            {
+                let intensity = kind.spec().intensity;
+                self.mind.remember_with(
+                    kind,
+                    ActorRef::staff(staff_id),
+                    &mind_ctx,
+                    EncodingInputs {
+                        intensity,
+                        // `weight` folds importance × credibility × public;
+                        // 1.0 is an ordinary private promise, ~2.9 the most
+                        // loaded public one.
+                        relevance: (weight / 2.0).clamp(0.0, 1.0),
+                        surprise: 0.5,
+                    },
+                    None,
+                );
+            }
+        }
+
+        if kept_weight > 0.0 {
+            let mag = (4.0 * kept_weight).clamp(1.0, 14.0);
+            let mctx = ManagerInteractionEventContext::new(
+                ManagerInteractionTopic::PromiseFollowUp,
+                ManagerInteractionTone::Honest,
+                PlayerAcceptance::Motivated,
+            )
+            .with_promise(PromiseKind::PlayingTime, 0.9);
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::ManagerSupport,
+                HappinessEventSeverity::from_magnitude(mag),
+                HappinessEventScope::Personal,
+            )
+            .with_manager_interaction_context(mctx);
+            self.happiness.add_event_with_context(
+                HappinessEventType::PromiseKept,
+                mag,
+                None,
+                happiness_ctx,
+            );
+            self.happiness.factors.manager_relationship =
+                (self.happiness.factors.manager_relationship + (2.0 * kept_weight).clamp(0.0, 6.0))
+                    .clamp(-15.0, 15.0);
+        }
+        if broken_weight > 0.0 {
+            let mag = -(8.0 * broken_weight).clamp(2.0, 24.0);
+            let mctx = ManagerInteractionEventContext::new(
+                ManagerInteractionTopic::PromiseFollowUp,
+                ManagerInteractionTone::Honest,
+                PlayerAcceptance::Resented,
+            )
+            .with_promise(PromiseKind::PlayingTime, 0.4);
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::from_magnitude(mag),
+                HappinessEventScope::Personal,
+            )
+            .with_manager_interaction_context(mctx);
+            self.happiness.add_event_with_context(
+                HappinessEventType::PromiseBroken,
+                mag,
+                None,
+                happiness_ctx,
+            );
+            self.happiness.factors.manager_relationship =
+                (self.happiness.factors.manager_relationship
+                    - (4.0 * broken_weight).clamp(0.0, 12.0))
+                .clamp(-15.0, 15.0);
+        }
+    }
+
+    /// Inputs the mind needs, gathered from the player himself plus the
+    /// one thing he cannot know on his own — which club he is at.
+    ///
+    /// Kept on `Player` rather than built at each call site so every
+    /// emit site records episodes against the same personality and the
+    /// same club tag. `club_id` is `None` for a free agent; episodes
+    /// recorded then carry no club cue, which is correct — nothing that
+    /// happens to a clubless player belongs to a club's memory.
+    pub fn mind_context(&self, now: NaiveDate, club_id: Option<u32>) -> MindTickContext {
+        MindTickContext::new(
+            now,
+            club_id.unwrap_or(0),
+            &self.attributes,
+            self.happiness.morale,
+        )
+    }
+
+    /// The read-only picture of where he actually is, for the sub-minds
+    /// to reason over.
+    ///
+    /// Gathered here rather than inside the mind so no faculty ever
+    /// reaches back into `Player` for a field — every one of them stays
+    /// testable against a plain struct.
+    ///
+    /// Two facts about where he is, and they are NOT the same fact.
+    /// `club_country_id` decides whether he is abroad (a passport
+    /// comparison); `country_code` decides whether he speaks the language
+    /// there. Pass `0` / `""` when neither is known and he is read as at
+    /// home, speaking the language — the honest no-view for a free agent
+    /// and for every unit test that builds a lone player.
+    pub fn mind_situation(
+        &self,
+        now: NaiveDate,
+        club_country_id: u32,
+        country_code: &str,
+    ) -> MindSituation {
+        let squad_status = self.contract.as_ref().map(|c| c.squad_status.clone());
+        let social = self.squad_social_view.as_ref();
+        // Where he stands among the other twenty-odd men, written by the
+        // team's weekly pass. Absent for a free agent, for a player whose
+        // side has not ticked since he arrived, and in every unit test
+        // that builds a lone player — all of which must read as no view.
+        let standing = self.squad_standing_view.unwrap_or_default();
+
+        MindSituation {
+            age: self.age(now),
+            ambition: self.attributes.ambition,
+            pressure: self.attributes.pressure,
+            adaptability: self.attributes.adaptability,
+            loyalty: self.attributes.loyalty,
+            professionalism: self.attributes.professionalism,
+            temperament: self.attributes.temperament,
+            starter_ratio: self.happiness.starter_ratio,
+            appearances_tracked: self.happiness.appearances_tracked,
+            apps_since_goal: self.happiness.apps_since_last_competitive_goal,
+            contract_days_left: self
+                .contract
+                .as_ref()
+                .map(|c| (c.expiration - now).num_days().clamp(0, u16::MAX as i64) as u16)
+                .unwrap_or(0),
+            // The one tenure anchor, and the same reading every other
+            // caller takes: no anchor at all is a man who has always been
+            // here, not a man who arrived this morning. Reading it the
+            // other way left five of the eight arcs unreachable for every
+            // homegrown player in the world.
+            days_at_club: StuckCareerScan::club_tenure_days(self, now)
+                .map(|d| d.clamp(0, u16::MAX as i64) as u16)
+                .unwrap_or(u16::MAX),
+            // Through the existing table, so the mind and the happiness
+            // path never disagree about what a squad role implies.
+            expected_start_share: PlayingTimeFrustrationConfig::expected_start_share(
+                squad_status.as_ref(),
+            ),
+            // …and what a season of real football has taught him to
+            // expect, which the paperwork does not know about. The same
+            // record floor the happiness path's own expectation reads.
+            own_expected_start_share: MatchExperienceBackground::from_player(self)
+                .expected_start_share_floor(
+                    self.statistics_history
+                        .current
+                        .iter()
+                        .rev()
+                        .find(|e| e.departed_date.is_none())
+                        .map(|e| e.team_reputation)
+                        .unwrap_or(0),
+                ),
+            // The man who picks the side, from the squad pass. `NONE`
+            // while the bench is vacant or the side has not ticked yet,
+            // which the professional mind reads as "no view".
+            manager: if standing.head_coach_id == 0 {
+                ActorRef::NONE
+            } else {
+                ActorRef::staff(standing.head_coach_id)
+            },
+            club_reputation: 0.5,
+            // The passport, not the phrasebook. See [`MindSituation::is_abroad`].
+            is_abroad: club_country_id != 0
+                && self.country_id != 0
+                && self.country_id != club_country_id,
+            speaks_local_language: country_code.is_empty()
+                || self.speaks_local_language(country_code),
+            familiar_teammates: social
+                .map(|v| v.same_language_or_nationality())
+                .unwrap_or(0),
+            is_on_loan: self.is_on_loan(),
+            in_first_team: matches!(standing.squad_tier, TeamType::Main),
+
+            pecking_rank: standing.pecking_rank,
+            rivals_at_position: standing.rivals_at_position,
+            top_rival: if standing.top_rival_id == 0 {
+                ActorRef::NONE
+            } else {
+                ActorRef::player(standing.top_rival_id)
+            },
+            top_rival_age: standing.top_rival_age,
+            rival_gap: standing.rival_gap,
+            is_captain: standing.is_captain,
+            is_vice_captain: standing.is_vice_captain,
+            wage_standing: standing.wage_standing(),
+
+            coaching_ceiling: standing.coaching_ceiling as f32,
+            own_level: standing.observable_level,
+            training_performance: self.training.training_performance,
+            // The regressed season average rather than the raw one: nine
+            // good games in August do not make a man think he has
+            // arrived, and the regression is the model of exactly that.
+            recent_rating: self
+                .statistics
+                .average_rating_realistic(self.position().position_group()),
+            position_group: self.position().position_group(),
+            football_drought: self.football_drought(now),
+            development: self.development.ledger.read(now),
+
+            // The calendar is filled by the caller that has the country
+            // context; `u8::MAX` is "no tournament in view", which is
+            // further away than any real one.
+            months_to_tournament: u8::MAX,
+            national_standing: self.national_standing(),
+            // Same shape as the tournament clock above: filled by the
+            // caller that holds the country context.
+            days_to_main_window_close: u16::MAX,
+            division_reputation: 0,
+            ceiling: 0,
+            heart_club: self.favorite_clubs.first().copied().unwrap_or(0),
+            player_id: self.id,
+        }
+    }
+
+    /// How close he is to his country's side.
+    ///
+    /// Read from what the simulation already tracks: the `Int` status is
+    /// the current squad, and caps are the record. Held as a band rather
+    /// than a number because the thing that matters is not how many he
+    /// has — it is whether the next squad is something he is defending,
+    /// chasing, or has no business thinking about.
+    fn national_standing(&self) -> NationalStanding {
+        let caps = self.player_attributes.international_apps;
+        let in_the_squad = self.statuses.has(crate::club::PlayerStatusType::Int);
+        match (in_the_squad, caps) {
+            (true, c) if c >= 15 => NationalStanding::Established,
+            (true, _) => NationalStanding::InContention,
+            // Out of the current squad with a real record behind him: the
+            // man chasing his place back, and the one a tournament year
+            // presses hardest on.
+            (false, c) if c >= 10 => NationalStanding::InContention,
+            (false, c) if c >= 1 => NationalStanding::Fringe,
+            (false, _) => NationalStanding::Unknown,
+        }
+    }
+
+    pub fn simulate(&mut self, ctx: &GlobalContext<'_>) -> PlayerResult {
+        self.simulate_with_options(ctx, false)
+    }
+
+    /// `simulate` variant that conditionally skips the weekly natural
+    /// development tick. Used by `ClubAcademy::simulate` so academy
+    /// players develop only via `train_academy_players`, never through
+    /// both signals in the same week.
+    #[expect(clippy::too_many_lines)]
+    pub fn simulate_with_options(
+        &mut self,
+        ctx: &GlobalContext<'_>,
+        skip_natural_development: bool,
+    ) -> PlayerResult {
+        let now = ctx.simulation.date;
+
+        let mut result = PlayerResult::new(self.id);
+
+        // Age the rolling workload windows before anything reads them today.
+        // Cheap and idempotent — safe to call before every other step. The
+        // form target lets a benched player's stale form fade back toward
+        // neutral (nudged by how he's training) so poor form can't strand
+        // him out of the side forever.
+        let form_target = self.training.form_recovery_baseline();
+        self.load
+            .daily_decay_with_form_target(now.date(), form_target);
+
+        // Birthday
+        if DateUtils::is_birthday(self.birth_date, now.date()) {
+            self.behaviour.try_increase();
+        }
+
+        if self
+            .matchday_assignment
+            .is_some_and(|a| a.date <= now.date())
+        {
+            self.matchday_assignment = None;
+        }
+
+        // First tick after a transfer: react to the new club — ambition /
+        // salary shocks, role fit, implicit playing-time promise. No-op if
+        // nothing is pending.
+        if self.pending_signing.is_some() {
+            let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
+            let club_rep = ctx.team.as_ref().map(|t| t.reputation).unwrap_or(0.0);
+            let league_rep = ctx.club.as_ref().map(|c| c.league_reputation).unwrap_or(0);
+            let formation = ctx.team.as_ref().and_then(|t| t.formation);
+            self.process_transfer_shock(
+                now.date(),
+                club_rep,
+                league_rep,
+                country_code,
+                formation.as_ref(),
+            );
+        }
+
+        // Injury recovery (daily) — driven by the parent club's medical
+        // staff quality (physiotherapy + sports science).
+        let medical = MedicalStaffQuality {
+            physio: ctx.club_medical_quality(),
+            sports_science: ctx.club_sports_science_quality(),
+        };
+        self.process_injury(
+            &mut result,
+            now.date(),
+            &medical,
+            ctx.club.as_ref().map(|c| c.id),
+        );
+
+        // Natural condition recovery for non-injured players
+        self.process_condition_recovery(now.date());
+
+        // Match readiness decay for players not playing (rebuilds during pre-season)
+        self.process_match_readiness_decay(now.date());
+
+        // Player happiness & morale evaluation (weekly)
+        let team_reputation = ctx.team.as_ref().map(|t| t.reputation).unwrap_or(0.0);
+        if ctx.simulation.is_week_beginning() {
+            // The mind's periodic think, before anything reads it. The
+            // five faculties reflect on where he actually is, the goal
+            // stack is reviewed, and the monthly consolidation banks
+            // what recent episodes meant while they are still there to
+            // learn from.
+            let mind_ctx = self.mind_context(now.date(), ctx.club.as_ref().map(|c| c.id));
+            let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
+            let club_country_id = ctx.country.as_ref().map(|c| c.id).unwrap_or(0);
+            let mut situation = self.mind_situation(now.date(), club_country_id, country_code);
+            // The club he is at, not the squad that holds his registration:
+            // a reserve at a giant is at a giant.
+            situation.club_reputation = ctx
+                .club
+                .as_ref()
+                .map(|c| c.main_team_reputation as f32 / 10_000.0)
+                .filter(|standing| *standing > 0.0)
+                .unwrap_or(team_reputation)
+                .clamp(0.0, 1.0);
+            situation.division_reputation = ctx
+                .club
+                .as_ref()
+                .map(|c| c.league_reputation)
+                .filter(|division| *division > 0)
+                .or_else(|| ctx.team.as_ref().and_then(|t| t.league_reputation))
+                .unwrap_or(0);
+            situation.ceiling = PotentialEstimator::observable_ceiling(self, now.date());
+            // His OWN federation's calendar. A tournament clock belongs to
+            // a passport: a Brazilian at Arsenal is counting down to the
+            // Copa, not the Euros, and the country he plays in was the
+            // only clock the mind could see. A native's nationality
+            // continent is his club's, so nothing moves for him.
+            situation.months_to_tournament = ctx
+                .simulation
+                .tournament_clocks
+                .months_for(self.nationality_continent_id)
+                .unwrap_or_else(|| {
+                    ctx.country
+                        .as_ref()
+                        .map(|c| c.months_to_tournament)
+                        .unwrap_or(u8::MAX)
+                });
+            // The week's mood, swept into memory before the faculties
+            // reflect on it — so a fallout with the manager on Thursday
+            // is already something he remembers when he thinks about his
+            // future on Monday, rather than a week later.
+            situation.days_to_main_window_close = ctx
+                .country
+                .as_ref()
+                .map(|c| c.days_to_main_window_close)
+                .unwrap_or(u16::MAX);
+            self.remember_recent_mood(ctx.club.as_ref().map(|c| c.id), now.date());
+            self.mind.tick_with(&mind_ctx, &situation);
+            // …and how badly he wants to go home, read here because the
+            // mind has just thought and the picture is already built. The
+            // transfer pool then reads two fields instead of rebuilding
+            // this for every player in the world every day.
+            self.home_pull = HomePull::read(self, &situation, now.date());
+            // Decay interaction log so old talks don't keep the cooldown
+            // gates cold past their useful window.
+            self.interactions.decay(now.date());
+            // Verify promises before happiness so kept/broken events feed
+            // into the same weekly morale recalculation.
+            self.verify_promises(now.date(), ctx.club.as_ref().map(|c| c.id));
+            let season_state = TeamSeasonState {
+                league_position: ctx.club.as_ref().map(|c| c.league_position).unwrap_or(0),
+                league_size: ctx.club.as_ref().map(|c| c.league_size).unwrap_or(0),
+                season_progress: ctx
+                    .club
+                    .as_ref()
+                    .map(|c| {
+                        if c.total_league_matches > 0 {
+                            c.league_matches_played as f32 / c.total_league_matches as f32
+                        } else {
+                            0.0
+                        }
+                    })
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 1.0),
+                league_reputation: ctx.club.as_ref().map(|c| c.league_reputation).unwrap_or(0),
+            };
+            let club_morale_ctx = ctx
+                .club
+                .as_ref()
+                .map(|c| ClubMoraleContext {
+                    coach_best_technical: c.coach_best_technical,
+                    coach_best_mental: c.coach_best_mental,
+                    coach_best_fitness: c.coach_best_fitness,
+                    coach_best_goalkeeping: c.coach_best_goalkeeping,
+                    training_facility_quality: c.training_facility_quality,
+                    youth_facility_quality: c.youth_facility_quality,
+                })
+                .unwrap_or_default();
+            self.process_happiness_full(
+                &mut result,
+                now.date(),
+                team_reputation,
+                season_state,
+                club_morale_ctx,
+            );
+            // A week passed for his development.
+            if !skip_natural_development {
+                self.process_development(now.date());
+            }
+            // The level he competes at: his team's own competition (a B
+            // squad in the third division, a U18 side in youth football)
+            // before the club's main league.
+            let league_reputation = ctx
+                .team
+                .as_ref()
+                .and_then(|t| t.league_reputation)
+                .unwrap_or_else(|| ctx.club.as_ref().map(|c| c.league_reputation).unwrap_or(0));
+            // Language learning when playing abroad
+            let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
+            self.process_language_learning(now.date(), country_code);
+            // Post-transfer integration: bonding / isolation events for the
+            // first ~24 weeks at a new club.
+            self.process_integration(now.date(), country_code);
+            // Weekly transfer-environment story tick — ongoing
+            // weak↔elite / star↔weak narratives layered on top of the
+            // first-tick shocks. Active for the first 168 days after a
+            // transfer; no-op otherwise.
+            let team_rep = ctx.team.as_ref().map(|t| t.reputation).unwrap_or(0.0);
+            let formation_for_story = ctx.team.as_ref().and_then(|t| t.formation);
+            self.process_transfer_environment_story(
+                now.date(),
+                country_code,
+                team_rep,
+                league_reputation,
+                formation_for_story.as_ref(),
+            );
+        }
+
+        // Contract processing
+        self.process_contract(&mut result, now);
+        self.process_mailbox(&mut result, now.date());
+
+        // Transfer desire based on multiple factors. Build the
+        // context once from `GlobalContext` so the transfer-desire
+        // path doesn't have to walk the simulator world.
+        if self.may_seek_transfer(now.date()) {
+            let desire_ctx = TransferDesireContext::from_global(self, ctx);
+            self.process_transfer_desire(now.date(), &desire_ctx);
+        }
+
+        result
+    }
+
+    pub fn shirt_number(&self) -> u8 {
+        if let Some(contract) = &self.contract {
+            return contract.shirt_number.unwrap_or(0);
+        }
+
+        0
+    }
+
+    pub fn value(&self, date: NaiveDate, league_reputation: u16, club_reputation: u16) -> f64 {
+        PlayerValueCalculator::calculate(self, date, 1.0, league_reputation, club_reputation)
+    }
+
+    pub fn value_with_price_level(
+        &self,
+        date: NaiveDate,
+        price_level: f32,
+        league_reputation: u16,
+        club_reputation: u16,
+    ) -> f64 {
+        PlayerValueCalculator::calculate(
+            self,
+            date,
+            price_level,
+            league_reputation,
+            club_reputation,
+        )
+    }
+
+    #[inline]
+    pub fn positions(&self) -> Vec<PlayerPositionType> {
+        self.positions.positions()
+    }
+
+    #[inline]
+    pub fn position(&self) -> PlayerPositionType {
+        self.positions.primary().expect("no position found")
+    }
+
+    pub fn is_on_loan(&self) -> bool {
+        self.contract_loan.is_some()
+    }
+
+    /// A borrowed player does not face the club that owns him.
+    pub fn barred_against(&self, opponent_club_id: u32) -> bool {
+        self.contract_loan
+            .as_ref()
+            .and_then(|loan| loan.loan_from_club_id)
+            == Some(opponent_club_id)
+    }
+
+    /// The club has decided which of its sides he is with on `date`.
+    pub fn on_matchday_assigned(&mut self, date: NaiveDate, team_id: u32) {
+        self.matchday_assignment = Some(MatchdayAssignment { date, team_id });
+    }
+
+    /// The club has taken back what it decided for the day.
+    pub fn on_matchday_assignment_withdrawn(&mut self) {
+        self.matchday_assignment = None;
+    }
+
+    /// The side the club has put him with on `date`, when it has decided.
+    pub fn assigned_side_on(&self, date: NaiveDate) -> Option<u32> {
+        self.matchday_assignment
+            .filter(|a| a.date == date)
+            .map(|a| a.team_id)
+    }
+
+    /// His club has accepted a bid for him, or his transfer is agreed.
+    pub fn move_is_agreed(&self) -> bool {
+        self.statuses.has(PlayerStatusType::Bid) || self.statuses.has(PlayerStatusType::Trn)
+    }
+
+    /// Live appearances below which the season-end snapshot has already
+    /// frozen and reset the loan season, and the frozen row is the record.
+    const LIVE_LOAN_SEASON_APPS: u16 = 5;
+    /// Days his own ask to make a loan permanent still counts as recent.
+    const LOAN_PERMANENT_WISH_DAYS: u16 = 120;
+
+    /// Appearances in the loan season the borrower watched: the live season
+    /// while it runs, or the loan's league row once the season-end snapshot
+    /// has frozen it.
+    pub fn loan_season_appearances(&self) -> u16 {
+        let live = self.statistics.played + self.statistics.played_subs;
+        if live >= Self::LIVE_LOAN_SEASON_APPS {
+            return live;
+        }
+        self.statistics_history
+            .season_ledger
+            .iter()
+            .filter(|e| {
+                e.is_loan && matches!(e.competition_kind, PlayerStatCompetitionKind::League)
+            })
+            .max_by_key(|e| (e.season_start_year, e.seq_id))
+            .map(|e| e.statistics.played + e.statistics.played_subs)
+            .unwrap_or(live)
+    }
+
+    /// He has asked, recently, to make his loan permanent.
+    pub fn wants_loan_made_permanent(&self) -> bool {
+        self.happiness.has_recent_event(
+            &HappinessEventType::WantsLoanMadePermanent,
+            Self::LOAN_PERMANENT_WISH_DAYS,
+        )
+    }
+
+    /// The club has decided he goes: transfer-listed (the contract flag or
+    /// the `Lst` badge) or told he is not needed. From here the market owns
+    /// his future — the manager makes him no playing-time promise, a talk
+    /// does not clear his unhappiness, and the listing pass owes him a
+    /// market row.
+    pub fn is_being_moved_on(&self) -> bool {
+        self.statuses.has(PlayerStatusType::Lst)
+            || self.contract.as_ref().is_some_and(|c| {
+                c.is_transfer_listed || matches!(c.squad_status, PlayerSquadStatus::NotNeeded)
+            })
+    }
+
+    /// True when the player is physically present at `club_id` because of
+    /// a loan agreement — i.e. the borrowing-side view. Used by squad
+    /// management to disable renewal / release / transfer-listing for
+    /// players the club doesn't actually own.
+    pub fn is_loaned_in_at(&self, club_id: u32) -> bool {
+        self.contract_loan.as_ref().and_then(|c| c.loan_to_club_id) == Some(club_id)
+    }
+
+    /// True when the player's permanent contract belongs to `club_id`
+    /// and they are currently away on loan elsewhere. Parent-side view —
+    /// the renewal manager uses this to find loaned-out players that
+    /// don't live in the parent's own roster.
+    pub fn is_loaned_out_from(&self, club_id: u32) -> bool {
+        self.contract_loan
+            .as_ref()
+            .and_then(|c| c.loan_from_club_id)
+            == Some(club_id)
+    }
+
+    /// The club that owns the player's permanent contract. For loaned-out
+    /// players this is the parent (`loan_from_club_id`); otherwise None
+    /// — the caller already knows which club's roster they were iterating.
+    pub fn parent_club_id(&self) -> Option<u32> {
+        self.contract_loan
+            .as_ref()
+            .and_then(|c| c.loan_from_club_id)
+    }
+
+    pub fn is_ready_for_match(&self) -> bool {
+        !self.player_attributes.is_injured
+            && !self.player_attributes.is_banned
+            && !self.player_attributes.is_in_recovery()
+            && self.player_attributes.condition_percentage() > 30
+    }
+
+    pub fn growth_potential(&self, now: NaiveDate) -> u8 {
+        PlayerGrowth::growth_potential(self, now)
+    }
+
+    /// Weekly language learning: if the player is in a country whose language
+    /// they don't speak natively, they gradually learn it.
+    fn process_language_learning(&mut self, now: NaiveDate, country_code: &str) {
+        use crate::club::player::language::{Language, weekly_language_progress};
+
+        if country_code.is_empty() {
+            return;
+        }
+
+        let country_languages = Language::from_country_code(country_code);
+        if country_languages.is_empty() {
+            return;
+        }
+
+        let age = DateUtils::age(self.birth_date, now);
+
+        for target_lang in country_languages {
+            // Check if player already speaks this language natively
+            let already_native = self
+                .languages
+                .iter()
+                .any(|l| l.language == *target_lang && l.is_native);
+            if already_native {
+                continue;
+            }
+
+            // Check if already fully fluent (proficiency >= 100)
+            let already_fluent = self
+                .languages
+                .iter()
+                .any(|l| l.language == *target_lang && l.proficiency >= 100);
+            if already_fluent {
+                continue;
+            }
+
+            let current_prof = self
+                .languages
+                .iter()
+                .find(|l| l.language == *target_lang)
+                .map(|l| l.proficiency)
+                .unwrap_or(0);
+
+            let gain = weekly_language_progress(
+                self.attributes.adaptability,
+                self.attributes.professionalism,
+                age,
+                self.player_attributes.current_ability,
+                current_prof,
+            );
+
+            if gain == 0 {
+                continue;
+            }
+
+            // Threshold-crossing detection so morale only lifts on meaningful
+            // milestones (basic, conversational, functional, fluent). Weekly
+            // +1% increments would otherwise spam the event log.
+            //
+            // Magnitude scales by milestone — first words feel small, the
+            // jump to functional ("can do an interview unaided") is bigger,
+            // and full fluency is a quiet pride moment. Catalog default is
+            // the conversational rung; the multiplier maps each threshold
+            // around it.
+            const THRESHOLDS: &[u8] = &[40, 55, 70, 90];
+            let prev_prof = current_prof;
+            let new_prof = (current_prof + gain).min(100);
+            let crossed_threshold = THRESHOLDS
+                .iter()
+                .find(|&&t| prev_prof < t && new_prof >= t)
+                .copied();
+
+            if let Some(lang_entry) = self
+                .languages
+                .iter_mut()
+                .find(|l| l.language == *target_lang)
+            {
+                lang_entry.proficiency = new_prof;
+            } else {
+                self.languages
+                    .push(PlayerLanguage::learning(*target_lang, gain));
+            }
+
+            if let Some(t) = crossed_threshold {
+                // 40 basic → 0.7×, 55 conversational → 1.0× (catalog),
+                // 70 functional → 1.4×, 90 fluent → 0.9× (quiet pride).
+                let factor = match t {
+                    40 => 0.7,
+                    55 => 1.0,
+                    70 => 1.4,
+                    90 => 0.9,
+                    _ => 1.0,
+                };
+                let cfg = HappinessConfig::default();
+                let mag = cfg.catalog.language_progress * factor;
+                let pactx = PersonalAdaptationEventContext::new(
+                    PersonalAdaptationKind::LanguageMilestone,
+                    0,
+                )
+                .with_local_language(true);
+                let happiness_ctx = HappinessEventContext::new(
+                    HappinessEventCause::NationalityIntegration,
+                    HappinessEventSeverity::from_magnitude(mag),
+                    HappinessEventScope::Personal,
+                )
+                .with_personal_adaptation_context(pactx);
+                // Cooldown 30d so two languages crossing thresholds in the
+                // same fortnight don't both fire (rare, but tidy).
+                self.happiness.add_event_with_context_and_cooldown(
+                    HappinessEventType::LanguageProgress,
+                    mag,
+                    None,
+                    happiness_ctx,
+                    30,
+                );
+            }
+        }
+    }
+}
+
+/// Sensible per-kind default for `target_value` when callers don't
+/// supply one. Reads the player's contract so the threshold matches
+/// their stated squad role.
+fn default_target(kind: ManagerPromiseKind, contract: &Option<PlayerClubContract>) -> u16 {
+    use crate::PlayerSquadStatus::*;
+    match kind {
+        ManagerPromiseKind::PlayingTime => 0,
+        ManagerPromiseKind::StartingRole => match contract.as_ref().map(|c| &c.squad_status) {
+            Some(KeyPlayer) => 80,
+            Some(FirstTeamRegular) => 60,
+            Some(FirstTeamSquadRotation) => 40,
+            _ => 30,
+        },
+        ManagerPromiseKind::TacticalRole => 0,
+        ManagerPromiseKind::LoanDevelopment => 0,
+        ManagerPromiseKind::PreferredPosition
+        | ManagerPromiseKind::TransferPermission
+        | ManagerPromiseKind::ContractReview
+        | ManagerPromiseKind::Captaincy => 0,
+    }
+}
+
+impl Person for Player {
+    fn id(&self) -> u32 {
+        self.id
+    }
+
+    fn fullname(&self) -> &FullName {
+        &self.full_name
+    }
+
+    fn birthday(&self) -> NaiveDate {
+        self.birth_date
+    }
+
+    fn behaviour(&self) -> &PersonBehaviour {
+        &self.behaviour
+    }
+
+    fn attributes(&self) -> &PersonAttributes {
+        &self.attributes
+    }
+
+    fn relations(&self) -> &Relations {
+        &self.relations
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerPreferredFoot {
+    Left,
+    Right,
+    Both,
+}
+
+impl PlayerPreferredFoot {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            PlayerPreferredFoot::Left => "foot_left",
+            PlayerPreferredFoot::Right => "foot_right",
+            PlayerPreferredFoot::Both => "foot_both",
+        }
+    }
+}
+
+/// Per-foot ownership on a 0-100 scale (100 = fully natural foot).
+#[derive(Debug, Clone)]
+pub struct PlayerFoots {
+    pub left: u8,
+    pub right: u8,
+}
+
+impl PlayerFoots {
+    pub fn new(left: u8, right: u8) -> Self {
+        PlayerFoots {
+            left: left.min(100),
+            right: right.min(100),
+        }
+    }
+
+    /// Default levels for a player whose record only carries a preferred-foot
+    /// label: the natural foot is fully owned, the weak foot serviceable.
+    pub fn from_preferred(foot: &PlayerPreferredFoot) -> Self {
+        match foot {
+            PlayerPreferredFoot::Left => PlayerFoots::new(100, 45),
+            PlayerPreferredFoot::Right => PlayerFoots::new(45, 100),
+            PlayerPreferredFoot::Both => PlayerFoots::new(95, 95),
+        }
+    }
+
+    /// Derive the preferred-foot label from the levels — near-equal feet
+    /// read as two-footed.
+    pub fn preferred(&self) -> PlayerPreferredFoot {
+        let diff = self.left as i16 - self.right as i16;
+        if diff.abs() <= 15 {
+            PlayerPreferredFoot::Both
+        } else if diff > 0 {
+            PlayerPreferredFoot::Left
+        } else {
+            PlayerPreferredFoot::Right
+        }
+    }
+}
+
+//DISPLAY
+impl Display for Player {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        write!(f, "{}, {}", self.full_name, self.birth_date)
+    }
+}
+
+impl PartialEq for Player {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn player_is_correct() {
+        assert_eq!(10, 10);
+    }
+
+    #[test]
+    fn foots_levels_clamp_to_100() {
+        let foots = PlayerFoots::new(120, 200);
+        assert_eq!(foots.left, 100);
+        assert_eq!(foots.right, 100);
+    }
+
+    #[test]
+    fn foots_derive_preferred_label() {
+        assert!(matches!(
+            PlayerFoots::new(100, 50).preferred(),
+            PlayerPreferredFoot::Left
+        ));
+        assert!(matches!(
+            PlayerFoots::new(40, 100).preferred(),
+            PlayerPreferredFoot::Right
+        ));
+        assert!(matches!(
+            PlayerFoots::new(95, 90).preferred(),
+            PlayerPreferredFoot::Both
+        ));
+    }
+
+    #[test]
+    fn foots_from_preferred_round_trips() {
+        for foot in [
+            PlayerPreferredFoot::Left,
+            PlayerPreferredFoot::Right,
+            PlayerPreferredFoot::Both,
+        ] {
+            let derived = PlayerFoots::from_preferred(&foot).preferred();
+            assert_eq!(
+                std::mem::discriminant(&derived),
+                std::mem::discriminant(&foot),
+                "from_preferred({foot:?}) → preferred() must return {foot:?}, got {derived:?}"
+            );
+        }
+    }
+}

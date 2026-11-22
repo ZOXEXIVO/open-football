@@ -11,11 +11,10 @@
 //! changes what the match does.
 
 use crate::PlayerFieldPositionGroup;
-use crate::r#match::common_states::{ChallengeKind, TackleEngagement};
 use crate::r#match::engine::ball::ball::OffsideLine;
 use crate::r#match::engine::teamplay::plans::attack::AttackPlan;
 use crate::r#match::engine::teamplay::possession::TeamPossession;
-use crate::r#match::forwarders::states::common::ForwardRead;
+use crate::r#match::forwarders::states::shared::ForwardRead;
 use crate::r#match::forwarders::states::{ForwardFamily, ForwardState};
 use crate::r#match::player::diagnostics::defender_census::{
     ChallengeOutcome, ChaseYield, DefenderCensus, DispatchRedirect, HeaderBooking, HeaderRule,
@@ -24,6 +23,7 @@ use crate::r#match::player::diagnostics::defender_census::{
 use crate::r#match::player::diagnostics::midfielder_census::BallHeld;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::players::ops::box_movement::BoxMovement;
+use crate::r#match::shared_states::{ChallengeKind, TackleEngagement};
 use crate::r#match::{
     MatchField, MatchPlayer, MatchTally, PlayerSide, StateProcessingContext, StateProcessingResult,
 };

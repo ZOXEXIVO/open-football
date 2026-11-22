@@ -1,4 +1,4 @@
-use crate::r#match::goalkeepers::states::common::{
+use crate::r#match::goalkeepers::states::shared::{
     ActivityIntensity, GoalkeeperCondition, KeeperDebug, KeeperPenaltyStance, KeeperRead,
     KeeperRestPosition, KeeperSetPieceStance, KeeperSetPosition, KeeperShotDive,
     KeeperShotReaction, KeeperSweepLimit, ReadLevel, Reading,

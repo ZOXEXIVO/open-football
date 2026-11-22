@@ -105,6 +105,7 @@ impl Shading {
     }
 
     /// The skin, lit. Everything here is clipped to the head silhouette.
+    #[expect(clippy::too_many_lines)]
     pub fn head(c: &mut Canvas, l: &Landmarks, t: &Tones, id: &Identity, age: u8, heft: f32) {
         let cx = l.cx;
         let s = &l.skull;

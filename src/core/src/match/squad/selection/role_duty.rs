@@ -121,6 +121,7 @@ impl RoleDutyFitScorer {
     /// blend tables live here in named match arms — the spec wants
     /// declarative role recipes, not magic numbers buried inline at the
     /// scoring call site.
+    #[expect(clippy::too_many_lines)]
     pub fn role_attribute_fit(player: &Player, profile: SelectionRoleProfile) -> f32 {
         let t = &player.skills.technical;
         let m = &player.skills.mental;

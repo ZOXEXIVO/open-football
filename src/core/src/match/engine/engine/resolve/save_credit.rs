@@ -82,9 +82,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
         field.players[shooter_idx].memory.credit_shot_on_target();
         if shot_xg >= Self::BIG_SAVE_XGOT {
-            context
-                .psychology
-                .record_positive(keeper_id, PositiveEvent::BigSave, context.current_tick());
+            context.psychology.record_positive(
+                keeper_id,
+                PositiveEvent::BigSave,
+                context.current_tick(),
+            );
         }
         if spot_kick {
             context.penalty_saves.push(keeper_id);

@@ -78,9 +78,9 @@ impl MatchRules {
         match competition {
             CompetitionKind::Friendly => Self::friendly(),
             CompetitionKind::International => Self::international(),
-            CompetitionKind::League | CompetitionKind::DomesticCup | CompetitionKind::Continental => {
-                Self::modern()
-            }
+            CompetitionKind::League
+            | CompetitionKind::DomesticCup
+            | CompetitionKind::Continental => Self::modern(),
         }
     }
 }

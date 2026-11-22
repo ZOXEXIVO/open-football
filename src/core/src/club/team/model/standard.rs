@@ -87,7 +87,10 @@ mod tests {
                     .attributes(PersonAttributes::default())
                     .skills(PlayerSkills::flat_for_ability(ability))
                     .positions(PlayerPositions {
-                        positions: vec![PlayerPosition { position, level: 20 }],
+                        positions: vec![PlayerPosition {
+                            position,
+                            level: 20,
+                        }],
                     })
                     .player_attributes(PlayerAttributes {
                         current_ability: ability,
@@ -108,6 +111,9 @@ mod tests {
     #[test]
     fn a_squad_with_no_outfielders_reads_the_calibration_standard() {
         let keeper_only: Vec<Player> = squad(120).into_iter().take(1).collect();
-        assert_eq!(PlayingStandard::of(&keeper_only), MatchStandard::CALIBRATION);
+        assert_eq!(
+            PlayingStandard::of(&keeper_only),
+            MatchStandard::CALIBRATION
+        );
     }
 }

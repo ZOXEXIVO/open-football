@@ -188,6 +188,7 @@ impl DomesticApproachPass {
 
     /// Walk this club's shortlists, and for each one decide an offer for the
     /// candidate sitting at the cursor.
+    #[expect(clippy::too_many_lines)]
     fn pursue(
         buyer: &DomesticBuyer<'_>,
         date: NaiveDate,
@@ -382,6 +383,7 @@ impl DomesticApproachPass {
 
     /// What the club believes about the man at the shortlist cursor, and what
     /// its director of football decided to do about him.
+    #[expect(clippy::too_many_lines)]
     fn target<'a>(
         buyer: &DomesticBuyer<'a>,
         candidate: &ShortlistCandidate,

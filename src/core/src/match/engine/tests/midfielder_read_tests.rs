@@ -7,7 +7,6 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
-use crate::r#match::common_states::{ChallengeKind, ShapeTempo, TackleEngagement};
 use crate::r#match::defenders::states::DefenderMarkingState;
 use crate::r#match::engine::ball::ball::{
     AwaitedRestart, OffsideLine, PassOriginRestart, RestartQuiet,
@@ -16,7 +15,7 @@ use crate::r#match::engine::engine::FootballEngine;
 use crate::r#match::engine::result::Score;
 use crate::r#match::engine::teamplay::possession::TeamPossession;
 use crate::r#match::events::Event;
-use crate::r#match::midfielders::states::common::MidfielderRead;
+use crate::r#match::midfielders::states::shared::MidfielderRead;
 use crate::r#match::midfielders::states::{
     MidfielderAttackSupportingState, MidfielderCreatingSpaceState, MidfielderGuardingState,
     MidfielderHeadingState, MidfielderHoldingShapeState, MidfielderHoldingWidthState,
@@ -29,6 +28,7 @@ use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::ops::support::SupportOffer;
 use crate::r#match::player::transition::TransitionSource;
+use crate::r#match::shared_states::{ChallengeKind, ShapeTempo, TackleEngagement};
 use crate::r#match::{
     ActivityIntensity, ConditionContext, DefenceRefreshInputs, DefensivePlan, GameTickContext,
     MatchContext, MatchField, MatchPlayerCollection, MovementEffort, PlayerSide, StateChangeResult,

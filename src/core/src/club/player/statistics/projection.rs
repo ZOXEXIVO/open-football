@@ -118,6 +118,7 @@ impl PlayerStatisticsProjection {
     /// for departed spells. Live per-competition cup slices become
     /// per-kind entries attributed to the active spell's
     /// `(season, team)`; the friendly bucket adds a Friendly entry.
+    #[expect(clippy::too_many_lines)]
     pub fn build_ledger(
         history: &PlayerStatisticsHistory,
         live: &PlayerLiveStatsInput<'_>,
@@ -847,6 +848,7 @@ impl PlayerStatisticsProjection {
     ///
     /// Output is sorted by season-year descending, then by `seq_id`
     /// descending so the most recent row surfaces first.
+    #[expect(clippy::too_many_lines)]
     pub fn player_history_rows(
         history: &PlayerStatisticsHistory,
         live: &PlayerLiveStatsInput<'_>,

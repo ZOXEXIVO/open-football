@@ -288,7 +288,12 @@ impl CoachSquadPlan {
     /// True when the plan no longer describes the squad: a month has
     /// passed, the shape has changed, a man has joined or left, or a role
     /// was set by hand and has not been drawn onto the chart.
-    pub fn is_stale(&self, players: &PlayerCollection, tactics: &Tactics, today: NaiveDate) -> bool {
+    pub fn is_stale(
+        &self,
+        players: &PlayerCollection,
+        tactics: &Tactics,
+        today: NaiveDate,
+    ) -> bool {
         self.due_for_revision(today)
             || self.formation != Some(tactics.tactic_type)
             || players.players.len() != self.entries.len()
@@ -350,6 +355,7 @@ impl CoachSquadPlan {
     /// each stands with him. Never from hidden ability. Each shirt's
     /// football is then divided between the men planned for it, so the
     /// shares of a squad add up to the football its formation plays.
+    #[expect(clippy::too_many_lines)]
     pub fn revise(&mut self, reading: &PlanReading<'_>) -> Vec<(u32, PlannedRole)> {
         let today = reading.today;
         let squad: Vec<&Player> = reading.players.iter().collect();
@@ -362,8 +368,7 @@ impl CoachSquadPlan {
             today,
         );
         let by_id: FxHashMap<u32, &Player> = squad.iter().map(|p| (p.id, *p)).collect();
-        let standing_of =
-            |id: u32| reading.memory.and_then(|store| store.standing_of(id));
+        let standing_of = |id: u32| reading.memory.and_then(|store| store.standing_of(id));
 
         let mut drafted: FxHashMap<u32, PlayerPlanEntry> = FxHashMap::default();
         for depth in chart.shirts() {
@@ -452,8 +457,7 @@ impl CoachSquadPlan {
                         .then(|| Self::shop_window(men[i], &reading.climate, keeper))
                         .flatten()
                         .map(|share| {
-                            let demanded =
-                                men[i].decision_history.sale_was_demanded_by_the_board();
+                            let demanded = men[i].decision_history.sale_was_demanded_by_the_board();
                             if frozen_out(i) && !demanded {
                                 share * reading.board_hold.clamp(0.0, 1.0)
                             } else {
@@ -522,8 +526,8 @@ impl CoachSquadPlan {
     /// this season still moves his price.
     fn shop_window(player: &Player, climate: &ShareClimate, keeper: bool) -> Option<f32> {
         let seen = FootballRecord::this_season(player).appearances;
-        let share = ShirtShares::rotation(climate, keeper)
-            * PlayerValueCalculator::football_leverage(seen);
+        let share =
+            ShirtShares::rotation(climate, keeper) * PlayerValueCalculator::football_leverage(seen);
         (share > 0.0).then_some(share)
     }
 
@@ -662,8 +666,8 @@ mod tests {
         PlayerSkills, PlayerSquadStatus, PlayerStatCompetitionKind, PlayerStatLedgerEntry,
         PlayerStatistics, PlayerStatusType,
     };
-    use chrono::{Datelike, Duration};
     use PlayerPositionType::*;
+    use chrono::{Datelike, Duration};
 
     /// Fixtures for the squad-plan derivation.
     struct Fx;
@@ -673,7 +677,12 @@ mod tests {
             NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()
         }
 
-        fn versatile(id: u32, positions: &[(PlayerPositionType, u8)], ability: u8, age: u8) -> Player {
+        fn versatile(
+            id: u32,
+            positions: &[(PlayerPositionType, u8)],
+            ability: u8,
+            age: u8,
+        ) -> Player {
             let attrs = PlayerAttributes {
                 current_ability: ability,
                 potential_ability: ability,
@@ -718,7 +727,10 @@ mod tests {
                 .collect()
         }
 
-        fn plan(players: Vec<Player>, shape: MatchTacticType) -> (CoachSquadPlan, PlayerCollection) {
+        fn plan(
+            players: Vec<Player>,
+            shape: MatchTacticType,
+        ) -> (CoachSquadPlan, PlayerCollection) {
             let squad = PlayerCollection::new(players);
             let mut plan = CoachSquadPlan::new();
             plan.revise(&PlanReading::of(&squad, &Tactics::new(shape), Self::date()));
@@ -775,16 +787,24 @@ mod tests {
             .enumerate()
             .map(|(i, &slot)| Fx::player(i as u32 + 1, slot, 150 - 2 * i as u8, 27))
             .collect();
-        for (i, slot) in [Goalkeeper, DefenderCenterLeft, MidfielderCenterRight, ForwardLeft]
-            .into_iter()
-            .enumerate()
+        for (i, slot) in [
+            Goalkeeper,
+            DefenderCenterLeft,
+            MidfielderCenterRight,
+            ForwardLeft,
+        ]
+        .into_iter()
+        .enumerate()
         {
             players.push(Fx::player(20 + i as u32, slot, 125, 26));
         }
         players.push(Fx::player(30, DefenderCenterRight, 110, 30));
         let (plan, squad) = Fx::plan(players, MatchTacticType::T442);
 
-        assert_eq!(Fx::first_choices(&plan, &squad), (1..=11).collect::<Vec<u32>>());
+        assert_eq!(
+            Fx::first_choices(&plan, &squad),
+            (1..=11).collect::<Vec<u32>>()
+        );
         for id in 1..=11 {
             assert!(
                 plan.role_of(id).unwrap().is_at_least(PlannedRole::Starter),
@@ -792,7 +812,11 @@ mod tests {
                 plan.role_of(id)
             );
         }
-        assert!((plan.total_share() - 11.0).abs() < 1e-3, "{}", plan.total_share());
+        assert!(
+            (plan.total_share() - 11.0).abs() < 1e-3,
+            "{}",
+            plan.total_share()
+        );
     }
 
     #[test]
@@ -805,8 +829,15 @@ mod tests {
         for id in 2..=5 {
             let entry = plan.entry(id).unwrap();
             assert_eq!(entry.place, 0, "defender {id}");
-            assert!(entry.role.is_at_least(PlannedRole::Starter), "defender {id}");
-            assert!(entry.share > 0.7, "defender {id} is planned for {}", entry.share);
+            assert!(
+                entry.role.is_at_least(PlannedRole::Starter),
+                "defender {id}"
+            );
+            assert!(
+                entry.share > 0.7,
+                "defender {id} is planned for {}",
+                entry.share
+            );
         }
         for id in [20, 21] {
             let entry = plan.entry(id).unwrap();
@@ -823,7 +854,9 @@ mod tests {
                 .filter_map(|p| plan.entry(p.id))
                 .filter(|e| e.place == 0)
                 .filter(|e| {
-                    e.shirt.is_some_and(|s| central.contains(&s) || s == DefenderLeft || s == DefenderRight)
+                    e.shirt.is_some_and(|s| {
+                        central.contains(&s) || s == DefenderLeft || s == DefenderRight
+                    })
                 })
                 .count()
         };
@@ -831,11 +864,18 @@ mod tests {
         players.push(Fx::player(20, DefenderCenter, 135, 26));
         let squad = PlayerCollection::new(players);
         let mut plan = CoachSquadPlan::new();
-        plan.revise(&PlanReading::of(&squad, &Tactics::new(MatchTacticType::T442), Fx::date()));
+        plan.revise(&PlanReading::of(
+            &squad,
+            &Tactics::new(MatchTacticType::T442),
+            Fx::date(),
+        ));
         assert_eq!(back_line(&plan, &squad), 4);
 
         let three = Tactics::new(MatchTacticType::T352);
-        assert!(plan.is_stale(&squad, &three, Fx::date()), "the shape changed today");
+        assert!(
+            plan.is_stale(&squad, &three, Fx::date()),
+            "the shape changed today"
+        );
         plan.revise(&PlanReading::of(&squad, &three, Fx::date()));
         assert_eq!(back_line(&plan, &squad), 3);
         assert!(!plan.is_stale(&squad, &three, Fx::date()));
@@ -847,13 +887,22 @@ mod tests {
         players[1] = Fx::player(2, DefenderLeft, 110, 27);
         players[5] = Fx::player(6, MidfielderLeft, 150, 27);
         players.push(Fx::player(20, MidfielderLeft, 145, 27));
-        players.push(Fx::versatile(21, &[(DefenderLeft, 18), (MidfielderLeft, 18)], 140, 27));
+        players.push(Fx::versatile(
+            21,
+            &[(DefenderLeft, 18), (MidfielderLeft, 18)],
+            140,
+            27,
+        ));
         let (plan, _) = Fx::plan(players, MatchTacticType::T442);
 
         let entry = plan.entry(21).unwrap();
         assert_eq!(entry.shirt, Some(DefenderLeft));
         assert_eq!(entry.place, 0);
-        assert_eq!(plan.entry(2).unwrap().place, 1, "the old left-back stands behind him");
+        assert_eq!(
+            plan.entry(2).unwrap().place,
+            1,
+            "the old left-back stands behind him"
+        );
     }
 
     #[test]
@@ -877,8 +926,16 @@ mod tests {
             });
             (plan.entry(3).unwrap().place, plan.entry(20).unwrap().place)
         };
-        assert_eq!(trusted(143), (0, 1), "marginally stronger: the incumbent keeps the shirt");
-        assert_eq!(trusted(155), (1, 0), "clearly stronger: the newcomer takes it");
+        assert_eq!(
+            trusted(143),
+            (0, 1),
+            "marginally stronger: the incumbent keeps the shirt"
+        );
+        assert_eq!(
+            trusted(155),
+            (1, 0),
+            "clearly stronger: the newcomer takes it"
+        );
     }
 
     #[test]
@@ -887,7 +944,11 @@ mod tests {
         players.push(Fx::player(20, MidfielderCenterLeft, 138, 26));
         let (plan, mut squad) = Fx::plan(players, MatchTacticType::T442);
         let entry = *plan.entry(20).unwrap();
-        assert!(entry.share > 0.2, "a close second is planned for {}", entry.share);
+        assert!(
+            entry.share > 0.2,
+            "a close second is planned for {}",
+            entry.share
+        );
         assert!(entry.role == PlannedRole::Rotation);
 
         let player = squad.players.iter_mut().find(|p| p.id == 20).unwrap();
@@ -960,15 +1021,25 @@ mod tests {
             MandateAuthor::Board,
         )
         .with_money(20_000_000.0, 2_000_000.0);
-        signing.plan = Some(PlayerPlan::from_mandate(mandate, Fx::date() - Duration::days(30)));
+        signing.plan = Some(PlayerPlan::from_mandate(
+            mandate,
+            Fx::date() - Duration::days(30),
+        ));
         let mut players = Fx::eleven(MatchTacticType::T442, 140);
         players.push(signing);
         let (plan, _) = Fx::plan(players, MatchTacticType::T442);
 
         let entry = plan.entry(20).unwrap();
         assert_eq!(entry.place, 1, "the manager's chart has him second");
-        assert!(entry.share >= 0.8, "the board bought a starter, planned for {}", entry.share);
-        assert!(plan.entry(7).unwrap().share < 0.25, "the football comes from his shirt");
+        assert!(
+            entry.share >= 0.8,
+            "the board bought a starter, planned for {}",
+            entry.share
+        );
+        assert!(
+            plan.entry(7).unwrap().share < 0.25,
+            "the football comes from his shirt"
+        );
         assert!((plan.total_share() - 11.0).abs() < 1e-3);
     }
 
@@ -981,7 +1052,10 @@ mod tests {
         let first = plan.revise(&PlanReading::of(&squad, &shape, Fx::date()));
         assert_eq!(first.len(), 11, "a fresh plan is all new opinions");
         let again = plan.revise(&PlanReading::of(&squad, &shape, Fx::date()));
-        assert!(again.is_empty(), "nothing changed, so there is nothing new to tell anyone");
+        assert!(
+            again.is_empty(),
+            "nothing changed, so there is nothing new to tell anyone"
+        );
         assert!(!plan.is_stale(&squad, &shape, Fx::date()));
     }
 
@@ -996,15 +1070,26 @@ mod tests {
         let joined = PlayerCollection::new(players.clone());
         assert!(plan.is_stale(&joined, &shape, Fx::date()));
         plan.revise(&PlanReading::of(&joined, &shape, Fx::date()));
-        assert_eq!(plan.entry(20).unwrap().place, 0, "the better man takes the shirt on the day");
+        assert_eq!(
+            plan.entry(20).unwrap().place,
+            0,
+            "the better man takes the shirt on the day"
+        );
         assert_eq!(plan.entry(10).unwrap().place, 1);
 
         players.retain(|p| p.id != 20);
         let left = PlayerCollection::new(players);
         assert!(plan.is_stale(&left, &shape, Fx::date()));
         plan.revise(&PlanReading::of(&left, &shape, Fx::date()));
-        assert!(plan.role_of(20).is_none(), "a departed player is no longer the coach's problem");
-        assert_eq!(plan.entry(10).unwrap().place, 0, "and the man behind him moves up");
+        assert!(
+            plan.role_of(20).is_none(),
+            "a departed player is no longer the coach's problem"
+        );
+        assert_eq!(
+            plan.entry(10).unwrap().place,
+            0,
+            "and the man behind him moves up"
+        );
     }
 
     /// Only one keeper can play the league, so a settled senior deputy
@@ -1013,7 +1098,10 @@ mod tests {
     #[test]
     fn the_second_keeper_is_the_cup_keeper() {
         let mut players = Fx::eleven(MatchTacticType::T442, 150);
-        players.push(Fx::with_stalled_seasons(Fx::player(20, Goalkeeper, 130, 28), 4));
+        players.push(Fx::with_stalled_seasons(
+            Fx::player(20, Goalkeeper, 130, 28),
+            4,
+        ));
         let (plan, _) = Fx::plan(players, MatchTacticType::T442);
         assert!(
             plan.role_of(1)
@@ -1025,7 +1113,10 @@ mod tests {
             Some(PlannedRole::CupKeeper),
             "a senior deputy keeper has a competition of his own, not a stalled career"
         );
-        assert!(plan.entry(1).unwrap().share > 0.85, "a goalkeeper shares least");
+        assert!(
+            plan.entry(1).unwrap().share > 0.85,
+            "a goalkeeper shares least"
+        );
     }
 
     /// An outfield player with the same stalled record has no such role —
@@ -1046,7 +1137,10 @@ mod tests {
         ));
         let (plan, _) = Fx::plan(players, MatchTacticType::T442);
         assert_ne!(plan.role_of(21), Some(PlannedRole::ShopWindow));
-        assert!(plan.entry(21).unwrap().share > 0.0, "he is still planned for");
+        assert!(
+            plan.entry(21).unwrap().share > 0.0,
+            "he is still planned for"
+        );
         assert_eq!(plan.role_of(22), Some(PlannedRole::NotInPlans));
         assert_eq!(plan.entry(22).unwrap().share, 0.0);
         assert!((plan.total_share() - 11.0).abs() < 1e-3);
@@ -1087,7 +1181,11 @@ mod tests {
             .unwrap()
             .statuses
             .add(Fx::date(), PlayerStatusType::Bid);
-        plan.revise(&PlanReading::of(&squad, &Tactics::new(MatchTacticType::T442), Fx::date()));
+        plan.revise(&PlanReading::of(
+            &squad,
+            &Tactics::new(MatchTacticType::T442),
+            Fx::date(),
+        ));
         assert_ne!(plan.role_of(20), Some(PlannedRole::ShopWindow));
     }
 
@@ -1121,9 +1219,16 @@ mod tests {
         let (plan, _) = Fx::plan(players, MatchTacticType::T442);
         let rotation = ShirtShares::rotation(&ShareClimate::ONE_COMPETITION, false);
         let entry = plan.entry(20).unwrap();
-        assert!((entry.share - rotation).abs() < 1e-4, "{} against {rotation}", entry.share);
+        assert!(
+            (entry.share - rotation).abs() < 1e-4,
+            "{} against {rotation}",
+            entry.share
+        );
         assert!(entry.share >= 0.15, "a real share: {}", entry.share);
-        assert!((plan.total_share() - 11.0).abs() < 1e-3, "the first choice makes room");
+        assert!(
+            (plan.total_share() - 11.0).abs() < 1e-3,
+            "the first choice makes room"
+        );
     }
 
     #[test]
@@ -1137,9 +1242,15 @@ mod tests {
                 .share
         };
         let earned = share_of(man(28));
-        let (unseen, some, all_season) =
-            (share_of(listed(man(0))), share_of(listed(man(1))), share_of(listed(man(28))));
-        assert!(unseen > some && some > all_season, "{unseen} {some} {all_season}");
+        let (unseen, some, all_season) = (
+            share_of(listed(man(0))),
+            share_of(listed(man(1))),
+            share_of(listed(man(28))),
+        );
+        assert!(
+            unseen > some && some > all_season,
+            "{unseen} {some} {all_season}"
+        );
         assert_eq!(
             all_season, earned,
             "a man the market has watched all season is given what his place earns him"
@@ -1178,7 +1289,10 @@ mod tests {
 
         let secure = window_share(man(), &memory, 0.0);
         let pressed = window_share(man(), &memory, 0.5);
-        assert_eq!(secure, 0.0, "a manager sure of his board shows him to nobody");
+        assert_eq!(
+            secure, 0.0,
+            "a manager sure of his board shows him to nobody"
+        );
         assert!((pressed - rotation * 0.5).abs() < 1e-4);
 
         // The board demands the sale itself.
@@ -1190,14 +1304,15 @@ mod tests {
             "dec_decided_board".to_string(),
         );
         let forced = window_share(demanded, &memory, 0.0);
-        assert!((forced - rotation).abs() < 1e-4, "the full share, whatever he thinks of him");
+        assert!(
+            (forced - rotation).abs() < 1e-4,
+            "the full share, whatever he thinks of him"
+        );
     }
 
     #[test]
     fn a_team_opens_and_closes_the_window_the_day_the_club_decides() {
-        use crate::{
-            StaffCollection, TeamBuilder, TeamReputation, TeamType, TrainingSchedule,
-        };
+        use crate::{StaffCollection, TeamBuilder, TeamReputation, TeamType, TrainingSchedule};
         use chrono::NaiveTime;
 
         let mut team = TeamBuilder::new()
@@ -1307,9 +1422,15 @@ mod tests {
         for id in [1, 20, 21] {
             let planned = plan.entry(id).unwrap().share;
             let declared = room.glove_share(id).unwrap();
-            assert!((planned - declared).abs() < 1e-4, "keeper {id}: {planned} against {declared}");
+            assert!(
+                (planned - declared).abs() < 1e-4,
+                "keeper {id}: {planned} against {declared}"
+            );
         }
-        assert!(plan.entry(20).unwrap().share > 0.1, "a deputy with the whole cup");
+        assert!(
+            plan.entry(20).unwrap().share > 0.1,
+            "a deputy with the whole cup"
+        );
         assert!((plan.total_share() - 11.0).abs() < 1e-3);
     }
 
@@ -1334,17 +1455,31 @@ mod tests {
         let shape = Tactics::new(MatchTacticType::T442);
 
         plan.force_role(20, PlannedRole::NotInPlans, Fx::date());
-        assert!(plan.is_stale(&squad, &shape, Fx::date()), "the chart has not seen it");
+        assert!(
+            plan.is_stale(&squad, &shape, Fx::date()),
+            "the chart has not seen it"
+        );
         plan.revise(&PlanReading::of(&squad, &shape, Fx::date()));
         let entry = plan.entry(20).unwrap();
         assert_eq!(entry.role, PlannedRole::NotInPlans);
         assert_eq!(entry.shirt, Some(MidfielderCenterLeft));
-        assert_eq!(entry.share, 0.0, "a man with no future holds none of the shirt's football");
+        assert_eq!(
+            entry.share, 0.0,
+            "a man with no future holds none of the shirt's football"
+        );
         assert!((plan.total_share() - 11.0).abs() < 1e-3);
         assert!(!plan.is_stale(&squad, &shape, Fx::date()));
 
-        plan.revise(&PlanReading::of(&squad, &shape, Fx::date() + Duration::days(31)));
-        assert_eq!(plan.role_of(20), Some(PlannedRole::Rotation), "the coach looks again");
+        plan.revise(&PlanReading::of(
+            &squad,
+            &shape,
+            Fx::date() + Duration::days(31),
+        ));
+        assert_eq!(
+            plan.role_of(20),
+            Some(PlannedRole::Rotation),
+            "the coach looks again"
+        );
     }
 
     #[test]
@@ -1378,7 +1513,10 @@ mod tests {
 
     #[test]
     fn a_new_manager_inherits_a_squad_not_a_plan() {
-        let (mut plan, squad) = Fx::plan(Fx::eleven(MatchTacticType::T442, 140), MatchTacticType::T442);
+        let (mut plan, squad) = Fx::plan(
+            Fx::eleven(MatchTacticType::T442, 140),
+            MatchTacticType::T442,
+        );
         assert!(!plan.is_empty());
         plan.clear();
         assert!(plan.is_empty());

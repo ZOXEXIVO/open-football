@@ -12,7 +12,7 @@
 use crate::r#match::engine::ball::ball::block_diag::CrossPriceCensus;
 use crate::r#match::engine::ball::ball::contest::pass_block::{PassBlock, StrikeLine};
 use crate::r#match::engine::ball::ball::{AerialReach, Ball, PassOriginRestart};
-use crate::r#match::midfielders::states::common::LaneAhead;
+use crate::r#match::midfielders::states::shared::LaneAhead;
 use crate::r#match::passing::{CrossModel, CrossType, FlankPlay};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, MatchField, MatchPlayer, PlayerSide};

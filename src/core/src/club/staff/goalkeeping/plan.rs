@@ -193,8 +193,7 @@ impl KeeperRoomPlan {
     /// season. `None` for a keeper outside it.
     pub fn glove_share(&self, player_id: u32) -> Option<f32> {
         let deputy = self.deputy.map_or(0.0, |_| {
-            Self::DEPUTY_SHARE
-                + Self::CUP_SHARE * self.deputy_competition.map_or(0.0, |c| c.reach)
+            Self::DEPUTY_SHARE + Self::CUP_SHARE * self.deputy_competition.map_or(0.0, |c| c.reach)
         });
         let third = self.third.map_or(0.0, |_| Self::THIRD_SHARE);
         if self.number_one == Some(player_id) {

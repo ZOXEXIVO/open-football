@@ -1,7 +1,7 @@
 pub mod academy;
 pub mod board;
+pub mod club;
 pub mod context;
-pub mod core;
 pub mod facilities;
 pub mod finance;
 pub mod mind;
@@ -9,6 +9,7 @@ pub mod mood;
 pub mod news;
 pub mod person;
 pub mod player;
+pub mod process;
 pub mod relations;
 pub mod result;
 pub mod staff;
@@ -17,7 +18,8 @@ pub mod team;
 pub mod transfers;
 
 // Re-export all simple modules
-pub use self::core::*;
+pub use self::club::*;
+pub use self::process::*;
 pub use academy::{
     AcademyDevelopmentIdentity, AcademyPathwayPolicy, AcademyPipelineHealth, AcademyPlayerPhase,
     AcademyReadinessScorer, AcademyTier, AcademyTuning, ClubAcademy,
@@ -158,6 +160,7 @@ pub use player::{
     PlayerFieldPositionGroup,
     PlayerFoots,
     PlayerGenerator,
+    PlayerGrowth,
     PlayerHappiness,
     PlayerHistoryRow,
     PlayerHistoryRowBreakdown,
@@ -187,7 +190,6 @@ pub use player::{
     PlayerTraining,
     PlayerTrainingHistory,
     PlayerTransferStatus,
-    PlayerUtils,
     PlayerValueCalculator,
     PositionCoverage,
     PositionWeights,

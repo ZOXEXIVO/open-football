@@ -31,14 +31,29 @@
   friendlies). Dampen the magnitude if needed; never hard-gate a whole
   feature off for one kind of entity.
 
+## Module layout and naming
+See [AGENTS.md](AGENTS.md#module-layout-and-naming) for the normative module
+layout and naming rules.
+
 ## Code style
-- No global / free functions in domain code. Every helper, algorithm, or
+- A production function does one logical job and stays at or below 100 lines
+  as measured by `clippy::too_many_lines`.
+- A function stays at one level of abstraction. Mixed phases, deep nesting,
+  and a name that needs "and" are signals to extract; prefer guard clauses and
+  small predicate methods over nested branches.
+- A complex phase is extracted into a named method on the owning type or a
+  dedicated component type (`WeeklyAwardsTick::run`, `CountryClubFanout`), not
+  into a longer function.
+- Module-level `fn` items are forbidden in production code. The only
+  exceptions are `main`, build scripts, wasm/C entry points that the runtime
+  requires to be free, and `#[cfg(test)]` code. Every helper, algorithm, or
   orchestrator must live as a method on a logical struct (e.g.
   `PlayerOfTheWeekSelector::aggregate(...)`, `WeeklyAwardsTick::run(...)`),
   not as a bare `fn` at module scope. Group functions by purpose under a
   named type so callers pull a single namespace and the unit test surface
-  reads as one cluster. Test-only helpers inside `#[cfg(test)]` are
-  exempt.
+  reads as one cluster.
+- An associated function whose first argument is another domain type is not a
+  loophole. Behaviour belongs on the type it acts on.
 - No unnecessary comments. Explain the WHY when non-obvious — never the
   WHAT (identifiers do that).
 - No multi-paragraph docstrings, no comment blocks narrating the current

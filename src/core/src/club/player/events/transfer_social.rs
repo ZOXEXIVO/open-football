@@ -879,6 +879,7 @@ impl Player {
         }
     }
 
+    #[expect(clippy::too_many_lines)]
     fn reaction_for_signal(
         &self,
         sig: &TransferInterestSignal,

@@ -239,6 +239,7 @@ impl League {
     /// Compute the per-league `SeasonAwardsSnapshot` from this season's
     /// matches, statistics, and clubs. Read-only; does not mutate league
     /// state. Called during `process_season_end` before stats archive.
+    #[expect(clippy::too_many_lines)]
     fn snapshot_season_awards(
         &self,
         clubs: &[Club],

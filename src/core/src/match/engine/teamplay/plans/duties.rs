@@ -128,6 +128,7 @@ impl DutyAssigner<'_> {
     /// somebody to go.
     const KEEPER_CALL_BONUS: f32 = 4.0;
 
+    #[expect(clippy::too_many_lines)]
     pub(in crate::r#match::engine::teamplay::plans) fn assign(
         &self,
         plan: &mut DefensivePlan,

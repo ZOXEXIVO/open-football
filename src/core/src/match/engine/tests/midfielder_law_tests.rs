@@ -8,18 +8,18 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
-use crate::r#match::common_states::TackleEngagement;
 use crate::r#match::engine::ball::ball::PlayerReach;
 use crate::r#match::engine::result::Score;
 use crate::r#match::events::{Event, EventCollection, EventDispatcher};
-use crate::r#match::midfielders::states::common::MidfielderRead;
 use crate::r#match::midfielders::states::running::ReleaseClock;
+use crate::r#match::midfielders::states::shared::MidfielderRead;
 use crate::r#match::midfielders::states::{
     MidfielderDribblingState, MidfielderGuardingState, MidfielderHeadingState, MidfielderState,
 };
 use crate::r#match::player::events::{FoulSource, PlayerEvent};
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::transition::TransitionSource;
+use crate::r#match::shared_states::TackleEngagement;
 use crate::r#match::{
     DefenceRefreshInputs, DefensivePlan, GameTickContext, MatchContext, MatchField,
     MatchPlayerCollection, MatchRng, PlayerSide, ResultMatchPositionData, StateChangeResult,

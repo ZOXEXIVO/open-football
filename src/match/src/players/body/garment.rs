@@ -211,6 +211,7 @@ pub(super) fn shorts(grain: Grain) -> Mesh {
     make()
 }
 
+#[expect(clippy::too_many_lines)]
 fn surface(grain: Grain, pattern: &Pattern, origin: Vec3, size: Vec3, cuff: bool) -> Mesh {
     let spacing = grain.cloth as f32 / 1000.0;
     let counts = (size / spacing).ceil().as_uvec3() + UVec3::ONE;

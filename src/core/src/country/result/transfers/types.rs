@@ -1,6 +1,6 @@
 use crate::club::board::mandate::SigningMandate;
-use crate::club::core::SellerCover;
 use crate::club::player::events::transfer_social::TransferContinentalPath;
+use crate::club::process::SellerCover;
 use crate::transfers::deal::negotiation::NegotiationPhase;
 use crate::transfers::deal::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
 use crate::transfers::gate::appraisal::PlayerStance;

@@ -4,7 +4,7 @@
 //! wants.
 
 use crate::club::player::behaviour_config::HappinessConfig;
-use crate::club::player::core::player::{Player, TransferRequestReason};
+use crate::club::player::model::player::{Player, TransferRequestReason};
 use crate::club::player::transfer::processing::UNHAPPY_LISTING_MIN_DAYS;
 use crate::transfers::market::window::AGREEMENT_PRE_OPEN_DAYS;
 use crate::{HappinessEventType, PlayerStatusType};

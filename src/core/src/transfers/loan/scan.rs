@@ -250,6 +250,7 @@ impl LoanBoard {
     /// bigger one about a player who has NOT been loan-listed — the badge is
     /// not a precondition for loan demand. Built weekly so the squad-wide scan
     /// stays cheap, while the listed market above is read daily.
+    #[expect(clippy::too_many_lines)]
     fn unsolicited(country: &Country, date: NaiveDate) -> Vec<LoanListing> {
         // ── Unsolicited loan targets (no `Loa` required) ─────────────
         //
@@ -959,9 +960,16 @@ impl BorrowerTurn<'_> {
                 continue;
             }
             let open = Self::unclaimed(&request.candidates, claimed);
-            if let Some(best) = InterestDraw::pick(&Self::weights(&open)).map(|i| open[i as usize].0)
+            if let Some(best) =
+                InterestDraw::pick(&Self::weights(&open)).map(|i| open[i as usize].0)
             {
-                self.stage(best, TransferReason::key(request.reason), false, claimed, actions);
+                self.stage(
+                    best,
+                    TransferReason::key(request.reason),
+                    false,
+                    claimed,
+                    actions,
+                );
                 scanned_position_groups.push(request.group);
                 scans_this_club += 1;
             }
@@ -1085,6 +1093,7 @@ impl BorrowerTurn<'_> {
 struct LoanScanCommit;
 
 impl LoanScanCommit {
+    #[expect(clippy::too_many_lines)]
     fn apply(country: &mut Country, actions: Vec<LoanScanAction>, date: NaiveDate) {
         // Pass 2: Start loan negotiations
         for action in actions {
@@ -1278,7 +1287,8 @@ impl LoanMarketScan {
         let turns: Vec<Option<BorrowerTurn<'_>>> = (0..country_ref.clubs.len())
             .into_par_iter()
             .map(|club_idx| {
-                BorrowerScan::open(country_ref, club_idx, tick, &load).map(|scan| scan.score(&board))
+                BorrowerScan::open(country_ref, club_idx, tick, &load)
+                    .map(|scan| scan.score(&board))
             })
             .collect();
 

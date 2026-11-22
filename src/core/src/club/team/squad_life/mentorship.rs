@@ -190,6 +190,7 @@ impl MentorshipProcessor {
     /// at most one mentee per pass, and each mentee has exactly one mentor.
     /// Returns the pairings that were applied this tick so callers can surface
     /// them to the UI / result stream.
+    #[expect(clippy::too_many_lines)]
     pub fn process(
         players: &mut [Player],
         date: NaiveDate,

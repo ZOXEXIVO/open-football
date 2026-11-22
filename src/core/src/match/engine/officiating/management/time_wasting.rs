@@ -120,8 +120,14 @@ mod tests {
 
     #[test]
     fn time_wasting_zero_when_not_protecting() {
-        assert_eq!(TimeWasting::delay_ms(0.0, TimeWastingRestart::ThrowIn, 12.0), 0);
-        assert_eq!(TimeWasting::delay_ms(-0.4, TimeWastingRestart::ThrowIn, 12.0), 0);
+        assert_eq!(
+            TimeWasting::delay_ms(0.0, TimeWastingRestart::ThrowIn, 12.0),
+            0
+        );
+        assert_eq!(
+            TimeWasting::delay_ms(-0.4, TimeWastingRestart::ThrowIn, 12.0),
+            0
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::slug::{PlayerPage, resolve_player_page};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::slug::{PlayerPage, resolve_player_page};
 use crate::player::events::PlayerEventsCounter;
 use crate::teams::newspaper::{IssueView, Paper, PaperFor, PressDesk, PressFocus, PressTeam};
 use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
@@ -169,6 +169,7 @@ pub struct PlayerNewspaperTemplate {
     pub issues: Vec<IssueView>,
 }
 
+#[expect(clippy::too_many_lines)]
 pub async fn player_newspaper_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<PlayerNewspaperRequest>,

@@ -7,7 +7,6 @@
 use super::goal_celebration_tests::squad;
 use super::substitution_break_tests::kickoff;
 use crate::PlayerPositionType;
-use crate::r#match::common_states::SetPieceHold;
 use crate::r#match::engine::ball::ball::{
     AwaitedRestart, PassOriginRestart, PlayerReach, RestartQuiet,
 };
@@ -21,6 +20,7 @@ use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext, effective_skill,
 };
+use crate::r#match::shared_states::SetPieceHold;
 use crate::r#match::{
     GameTickContext, MatchContext, MatchField, MatchPlayer, MatchPlayerCollection, MatchState,
     PlayerSide, StateProcessingResult,

@@ -1,8 +1,8 @@
-use crate::r#match::midfielders::states::common::{
+use crate::r#match::midfielders::states::shared::{
     ActivityIntensity, MidfielderCondition, MidfielderRead,
 };
 use crate::r#match::midfielders::states::{MidfielderRunningState, MidfielderState};
-use crate::r#match::player::strategies::common::players::ops::support::SupportOffer;
+use crate::r#match::player::strategies::shared::players::ops::support::SupportOffer;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,

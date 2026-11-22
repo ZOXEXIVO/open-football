@@ -831,6 +831,7 @@ impl Crowd {
     /// `seed` is what makes the four banks of a ground differ. Without one
     /// every bank draws the same figures in the same places, and the two ends
     /// are visibly the same photograph.
+    #[expect(clippy::too_many_lines)]
     pub fn fill(
         terrace: &Terrace,
         stature: Stature,

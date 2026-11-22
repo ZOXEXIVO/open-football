@@ -7,14 +7,13 @@
 
 use super::goal_celebration_tests::squad;
 use crate::club::player::skills::GoalkeeperSpeedContext;
-use crate::r#match::common_states::ChallengeKind;
 use crate::r#match::engine::ball::ball::PlayerReach;
 use crate::r#match::engine::engine::FootballEngine;
 use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::engine::officiating::restart_shape::{RestartShape, RestartStation};
 use crate::r#match::engine::result::Score;
 use crate::r#match::events::Event;
-use crate::r#match::goalkeepers::states::common::{
+use crate::r#match::goalkeepers::states::shared::{
     KeeperAerialClaim, KeeperBallClaim, KeeperFeetDecision, KeeperOneOnOne, KeeperRestPosition,
     KeeperSetPieceStance, KeeperSetPosition, KeeperShotReaction,
 };
@@ -31,6 +30,7 @@ use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::passing::CrossType;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::player::transition::TransitionSource;
+use crate::r#match::shared_states::ChallengeKind;
 use crate::r#match::{
     Ball, ClaimIntent, ClaimOutcome, GameTickContext, MatchContext, MatchField, MatchPlayer,
     MatchPlayerCollection, MatchRng, PassOriginRestart, PlayerSide, ResultMatchPositionData,

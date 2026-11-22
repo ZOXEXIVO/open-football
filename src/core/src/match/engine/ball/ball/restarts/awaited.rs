@@ -207,7 +207,13 @@ impl PhaseOrigin {
     }
 
     /// Book a touch; `false` once the phase is over.
-    pub fn note_touch(&mut self, player_id: u32, team_id: u32, tick: u64, controlled: bool) -> bool {
+    pub fn note_touch(
+        &mut self,
+        player_id: u32,
+        team_id: u32,
+        tick: u64,
+        controlled: bool,
+    ) -> bool {
         if player_id != self.taker_id {
             self.only_taker = false;
         }
@@ -510,7 +516,9 @@ impl AwaitedRestart {
     /// Hold the restart until `until_tick`. A second hold extends the first
     /// rather than shortening it, and takes over its reason.
     pub fn hold_until(&mut self, reason: DeadTime, until_tick: u64) {
-        let until_tick = self.hold.map_or(until_tick, |h| h.until_tick.max(until_tick));
+        let until_tick = self
+            .hold
+            .map_or(until_tick, |h| h.until_tick.max(until_tick));
         self.hold = Some(RestartHold { until_tick, reason });
     }
 
@@ -700,7 +708,12 @@ mod tests {
         let mut phase = PhaseOrigin::open(PassOriginRestart::ThrowIn, ATTACK, TAKER, 0);
         assert!(phase.note_touch(MATE, ATTACK, 0, true));
         assert!(phase.note_touch(DEFENDER, DEFENCE, 100, false));
-        assert!(!phase.note_touch(DEFENDER, DEFENCE, 100 + PhaseOrigin::OPPONENT_SETTLED_TICKS, false));
+        assert!(!phase.note_touch(
+            DEFENDER,
+            DEFENCE,
+            100 + PhaseOrigin::OPPONENT_SETTLED_TICKS,
+            false
+        ));
     }
 
     #[test]

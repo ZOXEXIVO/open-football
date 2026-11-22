@@ -126,6 +126,7 @@ impl PlayerSummaryBuilder {
         Some(Self::build(country, club, &ctx, team, player, date))
     }
 
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn build(
         country: &Country,
         club: &Club,

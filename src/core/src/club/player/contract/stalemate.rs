@@ -460,8 +460,8 @@ pub fn rejection_reason_token(reason: RejectionReason) -> &'static str {
 mod tests {
     use super::*;
     use crate::club::PlayerSkills;
-    use crate::club::player::core::builder::PlayerBuilder;
     use crate::club::player::mailbox::{PlayerContractAsk, RejectionReason};
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::club::player::personality::PlayerDecisionHistory;
     use crate::shared::fullname::FullName;
     use crate::{

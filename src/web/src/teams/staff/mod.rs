@@ -1,7 +1,7 @@
 pub mod goalkeeping;
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::leagues::address::LeagueAddress;
 use crate::teams::newspaper::NewspaperCounter;
 use crate::teams::staff::goalkeeping::{GoalkeepingDepartmentView, GoalkeepingPanel};
@@ -141,6 +141,7 @@ fn group_sort_order(group_key: &str) -> u8 {
     }
 }
 
+#[expect(clippy::too_many_lines)]
 pub async fn team_staff_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<TeamStaffRequest>,

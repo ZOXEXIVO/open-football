@@ -1,7 +1,7 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::engine::ball::ball::HandlingVerdict;
 use crate::r#match::events::Event;
-use crate::r#match::goalkeepers::states::common::{
+use crate::r#match::goalkeepers::states::shared::{
     ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperFeetDecision, KeeperShotDive,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;

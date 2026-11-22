@@ -1,9 +1,9 @@
 use crate::r#match::engine::ball::ball::PossessionSource;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::delivery_diag::TouchKind;
-use crate::r#match::engine::psychology::LapseFamily;
 use crate::r#match::engine::ball::ball::frame::FramePart;
 use crate::r#match::engine::player::events::players::{FoulSource, PlayerEventDispatcher};
+use crate::r#match::engine::psychology::LapseFamily;
 use crate::r#match::engine::zones::Progression;
 use crate::r#match::events::{Event, EventCollection};
 use crate::r#match::player::events::PlayerEvent;
@@ -125,6 +125,7 @@ impl BallEventDispatcher {
     /// all engine allocations (alloc-site sampler, July 2026). `out` is
     /// the caller's inline-buffered `EventCollection`, so the dominant
     /// path allocates nothing.
+    #[expect(clippy::too_many_lines)]
     pub fn dispatch(
         event: BallEvent,
         field: &mut MatchField,
@@ -355,7 +356,9 @@ impl BallEventDispatcher {
                 remaining_events.add(Event::PlayerEvent(PlayerEvent::TakeBall(player_id)));
             }
             BallEvent::Handball(player_id, goal_bound) => {
-                remaining_events.add(Event::PlayerEvent(PlayerEvent::Handball(player_id, goal_bound)));
+                remaining_events.add(Event::PlayerEvent(PlayerEvent::Handball(
+                    player_id, goal_bound,
+                )));
             }
             BallEvent::Caution(player_id, source) => {
                 remaining_events.add(Event::PlayerEvent(PlayerEvent::Caution(player_id, source)));
@@ -386,14 +389,24 @@ impl BallEventDispatcher {
                     // tracker on the RECEIVER so the error-to-shot /
                     // error-to-goal pipeline charges the right player
                     // if the opposition converts the loose ball.
-                    PlayerEventDispatcher::lose_ball(receiver_id, LapseFamily::Touch, field, context);
+                    PlayerEventDispatcher::lose_ball(
+                        receiver_id,
+                        LapseFamily::Touch,
+                        field,
+                        context,
+                    );
                     if let Some(receiver) = field.get_player_mut(receiver_id) {
                         receiver.statistics.add_miscontrol();
                     }
                 } else {
                     // Knocked too far: his if he gets back to it first,
                     // the giver's error if an opponent does and scores.
-                    PlayerEventDispatcher::give_away(receiver_id, LapseFamily::Touch, field, context);
+                    PlayerEventDispatcher::give_away(
+                        receiver_id,
+                        LapseFamily::Touch,
+                        field,
+                        context,
+                    );
                     if let Some(receiver) = field.get_player_mut(receiver_id) {
                         receiver.statistics.add_heavy_touch();
                     }
@@ -417,6 +430,7 @@ impl BallEventDispatcher {
     /// stayed with the carrier's team — a carry ending in a tackle
     /// is classified upstream as a failed dribble and must not also
     /// fire a successful one here.
+    #[expect(clippy::too_many_lines)]
     fn credit_carry(
         carrier_id: u32,
         start: Vector3<f32>,

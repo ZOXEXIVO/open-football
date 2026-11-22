@@ -91,7 +91,11 @@ impl CoachDossierStore {
                     return false;
                 }
                 // `make_room` may have shifted everything left of the gap.
-                let at = if self.records.len() < at { self.records.len() } else { at };
+                let at = if self.records.len() < at {
+                    self.records.len()
+                } else {
+                    at
+                };
                 let at = self
                     .records
                     .binary_search_by_key(&record.player_id, |held| held.player_id)
@@ -228,10 +232,7 @@ impl Dossiers {
     }
 
     /// Men he would have back, warmest first. Bounded output.
-    pub fn warmest<const N: usize>(
-        store: &CoachDossierStore,
-        today: EpochDay,
-    ) -> [Option<u32>; N] {
+    pub fn warmest<const N: usize>(store: &CoachDossierStore, today: EpochDay) -> [Option<u32>; N] {
         let mut best = [(f32::NEG_INFINITY, None); N];
         if N == 0 {
             return best.map(|(_, id)| id);
@@ -284,8 +285,8 @@ impl SpellOpening {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::record::{MedalFlags, ScarFlags, SeparationCause};
+    use super::*;
 
     const TODAY: EpochDay = 10_000;
     const YEAR: EpochDay = 365;
@@ -321,7 +322,10 @@ mod tests {
         fn full_of_servants() -> CoachDossierStore {
             let mut store = CoachDossierStore::new();
             for id in 0..DossierTuning::CAPACITY as u32 {
-                store.insert(Fx::parted(id, 80, 0.5, 0, MedalFlags::CORNERSTONE, 1), TODAY);
+                store.insert(
+                    Fx::parted(id, 80, 0.5, 0, MedalFlags::CORNERSTONE, 1),
+                    TODAY,
+                );
             }
             store
         }

@@ -18,39 +18,40 @@ use crate::r#match::engine::ball::ball::{
     AerialReach, Ball, DeadBall, FlightProtection, GRAVITY_PER_TICK, GoalOrigin, PlayerReach,
     PossessionSource,
 };
+use crate::r#match::engine::environment::EnvModifiers;
+use crate::r#match::engine::flow::context::MATCH_TIME_INCREMENT_MS;
 use crate::r#match::engine::flow::context::PendingAdvantage;
 use crate::r#match::engine::flow::rng::MatchRng;
 use crate::r#match::engine::goal::GOAL_WIDTH as GOAL_MOUTH_HALF_WIDTH;
-use crate::r#match::engine::environment::EnvModifiers;
-use crate::r#match::engine::flow::context::MATCH_TIME_INCREMENT_MS;
-use crate::r#match::engine::officiating::restart_shape::RestartShape;
 use crate::r#match::engine::officiating::management::{
     CounterAttackThreat, Dissent, ProfessionalFoul,
 };
-use crate::r#match::engine::officiating::referee::{ContactLocation, FoulCallContext, RefereeProfile};
-use crate::r#match::engine::player::injury::{InjuryCause, InjuryRisk, InjuryGrade, MatchInjury};
-use crate::r#match::engine::result::DeadTime;
+use crate::r#match::engine::officiating::referee::{
+    ContactLocation, FoulCallContext, RefereeProfile,
+};
+use crate::r#match::engine::officiating::restart_shape::RestartShape;
+use crate::r#match::engine::player::injury::{InjuryCause, InjuryGrade, InjuryRisk, MatchInjury};
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::psychology::lapse::lapse_diag;
 use crate::r#match::engine::psychology::{
     ActionLapse, LapseFamily, NegativeEvent, PositiveEvent, PsychState,
 };
-#[cfg(feature = "match-logs")]
-use crate::r#match::engine::psychology::lapse::lapse_diag;
-#[cfg(feature = "match-logs")]
-use crate::r#match::player::diagnostics::defender_census::DefenderCensus;
-#[cfg(feature = "match-logs")]
-use crate::r#match::player::diagnostics::midfielder_census::MidfielderCensus;
+use crate::r#match::engine::result::DeadTime;
 use crate::r#match::engine::set_pieces::{FreeKickBand, wall_block_prob, wall_size_for};
 use crate::r#match::engine::zones::MatchZone;
 use crate::r#match::engine::zones::Progression;
 use crate::r#match::events::{Event, EventCollection};
-use crate::r#match::common_states::{BlockChallenge, ChallengeKind, TackleOutcome};
-use crate::r#match::goalkeepers::states::common::KeeperAerialClaim;
+use crate::r#match::goalkeepers::states::shared::KeeperAerialClaim;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::events::gk_claim::GkClaimContest;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::DefenderCensus;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::{DeflectionKind, TakeRule};
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::keeper_census::KeeperCensus;
 #[cfg(feature = "match-logs")]
-use crate::r#match::player::diagnostics::defender_census::{DeflectionKind, TakeRule};
+use crate::r#match::player::diagnostics::midfielder_census::MidfielderCensus;
+use crate::r#match::player::events::gk_claim::GkClaimContest;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::events::gk_claim::gk_claim_diag;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
@@ -74,6 +75,7 @@ use crate::r#match::player::strategies::players::ops::goalkeeper_skill::{
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::ops::xg::ShotType;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
+use crate::r#match::shared_states::{BlockChallenge, ChallengeKind, TackleOutcome};
 use crate::r#match::{
     ChanceDetail, GoalDetail, GoalPosition, HighlightSelector, MatchContext, MatchField,
     MatchPlayer, OffsideLine, OffsideSnapshot, PassOriginRestart, PlayerSide,
@@ -603,25 +605,21 @@ impl PassSkills {
         // Flair was already unfloored.
         let passing = (effective_skill(player, player.skills.technical.passing, tech) / 20.0)
             .clamp(0.02, 1.0);
-        let technique =
-            (effective_skill(player, player.skills.technical.technique, tech) / 20.0)
-                .clamp(0.02, 1.0);
-        let vision = (effective_skill(player, player.skills.mental.vision, mental) / 20.0)
+        let technique = (effective_skill(player, player.skills.technical.technique, tech) / 20.0)
             .clamp(0.02, 1.0);
-        let composure =
-            (effective_skill(player, player.skills.mental.composure, mental) / 20.0)
-                .clamp(0.02, 1.0);
-        let concentration =
-            (effective_skill(player, player.skills.mental.concentration, mental) / 20.0)
-                .clamp(0.02, 1.0);
-        let flair = (effective_skill(player, player.skills.mental.flair, mental) / 20.0)
-            .clamp(0.0, 1.0);
-        let long_shots =
-            (effective_skill(player, player.skills.technical.long_shots, tech) / 20.0)
-                .clamp(0.02, 1.0);
-        let crossing =
-            (effective_skill(player, player.skills.technical.crossing, tech) / 20.0)
-                .clamp(0.02, 1.0);
+        let vision =
+            (effective_skill(player, player.skills.mental.vision, mental) / 20.0).clamp(0.02, 1.0);
+        let composure = (effective_skill(player, player.skills.mental.composure, mental) / 20.0)
+            .clamp(0.02, 1.0);
+        let concentration = (effective_skill(player, player.skills.mental.concentration, mental)
+            / 20.0)
+            .clamp(0.02, 1.0);
+        let flair =
+            (effective_skill(player, player.skills.mental.flair, mental) / 20.0).clamp(0.0, 1.0);
+        let long_shots = (effective_skill(player, player.skills.technical.long_shots, tech) / 20.0)
+            .clamp(0.02, 1.0);
+        let crossing = (effective_skill(player, player.skills.technical.crossing, tech) / 20.0)
+            .clamp(0.02, 1.0);
         // Availability factor — independent of `effective_skill`'s
         // condition handling. Captures chronic fitness (long-term shape)
         // and jadedness (cumulative load not yet recovered). Lightly
@@ -1108,7 +1106,11 @@ impl FoulResolver {
         let ball = field.ball.position;
         let to_goal = Vector3::new(goal.x - ball.x, goal.y - ball.y, 0.0);
         let reach = to_goal.norm();
-        let dir = if reach > 0.0 { to_goal / reach } else { to_goal };
+        let dir = if reach > 0.0 {
+            to_goal / reach
+        } else {
+            to_goal
+        };
         let across = |p: &MatchPlayer| {
             let rel = Vector3::new(p.position.x - ball.x, p.position.y - ball.y, 0.0);
             let along = rel.dot(&dir);
@@ -1389,6 +1391,7 @@ impl PlayerEventDispatcher {
         false
     }
 
+    #[expect(clippy::too_many_lines)]
     fn dispatch_one(
         event: PlayerEvent,
         field: &mut MatchField,
@@ -1546,7 +1549,12 @@ impl PlayerEventDispatcher {
                     *refusal = Some(StrikeKind::Pass.refusal());
                     return remaining_events;
                 }
-                if Self::offside_on_strike(pass_event_model.from_player_id, field, context, &mut remaining_events) {
+                if Self::offside_on_strike(
+                    pass_event_model.from_player_id,
+                    field,
+                    context,
+                    &mut remaining_events,
+                ) {
                     return remaining_events;
                 }
                 #[cfg(feature = "match-logs")]
@@ -1882,7 +1890,12 @@ impl PlayerEventDispatcher {
                     *refusal = Some(StrikeKind::Shot.refusal());
                     return remaining_events;
                 }
-                if Self::offside_on_strike(shoot_event_model.from_player_id, field, context, &mut remaining_events) {
+                if Self::offside_on_strike(
+                    shoot_event_model.from_player_id,
+                    field,
+                    context,
+                    &mut remaining_events,
+                ) {
                     return remaining_events;
                 }
                 // Capture field dimensions up-front so the log block
@@ -2177,9 +2190,12 @@ impl PlayerEventDispatcher {
             }
             PlayerEvent::HeldTooLong(keeper_id) => {
                 let mut corner = EventCollection::with_capacity(2);
-                field
-                    .ball
-                    .concede_corner_for_holding(keeper_id, context, &field.players, &mut corner);
+                field.ball.concede_corner_for_holding(
+                    keeper_id,
+                    context,
+                    &field.players,
+                    &mut corner,
+                );
                 remaining_events.extend(corner.drain());
             }
             PlayerEvent::Caution(player_id, source) => {
@@ -2199,6 +2215,7 @@ impl PlayerEventDispatcher {
         remaining_events
     }
 
+    #[expect(clippy::too_many_lines)]
     fn handle_goal_event(
         player_id: u32,
         is_auto_goal: bool,
@@ -2480,7 +2497,11 @@ impl PlayerEventDispatcher {
         }
     }
 
-    fn handle_ball_owner_change_event(player_id: u32, field: &mut MatchField, context: &MatchContext) {
+    fn handle_ball_owner_change_event(
+        player_id: u32,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
         let carrier = field.ball.current_owner;
         if Self::secure_ball_for(player_id, field) {
             Self::credit_take(player_id, carrier, field, context);
@@ -3319,6 +3340,7 @@ impl PlayerEventDispatcher {
 
     /// Strikes the pass. Returns whether the ball went up rather than
     /// along the deck — the shape a cross is booked by.
+    #[expect(clippy::too_many_lines)]
     fn handle_pass_to_event(
         event_model: PassingEventContext,
         field: &mut MatchField,
@@ -3484,7 +3506,9 @@ impl PlayerEventDispatcher {
             let delivery = if field.ball.pass_origin_restart == PassOriginRestart::Corner {
                 field
                     .get_player(event_model.from_player_id)
-                    .map_or(skills.crossing, |taker| sc::set_piece_delivery(taker, minute))
+                    .map_or(skills.crossing, |taker| {
+                        sc::set_piece_delivery(taker, minute)
+                    })
             } else {
                 skills.crossing
             };
@@ -3723,12 +3747,11 @@ impl PlayerEventDispatcher {
         // foot at to arrive. The trajectory solver below either uses this
         // as-is (driven / ground balls) or replaces it with a ballistic
         // solution (lofted balls).
-        let rolling_velocity =
-            Self::calculate_horizontal_velocity(
-                &actual_pass_vector,
-                event_model.pass_force,
-                &context.conditions,
-            );
+        let rolling_velocity = Self::calculate_horizontal_velocity(
+            &actual_pass_vector,
+            event_model.pass_force,
+            &context.conditions,
+        );
 
         // Determine trajectory type based on context, not just distance
         let passer = field.get_player_mut(event_model.from_player_id).unwrap();
@@ -4413,10 +4436,11 @@ impl PlayerEventDispatcher {
 
             // Allow claim with escalated cooldown
             #[cfg(feature = "match-logs")]
-            context
-                .defender_census
-                .borrow_mut()
-                .tag_take(TakeRule::ClaimOwned, player_id, context.current_tick());
+            context.defender_census.borrow_mut().tag_take(
+                TakeRule::ClaimOwned,
+                player_id,
+                context.current_tick(),
+            );
             field.ball.previous_owner = Some(current_owner);
             field.ball.current_owner = Some(player_id);
             Self::touch_on_taking(player_id, field, context.current_tick());
@@ -4569,9 +4593,10 @@ impl PlayerEventDispatcher {
         context: &mut MatchContext,
     ) {
         const ERROR_TO_SHOT_WINDOW_TICKS: u64 = 600; // ~6s
-        let (Some(giver_id), Some(giver_team)) =
-            (field.ball.last_giveaway_player_id, field.ball.last_giveaway_team_id)
-        else {
+        let (Some(giver_id), Some(giver_team)) = (
+            field.ball.last_giveaway_player_id,
+            field.ball.last_giveaway_team_id,
+        ) else {
             return;
         };
         let in_window =
@@ -4717,7 +4742,8 @@ impl PlayerEventDispatcher {
         field: &mut MatchField,
         context: &mut MatchContext,
     ) -> bool {
-        let (Some(challenger), Some(owner)) = (field.get_player(claimer), field.get_player(carrier))
+        let (Some(challenger), Some(owner)) =
+            (field.get_player(claimer), field.get_player(carrier))
         else {
             return false;
         };
@@ -4833,7 +4859,9 @@ impl PlayerEventDispatcher {
         field.ball.current_owner = Some(player_id);
         Self::touch_on_taking(player_id, field, tick);
         if let Some(loser) = field.ball.previous_owner.filter(|&id| id != player_id)
-            && field.get_player(loser).is_some_and(|p| Some(p.team_id) != team_id)
+            && field
+                .get_player(loser)
+                .is_some_and(|p| Some(p.team_id) != team_id)
         {
             field.on_dispossessed(loser, tick);
         }
@@ -4923,6 +4951,7 @@ impl PlayerEventDispatcher {
         (apex - from_height) / ticks + 0.5 * GRAVITY_PER_TICK * ticks
     }
 
+    #[expect(clippy::too_many_lines)]
     fn handle_shoot_event(
         shoot_event_model: ShootingEventContext,
         field: &mut MatchField,
@@ -5322,7 +5351,9 @@ impl PlayerEventDispatcher {
         // A penalty is a miss until it goes in as one — the goal handler
         // takes it off again.
         if shoot_event_model.shot_type == ShotType::Penalty {
-            context.penalty_misses.push(shoot_event_model.from_player_id);
+            context
+                .penalty_misses
+                .push(shoot_event_model.from_player_id);
         }
         let dead_ball = match shoot_event_model.shot_type {
             ShotType::Penalty => Some(PenaltyKick::strike(execution_skill, rng)),
@@ -5495,7 +5526,10 @@ impl PlayerEventDispatcher {
         // His head scales the forced misses, not the aim: a nervous
         // finisher snatches more of the same chances, and the chance's own
         // xG reading is untouched.
-        let finisher_head = context.psychology.get(shoot_event_model.from_player_id).copied();
+        let finisher_head = context
+            .psychology
+            .get(shoot_event_model.from_player_id)
+            .copied();
         let wide_miss_chance = ActionLapse::scaled(
             LapseFamily::Finish,
             wide_base * (1.0 + accuracy_edge)
@@ -5812,7 +5846,10 @@ impl PlayerEventDispatcher {
         };
         #[cfg(feature = "match-logs")]
         if dead_ball.is_none() {
-            lapse_diag::note(LapseFamily::Finish, forced_wide || miskicked || shot_goes_over_bar);
+            lapse_diag::note(
+                LapseFamily::Finish,
+                forced_wide || miskicked || shot_goes_over_bar,
+            );
         }
         #[cfg(feature = "match-logs")]
         {
@@ -6419,8 +6456,7 @@ impl PlayerEventDispatcher {
                                 != FreeKickBand::Far =>
                     {
                         field.ball.position
-                            + to_line.normalize()
-                                * RestartShape::WALL_DISTANCE.min(to_line.norm())
+                            + to_line.normalize() * RestartShape::WALL_DISTANCE.min(to_line.norm())
                     }
                     _ => field.ball.position,
                 };
@@ -6979,7 +7015,7 @@ impl PlayerEventDispatcher {
                 victim,
                 InjuryRisk::foul_impulse(foul.severity),
             )
-                .map(|hurt| (victim, hurt))
+            .map(|hurt| (victim, hurt))
         });
         let stops_play = injury.is_some_and(|(_, hurt)| hurt > InjuryGrade::Knock);
         Self::whistle_foul(foul, spot, stops_play, field, context);
@@ -7006,7 +7042,11 @@ impl PlayerEventDispatcher {
             p.fouls_committed = p.fouls_committed.saturating_add(1);
             p.statistics.add_foul(now);
         }
-        let (yellow, red) = if goal_bound { (0.35, 0.15) } else { (0.15, 0.0) };
+        let (yellow, red) = if goal_bound {
+            (0.35, 0.15)
+        } else {
+            (0.15, 0.0)
+        };
         Self::apply_card_decision(
             player_id,
             FoulSeverity::Normal,
@@ -7018,7 +7058,7 @@ impl PlayerEventDispatcher {
         );
     }
 
-
+    #[expect(clippy::too_many_lines)]
     fn whistle_foul(
         foul: FoulCommitted,
         spot: Vector3<f32>,
@@ -7230,7 +7270,12 @@ impl PlayerEventDispatcher {
                 .players
                 .iter()
                 .filter(|p| p.team_id == fouler.team_id && p.id != fouler_id && !p.off_pitch)
-                .map(|p| (p.position, p.tactical_position.current_position.is_goalkeeper())),
+                .map(|p| {
+                    (
+                        p.position,
+                        p.tactical_position.current_position.is_goalkeeper(),
+                    )
+                }),
         );
         Some((1.0, ProfessionalFoul::red_card_prob(threat)))
     }
@@ -7514,9 +7559,7 @@ impl PlayerEventDispatcher {
             .psychology
             .record_negative(fouler_id, NegativeEvent::YellowCard, psych_tick);
 
-        if ends_with_red
-            && let Some(team_id) = field.get_player(fouler_id).map(|p| p.team_id)
-        {
+        if ends_with_red && let Some(team_id) = field.get_player(fouler_id).map(|p| p.team_id) {
             field.take_off(fouler_id, context.coach_for_team(team_id).spare_line());
             context.on_sending_off(team_id);
             // Roster effectively changed (one fewer active player) —
@@ -7830,6 +7873,7 @@ impl PlayerEventDispatcher {
         Self::handle_clear_ball_event(clearer_id, velocity, miscued, credited, field, context);
     }
 
+    #[expect(clippy::too_many_lines)]
     fn handle_clear_ball_event(
         clearer_id: u32,
         velocity: Vector3<f32>,
@@ -8055,6 +8099,7 @@ impl PlayerEventDispatcher {
     /// Picks the taker dynamically by skill score (penalty: penalty_taking
     /// composite; FK: free_kicks composite). Idempotent on missing data:
     /// returns silently if fouler/victim team can't be resolved.
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn award_restart_for_foul(
         fouler_id: u32,
         _severity: FoulSeverity,

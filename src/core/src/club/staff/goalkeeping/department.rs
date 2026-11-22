@@ -221,6 +221,7 @@ impl GoalkeepingDepartment {
     ///
     /// `previous` is read for the declared order only — the point of the
     /// pecking order is that it persists.
+    #[expect(clippy::too_many_lines)]
     pub fn review(
         room: &KeeperRoom,
         previous: &KeeperRoomPlan,
@@ -555,6 +556,7 @@ impl GoalkeepingDepartment {
 
     /// Everything the goalkeeping coach has to say this month.
     #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_lines)]
     fn advise(
         room: &KeeperRoom,
         order: &[&RoomKeeper],

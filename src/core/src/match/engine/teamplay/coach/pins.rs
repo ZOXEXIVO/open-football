@@ -98,8 +98,11 @@ mod tests {
 
     #[test]
     fn pins_read_both_sides_and_the_plan() {
-        let pins = TeamPins::parse(Some("home:pressing,away:risk=0.9/caution=0.1"), Some("neutral"))
-            .unwrap();
+        let pins = TeamPins::parse(
+            Some("home:pressing,away:risk=0.9/caution=0.1"),
+            Some("neutral"),
+        )
+        .unwrap();
         assert_eq!(pins.home_coach.unwrap().preference.press, 0.9);
         let away = pins.away_coach.unwrap();
         assert_eq!(away.temperament.risk_tolerance, 0.9);

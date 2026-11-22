@@ -1,20 +1,20 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{
+use crate::r#match::defenders::states::shared::{
     ActivityIntensity, DefenderCondition, DefenderRead, DefensiveSlot,
 };
 use crate::r#match::events::Event;
-use crate::r#match::midfielders::states::common::LaneAhead;
+use crate::r#match::midfielders::states::shared::LaneAhead;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay};
-use crate::r#match::player::strategies::common::players::ops::clearance::{
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::player::strategies::shared::passing::{FlankAction, FlankPlay};
+use crate::r#match::player::strategies::shared::players::ops::clearance::{
     ClearanceCall, TouchlineCall,
 };
-use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
-use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
+use crate::r#match::player::strategies::shared::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
-use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchContext, MatchPlayerLite, PlayerSide, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -36,12 +36,11 @@ use nalgebra::Vector3;
 /// Part of the shooting-blocker teardown — see `PlayerMemory::can_shoot`.
 const MAX_SHOOTING_DISTANCE: f32 = 320.0;
 
-
-
 #[derive(Default, Clone)]
 pub struct DefenderRunningState {}
 
 impl StateProcessingHandler for DefenderRunningState {
+    #[expect(clippy::too_many_lines)]
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // The man on the ball. Without it, the read.
         if !ctx.player.has_ball(ctx) {
@@ -60,8 +59,7 @@ impl StateProcessingHandler for DefenderRunningState {
             // out is genuinely an out was the last thing asked and, under
             // `prefer_possession`, was not reached at all between 15u and
             // `ClearanceCall::SQUEEZE_FAR`.
-            if let Some(release) =
-                ClearanceCall::decide(ctx).or_else(|| TouchlineCall::decide(ctx))
+            if let Some(release) = ClearanceCall::decide(ctx).or_else(|| TouchlineCall::decide(ctx))
             {
                 return Some(release.resolve(ctx));
             }
@@ -271,8 +269,7 @@ impl StateProcessingHandler for DefenderRunningState {
             }
 
             // The out first: a safe short pass, then a longer one upfield.
-            if let Some(target) = self.find_safe_buildup_pass(ctx, 150.0)
-            {
+            if let Some(target) = self.find_safe_buildup_pass(ctx, 150.0) {
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderRead::released(ctx),
                     Event::PlayerEvent(PlayerEvent::PassTo(
@@ -285,8 +282,7 @@ impl StateProcessingHandler for DefenderRunningState {
                 ));
             }
 
-            if let Some(target) = self.find_safe_buildup_pass(ctx, 300.0)
-            {
+            if let Some(target) = self.find_safe_buildup_pass(ctx, 300.0) {
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderRead::released(ctx),
                     Event::PlayerEvent(PlayerEvent::PassTo(
@@ -384,7 +380,6 @@ impl StateProcessingHandler for DefenderRunningState {
 }
 
 impl DefenderRunningState {
-
     /// Counter-attack outlet — same gates as `DefenderPassingState`.
     /// Returns the long-ball target when (a) we won possession recently,
     /// (b) the opposition over-committed forward, and (c) a teammate is
@@ -772,7 +767,10 @@ impl DefenderRunningState {
             })
             .filter_map(|teammate| {
                 let odds = ctx.player().clear_pass(teammate.id)?;
-                Some((teammate, odds.price(-(teammate.position - player_position).magnitude())))
+                Some((
+                    teammate,
+                    odds.price(-(teammate.position - player_position).magnitude()),
+                ))
             })
             .max_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(teammate, _)| teammate)
@@ -933,6 +931,7 @@ impl DefenderRunningState {
     ///      low-block responses favour midfielders / forwards.
     ///   F. **Coach override** — under WasteTime / ParkTheBus the
     ///      scoring inverts: backward and lateral safe options win.
+    #[expect(clippy::too_many_lines)]
     fn find_safe_buildup_pass(
         &self,
         ctx: &StateProcessingContext,
@@ -1194,7 +1193,6 @@ impl DefenderRunningState {
 
         best.map(|(t, _)| t)
     }
-
 }
 
 #[cfg(test)]

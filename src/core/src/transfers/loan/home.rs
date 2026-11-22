@@ -710,7 +710,7 @@ mod tests {
 #[cfg(test)]
 mod passport_tests {
     use super::*;
-    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::club::player::personality::language::{Language, PlayerLanguage};
     use crate::shared::fullname::FullName;
     use crate::{

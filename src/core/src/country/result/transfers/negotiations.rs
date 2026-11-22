@@ -228,96 +228,12 @@ impl NegotiationPass {
             player_signals: Vec::new(),
         };
         let country_id = country.id;
-
-        // When multiple buyers have bids in flight for the same player,
-        // the seller picks the strongest one first — best total
-        // potential, cleanest payment structure, most credible buyer.
-        // Sorting the ready-list best-first means the realistic bid
-        // resolves before the also-rans, which mirrors a seller
-        // explicitly comparing offers instead of accepting whatever
-        // hits Medical first.
         let ready_to_resolve: Vec<u32> = SellerBidOrdering::order(country, date);
 
         for neg_id in ready_to_resolve {
-            let neg_data = match country.transfer_market.negotiations.get(&neg_id) {
-                Some(n) => {
-                    let listing_ref = country.transfer_market.listings.get(n.listing_id as usize);
-                    let asking_price = listing_ref.map(|l| l.asking_price.amount).unwrap_or(0.0);
-                    // A market listing exists when the listing row is
-                    // Available or InNegotiation. Used for plumbing —
-                    // not for acceptance scoring.
-                    let has_market_listing = listing_ref
-                        .map(|l| {
-                            l.status == TransferListingStatus::InNegotiation
-                                || l.status == TransferListingStatus::Available
-                        })
-                        .unwrap_or(false);
-                    let listing_origin = listing_ref.map(|l| l.origin);
-
-                    // True availability is driven by the player's own
-                    // status (Lst/Loa/Req/Unh/NotNeeded) or by a
-                    // genuinely-seller-advertised listing. Synthetic
-                    // listings created to back unsolicited approaches
-                    // are explicitly excluded so that the bonuses
-                    // downstream don't reward stale plumbing.
-                    let player_is_available = CountryRoster::find(country, n.player_id)
-                        .map(|p| AvailabilityView::read(p, n.is_loan, listing_origin))
-                        .map(|v| v.available_soft)
-                        .unwrap_or(false);
-
-                    let sell_on_percentage = n.current_offer.clauses.iter().find_map(|c| {
-                        if let TransferClause::SellOnClause(pct) = c {
-                            Some(*pct)
-                        } else {
-                            None
-                        }
-                    });
-                    NegotiationData {
-                        player_id: n.player_id,
-                        selling_club_id: n.selling_club_id,
-                        buying_club_id: n.buying_club_id,
-                        offer_amount: n.current_offer.base_fee.amount,
-                        is_loan: n.is_loan,
-                        has_option_to_buy: n.has_option_to_buy,
-                        is_unsolicited: n.is_unsolicited,
-                        phase: n.phase.clone(),
-                        selling_rep: n.selling_club_reputation,
-                        buying_rep: n.buying_club_reputation,
-                        player_age: n.player_age,
-                        player_ambition: n.player_ambition,
-                        asking_price,
-                        has_market_listing,
-                        player_is_available,
-                        listing_origin,
-                        selling_country_id: n.selling_country_id,
-                        selling_continent_id: n.selling_continent_id,
-                        selling_country_code: n.selling_country_code.clone(),
-                        player_sold_from: n.player_sold_from,
-                        player_name: n.player_name.clone(),
-                        selling_club_name: n.selling_club_name.clone(),
-                        offered_annual_wage: n.offered_salary,
-                        staged_reservation_wage: n.staged_reservation_wage,
-                        buying_league_reputation: n.buying_league_reputation,
-                        selling_league_reputation: n.selling_league_reputation,
-                        player_stage_inclination: n.player_stage_inclination,
-                        sell_on_percentage,
-                        loan_future_fee: n.current_offer.loan_future_fee().map(
-                            |(fee, obligation)| (fee.amount.max(0.0).round() as u32, obligation),
-                        ),
-                        personal_terms: n.current_offer.personal_terms.clone(),
-                        foreign_seller_importance: n.foreign_seller_importance,
-                        foreign_seller_cover: n.foreign_seller_cover,
-                        foreign_seller_floor: n.foreign_seller_floor,
-                        foreign_seller_finances: n.foreign_seller_finances,
-                        staged_stance: n.staged_stance,
-                        staged_sporting_drop: n.staged_sporting_drop,
-                        staged_loan_verdict: n.staged_loan_verdict,
-                        mandate: n.mandate,
-                    }
-                }
-                None => continue,
+            let Some(neg_data) = Self::negotiation_data(country, neg_id) else {
+                continue;
             };
-
             match neg_data.phase {
                 NegotiationPhase::InitialApproach { .. } => {
                     Self::resolve_initial_approach(country, neg_id, &neg_data, date, &mut outcomes);
@@ -360,7 +276,77 @@ impl NegotiationPass {
         outcomes
     }
 
-    /// Build the transfer-interest signal that the player owner needs
+    fn negotiation_data(country: &Country, neg_id: u32) -> Option<NegotiationData> {
+        let negotiation = country.transfer_market.negotiations.get(&neg_id)?;
+        let listing_ref = country
+            .transfer_market
+            .listings
+            .get(negotiation.listing_id as usize);
+        let asking_price = listing_ref.map(|l| l.asking_price.amount).unwrap_or(0.0);
+        let has_market_listing = listing_ref
+            .map(|listing| {
+                listing.status == TransferListingStatus::InNegotiation
+                    || listing.status == TransferListingStatus::Available
+            })
+            .unwrap_or(false);
+        let listing_origin = listing_ref.map(|listing| listing.origin);
+        let player_is_available = CountryRoster::find(country, negotiation.player_id)
+            .map(|player| AvailabilityView::read(player, negotiation.is_loan, listing_origin))
+            .map(|view| view.available_soft)
+            .unwrap_or(false);
+        let sell_on_percentage = negotiation.current_offer.clauses.iter().find_map(|clause| {
+            if let TransferClause::SellOnClause(pct) = clause {
+                Some(*pct)
+            } else {
+                None
+            }
+        });
+
+        Some(NegotiationData {
+            player_id: negotiation.player_id,
+            selling_club_id: negotiation.selling_club_id,
+            buying_club_id: negotiation.buying_club_id,
+            offer_amount: negotiation.current_offer.base_fee.amount,
+            is_loan: negotiation.is_loan,
+            has_option_to_buy: negotiation.has_option_to_buy,
+            is_unsolicited: negotiation.is_unsolicited,
+            phase: negotiation.phase.clone(),
+            selling_rep: negotiation.selling_club_reputation,
+            buying_rep: negotiation.buying_club_reputation,
+            player_age: negotiation.player_age,
+            player_ambition: negotiation.player_ambition,
+            asking_price,
+            has_market_listing,
+            player_is_available,
+            listing_origin,
+            selling_country_id: negotiation.selling_country_id,
+            selling_continent_id: negotiation.selling_continent_id,
+            selling_country_code: negotiation.selling_country_code.clone(),
+            player_sold_from: negotiation.player_sold_from,
+            player_name: negotiation.player_name.clone(),
+            selling_club_name: negotiation.selling_club_name.clone(),
+            offered_annual_wage: negotiation.offered_salary,
+            staged_reservation_wage: negotiation.staged_reservation_wage,
+            buying_league_reputation: negotiation.buying_league_reputation,
+            selling_league_reputation: negotiation.selling_league_reputation,
+            player_stage_inclination: negotiation.player_stage_inclination,
+            sell_on_percentage,
+            loan_future_fee: negotiation
+                .current_offer
+                .loan_future_fee()
+                .map(|(fee, obligation)| (fee.amount.max(0.0).round() as u32, obligation)),
+            personal_terms: negotiation.current_offer.personal_terms.clone(),
+            foreign_seller_importance: negotiation.foreign_seller_importance,
+            foreign_seller_cover: negotiation.foreign_seller_cover,
+            foreign_seller_floor: negotiation.foreign_seller_floor,
+            foreign_seller_finances: negotiation.foreign_seller_finances,
+            staged_stance: negotiation.staged_stance,
+            staged_sporting_drop: negotiation.staged_sporting_drop,
+            staged_loan_verdict: negotiation.staged_loan_verdict,
+            mandate: negotiation.mandate,
+        })
+    }
+
     /// to react to a stage transition. Composes the rep gaps, league
     /// rep gaps, rivalry, home-country, and former-club facts so the
     /// emit-side method can pick a kind / reaction without re-reading
@@ -966,41 +952,15 @@ impl NegotiationPass {
         } = Self::seller_position(country, neg_data, round, date);
         // every domestic sale and priced ordinary business out of reach.
         let deadline_window = PlanningCadence::deadline_window(country, date);
-        let mut seller_holds_him = false;
-        if !neg_data.is_loan {
-            let seller = country
-                .clubs
-                .iter()
-                .find(|c| c.id == neg_data.selling_club_id);
-            let marketed = seller
-                .map(|c| c.transfer_plan.is_marketed(neg_data.player_id))
-                .unwrap_or(false);
-            // At home the seller is read live; abroad, as it stood when
-            // the approach was made.
-            let cover = match neg_data.selling_country_id {
-                None => seller.map(|c| {
-                    c.seller_cover(
-                        neg_data.player_id,
-                        neg_data.offer_amount,
-                        deadline_window.days_left,
-                    )
-                }),
-                Some(_) => neg_data.foreign_seller_cover,
-            };
-            if let Some(cover) = cover
-                && !neg_data.player_is_available
-                && !marketed
-            {
-                seller_reservation += ReplacementScarcity::lift(
-                    cover.readiness,
-                    importance,
-                    deadline_window.pressure(),
-                );
-                let forced = Self::player_is_forcing_it(country, neg_data);
-                seller_holds_him = cover.declines(deadline_window.days_left, ratio, forced);
-            }
-            seller_reservation += Self::fresh_income_lift(country, neg_data);
-        }
+        let (adjusted_reservation, seller_holds_him) = Self::seller_hold_adjustment(
+            country,
+            neg_data,
+            seller_reservation,
+            importance,
+            ratio,
+            deadline_window,
+        );
+        seller_reservation = adjusted_reservation;
         if seller_holds_him {
             Self::seller_declines_for_the_window(country, neg_data, neg_id, outcomes);
             return;
@@ -1028,38 +988,8 @@ impl NegotiationPass {
             );
         }
 
-        let mut chance: f32 = if ratio >= seller_reservation + 0.20 {
-            92.0
-        } else if ratio >= seller_reservation + 0.08 {
-            78.0
-        } else if ratio >= seller_reservation {
-            62.0
-        } else if ratio >= seller_reservation - 0.10 {
-            34.0
-        } else {
-            8.0
-        };
-
-        // What the market around this player is doing, and how close the
-        // window is to shutting. Both are read once here — the acceptance
-        // roll below and the buyer's escalation further down share them.
-        let auction = Self::auction_state(country, neg_id, neg_data.player_id);
-        let deadline = PlanningCadence::deadline_window(country, date);
-
-        // In a contested sale the seller is not choosing between this bid and
-        // nothing: it is choosing between this bid and the best one on the
-        // table. A bid behind the leader is not the one that gets taken, and
-        // in the last days — when there is no time left for another round —
-        // the leader is taken rather than held out on.
-        if auction.is_contested() {
-            if auction.leads_with(neg_data.offer_amount) {
-                chance += AuctionState::LEADER_BONUS * (1.0 + deadline.pressure());
-            } else {
-                chance *= AuctionState::TRAILING_SHARE;
-            }
-        }
-
-        chance = chance.clamp(5.0, 95.0);
+        let (chance, auction, deadline) =
+            Self::seller_acceptance(country, neg_data, neg_id, date, ratio, seller_reservation);
         let roll = FloatUtils::random(0.0, 100.0);
 
         // A below-floor bid can never be accepted, whatever the roll — the
@@ -1085,6 +1015,80 @@ impl NegotiationPass {
         } else {
             Self::seller_rejects(country, neg_data, neg_id, floor.as_ref(), outcomes);
         }
+    }
+
+    fn seller_acceptance(
+        country: &Country,
+        neg_data: &NegotiationData,
+        neg_id: u32,
+        date: NaiveDate,
+        ratio: f64,
+        seller_reservation: f64,
+    ) -> (f32, AuctionState, DeadlineWindow) {
+        let mut chance: f32 = if ratio >= seller_reservation + 0.20 {
+            92.0
+        } else if ratio >= seller_reservation + 0.08 {
+            78.0
+        } else if ratio >= seller_reservation {
+            62.0
+        } else if ratio >= seller_reservation - 0.10 {
+            34.0
+        } else {
+            8.0
+        };
+        let auction = Self::auction_state(country, neg_id, neg_data.player_id);
+        let deadline = PlanningCadence::deadline_window(country, date);
+        if auction.is_contested() {
+            if auction.leads_with(neg_data.offer_amount) {
+                chance += AuctionState::LEADER_BONUS * (1.0 + deadline.pressure());
+            } else {
+                chance *= AuctionState::TRAILING_SHARE;
+            }
+        }
+        (chance.clamp(5.0, 95.0), auction, deadline)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn seller_hold_adjustment(
+        country: &Country,
+        neg_data: &NegotiationData,
+        mut seller_reservation: f64,
+        importance: f32,
+        ratio: f64,
+        deadline_window: DeadlineWindow,
+    ) -> (f64, bool) {
+        if neg_data.is_loan {
+            return (seller_reservation, false);
+        }
+        let seller = country
+            .clubs
+            .iter()
+            .find(|club| club.id == neg_data.selling_club_id);
+        let marketed = seller
+            .map(|club| club.transfer_plan.is_marketed(neg_data.player_id))
+            .unwrap_or(false);
+        let cover = match neg_data.selling_country_id {
+            None => seller.map(|club| {
+                club.seller_cover(
+                    neg_data.player_id,
+                    neg_data.offer_amount,
+                    deadline_window.days_left,
+                )
+            }),
+            Some(_) => neg_data.foreign_seller_cover,
+        };
+        let mut holds = false;
+        if let Some(cover) = cover
+            && !neg_data.player_is_available
+            && !marketed
+        {
+            seller_reservation +=
+                ReplacementScarcity::lift(cover.readiness, importance, deadline_window.pressure());
+            let forced = Self::player_is_forcing_it(country, neg_data);
+            holds = cover.declines(deadline_window.days_left, ratio, forced);
+        }
+        seller_reservation += Self::fresh_income_lift(country, neg_data);
+        (seller_reservation, holds)
     }
 
     /// The player's side of the deal — [`PlayerOfferAppraisal`], once.
@@ -2004,128 +2008,25 @@ impl NegotiationPass {
         buyer_transfer_budget: Option<f64>,
         outcomes: &mut NegotiationOutcomes,
     ) {
-        // Buyer escalation closes 45% of the remaining gap per round at
-        // the start of the window, up to ~70% in the final panic days.
-        // The previous offer is archived to `counter_offers` so the
-        // negotiation history is auditable (who bid what, when).
-        // Escalate toward the price the seller will actually accept
-        // (asking × his reservation), not merely the asking price.
-        // A key man not pushing to leave commands a premium ABOVE
-        // asking; aiming only at asking left every such deal short
-        // of the reservation band, so it timed out. Clamped to
-        // [1.0, 1.55]×asking: never below asking (so the working
-        // available-player path is unchanged — its reservation is
-        // <= 1.0 and clamps to 1.0), and up to the same 1.55 ceiling
-        // the seller's reservation itself clamps to, so the buyer can
-        // actually reach a coveted player's premium instead of topping
-        // out below it. The target is additionally lifted to the
-        // seller's absolute fee floor, so a lowball opening converges
-        // toward a closable number instead of orbiting below it.
-        // The asking price is only a valid escalation anchor when the
-        // bound listing sells the same kind of deal. `start_negotiation`
-        // binds to the first open listing for the player regardless of
-        // type, so a LOAN bid on a transfer-listed player used to
-        // escalate toward the full PERMANENT ask — loan fees converging
-        // on half the player's market value (the loan-fee-anchor bug
-        // reborn one phase later). A mismatched listing falls back to
-        // the modest own-offer escalation path instead.
-        let listing_matches_deal_type = country
-            .transfer_market
-            .negotiations
-            .get(&neg_id)
-            .and_then(|n| country.transfer_market.listings.get(n.listing_id as usize))
-            .map(|l| {
-                if neg_data.is_loan {
-                    l.listing_type == TransferListingType::Loan
-                } else {
-                    l.listing_type != TransferListingType::Loan
-                }
-            })
-            .unwrap_or(true);
+        let Some((target, exception, doctrine_blocked)) = Self::counter_target(
+            country,
+            neg_data,
+            neg_id,
+            seller_reservation,
+            floor,
+            auction,
+            deadline,
+        ) else {
+            return;
+        };
 
         let mut buyer_walks = false;
-        let mut exception: Option<f64> = None;
         if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-            let reservation_mult = seller_reservation.clamp(1.0, 1.55);
-            let mut target = if neg_data.asking_price > 0.0 && listing_matches_deal_type {
-                neg_data.asking_price * reservation_mult
-            } else {
-                negotiation.current_offer.base_fee.amount * 1.15
-            };
-            if let Some(f) = &floor {
-                target = target.max(f.min_fee);
-            }
-            // ── The auction ─────────────────────────────────────
-            //
-            // Somebody else is already in front. A buyer that wants him
-            // has to clear the leading bid by a real margin or it is
-            // simply not in the conversation — and the one whose own
-            // valuation runs out first stops raising and drops away.
-            // This is what turns rivalry into money; the seller-side
-            // engagement lift alone never moved a fee.
-            if auction.is_contested() {
-                target = target.max(auction.floor());
-            }
-
-            // ── The deadline ────────────────────────────────────
-            //
-            // A club whose season plan still has a hole in it pays over
-            // the odds in the last days. Cover does not: there is
-            // always another body, and the loan market is open.
-            let tier = negotiation.brief_tier.unwrap_or(BriefTier::B);
-            let premium = deadline.premium_for(tier, true);
-            if premium > 0.0 && neg_data.asking_price > 0.0 {
-                target += neg_data.asking_price * premium;
-            }
-
-            // ── The board's own number ──────────────────────────
-            //
-            // Everything above says what it would TAKE to win him.
-            // This says what the board approved him FOR, and how far
-            // past that it will go. A club walks away from a bidding war
-            // at its own number, which is why two clubs chasing one
-            // player do not converge on the same fee — the richer one,
-            // whose marginal dollar is worth less, simply has further to
-            // go.
-            //
-            // It now acts on the whole reach rather than only on the
-            // extension above the seller's price. That exception existed
-            // because the walk-away sat under every plausible ask at the
-            // old fee scale; with the envelope priced off the minutes a
-            // mandate actually promises, it is the buyer's number for
-            // every deal — and it is the only thing that stops a
-            // seller's ask dragging a buyer past its own doctrine one
-            // round at a time.
-            let mut doctrine_blocked = false;
-            if let Some(approved) = negotiation.approved_fee {
-                // Crossing the approved fee sends it back to the board,
-                // which grants the exception once. The rope it grants is
-                // already in `buyer_ceiling_fee`.
-                if target > approved && negotiation.rehearings == 0 {
-                    negotiation.rehearings = 1;
-                    exception = Some(target.min(negotiation.buyer_ceiling_fee.unwrap_or(target)));
-                }
-            }
-            if let Some(ceiling) = negotiation.buyer_ceiling_fee
-                && target > ceiling
-            {
-                target = ceiling;
-                doctrine_blocked = true;
-            }
-
             let escalation = 0.45 + urgency * 0.25;
             let current_amount = negotiation.current_offer.base_fee.amount;
             let mut new_amount = FormattingUtils::round_fee(
                 current_amount + (target - current_amount).max(0.0) * escalation,
             );
-            // Cap the escalated headline at what the buyer can actually
-            // fund up front (installment tranches settle later from the
-            // balance, so they extend the affordable headline). When the
-            // BUDGET is what stops the bid improving, the buyer walks
-            // now — the same refusal `reserve_transfer_budget` would
-            // deliver at the medical, minus the wasted weeks. A bid that
-            // already meets the target simply re-enters the next round
-            // unchanged (the seller may yet say yes), as before.
             let mut budget_blocked = false;
             if let Some(available) = buyer_transfer_budget {
                 let deferred = new_amount
@@ -2140,10 +2041,6 @@ impl NegotiationPass {
                     budget_blocked = true;
                 }
             }
-            // Whatever stopped the bid improving — the budget or the
-            // board — a buyer that cannot raise again is out of the
-            // conversation, and says so now rather than orbiting below
-            // the seller's number for six more rounds.
             if (budget_blocked || doctrine_blocked) && new_amount <= current_amount {
                 buyer_walks = true;
             } else {
@@ -2154,14 +2051,12 @@ impl NegotiationPass {
                 negotiation.advance_club_negotiation_round(date);
             }
         }
-        // The board was asked again and raised its own number. A decision
-        // a supporter learns about while the deal is still live, which is
-        // the only boardroom fact in a negotiation that ever reaches him.
+
         if let Some(fee) = exception
             && let Some(buyer) = country
                 .clubs
                 .iter_mut()
-                .find(|c| c.id == neg_data.buying_club_id)
+                .find(|club| club.id == neg_data.buying_club_id)
         {
             buyer.record_affair(
                 ClubAffair::TransferExceptionApproved {
@@ -2172,27 +2067,99 @@ impl NegotiationPass {
             );
         }
         if buyer_walks {
-            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                negotiation.reject_with_reason(NegotiationRejectionReason::AskingPriceTooHigh);
-            }
-            NegotiationPass::reopen_listing_for_player(country, neg_data.player_id);
-            // The suitor priced himself out and walked — the rumour
-            // the player had been hearing goes quiet.
-            NegotiationPass::notify_player_stage(
-                country,
-                outcomes,
-                neg_data,
-                TransferInterestStage::InterestCooled,
-                TransferInterestSource::ClubBriefing,
-                false,
-            );
-            ApproachPass::on_negotiation_resolved(
-                country,
-                neg_data.buying_club_id,
-                neg_data.player_id,
-                false,
-            );
+            Self::finish_buyer_walk_away(country, neg_data, neg_id, outcomes);
         }
+    }
+
+    fn counter_target(
+        country: &mut Country,
+        neg_data: &NegotiationData,
+        neg_id: u32,
+        seller_reservation: f64,
+        floor: Option<&SellerFloorVerdict>,
+        auction: &AuctionState,
+        deadline: &DeadlineWindow,
+    ) -> Option<(f64, Option<f64>, bool)> {
+        let listing_matches_deal_type = country
+            .transfer_market
+            .negotiations
+            .get(&neg_id)
+            .and_then(|negotiation| {
+                country
+                    .transfer_market
+                    .listings
+                    .get(negotiation.listing_id as usize)
+            })
+            .map(|listing| {
+                if neg_data.is_loan {
+                    listing.listing_type == TransferListingType::Loan
+                } else {
+                    listing.listing_type != TransferListingType::Loan
+                }
+            })
+            .unwrap_or(true);
+
+        let negotiation = country.transfer_market.negotiations.get_mut(&neg_id)?;
+        let reservation_mult = seller_reservation.clamp(1.0, 1.55);
+        let mut target = if neg_data.asking_price > 0.0 && listing_matches_deal_type {
+            neg_data.asking_price * reservation_mult
+        } else {
+            negotiation.current_offer.base_fee.amount * 1.15
+        };
+        if let Some(floor) = floor {
+            target = target.max(floor.min_fee);
+        }
+        if auction.is_contested() {
+            target = target.max(auction.floor());
+        }
+        let tier = negotiation.brief_tier.unwrap_or(BriefTier::B);
+        let premium = deadline.premium_for(tier, true);
+        if premium > 0.0 && neg_data.asking_price > 0.0 {
+            target += neg_data.asking_price * premium;
+        }
+
+        let mut doctrine_blocked = false;
+        let mut exception = None;
+        if let Some(approved) = negotiation.approved_fee
+            && target > approved
+            && negotiation.rehearings == 0
+        {
+            negotiation.rehearings = 1;
+            exception = Some(target.min(negotiation.buyer_ceiling_fee.unwrap_or(target)));
+        }
+        if let Some(ceiling) = negotiation.buyer_ceiling_fee
+            && target > ceiling
+        {
+            target = ceiling;
+            doctrine_blocked = true;
+        }
+        Some((target, exception, doctrine_blocked))
+    }
+
+    fn finish_buyer_walk_away(
+        country: &mut Country,
+        neg_data: &NegotiationData,
+        neg_id: u32,
+        outcomes: &mut NegotiationOutcomes,
+    ) {
+        if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+            negotiation.reject_with_reason(NegotiationRejectionReason::AskingPriceTooHigh);
+        }
+        NegotiationPass::reopen_listing_for_player(country, neg_data.player_id);
+        NegotiationPass::notify_player_stage(
+            country,
+            outcomes,
+            neg_data,
+            TransferInterestStage::InterestCooled,
+            TransferInterestSource::ClubBriefing,
+            false,
+        );
+        ApproachPass::on_negotiation_resolved(
+            country,
+            neg_data.buying_club_id,
+            neg_data.player_id,
+            false,
+        );
     }
 
     /// He said no. Record the rejection, remember the interest it proves,
@@ -2247,7 +2214,11 @@ impl NegotiationPass {
 
     /// What the buyer has banked this window, against the price.
     fn fresh_income_lift(country: &Country, neg_data: &NegotiationData) -> f64 {
-        let Some(buyer) = country.clubs.iter().find(|c| c.id == neg_data.buying_club_id) else {
+        let Some(buyer) = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.buying_club_id)
+        else {
             return 0.0;
         };
         FreshIncome::lift(
@@ -4241,7 +4212,7 @@ mod development_pathway_protection_tests {
 mod seller_fee_floor_tests {
     use super::*;
     use crate::academy::ClubAcademy;
-    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings, Season};
     use crate::shared::fullname::FullName;
     use crate::shared::{Currency, CurrencyValue, Location};
@@ -4902,7 +4873,7 @@ mod saga_visibility_tests {
     use super::*;
     use crate::PlayerSquadStatus;
     use crate::academy::ClubAcademy;
-    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::fullname::FullName;
     use crate::shared::{Currency, CurrencyValue, Location};
@@ -5633,7 +5604,7 @@ mod medical_stage_tests {
 
     use super::*;
     use crate::academy::ClubAcademy;
-    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::fullname::FullName;
     use crate::shared::{Currency, CurrencyValue, Location};

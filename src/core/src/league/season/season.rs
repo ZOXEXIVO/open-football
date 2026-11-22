@@ -155,9 +155,18 @@ mod tests {
     #[test]
     fn season_weeks_reproduce_fifas_autumn_windows() {
         let cases = [
-            (2023, [date(2023, 9, 4), date(2023, 10, 9), date(2023, 11, 13)]),
-            (2024, [date(2024, 9, 2), date(2024, 10, 7), date(2024, 11, 11)]),
-            (2025, [date(2025, 9, 1), date(2025, 10, 6), date(2025, 11, 10)]),
+            (
+                2023,
+                [date(2023, 9, 4), date(2023, 10, 9), date(2023, 11, 13)],
+            ),
+            (
+                2024,
+                [date(2024, 9, 2), date(2024, 10, 7), date(2024, 11, 11)],
+            ),
+            (
+                2025,
+                [date(2025, 9, 1), date(2025, 10, 6), date(2025, 11, 10)],
+            ),
         ];
         for (year, expected) in cases {
             let season = Season::new(year);

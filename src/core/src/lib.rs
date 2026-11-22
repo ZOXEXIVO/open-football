@@ -211,6 +211,7 @@ pub use club::{
     PlayerFieldPositionGroup,
     PlayerFoots,
     PlayerGenerator,
+    PlayerGrowth,
     PlayerHappiness,
     PlayerHistoryRow,
     PlayerHistoryRowBreakdown,
@@ -243,7 +244,6 @@ pub use club::{
     PlayerTrainingHistory,
     PlayerTrainingResult,
     PlayerTransferStatus,
-    PlayerUtils,
     PlayerValueCalculator,
     PositionCoverage,
     PositionWeights,
@@ -450,7 +450,7 @@ pub use crate::r#match::engine::psychology::lapse::lapse_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::heatmap as heatmap_diag;
 #[cfg(feature = "match-logs")]
-pub use crate::r#match::midfielders::states::common::onball_diag as mid_onball_diag;
+pub use crate::r#match::midfielders::states::shared::onball_diag as mid_onball_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::player::diagnostics::defender_census;
 #[cfg(feature = "match-logs")]

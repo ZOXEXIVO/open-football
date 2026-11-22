@@ -342,6 +342,7 @@ impl Ball {
     /// * **somebody touches it** — handled by `record_touch`.
     ///
     /// Nothing here writes `position`. That is the whole point.
+    #[expect(clippy::too_many_lines)]
     pub(in crate::r#match::engine::ball::ball) fn tick_aerial_delivery(
         &mut self,
         players: &[MatchPlayer],

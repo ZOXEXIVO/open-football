@@ -11,6 +11,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     // Penalty shootout — discrete resolver, not tick-based
     // ───────────────────────────────────────────────────────────────────────
 
+    #[expect(clippy::too_many_lines)]
     pub(in crate::r#match::engine::engine) fn run_penalty_shootout(
         field: &mut MatchField,
         context: &mut MatchContext,

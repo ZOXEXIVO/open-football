@@ -610,7 +610,7 @@ fn nobody_may_touch_a_dead_ball_including_its_taker() {
 fn a_dead_ball_is_never_the_keepers_to_claim() {
     use crate::r#match::GameTickContext;
     use crate::r#match::StateProcessingContext;
-    use crate::r#match::goalkeepers::states::common::KeeperBallClaim;
+    use crate::r#match::goalkeepers::states::shared::KeeperBallClaim;
 
     let (mut field, context) = kickoff();
     let gk = keeper_at(&mut field, Vector3::new(20.0, 300.0, 0.0));

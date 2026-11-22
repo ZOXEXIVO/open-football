@@ -1,19 +1,17 @@
 use crate::PlayerFieldPositionGroup;
-use crate::r#match::common_states::{ChallengeKind, CommonInjuredState, CommonRecoveringState};
-use crate::r#match::defenders::states::common::DefenderRead;
+use crate::r#match::defenders::states::shared::DefenderRead;
 use crate::r#match::defenders::states::{DefenderState, DefenderStrategies};
 use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::engine::environment::EnvModifiers;
 use crate::r#match::events::{Event, EventCollection};
+use crate::r#match::forwarders::states::shared::ForwardRead;
 use crate::r#match::forwarders::states::{ForwardState, ForwardStrategies};
-use crate::r#match::goalkeepers::states::common::{
+use crate::r#match::goalkeepers::states::shared::{
     KeeperAerialClaim, KeeperDelivery, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::{GoalkeeperState, GoalkeeperStrategies};
-use crate::r#match::forwarders::states::common::ForwardRead;
-use crate::r#match::midfielders::states::common::MidfielderRead;
+use crate::r#match::midfielders::states::shared::MidfielderRead;
 use crate::r#match::midfielders::states::{MidfielderState, MidfielderStrategies};
-use crate::r#match::player::memory::PlayerMemory;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::defender_census::{DefenderCensus, DispatchRedirect};
 #[cfg(feature = "match-logs")]
@@ -22,14 +20,16 @@ use crate::r#match::player::diagnostics::forward_census::ForwardCensus;
 use crate::r#match::player::diagnostics::midfielder_census::MidfielderCensus;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::motion_diag::DoorCensus;
+use crate::r#match::player::memory::PlayerMemory;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::state::PlayerState::{Defender, Forward, Goalkeeper, Midfielder};
-use crate::r#match::player::strategies::common::PlayerOperationsImpl;
-use crate::r#match::player::strategies::common::PlayersOperationsImpl;
-use crate::r#match::player::strategies::common::states::{
+use crate::r#match::player::strategies::shared::PlayerOperationsImpl;
+use crate::r#match::player::strategies::shared::PlayersOperationsImpl;
+use crate::r#match::player::strategies::shared::states::{
     KeeperReleaseSpace, KickoffDelivery, RestartCarry, SetPieceHold, SetPieceKick, ThrowInDelivery,
 };
 use crate::r#match::player::transition::TransitionSource;
+use crate::r#match::shared_states::{ChallengeKind, CommonInjuredState, CommonRecoveringState};
 use crate::r#match::team::{ShapeDiscipline, TeamOperationsImpl};
 use crate::r#match::{
     BallOperationsImpl, ClaimIntent, GameTickContext, MatchContext, MatchPlayer, PlayerSide,

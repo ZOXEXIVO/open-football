@@ -95,6 +95,7 @@ impl Region<'_> {
 }
 
 impl FacialHair {
+    #[expect(clippy::too_many_lines)]
     pub fn paint(c: &mut Canvas, l: &Landmarks, t: &Tones, id: &Identity, age: u8) {
         let cx = l.cx;
         let s = &l.skull;

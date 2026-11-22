@@ -18,8 +18,8 @@ use super::situation::MindSituation;
 use super::submind::{MindOption, MindView, MoodContribution, ReasonSet, SubMind};
 use crate::club::player::player::Player;
 use crate::club::player::statistics::PlayerStatisticsHistoryItem;
-use crate::{PlayerFieldPositionGroup, PlayerSquadStatus};
 use crate::r#match::engine::teamplay::standard::MatchStandard;
+use crate::{PlayerFieldPositionGroup, PlayerSquadStatus};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
@@ -123,7 +123,10 @@ impl Player {
     ) -> bool {
         let mut seasons: Vec<&PlayerStatisticsHistoryItem> =
             self.statistics_history.items.iter().collect();
-        let Some(first) = seasons.iter().min_by_key(|i| (i.season.start_year, i.seq_id)) else {
+        let Some(first) = seasons
+            .iter()
+            .min_by_key(|i| (i.season.start_year, i.seq_id))
+        else {
             return false;
         };
         let start = standard_of(first) - CompetitiveMind::ROOKIE_GAP;

@@ -594,6 +594,7 @@ pub struct TransferRequest {
 /// Only the club that owns a player can sell him, so a player out on loan
 /// and a move to the club he is already at are refused with nothing
 /// changed. An unknown player or club is a 404.
+#[expect(clippy::too_many_lines)]
 pub(crate) fn execute_transfer(
     sim: &mut SimulatorData,
     player_id: u32,
@@ -756,6 +757,7 @@ pub struct LoanRequest {
     pub seasons: Option<u32>,
 }
 
+#[expect(clippy::too_many_lines)]
 pub async fn loan_action(
     State(state): State<GameAppData>,
     Path(params): Path<PlayerPathParam>,

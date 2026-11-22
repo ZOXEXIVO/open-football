@@ -5,13 +5,12 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
-use crate::r#match::common_states::{LooseBallChase, TackleEngagement};
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::DefensiveSlot;
+use crate::r#match::defenders::states::shared::DefensiveSlot;
 use crate::r#match::engine::result::Score;
 use crate::r#match::engine::teamplay::possession::TeamPossession;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::goalkeepers::states::common::KeeperSweepLimit;
+use crate::r#match::goalkeepers::states::shared::KeeperSweepLimit;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::defenders::states::holding_line::DefenderHoldingLineState;
@@ -20,6 +19,7 @@ use crate::r#match::player::strategies::forwarders::states::creating_space::Forw
 use crate::r#match::player::strategies::midfielders::states::intercepting::MidfielderInterceptingState;
 use crate::r#match::player::strategies::midfielders::states::returning::MidfielderReturningState;
 use crate::r#match::player::transition::TransitionSource;
+use crate::r#match::shared_states::{LooseBallChase, TackleEngagement};
 use crate::r#match::{
     DefenceRefreshInputs, DefensivePlan, GameTickContext, MatchContext, MatchField,
     MatchPlayerCollection, PlayerSide, StateProcessingContext, StateProcessingHandler,

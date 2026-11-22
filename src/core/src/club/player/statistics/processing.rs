@@ -142,7 +142,8 @@ impl Player {
                 && entry.team_slug != team_slug
                 && matches!(
                     entry.competition_kind,
-                    PlayerStatCompetitionKind::DomesticCup | PlayerStatCompetitionKind::ContinentalCup
+                    PlayerStatCompetitionKind::DomesticCup
+                        | PlayerStatCompetitionKind::ContinentalCup
                 )
                 && entry.statistics.played + entry.statistics.played_subs > 0
         })

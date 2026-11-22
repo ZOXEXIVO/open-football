@@ -175,6 +175,7 @@ impl League {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_lines)]
     fn build_match(
         scheduled_match: &LeagueMatch,
         clubs: &[Club],
@@ -1850,8 +1851,7 @@ mod tests {
     use super::MatchdayLookup;
     use crate::context::{GlobalContext, SimulationContext};
     use crate::league::{
-        KnockoutStakes, KnockoutTieReading, LeagueMatch, LeagueTable, LeagueTableRow,
-        TableStakes,
+        KnockoutStakes, KnockoutTieReading, LeagueMatch, LeagueTable, LeagueTableRow, TableStakes,
     };
     use crate::r#match::{FieldSquad, Match};
     use rustc_hash::FxHashMap;
@@ -2006,9 +2006,19 @@ mod tests {
         let commitments = md_commitments(&[1, 2]);
 
         let pool = |team_id: u32, main_team: bool| {
-            super::MatchdayPool::offer(&clubs[0], team_id, false, main_team, md_date(), &commitments)
+            super::MatchdayPool::offer(
+                &clubs[0],
+                team_id,
+                false,
+                main_team,
+                md_date(),
+                &commitments,
+            )
         };
-        assert!(reserve_has(&pool(2, false), RELEASED), "offered to the side he was put with");
+        assert!(
+            reserve_has(&pool(2, false), RELEASED),
+            "offered to the side he was put with"
+        );
         assert!(!reserve_has(&pool(1, true), RELEASED));
 
         let league = md_league(LeagueTable::default(), 10);
@@ -2075,7 +2085,10 @@ mod tests {
             "the minnow has far more riding on the tie than the giant"
         );
         assert_eq!(home.selection.room, 1.0 - home.selection.importance);
-        assert_eq!(home.selection.days_to_next, None, "no other fixture in sight");
+        assert_eq!(
+            home.selection.days_to_next, None,
+            "no other fixture in sight"
+        );
     }
 
     /// A twenty-team table after 34 of 38 rounds: the leaders far clear, a
@@ -2180,7 +2193,10 @@ mod tests {
         home.staffs = StaffCollection::new(vec![md_goalkeeping_coach(900)]);
         let mut home_club = md_club(100, vec![home]);
         home_club.review_goalkeeping_department(md_date());
-        assert_eq!(home_club.keeper_plan().and_then(|p| p.number_one()), Some(180));
+        assert_eq!(
+            home_club.keeper_plan().and_then(|p| p.number_one()),
+            Some(180)
+        );
 
         let clubs = vec![home_club, md_club(200, vec![md_first_team(2, 200, 8000)])];
         let keeper = |built: &Match| {
@@ -2198,7 +2214,11 @@ mod tests {
             &md_league(md_late_season_table(1, 2), 4),
             false,
         );
-        assert_eq!(keeper(&league), Some(180), "the league fixture plays the declared one");
+        assert_eq!(
+            keeper(&league),
+            Some(180),
+            "the league fixture plays the declared one"
+        );
 
         let mut competition = ChampionsLeague::new();
         competition.matches.push(ContinentalMatch {
@@ -2270,7 +2290,10 @@ mod tests {
         let tie = md_continental_tie(100, 300, CompetitionStage::GroupStage);
         let (winner, chaser) = md_continental_stakes(&tie, &groups, &[]);
         assert_eq!(winner, TableStakes::PROFESSIONAL_FLOOR);
-        assert!(chaser >= 0.8, "a point off qualifying with one to play: {chaser}");
+        assert!(
+            chaser >= 0.8,
+            "a point off qualifying with one to play: {chaser}"
+        );
     }
 
     #[test]
@@ -2288,7 +2311,10 @@ mod tests {
 
         let first_leg = md_continental_tie(100, 200, CompetitionStage::RoundOf16);
         let (home, away) = md_continental_stakes(&first_leg, &[], &[KnockoutTie::new(100, 200)]);
-        assert!(home > 0.6 && home < 0.9 && home == away, "an even first leg: {home}");
+        assert!(
+            home > 0.6 && home < 0.9 && home == away,
+            "an even first leg: {home}"
+        );
     }
 
     #[test]
@@ -2303,8 +2329,10 @@ mod tests {
         let mut played = md_continental_tie(200, 100, CompetitionStage::GroupStage);
         played.date = md_date() - chrono::Duration::days(14);
         played.result = Some((1, 1));
-        competitions.champions_league.matches =
-            vec![played, md_continental_tie(100, 200, CompetitionStage::GroupStage)];
+        competitions.champions_league.matches = vec![
+            played,
+            md_continental_tie(100, 200, CompetitionStage::GroupStage),
+        ];
 
         let runs = competitions.fixture_runs(md_date(), &by_id);
         let run = &runs[&100];

@@ -1,12 +1,12 @@
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{
+use crate::r#match::midfielders::states::shared::{
     ActivityIntensity, MidfielderCondition, MidfielderRead,
 };
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::player::strategies::common::passing::CrossModel;
+use crate::r#match::player::strategies::shared::passing::CrossModel;
 #[cfg(feature = "match-logs")]
-use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::CrossDiag;
+use crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::mid_run_diag::CrossDiag;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };

@@ -372,6 +372,7 @@ impl FormWatch {
 
     /// Collect discovery candidates at home, where the read comes
     /// corroborated: scoring-chart standing, awards, availability signals.
+    #[expect(clippy::too_many_lines)]
     fn domestic_candidates(
         country: &Country,
         date: NaiveDate,
@@ -762,6 +763,7 @@ impl FormWatch {
 
     /// One club's read of the names the sweep turned up: is any of them
     /// inside its network's reach, plausible for it, and worth a watch.
+    #[expect(clippy::too_many_lines)]
     fn evaluate_buyer(
         country: &Country,
         club: &Club,
@@ -1039,6 +1041,7 @@ impl FormWatch {
 mod breakout_watch_tests {
     use super::*;
     use crate::PathwayStage;
+    use crate::PlayerPreferredFoot;
     use crate::club::academy::ClubAcademy;
     use crate::club::player::LanguageProfile;
     use crate::club::player::builder::PlayerBuilder;
@@ -1053,7 +1056,6 @@ mod breakout_watch_tests {
     use crate::transfers::squad::bands::TierBands;
     use crate::transfers::squad::standing::CareerRecordSnapshot;
     use crate::transfers::view::world::{WorldPool, WorldPoolIndex};
-    use crate::PlayerPreferredFoot;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
         PlayerAttributes, PlayerCollection, PlayerFieldPositionGroup, PlayerPosition,

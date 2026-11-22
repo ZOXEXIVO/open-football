@@ -108,6 +108,7 @@ impl EpisodeKind {
     }
 
     /// The player reading.
+    #[expect(clippy::too_many_lines)]
     fn consolidates_for_player(self) -> Option<ConsolidationRule> {
         use ConsolidationRule as R;
 

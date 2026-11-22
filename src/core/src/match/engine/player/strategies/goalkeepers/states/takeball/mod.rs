@@ -1,10 +1,10 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
-use crate::r#match::goalkeepers::states::common::{
+use crate::r#match::goalkeepers::states::shared::{
     ActivityIntensity, GoalkeeperCondition, KeeperDelivery, KeeperGoalKick, KeeperRead,
     KeeperSweepLimit, ReadLevel, Reading,
 };
-use crate::r#match::player::strategies::common::states::LooseBallChase;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
+use crate::r#match::player::strategies::shared::states::LooseBallChase;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,

@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::leagues::address::LeagueAddress;
 use crate::teams::newspaper::NewspaperCounter;
 use crate::views::{self, MenuSection, SubTitleFlag};

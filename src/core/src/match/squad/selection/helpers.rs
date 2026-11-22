@@ -252,7 +252,9 @@ impl SlotFit {
 
         match tactics.tactical_style() {
             TacticalStyle::Attacking => {
-                if position.is_forward() || position == PlayerPositionType::AttackingMidfielderCenter {
+                if position.is_forward()
+                    || position == PlayerPositionType::AttackingMidfielderCenter
+                {
                     bonus += player.skills.technical.finishing * 0.1;
                     bonus += player.skills.mental.off_the_ball * 0.1;
                 }

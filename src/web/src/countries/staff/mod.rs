@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -64,6 +64,7 @@ pub async fn country_u21_staff_action(
     render_country_staff(state, route_params, NationalTeamLevel::Under21).await
 }
 
+#[expect(clippy::too_many_lines)]
 async fn render_country_staff(
     state: GameAppData,
     route_params: CountryStaffRequest,

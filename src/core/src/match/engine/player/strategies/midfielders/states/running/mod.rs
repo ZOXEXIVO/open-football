@@ -1,21 +1,21 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::onball_diag::{self, Exit};
-use crate::r#match::midfielders::states::common::{
+use crate::r#match::midfielders::states::shared::onball_diag::{self, Exit};
+use crate::r#match::midfielders::states::shared::{
     ActivityIntensity, CarryHeading, LaneAhead, MidfieldPlay, MidfieldRole, MidfielderCondition,
     MidfielderRead, Opportunity, TakeOn, U_PER_M,
 };
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::midfielder_census::MidfielderCensus;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay, ThroughBall};
-use crate::r#match::player::strategies::common::players::ops::clearance::TouchlineCall;
-use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
+use crate::r#match::player::strategies::shared::passing::{FlankAction, FlankPlay, ThroughBall};
+use crate::r#match::player::strategies::shared::players::ops::clearance::TouchlineCall;
+use crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
-use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
-use crate::r#match::player::strategies::common::players::ops::skill_composites as sc;
+use crate::r#match::player::strategies::shared::players::ops::midfielder_skill::MidfielderSkillProfile;
+use crate::r#match::player::strategies::shared::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchContext, MatchPlayerLite, PassEvaluator, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -358,6 +358,7 @@ impl ReleaseClock {
 pub struct MidfielderRunningState {}
 
 impl StateProcessingHandler for MidfielderRunningState {
+    #[expect(clippy::too_many_lines)]
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // He is the man on the ball. Without it the read decides, and
         // nothing of this state's runs.
@@ -537,7 +538,7 @@ impl StateProcessingHandler for MidfielderRunningState {
             #[cfg(feature = "match-logs")]
             {
                 use std::sync::atomic::Ordering;
-                crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::MID_INRANGE_TICKS.fetch_add(1, Ordering::Relaxed);
+                crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::mid_run_diag::MID_INRANGE_TICKS.fetch_add(1, Ordering::Relaxed);
             }
             // Tier 1 — a CLEAR, good-angle chance in range is taken by
             // ANY midfielder. This is chance-quality, NOT a skill gate:
@@ -803,7 +804,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                 #[cfg(feature = "match-logs")]
                 {
                     use std::sync::atomic::Ordering;
-                    crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::MID_SHOOT_FIRED.fetch_add(1, Ordering::Relaxed);
+                    crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::mid_run_diag::MID_SHOOT_FIRED.fetch_add(1, Ordering::Relaxed);
                 }
                 onball_diag::record(Exit::ShootClearChance);
                 return Some(
@@ -818,7 +819,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                     #[cfg(feature = "match-logs")]
                     {
                         use std::sync::atomic::Ordering;
-                        crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::MID_SHOOT_FIRED.fetch_add(1, Ordering::Relaxed);
+                        crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::mid_run_diag::MID_SHOOT_FIRED.fetch_add(1, Ordering::Relaxed);
                     }
                     // Beyond standard range, route to the dedicated
                     // long-range strike; closer is a normal finish.
@@ -1145,12 +1146,12 @@ impl StateProcessingHandler for MidfielderRunningState {
             let carrier_offcenter = (ctx.player.position.y - field_h / 2.0).abs() > field_h * 0.15;
             if carrier_byline && carrier_offcenter
                 && let Some(runner) =
-                    crate::r#match::player::strategies::common::players::ops::forward_shot_decision::find_cutback_to_arriving_runner(ctx)
+                    crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::find_cutback_to_arriving_runner(ctx)
                 {
                     #[cfg(feature = "match-logs")]
                     {
                         use std::sync::atomic::Ordering;
-                        crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::MID_CUTBACK.fetch_add(1, Ordering::Relaxed);
+                        crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::mid_run_diag::MID_CUTBACK.fetch_add(1, Ordering::Relaxed);
                     }
                     onball_diag::record(Exit::Cutback);
                     return Some(StateChangeResult::with_midfielder_state_and_event(

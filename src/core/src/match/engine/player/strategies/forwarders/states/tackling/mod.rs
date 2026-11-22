@@ -3,7 +3,7 @@ use crate::r#match::engine::psychology::lapse::lapse_diag;
 use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{
+use crate::r#match::forwarders::states::shared::{
     ActivityIntensity, ForwardCondition, ForwardRead,
 };
 #[cfg(feature = "match-logs")]
@@ -11,12 +11,12 @@ use crate::r#match::player::diagnostics::defender_census::ChallengeOutcome;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::forward_census::{ForwardCensus, FwdTackleTake};
 use crate::r#match::player::events::{FoulCommitted, FoulSeverity, FoulSource, PlayerEvent};
-use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
-use crate::r#match::player::strategies::common::states::{
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::player::strategies::shared::players::ops::midfielder_skill::MidfielderSkillProfile;
+use crate::r#match::player::strategies::shared::states::{
     BlockChallenge, ChallengeKind, ClosingPoint, RecoveryChallenge, TackleDecision,
     TackleEngagement, TackleOutcome,
 };
-use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchContext, MatchPlayerLite, PlayerSide, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -138,7 +138,11 @@ impl ForwardTacklingState {
     /// a man still diving in wins it less often and fouls more. A forward
     /// has no skill profile of his own; the midfielder's reads the same
     /// attributes for his discipline and condition.
-    fn block_challenge(&self, ctx: &StateProcessingContext, opponent: &MatchPlayerLite) -> TackleOutcome {
+    fn block_challenge(
+        &self,
+        ctx: &StateProcessingContext,
+        opponent: &MatchPlayerLite,
+    ) -> TackleOutcome {
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
         let profile = MidfielderSkillProfile::from_ctx(ctx);
         BlockChallenge {

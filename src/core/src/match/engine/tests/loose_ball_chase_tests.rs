@@ -48,7 +48,6 @@
 
 use super::goal_celebration_tests::squad;
 use crate::PlayerFieldPositionGroup;
-use crate::r#match::common_states::{ChasePath, LooseBallChase};
 use crate::r#match::engine::ball::ball::{
     Ball, BallRoll, CONTROL_DISTANCE, GROUND_FRICTION, LOOSE_CLAIM_DISTANCE,
 };
@@ -57,6 +56,7 @@ use crate::r#match::events::EventCollection;
 use crate::r#match::midfielders::states::{MidfielderState, MidfielderTakeBallState};
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::position_ball::BallFieldData;
+use crate::r#match::shared_states::{ChasePath, LooseBallChase};
 use crate::r#match::{
     GameTickContext, MatchContext, MatchField, MatchPlayer, MatchPlayerCollection, PlayerSide,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,

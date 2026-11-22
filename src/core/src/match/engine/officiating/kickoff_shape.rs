@@ -29,7 +29,7 @@
 //! replays reproducible and leaves the post-goal path's single RNG draw
 //! the only one it takes.
 //!
-//! [`ThrowInDelivery`]: crate::r#match::common_states::ThrowInDelivery
+//! [`ThrowInDelivery`]: crate::r#match::shared_states::ThrowInDelivery
 
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::{MatchPlayer, PlayerSide};

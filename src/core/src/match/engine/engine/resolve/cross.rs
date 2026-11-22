@@ -19,7 +19,7 @@ use crate::r#match::engine::player::events::players::PlayerEventDispatcher;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::psychology::lapse::lapse_diag;
 use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
-use crate::r#match::goalkeepers::states::common::KeeperAerialClaim;
+use crate::r#match::goalkeepers::states::shared::KeeperAerialClaim;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::defender_census::{
     DefenderCensus, HeaderBooking, HeaderRule,
@@ -222,7 +222,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             ) * (1.0 - margin / 0.55)
         });
         let miscued = context.rng.bernoulli(lapse);
-        let side = if context.rng.bernoulli(0.5) { 1.0 } else { -1.0 };
+        let side = if context.rng.bernoulli(0.5) {
+            1.0
+        } else {
+            -1.0
+        };
         let swing = context.rng.unit_f32();
         #[cfg(feature = "match-logs")]
         if heading_it.is_some() {
@@ -279,6 +283,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// quarter of open-play crosses, and only a fraction of those become
     /// attempts, which is why crossing is a low-percentage way to attack
     /// even though every team does it.
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn resolve_cross_contest(
         field: &mut MatchField,
         context: &mut MatchContext,
@@ -810,8 +815,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 CrossClearer::Coming(d) => Some(d),
                 CrossClearer::Nobody => None,
             };
-            let (clear_range, turn) =
-                Self::miscue(field, context, heading_it, margin, clear_range);
+            let (clear_range, turn) = Self::miscue(field, context, heading_it, margin, clear_range);
             #[cfg(feature = "match-logs")]
             BlockDiag::note_contact(
                 2,
@@ -868,7 +872,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                         turn,
                     );
                     b.current_owner = None;
-                    b.flags.in_flight_state = FlightProtection::for_launch(b.velocity, b.position.z);
+                    b.flags.in_flight_state =
+                        FlightProtection::for_launch(b.velocity, b.position.z);
                 }
                 // Nobody to head it. The cross beat the whole defence and
                 // carries on — a ball nobody can reach is not cleared by

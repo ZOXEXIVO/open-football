@@ -42,6 +42,7 @@ impl TeamBehaviour {
     /// simulation date so re-asking the same player about the same topic
     /// is throttled; pass `None` only from contexts where date isn't
     /// known and you accept that the cooldown gate becomes a no-op.
+    #[expect(clippy::too_many_lines)]
     pub(super) fn process_manager_player_talks_dated(
         players: &PlayerCollection,
         staffs: &StaffCollection,
@@ -227,6 +228,7 @@ impl TeamBehaviour {
         }
     }
 
+    #[expect(clippy::too_many_lines)]
     fn conduct_manager_talk(
         manager: &Staff,
         player: &Player,
@@ -1400,7 +1402,7 @@ mod coach_termination_tests {
     use super::*;
     use crate::PlayerSquadStatus;
     use crate::club::StaffStub;
-    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
     use crate::club::team::squad::SquadAssetClass;
     use crate::context::SimulationContext;
@@ -1779,9 +1781,9 @@ mod plan_escalation_tests {
     use super::*;
     use crate::PlayerSquadStatus;
     use crate::club::StaffStub;
-    use crate::club::player::core::builder::PlayerBuilder;
     use crate::club::player::interaction::{InteractionOutcome, ManagerInteraction};
     use crate::club::player::mind::{CareerPlan, GoalOrigin, PlanStage};
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
     use crate::context::{GlobalContext, SimulationContext};
     use crate::shared::fullname::FullName;
@@ -2012,7 +2014,7 @@ mod player_forced_termination_tests {
     //! keeps shut for a protected or valuable player.
     use super::*;
     use crate::PlayerSquadStatus;
-    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
@@ -2130,7 +2132,7 @@ mod moving_on_talk_tests {
     use super::*;
     use crate::PlayerSquadStatus;
     use crate::club::StaffStub;
-    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
     use crate::shared::fullname::FullName;
     use crate::{

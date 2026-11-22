@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::views::{MenuSection, SubTitleFlag};
 use crate::worker::WorkerStatus;
 use crate::{ApiError, ApiResult, GameAppData, I18n, LlmSettings};

@@ -21,8 +21,8 @@ use crate::transfers::gate::fit::{SquadFitSnapshot, SquadRegistrationLimits};
 use crate::transfers::gate::{MoveTerms, PursuitAction, TransferMovePlausibility};
 use crate::transfers::pipeline::{
     DetailedScoutingReport, FileReading, PlayerSummary, ReportRiskFlag, ScoutingAssignment,
-    ScoutingRecommendation, ShortlistCandidate, ShortlistCandidateStatus, TransferRequest,
-    TransferNeedReason, TransferRequestStatus, TransferShortlist,
+    ScoutingRecommendation, ShortlistCandidate, ShortlistCandidateStatus, TransferNeedReason,
+    TransferRequest, TransferRequestStatus, TransferShortlist,
 };
 use crate::transfers::squad::plan::{MoneySlack, PlanningCadence};
 use crate::transfers::value::PlayerValuationCalculator;
@@ -542,6 +542,7 @@ impl ShortlistPass {
     /// market listings. This keeps transfers flowing while scouts work on
     /// deeper evaluations in parallel.
     #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_lines)]
     fn shortlists_from_market(
         country: &Country,
         club: &Club,
@@ -712,6 +713,7 @@ impl ShortlistPass {
     /// runs before the scoring; everything that only shades the club's
     /// enthusiasm is a multiplier on top of the base read.
     #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_lines)]
     fn score_reported_candidates(
         country: &Country,
         club: &Club,
@@ -1229,6 +1231,7 @@ impl ShortlistPass {
     /// took the dossier in.
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_lines)]
     fn board_proposal(
         club: &Club,
         req: &TransferRequest,
@@ -1420,9 +1423,9 @@ mod market_fallback_age_tests {
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, Goalkeeping, Mental,
         PersonAttributes, Physical, Player, PlayerAttributes, PlayerCollection,
-        PlayerFieldPositionGroup, PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills,
-        PlayerStatusType, StaffCollection, Team,
-        TeamCollection, TeamReputation, TeamType, Technical, TrainingSchedule,
+        PlayerFieldPositionGroup, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, PlayerStatusType, StaffCollection, Team, TeamCollection, TeamReputation,
+        TeamType, Technical, TrainingSchedule,
     };
     use chrono::{NaiveDate, NaiveTime};
 
@@ -1743,15 +1746,29 @@ mod market_fallback_age_tests {
     fn a_replacement_search_starts_from_the_names_the_desk_kept_behind_the_shirt() {
         let date = MarketAgeFixtures::d(2026, 7, 1);
         let mut country = replacement_world(date, true);
-        ShortlistPass::build_shortlists(&mut country, WorldPool::empty(), &MarketMap::default(), date);
-        assert_eq!(shortlist_of(&country), vec![FILED], "shortlisted on the day, unscouted");
+        ShortlistPass::build_shortlists(
+            &mut country,
+            WorldPool::empty(),
+            &MarketMap::default(),
+            date,
+        );
+        assert_eq!(
+            shortlist_of(&country),
+            vec![FILED],
+            "shortlisted on the day, unscouted"
+        );
     }
 
     #[test]
     fn a_replacement_search_with_no_names_behind_it_runs_as_any_search_does() {
         let date = MarketAgeFixtures::d(2026, 7, 1);
         let mut country = replacement_world(date, false);
-        ShortlistPass::build_shortlists(&mut country, WorldPool::empty(), &MarketMap::default(), date);
+        ShortlistPass::build_shortlists(
+            &mut country,
+            WorldPool::empty(),
+            &MarketMap::default(),
+            date,
+        );
         assert!(!shortlist_of(&country).contains(&FILED));
     }
 }

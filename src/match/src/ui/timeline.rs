@@ -269,6 +269,7 @@ impl Timeline {
     /// not "watched" a gap, it has jumped it.
     const GAP: Color = Color::srgb(0.31, 0.34, 0.39);
 
+    #[expect(clippy::too_many_lines)]
     pub fn spawn(
         mut commands: Commands,
         mut images: ResMut<Assets<Image>>,

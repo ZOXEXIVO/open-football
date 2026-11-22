@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::leagues::address::LeagueAddress;
 use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
@@ -57,6 +57,7 @@ pub struct PlayoffHistoryRow {
     pub has_runner_up: bool,
 }
 
+#[expect(clippy::too_many_lines)]
 pub async fn playoff_history_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<PlayoffHistoryRequest>,

@@ -92,6 +92,7 @@ impl ManagerApproach {
     /// state-machine and effects are interleaved deliberately so a
     /// successful TermsAccepted transition immediately performs the
     /// move.
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn advance(
         &mut self,
         data: &mut SimulatorData,
@@ -301,6 +302,7 @@ impl ManagerApproach {
     /// them as the new manager, clear the requesting club's search
     /// state, and open a fresh manager search on the source club
     /// (cascade).
+    #[expect(clippy::too_many_lines)]
     fn finalize(&self, data: &mut SimulatorData, today: NaiveDate) {
         // Vacancy re-check: an approach takes ~5 days to mature, and
         // the requesting club's seat may have been filled in the

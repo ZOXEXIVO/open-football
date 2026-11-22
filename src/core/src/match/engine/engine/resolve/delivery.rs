@@ -10,8 +10,7 @@ use crate::r#match::engine::ball::ball::Ball;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::teleport as tc;
 use crate::r#match::engine::ball::ball::{
-    AerialDelivery, AerialOutcome, AerialReach, DeliveryIntent, FlightProtection,
-    KICKABLE_DISTANCE,
+    AerialDelivery, AerialOutcome, AerialReach, DeliveryIntent, FlightProtection, KICKABLE_DISTANCE,
 };
 use crate::r#match::engine::engine::*;
 use nalgebra::Vector3;
@@ -19,7 +18,6 @@ use nalgebra::Vector3;
 use std::sync::atomic::Ordering;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
-
     /// How far short of the winner a cross is aimed, in units. 1.2u
     /// (15 cm) sits inside every role's heading reach, including the
     /// midfielder's 2.0u.
@@ -65,6 +63,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// units — the two contests use different values and the difference
     /// is load-bearing (a midfielder's heading reach is 2.0u, which the
     /// corner's own 2.0u drop sat exactly on the boundary of).
+    #[expect(clippy::too_many_lines)]
     pub(in crate::r#match::engine::engine) fn deliver_to_winner(
         field: &mut MatchField,
         winner_idx: usize,
@@ -285,7 +284,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                         turn,
                     } => {
                         b.velocity = Ball::skew(
-                            Ball::headed_clear_velocity(b.position, attacked_goal, range, clear_apex),
+                            Ball::headed_clear_velocity(
+                                b.position,
+                                attacked_goal,
+                                range,
+                                clear_apex,
+                            ),
                             turn,
                         );
                         FlightProtection::for_launch(b.velocity, b.position.z)

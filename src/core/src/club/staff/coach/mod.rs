@@ -41,6 +41,7 @@ pub use crate::club::staff::mind::organs::judgements::coach_memory as memory;
 
 pub use assessment::{CoachDecisionScore, CoachPlayerAssessment};
 pub use bond::{CoachPlayerBond, CoachPlayerBondBreakdown};
+pub use chart::{ChartPlace, ShirtDepth, SquadDepthChart};
 pub use dossier::{
     CoachDossierStore, DossierCensus, DossierTuning, Dossiers, MedalFlags, PartingReport,
     PlayerDossier, ReunionPrior, ReunionSeed, ReunionSeeder, ScarFlags, SeparationCause,
@@ -51,10 +52,9 @@ pub use intent::PlayerMatchIntent;
 pub use memory::{
     CoachMatchObservation, CoachMemory, CoachMemoryFlags, CoachMemoryStore, MemoryEngine,
 };
-pub use chart::{ChartPlace, ShirtDepth, SquadDepthChart};
 pub use plan::{CoachSquadPlan, PlanReading, PlannedRole, PlayerPlanEntry};
-pub use shares::{PlanFloor, PlanFloorKind, ShareClimate, ShirtCandidate, ShirtShares};
 pub use reason::CoachDecisionReason;
+pub use shares::{PlanFloor, PlanFloorKind, ShareClimate, ShirtCandidate, ShirtShares};
 pub use snapshot::CoachMatchSnapshot;
 pub use standing::{
     CoachStanding, EvidenceLens, GrievanceFlags, LadderContext, StandingEvidence, StandingLadder,

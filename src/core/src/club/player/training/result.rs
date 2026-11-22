@@ -90,6 +90,7 @@ impl PlayerTrainingResult {
     /// isolation without standing up a full `SimulatorData`. The
     /// `process()` entry point is still the canonical caller — it
     /// owns the data lookup and date threading.
+    #[expect(clippy::too_many_lines)]
     pub fn apply_to_player(&self, player: &mut Player, current_date: NaiveDate) {
         {
             player.on_training_session(&self.effects.work, current_date);
@@ -423,6 +424,7 @@ impl PlayerTrainingResult {
         }
     }
 
+    #[expect(clippy::too_many_lines)]
     fn maybe_emit_training_event(
         player: &mut Player,
         outcome: &TrainingOutcomeBreakdown,

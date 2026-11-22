@@ -19,17 +19,17 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
-use crate::r#match::common_states::{
-    ActivityIntensity, ContactFoul, EngagementClock, FIELD_PLAYER_JADEDNESS_INTERVAL,
-    JADEDNESS_INCREMENT, LOW_CONDITION_THRESHOLD, TackleDecision, TackleEngagement, TackleOutcome,
-};
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, DefenderRead};
+use crate::r#match::defenders::states::shared::{DefenderCondition, DefenderRead};
 use crate::r#match::engine::psychology::PsychState;
 use crate::r#match::engine::result::Score;
 use crate::r#match::player::events::FoulSeverity;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::defenders::states::clearing::DefenderClearingState;
+use crate::r#match::shared_states::{
+    ActivityIntensity, ContactFoul, EngagementClock, FIELD_PLAYER_JADEDNESS_INTERVAL,
+    JADEDNESS_INCREMENT, LOW_CONDITION_THRESHOLD, TackleDecision, TackleEngagement, TackleOutcome,
+};
 use crate::r#match::{
     ConditionContext, GameTickContext, MatchContext, MatchField, MatchPlayer,
     MatchPlayerCollection, PlayerSide, StateProcessingContext, StateProcessingHandler,
@@ -339,7 +339,10 @@ fn nerves_cost_contact_fouls() {
         ContactFoul::probability(&ctx, 6.0, true)
     };
     let unseeded = foul(&context);
-    context.psychology.players.insert(defender.id, PsychState::default());
+    context
+        .psychology
+        .players
+        .insert(defender.id, PsychState::default());
     let settled = foul(&context);
     context.psychology.players.insert(
         defender.id,
@@ -482,5 +485,8 @@ fn a_booked_man_picks_his_moments() {
     booked.skills.mental.aggression = 18.0;
     let hothead = caution(&field);
 
-    assert!(cool < hothead && hothead < 1.0, "cool {cool}, hothead {hothead}");
+    assert!(
+        cool < hothead && hothead < 1.0,
+        "cool {cool}, hothead {hothead}"
+    );
 }

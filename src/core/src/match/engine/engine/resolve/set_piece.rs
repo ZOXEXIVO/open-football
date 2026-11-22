@@ -13,9 +13,9 @@ use crate::r#match::engine::ball::ball::CornerWalk;
 use crate::r#match::engine::ball::ball::teleport as tc;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::corner_shape::CornerShape;
-use crate::r#match::engine::officiating::restart_shape::RestartShape;
 use crate::r#match::engine::corner_shape::{CornerDeadline, CornerRole};
 use crate::r#match::engine::engine::*;
+use crate::r#match::engine::officiating::restart_shape::RestartShape;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::transition::TransitionSource;
 #[cfg(feature = "match-logs")]

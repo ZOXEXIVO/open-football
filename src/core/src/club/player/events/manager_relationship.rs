@@ -25,8 +25,9 @@
 use super::MatchOutcome;
 use super::MatchParticipation;
 use super::scaling;
-use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::mind::organs::memory::{ActorRef, EncodingInputs, EpisodeKind, FactClaim};
 use crate::club::person::Person;
+use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::player::Player;
 use crate::club::relations::StaffRelation;
 use crate::club::staff::coach::PlannedRole;
@@ -34,17 +35,16 @@ use crate::{
     BigMatchDecision, BigMatchKind, BigMatchSelectionContext, ChangeType, ClubDirectionContext,
     ClubDirectionEvidence, ClubDirectionKind, HappinessEventCause, HappinessEventContext,
     HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
-    HappinessEventType,
-    InjuryRecoveryEventContext, InjuryRecoveryEvidence, InjuryRecoveryStage, ManagerCriticismReason,
-    ManagerInteractionEventContext, ManagerInteractionTone, ManagerInteractionTopic,
-    MatchSelectionContext, NewSigningThreatContext, NewSigningThreatReason, PlayerAcceptance,
-    PlayerSquadStatus, PlayerStatusType, PrivateTalkReason, PrivateTalkRequestContext, RivalThreatResponse,
-    RelationshipChange, RelationshipEvent, RoleStatusEventContext, RoleStatusKind,
-    SelectionDecisionScope, SelectionOmissionReason, SelectionRole,
-    SubstitutionFrustrationContext, SubstitutionFrustrationKind, SupportEventContext,
-    SupportSetting, SupportSource, SupportTrigger,
+    HappinessEventType, InjuryRecoveryEventContext, InjuryRecoveryEvidence, InjuryRecoveryStage,
+    ManagerCriticismReason, ManagerInteractionEventContext, ManagerInteractionTone,
+    ManagerInteractionTopic, MatchSelectionContext, NewSigningThreatContext,
+    NewSigningThreatReason, PlayerAcceptance, PlayerSquadStatus, PlayerStatusType,
+    PrivateTalkReason, PrivateTalkRequestContext, RelationshipChange, RelationshipEvent,
+    RivalThreatResponse, RoleStatusEventContext, RoleStatusKind, SelectionDecisionScope,
+    SelectionOmissionReason, SelectionRole, SubstitutionFrustrationContext,
+    SubstitutionFrustrationKind, SupportEventContext, SupportSetting, SupportSource,
+    SupportTrigger,
 };
-use crate::club::mind::organs::memory::{ActorRef, EncodingInputs, EpisodeKind, FactClaim};
 use chrono::NaiveDate;
 
 /// One side of the weekly manager-trust read, split by the kind of
@@ -195,9 +195,7 @@ impl Player {
         let never_trusted = self.mind.believes(FactClaim::NeverTrustedMe, coach);
         let word_worthless = self.mind.believes(FactClaim::HisWordIsWorthless, coach);
 
-        let feeling = (standing
-            + made_me * 0.5
-            + backed_me * 0.35
+        let feeling = (standing + made_me * 0.5 + backed_me * 0.35
             - clashed * 0.5
             - never_trusted * 0.45
             - word_worthless * 0.6)

@@ -12,9 +12,9 @@
 //! −1 (hold on to what the side has) … +1 (throw everything forward) and
 //! bent by his temperament.
 
-use crate::r#match::engine::teamplay::coach::card::Temperament;
-use crate::r#match::engine::environment::MatchEnvironment;
 use crate::r#match::MatchContext;
+use crate::r#match::engine::environment::MatchEnvironment;
+use crate::r#match::engine::teamplay::coach::card::Temperament;
 
 /// What the result is worth on this occasion.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -339,7 +339,10 @@ mod tests {
                 }
             }
             for (got, want) in shares.iter().zip(expected) {
-                assert!((got - want).abs() <= 0.03, "gap {gap}: {shares:?} against {expected:?}");
+                assert!(
+                    (got - want).abs() <= 0.03,
+                    "gap {gap}: {shares:?} against {expected:?}"
+                );
             }
         }
         let home = Outlook {
@@ -361,7 +364,10 @@ mod tests {
                 read(&league, at(0, minute)),
                 read(&league, at(1, minute)),
             );
-            assert!(behind > level && level > ahead, "{minute}': {behind} {level} {ahead}");
+            assert!(
+                behind > level && level > ahead,
+                "{minute}': {behind} {level} {ahead}"
+            );
         }
     }
 
@@ -442,7 +448,12 @@ mod tests {
         let start = stance.impulse();
         assert!(start > 0.0);
         stance.follow(0.6, 10.0, &volatile);
-        assert!(stance.impulse() < 0.1 * start, "{} of {}", stance.impulse(), start);
+        assert!(
+            stance.impulse() < 0.1 * start,
+            "{} of {}",
+            stance.impulse(),
+            start
+        );
     }
 
     #[test]

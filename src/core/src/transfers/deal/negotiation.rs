@@ -1,6 +1,6 @@
 use crate::PlayerFieldPositionGroup;
-use crate::club::core::SellerCover;
 use crate::club::board::mandate::SigningMandate;
+use crate::club::process::SellerCover;
 use crate::transfers::deal::offer::TransferOffer;
 use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::gate::appraisal::{PlayerStance, TermsRefusalCause};

@@ -51,6 +51,7 @@ impl SquadDepthChart {
     /// `development` is how far the side exists to develop players
     /// ([`crate::TeamType::development_weight`]): there the staff's belief
     /// in a man counts toward his standing as well as what he is today.
+    #[expect(clippy::too_many_lines)]
     pub fn build(
         players: &[&Player],
         tactics: &Tactics,
@@ -70,8 +71,10 @@ impl SquadDepthChart {
 
         let standing = |player: &Player, slot: PlayerPositionType| -> f32 {
             let level = f32::from(AbilityEstimator::observable_level(player));
-            let familiarity =
-                RoleFamiliarity::credit_at(RoleFamiliarity::level_for_slot(&player.positions, slot));
+            let familiarity = RoleFamiliarity::credit_at(RoleFamiliarity::level_for_slot(
+                &player.positions,
+                slot,
+            ));
             let belief = if development > 0.0 {
                 development
                     * Self::BELIEF_REACH
@@ -164,20 +167,17 @@ impl SquadDepthChart {
         // A man who can play no shirt of this shape stands last behind the
         // one he is least unfamiliar with, among those somebody holds.
         for player in pool {
-            let shirt = outfield
-                .iter()
-                .copied()
-                .max_by(|a, b| {
-                    let key = |shirt: usize| {
-                        (
-                            !shirts[shirt].men.is_empty(),
-                            familiarity(player, slots[shirt]),
-                        )
-                    };
-                    let (held_a, level_a) = key(*a);
-                    let (held_b, level_b) = key(*b);
-                    held_a.cmp(&held_b).then(level_a.total_cmp(&level_b))
-                });
+            let shirt = outfield.iter().copied().max_by(|a, b| {
+                let key = |shirt: usize| {
+                    (
+                        !shirts[shirt].men.is_empty(),
+                        familiarity(player, slots[shirt]),
+                    )
+                };
+                let (held_a, level_a) = key(*a);
+                let (held_b, level_b) = key(*b);
+                held_a.cmp(&held_b).then(level_a.total_cmp(&level_b))
+            });
             if let Some(shirt) = shirt {
                 let standing = standing(player, slots[shirt]);
                 shirts[shirt].men.push((player.id, standing));
@@ -188,17 +188,21 @@ impl SquadDepthChart {
             .iter()
             .enumerate()
             .flat_map(|(shirt, depth)| {
-                depth.men.iter().enumerate().map(move |(place, (id, standing))| {
-                    (
-                        *id,
-                        ChartPlace {
-                            shirt,
-                            slot: depth.slot,
-                            place,
-                            standing: *standing,
-                        },
-                    )
-                })
+                depth
+                    .men
+                    .iter()
+                    .enumerate()
+                    .map(move |(place, (id, standing))| {
+                        (
+                            *id,
+                            ChartPlace {
+                                shirt,
+                                slot: depth.slot,
+                                place,
+                                standing: *standing,
+                            },
+                        )
+                    })
             })
             .collect();
 
@@ -238,6 +242,10 @@ impl SquadDepthChart {
         if self.places.is_empty() {
             return 0.0;
         }
-        self.places.values().map(|place| place.standing).sum::<f32>() / self.places.len() as f32
+        self.places
+            .values()
+            .map(|place| place.standing)
+            .sum::<f32>()
+            / self.places.len() as f32
     }
 }

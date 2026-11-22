@@ -236,8 +236,10 @@ mod tests {
     fn qualifying_dates_stay_inside_their_windows_in_order() {
         use crate::InternationalCalendar;
         for start_year in 2026..=2060 {
-            let dates: Vec<NaiveDate> =
-                eight_dates().qualifying_calendar(start_year).take(16).collect();
+            let dates: Vec<NaiveDate> = eight_dates()
+                .qualifying_calendar(start_year)
+                .take(16)
+                .collect();
             for date in &dates {
                 assert!(
                     InternationalCalendar::window_on(*date).is_some(),

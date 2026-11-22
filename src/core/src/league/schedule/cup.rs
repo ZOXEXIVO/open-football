@@ -105,7 +105,8 @@ pub fn tie_winner(item: &ScheduleItem) -> Option<u32> {
 pub fn advancing_teams(tours: &[ScheduleTour], round_one_field: &[u32]) -> Option<Vec<u32>> {
     let mut entering: Vec<u32> = round_one_field.to_vec();
     for tour in tours {
-        let mut played: FxHashSet<u32> = FxHashSet::with_capacity_and_hasher(tour.items.len() * 2, Default::default());
+        let mut played: FxHashSet<u32> =
+            FxHashSet::with_capacity_and_hasher(tour.items.len() * 2, Default::default());
         let mut winners: Vec<u32> = Vec::with_capacity(tour.items.len());
         for item in &tour.items {
             played.insert(item.home_team_id);
@@ -346,7 +347,10 @@ mod tests {
     fn no_cup_round_falls_inside_an_international_window() {
         let d = |y: i32, m: u32, day: u32| NaiveDate::from_ymd_opt(y, m, day).unwrap();
         for year in 2026..=2060 {
-            let seasons = [(d(year, 8, 1), d(year + 1, 5, 30)), (d(year, 2, 1), d(year, 12, 5))];
+            let seasons = [
+                (d(year, 8, 1), d(year + 1, 5, 30)),
+                (d(year, 2, 1), d(year, 12, 5)),
+            ];
             for (start, end) in seasons {
                 for total in 1..=8u8 {
                     let dates: Vec<NaiveDate> = (1..=total)

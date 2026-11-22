@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::leagues::address::LeagueAddress;
 use crate::teams::newspaper::NewspaperCounter;
 use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
@@ -127,6 +127,7 @@ pub struct TeamScoutingTemplate {
     pub transfer_requests: Vec<TransferRequestRowView>,
 }
 
+#[expect(clippy::too_many_lines)]
 pub async fn team_scouting_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<TeamScoutingRequest>,

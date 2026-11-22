@@ -1,6 +1,5 @@
 pub mod attacking_corner;
 pub mod clearing;
-pub mod common;
 pub mod covering;
 pub mod crossing;
 pub mod heading;
@@ -14,6 +13,7 @@ pub mod pressing;
 pub mod pushingup;
 pub mod returning;
 pub mod running;
+pub mod shared;
 pub mod shooting;
 pub mod standing;
 pub mod state;

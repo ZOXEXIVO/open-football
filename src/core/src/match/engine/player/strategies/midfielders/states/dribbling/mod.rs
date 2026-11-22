@@ -1,12 +1,12 @@
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{
+use crate::r#match::midfielders::states::shared::{
     ActivityIntensity, LaneAhead, MidfielderCondition, MidfielderRead, Opportunity, TakeOn, U_PER_M,
 };
-use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
+use crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
-use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
-use crate::r#match::player::strategies::common::states::EngagementClock;
+use crate::r#match::player::strategies::shared::players::ops::midfielder_skill::MidfielderSkillProfile;
+use crate::r#match::player::strategies::shared::states::EngagementClock;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,

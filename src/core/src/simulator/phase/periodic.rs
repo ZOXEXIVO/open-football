@@ -1,6 +1,5 @@
 use crate::context::SimulationContext;
 use crate::continent::{ContinentAwardOutcome, ContinentResult};
-use crate::country::CountryResult;
 use crate::simulator::phase::MatchdayOutcome;
 use crate::simulator::{SimulationResult, WorldMatchdayResult};
 use crate::transfers::pipeline::approach::ApproachPass;
@@ -141,7 +140,7 @@ impl PeriodicPasses {
             .flat_map(|c| c.countries.par_iter_mut())
             .for_each(|country| {
                 if new_season.contains(&country.id) {
-                    CountryResult::snapshot_country(country, today);
+                    country.snapshot_season_statistics(today);
                 }
             });
     }

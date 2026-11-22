@@ -116,6 +116,7 @@ impl ClubResult {
         }
     }
 
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn process_player_contract_interaction<D: LeagueProcessAccess>(
         result: &PlayerResult,
         data: &mut D,
@@ -690,6 +691,7 @@ impl ClubResult {
 
     /// When club can't resolve salary unhappiness (rejected proposal, over budget, not needed):
     /// decide whether to transfer list, release on free transfer, or do nothing.
+    #[expect(clippy::too_many_lines)]
     fn handle_unresolved_salary<D: LeagueProcessAccess>(
         player_id: u32,
         data: &mut D,
@@ -981,8 +983,8 @@ mod tests {
     use crate::academy::ClubAcademy;
     use crate::club::board::SeasonTargets;
     use crate::club::player::contract::{RENEWAL_OFFERED_LABEL, RENEWAL_REJECTED_LABEL};
-    use crate::club::player::core::builder::PlayerBuilder;
     use crate::club::player::mailbox::{PlayerContractAsk, RejectionReason};
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::club::player::personality::PlayerDecisionHistory;
     use crate::competitions::global::GlobalCompetitions;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};

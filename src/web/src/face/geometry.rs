@@ -254,6 +254,7 @@ pub struct Landmarks {
 }
 
 impl Landmarks {
+    #[expect(clippy::too_many_lines)]
     pub fn new(id: &Identity, age: u8, heft: f32, aggr: f32) -> Landmarks {
         let cx = 100.0f32;
         let m = &id.morph;

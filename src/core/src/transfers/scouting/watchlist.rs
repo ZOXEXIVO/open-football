@@ -591,6 +591,7 @@ impl MarketKnowledge {
     /// Monday. A bucket is left at the first name even the department's
     /// kindest misreading would not lift over the shirt's bar; every name
     /// after him is weaker.
+    #[expect(clippy::too_many_lines)]
     fn for_club(
         country: &Country,
         club: &Club,

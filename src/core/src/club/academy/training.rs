@@ -189,6 +189,7 @@ struct PhaseWork {
 }
 
 impl PhaseWork {
+    #[expect(clippy::too_many_lines)]
     fn session(&self) -> SessionWork {
         let keeper = self.group == PlayerFieldPositionGroup::Goalkeeper;
         let (common, craft, mental, physical, goalkeeping): (

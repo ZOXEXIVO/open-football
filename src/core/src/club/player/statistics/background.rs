@@ -119,7 +119,8 @@ impl FootballRecord {
             return 0.0;
         }
         let raw = self.rating_points / self.rating_weight;
-        let reliability = self.rating_weight / (self.rating_weight + RatingLedger::RELIABILITY_GAMES);
+        let reliability =
+            self.rating_weight / (self.rating_weight + RatingLedger::RELIABILITY_GAMES);
         (raw - RatingLedger::neutral(position)) * reliability
     }
 
@@ -203,6 +204,7 @@ impl MatchExperienceBackground {
         (starts as f32 / Self::SEASON_MATCHES).clamp(0.0, 1.0)
     }
 
+    #[expect(clippy::too_many_lines)]
     pub fn from_player(player: &Player) -> Self {
         let history = &player.statistics_history;
         let mut slices: Vec<SpellSlice<'_>> =

@@ -1,6 +1,6 @@
 use crate::r#match::MatchPlayer;
-use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::engine::ball::ball::LOOSE_CLAIM_DISTANCE;
+use crate::r#match::shared_states::LooseBallChase;
 use nalgebra::Vector3;
 
 pub enum SteeringBehavior<'a> {
@@ -192,6 +192,7 @@ pub enum SteeringBehavior<'a> {
 }
 
 impl<'a> SteeringBehavior<'a> {
+    #[expect(clippy::too_many_lines)]
     pub fn calculate(&self, player: &MatchPlayer) -> SteeringOutput {
         match self {
             SteeringBehavior::Seek { target } => {

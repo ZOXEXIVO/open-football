@@ -159,6 +159,7 @@ fn position_type_from(pos: PlayerPositionType) -> PositionType {
 /// Roles aggressively reshape the weight distribution — a Poacher and a Target Man
 /// should look fundamentally different, not subtly different.
 /// Boost magnitudes: +0.8 to +1.5 for key skills, −0.5 to −1.0 for suppressed skills.
+#[expect(clippy::too_many_lines)]
 fn apply_role_archetype(weights: &mut [f32; SKILL_COUNT], position: &PositionType, roll: f32) {
     match position {
         PositionType::Goalkeeper => {
@@ -777,6 +778,7 @@ impl PlayerGenerator {
     /// world-init U18/U19 generator. `intake_state` is `Some` when callers
     /// want elite-cluster damping across one annual class; `None` for
     /// one-off generation.
+    #[expect(clippy::too_many_lines)]
     pub fn generate_with_context(
         country_id: u32,
         country_code: &str,

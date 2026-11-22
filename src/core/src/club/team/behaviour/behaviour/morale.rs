@@ -301,6 +301,7 @@ impl TeamBehaviour {
     /// a weak training environment, or simply not developing. Several weak
     /// signals are aggregated into one warning so it stays meaningful
     /// rather than firing after one quiet month. Runs on day 1 only.
+    #[expect(clippy::too_many_lines)]
     pub(super) fn process_loan_development_audit(
         players: &mut PlayerCollection,
         ctx: &GlobalContext<'_>,
@@ -474,6 +475,7 @@ impl TeamBehaviour {
     /// hit on the player + a relationship drag against a random teammate.
     /// Scaled so a calm, sportsmanlike star ~never triggers, while a hot-
     /// head with controversy >15 and temperament <8 fires frequently.
+    #[expect(clippy::too_many_lines)]
     pub(super) fn process_controversy_incidents(
         players: &mut PlayerCollection,
         ctx: &GlobalContext<'_>,
@@ -850,6 +852,7 @@ impl TeamBehaviour {
     /// before he commits his future. This is a pressure signal, not a
     /// transfer request; it becomes dangerous only stacked with title /
     /// European ambition or stalled contract talks. Runs on day 1 only.
+    #[expect(clippy::too_many_lines)]
     pub(super) fn process_squad_ambition_audit(
         players: &mut PlayerCollection,
         ctx: &GlobalContext<'_>,
@@ -1649,6 +1652,7 @@ impl TeamBehaviour {
     /// borrowed status, though: a visibly poor run pops it, the star
     /// treatment stops, and the room re-rates him on what he actually
     /// shows. Runs on day 1 for every squad.
+    #[expect(clippy::too_many_lines)]
     pub(super) fn process_big_club_aura_audit(
         players: &mut PlayerCollection,
         ctx: &GlobalContext<'_>,
@@ -2019,6 +2023,7 @@ impl TeamBehaviour {
     /// pressure). The deeply professional leader is the exception — he
     /// keeps the frustration private and backs the struggler instead.
     /// Runs on day 1, Main team only.
+    #[expect(clippy::too_many_lines)]
     pub(super) fn process_flop_signing_patience_audit(
         players: &mut PlayerCollection,
         ctx: &GlobalContext<'_>,
@@ -2189,6 +2194,7 @@ impl TeamBehaviour {
     /// (`UnhappyAboutBlockedHomegrown`, warming toward the kid). A
     /// loanee clearly better than the kid is accepted as fair
     /// competition. Runs on day 1, Main team only.
+    #[expect(clippy::too_many_lines)]
     pub(super) fn process_blocked_homegrown_audit(
         players: &mut PlayerCollection,
         ctx: &GlobalContext<'_>,
@@ -2382,6 +2388,7 @@ impl TeamBehaviour {
     /// tension toward the favoured). Both gates are deliberately strict
     /// so ordinary rotation never trips this. Runs on day 1, Main team
     /// only.
+    #[expect(clippy::too_many_lines)]
     pub(super) fn process_selection_favouritism_audit(
         players: &mut PlayerCollection,
         ctx: &GlobalContext<'_>,

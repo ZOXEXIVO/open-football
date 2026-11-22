@@ -66,6 +66,7 @@ pub fn country_skill_bias(continent_id: u32, country_code: &str) -> [f32; SKILL_
 
 /// Country-specific biases for major football nations.
 /// Returns true if a specific bias was applied.
+#[expect(clippy::too_many_lines)]
 fn apply_country_bias(b: &mut [f32; SKILL_COUNT], code: &str) -> bool {
     match code {
         // ── South America ──────────────────────────────────────────────
@@ -445,6 +446,7 @@ fn apply_country_bias(b: &mut [f32; SKILL_COUNT], code: &str) -> bool {
 }
 
 /// Region/continent-level defaults for countries without specific biases.
+#[expect(clippy::too_many_lines)]
 fn apply_region_bias(b: &mut [f32; SKILL_COUNT], continent_id: u32, code: &str) {
     match continent_id {
         // ── Africa (0) ─────────────────────────────────────────────────

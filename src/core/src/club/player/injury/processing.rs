@@ -81,6 +81,7 @@ impl Player {
     /// Process injury lifecycle: injured → recovery → healthy.
     /// The medical staff quality comes from the parent ClubContext and
     /// modulates recovery speed + spontaneous injury risk.
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn process_injury(
         &mut self,
         result: &mut PlayerResult,

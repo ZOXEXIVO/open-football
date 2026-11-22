@@ -34,10 +34,15 @@ use std::cmp::Ordering;
 
 /// What a ball across the goal line inside the frame is.
 enum GoalCredit {
-    Scored { scorer: u32, own_goal: bool },
+    Scored {
+        scorer: u32,
+        own_goal: bool,
+    },
     /// Not a goal: no shot behind it (`no_shot`), an indirect free kick
     /// nobody else touched, or a scorer no longer on the pitch.
-    Refused { no_shot: bool },
+    Refused {
+        no_shot: bool,
+    },
     /// Nobody has ever touched it.
     Uncredited,
 }
@@ -233,7 +238,11 @@ impl Ball {
     /// own goal against him, unless his touch met a shot by the other side
     /// that was already heading on frame — that goal is the shooter's. Off
     /// the other side, it is a goal only with a shot behind it.
-    fn credit_by_the_last_touch(&self, conceding: PlayerSide, context: &MatchContext) -> GoalCredit {
+    fn credit_by_the_last_touch(
+        &self,
+        conceding: PlayerSide,
+        context: &MatchContext,
+    ) -> GoalCredit {
         let Some(toucher_id) = self.last_touch_player_id.or(self.previous_owner) else {
             return GoalCredit::Uncredited;
         };
@@ -559,7 +568,10 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
-        let Some(keeper_side) = players.iter().find(|p| p.id == keeper_id).and_then(|p| p.side)
+        let Some(keeper_side) = players
+            .iter()
+            .find(|p| p.id == keeper_id)
+            .and_then(|p| p.side)
         else {
             return;
         };
@@ -587,6 +599,7 @@ impl Ball {
     /// `outside_posts` is whether the ball has anywhere to run out to
     /// (over the bar it does — it clears the netting, same as the skied
     /// shot); between the posts under the bar it has hit the net.
+    #[expect(clippy::too_many_lines)]
     fn award_corner(
         &mut self,
         side: GoalSide,
@@ -1061,6 +1074,7 @@ impl Ball {
     // are, and for the same kind of test: the bug is a SEQUENCE, and
     // standing up a whole `GameTickContext` to reach it through `update`
     // would test the tick orchestration instead of the restart.
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn check_wide_of_goal(
         &mut self,
         context: &MatchContext,

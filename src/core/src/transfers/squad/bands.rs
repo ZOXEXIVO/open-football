@@ -291,7 +291,10 @@ mod tests {
         // ability about eleven points, which is about one division of band.
         let here = 0.2;
         let below = LevelBand::below_standard(here, 0.0295);
-        assert!((below - here - LevelBand::ONE_LEVEL).abs() < 0.05, "{below}");
+        assert!(
+            (below - here - LevelBand::ONE_LEVEL).abs() < 0.05,
+            "{below}"
+        );
         assert!(LevelBand::below_standard(here, -0.03) < here);
         assert_eq!(LevelBand::below_standard(here, 1.0), LevelBand::MAX);
     }

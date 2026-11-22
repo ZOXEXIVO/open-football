@@ -124,6 +124,7 @@ impl BenchScenarioPlan {
 pub struct BenchScenarioScorer;
 
 impl BenchScenarioScorer {
+    #[expect(clippy::too_many_lines)]
     pub fn coverage(player: &Player, scenario: BenchScenario, date: NaiveDate) -> f32 {
         let t = &player.skills.technical;
         let m = &player.skills.mental;

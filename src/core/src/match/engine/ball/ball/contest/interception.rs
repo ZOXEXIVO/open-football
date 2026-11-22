@@ -9,12 +9,12 @@ use crate::r#match::engine::ball::ball::flight_diag::FlightDiag;
 use crate::r#match::engine::ball::ball::lane_diag;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::strike_diag::{GrantPath, StrikeCensus};
-#[cfg(feature = "match-logs")]
-use crate::r#match::player::diagnostics::defender_census::TakeRule;
 use crate::r#match::engine::ball::ball::{
     AerialReach, Ball, CONTROL_DISTANCE, LOOSE_CLAIM_DISTANCE,
 };
 use crate::r#match::events::EventCollection;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::TakeRule;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart};
@@ -286,6 +286,7 @@ impl InterceptionContest {
 impl Ball {
     /// Every opponent the ball draws level with gets one go at it — see
     /// [`InterceptionContest`]. Runs only on unowned balls in flight.
+    #[expect(clippy::too_many_lines)]
     pub fn try_intercept(
         &mut self,
         context: &MatchContext,
@@ -467,10 +468,11 @@ impl Ball {
                     let in_box = context.penalty_area(true).contains(&self.position)
                         || context.penalty_area(false).contains(&self.position);
                     crate::mid_run_diag::BoxPassDiag::note_cut_out(in_box);
-                    context
-                        .defender_census
-                        .borrow_mut()
-                        .tag_take(TakeRule::Interception, player.id, self.current_tick_cached);
+                    context.defender_census.borrow_mut().tag_take(
+                        TakeRule::Interception,
+                        player.id,
+                        self.current_tick_cached,
+                    );
                 }
                 self.take_intercepted(player, events);
                 return;

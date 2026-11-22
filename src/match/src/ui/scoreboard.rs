@@ -537,6 +537,7 @@ impl FullTime {
     const SCORER: f32 = 12.0;
 
     /// Builds the card, hidden, at startup.
+    #[expect(clippy::too_many_lines)]
     pub fn spawn(mut commands: Commands, config: Res<ViewerConfig>, faces: Res<Faces>) {
         // The same two fallbacks the bug and the seek rail's markers take.
         let home_shirt = config.home.background_color(Color::srgb(0.0, 0.19, 0.49));

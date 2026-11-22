@@ -856,6 +856,7 @@ impl Player {
     /// fit against the current formation, and record the implicit playing-
     /// time promise. Safe to call every tick — it's a no-op if nothing is
     /// pending.
+    #[expect(clippy::too_many_lines)]
     pub fn process_transfer_shock(
         &mut self,
         now: NaiveDate,
@@ -1668,6 +1669,7 @@ impl Player {
     /// tick — decides whether the cumulative mood justifies escalating
     /// to `Req`. This helper just stages the *fact* on happiness; the
     /// transfer-desire path reads the recent events.
+    #[expect(clippy::too_many_lines)]
     pub fn process_chronic_adaptation_failure(
         &mut self,
         now: NaiveDate,
@@ -4023,7 +4025,7 @@ mod transfer_environment_tests {
         // SeniorMentorSupport beats RolePathBlocked / Overawed in the
         // Flavor slot (priority 70 vs 65/50).
         let mut p = player_with(24, 14.0, 1000, 1000, 80, 5.0, 10.0, 10.0);
-        p.squad_social_view = Some(crate::club::player::core::player::SquadSocialView {
+        p.squad_social_view = Some(crate::club::player::model::player::SquadSocialView {
             same_nationality_teammates: 2,
             same_language_teammates: 2,
         });

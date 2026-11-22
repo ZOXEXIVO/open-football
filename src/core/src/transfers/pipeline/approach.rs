@@ -250,6 +250,7 @@ impl ApproachBuilder {
     /// The club's opening number, priced by its own transfer strategy against
     /// what the seller is asking — and, for a loan, against the rental a loan
     /// fee actually is rather than the asset price.
+    #[expect(clippy::too_many_lines)]
     fn open_offer(
         buyer: &ApproachBuyer<'_>,
         target: &ApproachTarget<'_>,
@@ -397,6 +398,7 @@ impl ApproachBuilder {
     /// Loans are left alone: a loan fee is a rental, not an asset purchase,
     /// and the upgrade model prices assets.
     #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_lines)]
     fn price_to_buyer(
         buyer: &ApproachBuyer<'_>,
         target: &ApproachTarget<'_>,
@@ -1013,6 +1015,7 @@ impl ApproachPass {
     /// table. `months_remaining` stays neutral: it only widens the
     /// acceptable band, never `expected_wage`, and the leverage that
     /// matters now lives in the appraisal's money weight.
+    #[expect(clippy::too_many_lines)]
     fn determine_transfer_approach(
         rep_level: &ReputationLevel,
         budget: f64,

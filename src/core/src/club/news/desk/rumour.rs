@@ -57,6 +57,7 @@ impl RumourDesk {
     /// Where the player stands with his own club: has he asked to go,
     /// has he been told to go, is he on the list, have talks broken
     /// down. One line, the sharpest version that applies.
+    #[expect(clippy::too_many_lines)]
     fn file_standing_at_club(
         out: &mut Vec<NewsStory>,
         player: &Player,
@@ -262,6 +263,7 @@ impl RumourDesk {
     /// at all. Those fall through to the generic speculation line at the
     /// bottom, which was written for exactly that — his name keeps
     /// coming up, and the paper is not saying whose idea it was.
+    #[expect(clippy::too_many_lines)]
     fn file_interest(out: &mut Vec<NewsStory>, player: &Player, date: NaiveDate, window_days: u16) {
         let feed = RecentEvents::within(player, window_days);
         let importance = PlayerStanding::importance(player);
@@ -481,12 +483,12 @@ impl RumourDesk {
 mod tests {
     use super::RumourDesk;
     use crate::club::news::types::{NewsStory, NewsStoryKind};
-    use crate::club::player::core::builder::PlayerBuilder;
     use crate::club::player::happiness::{
         HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
         TransferInterestContext, TransferInterestKind, TransferInterestReaction,
         TransferInterestSource, TransferInterestStage,
     };
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
         HappinessEventType, PersonAttributes, Player, PlayerAttributes, PlayerPosition,

@@ -2294,6 +2294,7 @@ impl Actors {
     /// Drives every player and the ball from the recording at the current
     /// playhead. Players with no samples around `now` were substituted off (or
     /// have not come on yet) and simply vanish.
+    #[expect(clippy::too_many_lines)]
     pub fn follow_playhead(
         playback: Res<Playback>,
         lineup: Res<Lineup>,
@@ -3545,6 +3546,7 @@ impl Actors {
     /// from the ground they cover. Driving the stride by distance rather than by
     /// time is what stops the feet from skating: however fast the playhead is
     /// running, a player still takes one step per stride length of turf.
+    #[expect(clippy::too_many_lines)]
     pub fn animate(
         playback: Res<Playback>,
         ball: Res<BallState>,
@@ -5349,6 +5351,7 @@ impl PlayerActor {
     /// match time has passed, and how fast he is covering ground both
     /// smoothed (`pace`, which survives a noisy frame) and as measured this
     /// frame (`ground`, which does not lag).
+    #[expect(clippy::too_many_lines)]
     fn track_flight(&mut self, match_delta: f32, pace: f32, ground: f32, seeked: bool) -> bool {
         let climb = if seeked || match_delta <= 0.0 {
             0.0
@@ -5965,6 +5968,7 @@ impl PlayerActor {
         flown + (fallen - flown) * self.flat
     }
 
+    #[expect(clippy::too_many_lines)]
     fn gait(&self) -> Gait {
         // An outfielder leaving the ground is heading a ball, not saving one.
         //

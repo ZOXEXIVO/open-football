@@ -1,16 +1,16 @@
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{
+use crate::r#match::forwarders::states::shared::{
     ActivityIntensity, ForwardCondition, ForwardRead,
 };
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::forward_census::{ForwardCensus, FwdRequest};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::player::strategies::common::players::ops::clearance::TouchlineCall;
 use crate::r#match::player::strategies::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
 use crate::r#match::player::strategies::players::skills::SkillCurve;
+use crate::r#match::player::strategies::shared::players::ops::clearance::TouchlineCall;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -29,7 +29,9 @@ impl StateProcessingHandler for ForwardPassingState {
         // Check if the forward still has the ball
         if !ctx.player.has_ball(ctx) {
             // Lost possession, transition to Running state
-            return Some(StateChangeResult::with_forward_state(ForwardRead::released(ctx)));
+            return Some(StateChangeResult::with_forward_state(
+                ForwardRead::released(ctx),
+            ));
         }
 
         // Pinned at his own touchline with no safe out: over the line, up

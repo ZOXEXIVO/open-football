@@ -2,7 +2,7 @@ use crate::GameAppData;
 use crate::about::about_routes;
 use crate::ai::routes::ai_routes;
 use crate::champions_league::champions_league_routes;
-use crate::common::default_handler::default_handler;
+use crate::shared::default_handler::default_handler;
 use crate::conference_league::conference_league_routes;
 use crate::copa_libertadores::copa_libertadores_routes;
 use crate::countries::country_routes;

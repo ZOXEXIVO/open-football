@@ -1,8 +1,8 @@
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{
+use crate::r#match::forwarders::states::shared::{
     ActivityIntensity, ForwardCondition, ForwardRead,
 };
-use crate::r#match::player::strategies::common::players::ops::support::SupportOffer;
+use crate::r#match::player::strategies::shared::players::ops::support::SupportOffer;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,

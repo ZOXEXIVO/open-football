@@ -44,8 +44,7 @@ impl DepartureOutlook {
     /// perceived level of its first choices, and `level` his own.
     pub fn of(player: &Player, marketed: bool, level: u8, side_level: u8, date: NaiveDate) -> Self {
         let months = player.contract.as_ref().map(|contract| {
-            (contract.expiration.year() - date.year()) * 12
-                + contract.expiration.month() as i32
+            (contract.expiration.year() - date.year()) * 12 + contract.expiration.month() as i32
                 - date.month() as i32
         });
         DepartureOutlook {
@@ -128,7 +127,10 @@ mod tests {
         let mut previous = DepartureOutlook::contract_term(Some(24));
         for months in (0..24).rev() {
             let now = DepartureOutlook::contract_term(Some(months));
-            assert!(now >= previous && now - previous < 0.06, "a step at {months} months");
+            assert!(
+                now >= previous && now - previous < 0.06,
+                "a step at {months} months"
+            );
             previous = now;
         }
         assert_eq!(DepartureOutlook::contract_term(Some(0)), 1.0);
@@ -141,7 +143,10 @@ mod tests {
         let mut previous = 0.0;
         for age in 25..=34 {
             let now = DepartureOutlook::ageing_term(age, group);
-            assert!(now >= previous && now - previous <= 1.0 / 6.0 + 1e-6, "a step at {age}");
+            assert!(
+                now >= previous && now - previous <= 1.0 / 6.0 + 1e-6,
+                "a step at {age}"
+            );
             previous = now;
         }
         assert_eq!(previous, 1.0);
@@ -167,7 +172,10 @@ mod tests {
         let mut previous = 0.0;
         for level in 150..=200 {
             let now = DepartureOutlook::outgrown_term(level, 150);
-            assert!(now >= previous && now - previous < 0.03, "a step at {level}");
+            assert!(
+                now >= previous && now - previous < 0.03,
+                "a step at {level}"
+            );
             previous = now;
         }
         assert_eq!(previous, 0.5);
@@ -177,12 +185,30 @@ mod tests {
     fn each_reason_adds_to_one_likelihood_and_none_takes_away() {
         let quiet = DepartureOutlook::default();
         let reasons = [
-            DepartureOutlook { marketed: 0.6, ..quiet },
-            DepartureOutlook { asked: 0.5, ..quiet },
-            DepartureOutlook { approached: 0.25, ..quiet },
-            DepartureOutlook { contract: 0.5, ..quiet },
-            DepartureOutlook { ageing: 0.5, ..quiet },
-            DepartureOutlook { outgrown: 0.3, ..quiet },
+            DepartureOutlook {
+                marketed: 0.6,
+                ..quiet
+            },
+            DepartureOutlook {
+                asked: 0.5,
+                ..quiet
+            },
+            DepartureOutlook {
+                approached: 0.25,
+                ..quiet
+            },
+            DepartureOutlook {
+                contract: 0.5,
+                ..quiet
+            },
+            DepartureOutlook {
+                ageing: 0.5,
+                ..quiet
+            },
+            DepartureOutlook {
+                outgrown: 0.3,
+                ..quiet
+            },
         ];
         for one in reasons {
             assert!(one.likelihood() > quiet.likelihood());

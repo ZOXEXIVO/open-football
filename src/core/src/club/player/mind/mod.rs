@@ -63,8 +63,8 @@
 //! [`CoachMemory`]: crate::club::staff::coach::CoachMemory
 //! [`CoachDecisionEngine`]: crate::club::staff::coach::CoachDecisionEngine
 
-pub mod career;
 pub mod anchors;
+pub mod career;
 pub mod competitive;
 pub mod financial;
 #[cfg(test)]
@@ -80,8 +80,8 @@ pub mod social;
 pub mod submind;
 
 pub use anchors::{
-    AnchorView, CareerAnchors, CareerChapter, CareerDream, CareerDreamReview, CareerSummit, ChapterKind,
-    DreamKind, DreamState,
+    AnchorView, CareerAnchors, CareerChapter, CareerDream, CareerDreamReview, CareerSummit,
+    ChapterKind, DreamKind, DreamState,
 };
 pub use career::{CareerMind, CareerStage};
 pub use competitive::{CompetitiveMatchRead, CompetitiveMind, KickoffMind, MindSwitch};
@@ -92,13 +92,13 @@ pub use situation::{MindSituation, NationalStanding};
 pub use social::SocialMind;
 pub use submind::{MindOption, MindView, MoodContribution, ReasonSet, SubMind, WeightedReason};
 
-pub use organs::{MindOrgans, SpellChange};
 pub use organs::goals::{
     Escalation, FormedWant, GoalBlocker, GoalBridge, GoalCensus, GoalDirection, GoalEvidence,
     GoalKind, GoalMask, GoalOrigin, GoalReviewReport, GoalSpec, GoalStack, GoalStatus, GoalSubject,
     MindGoal, ReasonMapping, StatusChange, SubjectMask,
 };
 pub use organs::journal::{MindJournal, MindNote, MindNoteKind, MindNoteStore};
+pub use organs::{MindOrgans, SpellChange};
 // `GoalDomain` is re-exported from the goals organ, but the name reads
 // better unqualified alongside `EpisodeDomain`.
 pub use organs::goals::GoalDomain;

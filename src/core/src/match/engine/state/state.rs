@@ -34,6 +34,9 @@ impl MatchState {
     }
 
     pub fn is_extra_time(&self) -> bool {
-        matches!(self, MatchState::ExtraTimeFirst | MatchState::ExtraTimeSecond)
+        matches!(
+            self,
+            MatchState::ExtraTimeFirst | MatchState::ExtraTimeSecond
+        )
     }
 }

@@ -14,8 +14,8 @@ use crate::PlayerStatusType;
 use crate::club::PlayerFieldPositionGroup;
 use crate::club::player::condition::{ConditionRecoveryModel, InjuryRiskInputs};
 use crate::club::player::injury::InjuryType;
-use crate::r#match::engine::player::injury::InjuryGrade;
 use crate::club::player::player::Player;
+use crate::r#match::engine::player::injury::InjuryGrade;
 use crate::utils::DateUtils;
 
 /// Compact inputs to the post-match physical exertion pass. Built
@@ -347,7 +347,13 @@ impl Player {
     /// He was hurt in the match: the injury he carries out of it is that
     /// one, sized by how bad it was on the pitch. A knock he got up from
     /// leaves nothing behind.
-    pub fn on_match_injury(&mut self, severity: InjuryGrade, minutes: f32, now: NaiveDate, age: u8) {
+    pub fn on_match_injury(
+        &mut self,
+        severity: InjuryGrade,
+        minutes: f32,
+        now: NaiveDate,
+        age: u8,
+    ) {
         let Some(injury) = InjuryType::from_match_severity(
             severity,
             minutes,

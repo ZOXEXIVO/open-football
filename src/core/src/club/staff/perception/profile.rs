@@ -117,6 +117,7 @@ impl CoachProfile {
         }
     }
 
+    #[expect(clippy::too_many_lines)]
     pub fn from_staff(staff: &Staff) -> Self {
         let mental = &staff.staff_attributes.mental;
         let knowledge = &staff.staff_attributes.knowledge;
@@ -266,7 +267,7 @@ impl CoachProfile {
 
     /// Hash-based noise in [-1.0, 1.0]. Deterministic per coach+player+salt.
     pub fn perception_noise(&self, player_id: u32, salt: u32) -> f32 {
-        super::utils::perception_noise_raw(self.coach_seed, player_id, salt)
+        super::noise::PerceptionNoise::raw(self.coach_seed, player_id, salt)
     }
 
     // ── Coach-decision reaction weights ────────────────────────────────
@@ -314,8 +315,7 @@ impl CoachProfile {
     /// lets him finish what he started; a conservative one takes the shirt
     /// back for the late rounds.
     pub fn deputy_cup_reach(&self) -> f32 {
-        (0.45 + 0.75 * (0.6 * self.man_management + 0.4 * self.rotation_tendency()))
-            .clamp(0.0, 1.0)
+        (0.45 + 0.75 * (0.6 * self.man_management + 0.4 * self.rotation_tendency())).clamp(0.0, 1.0)
     }
 
     /// How readily he rotates, 0..1: less the more conservative he is and

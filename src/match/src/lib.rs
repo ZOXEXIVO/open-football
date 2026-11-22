@@ -83,6 +83,7 @@ impl MatchViewer {
     /// [`ViewerConfig`]; the app takes over the canvas it names and runs until
     /// the page goes away.
     #[wasm_bindgen(js_name = start)]
+    #[expect(clippy::too_many_lines)]
     pub fn start(config: String) {
         console_error_panic_hook::set_once();
 

@@ -12,7 +12,10 @@
 use super::pricing::FreeAgentMarketCalculator;
 use crate::Person;
 use crate::Player;
-use crate::club::player::transfer::{FreeAgentBlockReason, FreeAgentStatusCategory, MarketStage};
+use crate::PlayerFieldPositionGroup;
+use crate::club::player::transfer::{
+    FreeAgentBlockReason, FreeAgentMarketState, FreeAgentStatusCategory, MarketStage,
+};
 use crate::transfers::market::region::ScoutingRegion;
 use crate::transfers::pipeline::TransferRequestStatus;
 use crate::transfers::view::club::ClubView;
@@ -166,30 +169,16 @@ impl FreeAgentMarketAuditor {
             );
         }
     }
-
     fn diagnose_player(
         data: &SimulatorData,
         player: &Player,
         date: NaiveDate,
     ) -> FreeAgentMarketDiagnosis {
-        // Two-stage nationality resolve, mirroring
-        // `snapshot_global_free_agents` — active country first, the
-        // lighter `country_info` map second, fail-closed fallback last.
-        let nationality = data
-            .country(player.country_id)
-            .map(|c| (c.reputation, c.continent_id, c.code.clone()))
-            .or_else(|| {
-                data.country_info
-                    .get(&player.country_id)
-                    .map(|c| (c.reputation, c.continent_id, c.code.clone()))
-            });
-        let nationality_unknown = nationality.is_none();
-        let (nat_rep, nat_continent, nat_code) =
-            nationality.unwrap_or((u16::MAX, 1, "gb".to_string()));
-
+        let (nat_rep, nat_continent, nat_code, nationality_unknown) =
+            Self::diagnose_nationality(data, player);
         let state = player.free_agent_state();
         let days_free = state
-            .map(|s| (date - s.free_since).num_days().max(0))
+            .map(|state| (date - state.free_since).num_days().max(0))
             .unwrap_or(0);
         let age = player.age(date);
         let ca = player.player_attributes.current_ability;
@@ -198,19 +187,88 @@ impl FreeAgentMarketAuditor {
         let group = player.position().position_group();
         let player_region_prestige =
             ScoutingRegion::from_country(nat_continent, &nat_code).league_prestige();
-
         let rep_drop = FreeAgentMarketCalculator::rep_drop_allowed(career_pressure, age, ca);
         let region_drop =
             FreeAgentMarketCalculator::region_drop_allowed(career_pressure, reference_reputation);
+        let (eligible_country_count, eligible_club_count, matching_request_count) =
+            Self::count_eligible_market(
+                data,
+                group,
+                ca,
+                career_pressure,
+                reference_reputation,
+                nat_continent,
+                player_region_prestige,
+                rep_drop,
+                region_drop,
+            );
 
+        let last_block_reason =
+            Self::diagnose_block_reason(state, nationality_unknown, matching_request_count);
+
+        FreeAgentMarketDiagnosis {
+            player_id: player.id,
+            player_name: player.full_name.to_string(),
+            days_free,
+            market_stage: player.market_stage(date),
+            career_pressure,
+            ability: ca,
+            age,
+            reference_reputation,
+            last_salary: state.map(|state| state.last_salary).unwrap_or(0),
+            offers_received_30d: state
+                .map(|state| state.offers_received_30d(date))
+                .unwrap_or(0),
+            offers_rejected_total: state.map(|state| state.offers_rejected_total).unwrap_or(0),
+            last_block_reason,
+            eligible_country_count,
+            eligible_club_count,
+            matching_request_count,
+        }
+    }
+
+    fn diagnose_nationality(data: &SimulatorData, player: &Player) -> (u16, u32, String, bool) {
+        let nationality = data
+            .country(player.country_id)
+            .map(|country| {
+                (
+                    country.reputation,
+                    country.continent_id,
+                    country.code.clone(),
+                )
+            })
+            .or_else(|| {
+                data.country_info.get(&player.country_id).map(|country| {
+                    (
+                        country.reputation,
+                        country.continent_id,
+                        country.code.clone(),
+                    )
+                })
+            });
+        let nationality_unknown = nationality.is_none();
+        let (reputation, continent, code) = nationality.unwrap_or((u16::MAX, 1, "gb".to_string()));
+        (reputation, continent, code, nationality_unknown)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn count_eligible_market(
+        data: &SimulatorData,
+        group: PlayerFieldPositionGroup,
+        ca: u8,
+        career_pressure: f32,
+        reference_reputation: u16,
+        nat_continent: u32,
+        player_region_prestige: f32,
+        rep_drop: i32,
+        region_drop: f32,
+    ) -> (usize, usize, usize) {
         let mut eligible_country_count = 0usize;
         let mut eligible_club_count = 0usize;
         let mut matching_request_count = 0usize;
 
         for continent in &data.continents {
             for country in &continent.countries {
-                // Country-level gates, mirroring the request-driven
-                // matcher's filter exactly.
                 if (country.reputation as i32 + rep_drop) < reference_reputation as i32 {
                     continue;
                 }
@@ -241,7 +299,7 @@ impl FreeAgentMarketAuditor {
                         .teams
                         .main()
                         .or_else(|| club.teams.teams.first())
-                        .map(|t| t.reputation.overall_score().clamp(0.0, 1.0))
+                        .map(|team| team.reputation.overall_score().clamp(0.0, 1.0))
                         .unwrap_or(0.0);
                     let min_ca = FreeAgentMarketCalculator::min_acceptable_ca(
                         club_score,
@@ -261,47 +319,38 @@ impl FreeAgentMarketAuditor {
                         .transfer_plan
                         .transfer_requests
                         .iter()
-                        .filter(|r| {
-                            r.status != TransferRequestStatus::Fulfilled
-                                && r.status != TransferRequestStatus::Abandoned
-                                && r.position.position_group() == group
+                        .filter(|request| {
+                            request.status != TransferRequestStatus::Fulfilled
+                                && request.status != TransferRequestStatus::Abandoned
+                                && request.position.position_group() == group
                         })
                         .count();
                 }
             }
         }
 
-        // Stored funnel reason wins (it's the most specific); fall back
-        // to the structural classifications so a player no matcher has
-        // touched yet still gets an answer.
-        let stored = state.and_then(|s| s.last_block).map(|(_, reason)| reason);
-        let last_block_reason = stored.or({
-            if nationality_unknown {
-                Some(FreeAgentBlockReason::UnknownNationality)
-            } else if matching_request_count == 0 {
-                Some(FreeAgentBlockReason::NoMatchingRequest)
-            } else {
-                None
-            }
-        });
-
-        FreeAgentMarketDiagnosis {
-            player_id: player.id,
-            player_name: player.full_name.to_string(),
-            days_free,
-            market_stage: player.market_stage(date),
-            career_pressure,
-            ability: ca,
-            age,
-            reference_reputation,
-            last_salary: state.map(|s| s.last_salary).unwrap_or(0),
-            offers_received_30d: state.map(|s| s.offers_received_30d(date)).unwrap_or(0),
-            offers_rejected_total: state.map(|s| s.offers_rejected_total).unwrap_or(0),
-            last_block_reason,
+        (
             eligible_country_count,
             eligible_club_count,
             matching_request_count,
-        }
+        )
+    }
+
+    fn diagnose_block_reason(
+        state: Option<&FreeAgentMarketState>,
+        nationality_unknown: bool,
+        matching_request_count: usize,
+    ) -> Option<FreeAgentBlockReason> {
+        let stored = state
+            .and_then(|state| state.last_block)
+            .map(|(_, reason)| reason);
+        stored.or(if nationality_unknown {
+            Some(FreeAgentBlockReason::UnknownNationality)
+        } else if matching_request_count == 0 {
+            Some(FreeAgentBlockReason::NoMatchingRequest)
+        } else {
+            None
+        })
     }
 }
 

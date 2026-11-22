@@ -90,7 +90,9 @@ impl ContinentResult {
         self.countries
             .into_iter()
             .filter_map(|country_result| {
-                PerformanceProfiler::stage("drain_country", 1, || country_result.process(data, result))
+                PerformanceProfiler::stage("drain_country", 1, || {
+                    country_result.process(data, result)
+                })
             })
             .collect()
     }

@@ -21,14 +21,14 @@ use crate::r#match::engine::ball::ball::{
     AwaitedRestart, Ball, GoalKickRunUp, PhaseOrigin, RestartHold, RestartQuiet, RunOff, RunUpPhase,
 };
 use crate::r#match::engine::corner_shape::CornerShape;
-use crate::r#match::engine::officiating::restart_shape::RestartShape;
 use crate::r#match::engine::flow::context::MATCH_TIME_INCREMENT_MS;
 use crate::r#match::engine::officiating::management::TimeWastingRestart;
+use crate::r#match::engine::officiating::restart_shape::RestartShape;
 use crate::r#match::engine::player::events::players::FoulSource;
 use crate::r#match::engine::result::DeadTime;
 use crate::r#match::engine::set_pieces::ThrowAppetite;
 use crate::r#match::events::EventCollection;
-use crate::r#match::goalkeepers::states::common::KeeperGoalKick;
+use crate::r#match::goalkeepers::states::shared::KeeperGoalKick;
 use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::RestartCensus;
@@ -45,6 +45,7 @@ impl Ball {
     /// up a throw-in for the team that did NOT last touch it. Routes
     /// through `pending_set_piece_teleport` like corners / goal kicks so
     /// the engine can place the thrower onto the ball after the tick.
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn check_throw_in(
         &mut self,
         context: &MatchContext,
@@ -372,6 +373,7 @@ impl Ball {
     /// A restart with an [`AwaitedRestart::take_from`] — the corner, and
     /// only the corner — runs the same thing TWICE: he fetches the ball
     /// from wherever it went out, and then carries it to the arc.
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn tick_awaited_restart(
         &mut self,
         context: &mut MatchContext,
@@ -890,17 +892,14 @@ impl Ball {
             .origin
             .keeps_opponents_off()
             .then_some(await_state.taker_id);
-        self.phase_origin = await_state
-            .origin
-            .opens_set_piece_phase()
-            .then(|| {
-                PhaseOrigin::open(
-                    await_state.origin,
-                    taker.team_id,
-                    taker.id,
-                    context.current_tick(),
-                )
-            });
+        self.phase_origin = await_state.origin.opens_set_piece_phase().then(|| {
+            PhaseOrigin::open(
+                await_state.origin,
+                taker.team_id,
+                taker.id,
+                context.current_tick(),
+            )
+        });
         self.record_touch(
             await_state.taker_id,
             taker.team_id,
@@ -1166,7 +1165,7 @@ impl ThrowIn {
     /// One switch for three pieces — the ball in his hands here, the
     /// second-touch bar in [`Ball::blocked_recollect_player`], and the
     /// delivery itself in
-    /// [`ThrowInDelivery`](crate::r#match::player::strategies::common::states::ThrowInDelivery)
+    /// [`ThrowInDelivery`](crate::r#match::player::strategies::shared::states::ThrowInDelivery)
     /// — because they are one behaviour and an A/B that moved only part of
     /// it would measure neither arm.
     ///
@@ -1363,4 +1362,3 @@ mod throw_in_tests {
         }
     }
 }
-

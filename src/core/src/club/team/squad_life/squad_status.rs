@@ -199,6 +199,7 @@ impl SquadStatusUpdater {
     /// ([`crate::TeamType::owns_squad_status`]) run the full re-rank;
     /// development and parking squads take the administrative pass in
     /// [`Self::apply_development_labels`] instead.
+    #[expect(clippy::too_many_lines)]
     pub fn apply(team: &mut Team, date: NaiveDate) {
         if !team.team_type.owns_squad_status() {
             Self::apply_development_labels(team, date);

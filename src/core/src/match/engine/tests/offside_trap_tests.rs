@@ -6,7 +6,7 @@
 
 use super::substitution_break_tests::kickoff;
 use crate::PlayerPositionType;
-use crate::r#match::defenders::states::common::LineStep;
+use crate::r#match::defenders::states::shared::LineStep;
 use crate::r#match::engine::teamplay::possession::TeamPossession;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent, PlayerEventDispatcher};
 use crate::r#match::{

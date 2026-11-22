@@ -471,6 +471,7 @@ impl GoalKind {
     }
 
     /// The catalog. One row per kind.
+    #[expect(clippy::too_many_lines)]
     pub fn spec(self) -> GoalSpec {
         use GoalDirection as Dir;
         use GoalDomain as D;
@@ -945,7 +946,10 @@ mod tests {
             GoalKind::ProveMyselfAtMyParentClub.subject(),
             GoalSubject::OwningClub
         );
-        assert_eq!(GoalKind::StayAtThisLoanClub.subject(), GoalSubject::ThisClub);
+        assert_eq!(
+            GoalKind::StayAtThisLoanClub.subject(),
+            GoalSubject::ThisClub
+        );
     }
 
     #[test]

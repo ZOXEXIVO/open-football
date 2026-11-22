@@ -62,6 +62,7 @@ impl Surface {
 }
 
 impl Style {
+    #[expect(clippy::too_many_lines)]
     pub(super) fn mesh(&self, upkeep: Upkeep) -> Mesh {
         let mut sward = Sward {
             positions: Vec::new(),

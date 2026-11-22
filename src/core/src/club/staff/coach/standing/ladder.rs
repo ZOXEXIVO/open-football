@@ -268,8 +268,7 @@ impl CoachStanding {
     /// Has he run out of big-match chances?
     #[inline]
     pub fn is_big_match_untrusted(&self) -> bool {
-        self.grievance
-            .contains(GrievanceFlags::BIG_MATCH_UNTRUSTED)
+        self.grievance.contains(GrievanceFlags::BIG_MATCH_UNTRUSTED)
     }
 }
 
@@ -321,7 +320,12 @@ impl StandingLadder {
     /// Time has passed without the coach seeing him. The score drifts back
     /// toward nothing and the heat goes out of it — an old grudge against a
     /// man you never see is not a grudge, it is a note.
-    pub fn decay(standing: &mut CoachStanding, months: f32, context: &LadderContext, today: NaiveDate) {
+    pub fn decay(
+        standing: &mut CoachStanding,
+        months: f32,
+        context: &LadderContext,
+        today: NaiveDate,
+    ) {
         if months <= 0.0 {
             return;
         }
@@ -370,10 +374,7 @@ impl StandingLadder {
         // ── The overrides ──
         // A refusal or a public row is not a score, it is a fact, and it
         // ends the argument.
-        if standing
-            .grievance
-            .contains(GrievanceFlags::UNFORGIVABLE)
-        {
+        if standing.grievance.contains(GrievanceFlags::UNFORGIVABLE) {
             return Self::floor(StandingRung::FrozenOut, context);
         }
 
@@ -448,7 +449,8 @@ impl StandingLadder {
     /// The rungs a coach is not free to use, whatever he thinks.
     fn floor(target: StandingRung, context: &LadderContext) -> StandingRung {
         // A squad too thin to leave anyone out does not leave anyone out.
-        if target == StandingRung::FrozenOut && context.fit_seniors < StandingTuning::FROZEN_SQUAD_FLOOR
+        if target == StandingRung::FrozenOut
+            && context.fit_seniors < StandingTuning::FROZEN_SQUAD_FLOOR
         {
             return StandingRung::OutOfFavour;
         }
@@ -489,10 +491,7 @@ impl StandingLadder {
                 if days < StandingTuning::MIN_STAY_FROZEN_DAYS {
                     return false;
                 }
-                if standing
-                    .grievance
-                    .contains(GrievanceFlags::UNFORGIVABLE)
-                {
+                if standing.grievance.contains(GrievanceFlags::UNFORGIVABLE) {
                     return false;
                 }
                 context.cleared_the_air
@@ -512,20 +511,14 @@ impl StandingLadder {
 
     /// Record a big-match start and decide whether the coach has run out of
     /// chances to give him.
-    pub fn note_big_match(
-        standing: &mut CoachStanding,
-        rating: f32,
-        context: &LadderContext,
-    ) {
+    pub fn note_big_match(standing: &mut CoachStanding, rating: f32, context: &LadderContext) {
         let failed = rating < StandingTuning::BIG_MATCH_FAILURE_RATING;
         standing.big_match_window = ((standing.big_match_window << 1) | u8::from(failed))
             & StandingTuning::BIG_MATCH_WINDOW_MASK;
 
         if failed {
             standing.big_match_answers = 0;
-            standing
-                .grievance
-                .insert(GrievanceFlags::BIG_MATCH_PENDING);
+            standing.grievance.insert(GrievanceFlags::BIG_MATCH_PENDING);
         } else if rating >= StandingTuning::BIG_MATCH_REDEMPTION_RATING {
             standing.big_match_answers = standing.big_match_answers.saturating_add(1);
         }

@@ -513,7 +513,12 @@ impl PlanBuilder<'_> {
     /// The touchlines and the short outlet, for a side that has the ball
     /// but is not yet in a phase that commits bodies forward. Without the
     /// outlet nobody in the build-up is told to show for it.
-    fn build_width(&self, plan: &mut AttackPlan, previous: &WidePlan, previous_runner: Option<u32>) {
+    fn build_width(
+        &self,
+        plan: &mut AttackPlan,
+        previous: &WidePlan,
+        previous_runner: Option<u32>,
+    ) {
         let Some((side, wide)) = self.geometry() else {
             return;
         };
@@ -613,6 +618,7 @@ impl PlanBuilder<'_> {
             .map(|(id, _)| id)
     }
 
+    #[expect(clippy::too_many_lines)]
     fn build(&self, plan: &mut AttackPlan) {
         let previous = *plan;
         *plan = AttackPlan::idle();

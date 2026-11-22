@@ -1,5 +1,5 @@
 use crate::r#match::engine::ball::ball::OffsideLine;
-use crate::r#match::midfielders::states::common::{
+use crate::r#match::midfielders::states::shared::{
     ActivityIntensity, MidfielderCondition, MidfielderRead,
 };
 use crate::r#match::midfielders::states::{MidfielderRunningState, MidfielderState};

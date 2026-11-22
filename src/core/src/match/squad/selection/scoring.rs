@@ -4,9 +4,7 @@ use crate::club::player::load::{
 };
 use crate::club::staff::CoachPlayerBond;
 use crate::club::staff::perception::{AbilityEstimator, CoachProfile};
-use crate::club::{
-    PlayerFieldPositionGroup, PlayerPositionType, PositionCoverage, Staff,
-};
+use crate::club::{PlayerFieldPositionGroup, PlayerPositionType, PositionCoverage, Staff};
 use crate::{Player, PlayerStatusType, SelectionScoreFactor, Tactics};
 use chrono::NaiveDate;
 
@@ -390,8 +388,10 @@ impl ScoringEngine {
         let physical_load = player.load.physical_load_7;
         let debt = player.load.recovery_debt;
 
-        let minutes_t = ScoringCurves::ramp(minutes_load, FATIGUE_LOAD_THRESHOLD, FATIGUE_LOAD_DANGER);
-        let physical_t = ScoringCurves::ramp(physical_load, PHYSICAL_LOAD_THRESHOLD, PHYSICAL_LOAD_DANGER);
+        let minutes_t =
+            ScoringCurves::ramp(minutes_load, FATIGUE_LOAD_THRESHOLD, FATIGUE_LOAD_DANGER);
+        let physical_t =
+            ScoringCurves::ramp(physical_load, PHYSICAL_LOAD_THRESHOLD, PHYSICAL_LOAD_DANGER);
         // Debt ramp: 0 at no debt, full penalty at 2× HEAVY threshold.
         let debt_t = ScoringCurves::ramp(debt, RECOVERY_DEBT_HEAVY, RECOVERY_DEBT_HEAVY * 2.0);
 

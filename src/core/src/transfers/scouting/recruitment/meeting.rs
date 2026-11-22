@@ -169,6 +169,7 @@ impl MeetingPass {
     /// One club's weekly recruitment meeting: whose dossiers are ready, who
     /// the room votes for, and what that promotes. Read-only — the country
     /// is walked while deciding, so every decision is staged.
+    #[expect(clippy::too_many_lines)]
     fn hold_meeting(club: &Club, date: NaiveDate, pending: &mut Vec<PendingMeeting>) {
         let plan = &club.transfer_plan;
         if !plan.initialized {
@@ -503,6 +504,7 @@ impl MeetingPass {
 
     /// One name on the agenda: the room's votes, the consensus they reach,
     /// and what that decision promotes or rejects.
+    #[expect(clippy::too_many_lines)]
     fn table_player(
         club: &Club,
         date: NaiveDate,

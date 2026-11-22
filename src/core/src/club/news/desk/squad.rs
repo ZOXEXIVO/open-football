@@ -868,6 +868,7 @@ impl SquadDesk {
     /// the pitch" and "he was dreadful" about one player on one page, and
     /// where both are true of two different afternoons the louder one is
     /// the story.
+    #[expect(clippy::too_many_lines)]
     pub(super) fn file_outfield_deeds(
         out: &mut Vec<NewsStory>,
         player: &Player,
@@ -1439,6 +1440,7 @@ impl SquadDesk {
     /// career milestone. The feed is the only place these are marked, so
     /// the desk reads it for the trigger and then sources the real number
     /// from the player's career record.
+    #[expect(clippy::too_many_lines)]
     fn file_life_events(
         out: &mut Vec<NewsStory>,
         player: &Player,
@@ -1977,6 +1979,7 @@ impl SquadDesk {
     /// `Standing` and read the fortnight. The pecking order is the one a
     /// back page uses: a grievance outranks contentment, and something
     /// that stops him playing at all outranks both.
+    #[expect(clippy::too_many_lines)]
     fn file_standing_in_the_building(out: &mut Vec<NewsStory>, player: &Player, date: NaiveDate) {
         let feed = RecentEvents::fortnight(player);
         let importance = PlayerStanding::importance(player);

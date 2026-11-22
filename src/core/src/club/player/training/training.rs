@@ -71,6 +71,7 @@ impl PlayerTraining {
         NEUTRAL_FORM + nudge
     }
 
+    #[expect(clippy::too_many_lines)]
     pub fn train(
         player: &Player,
         coach: &Staff,
@@ -536,6 +537,7 @@ impl PlayerTraining {
     /// emitted GoodTraining / PoorTraining event. All sub-scores live on
     /// a 1.0..20.0 scale so the renderer can talk about them in the same
     /// units.
+    #[expect(clippy::too_many_lines)]
     fn compute_outcome(
         player: &Player,
         _coach: &Staff,

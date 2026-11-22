@@ -108,7 +108,11 @@ fn possessions_are_counted_from_how_they_began_and_ended() {
     // wins it in play, shoots five seconds later and keeps going until the
     // ball goes dead; the home side restarts and has it to the whistle.
     for tick in 0..1_000 {
-        let time = if tick < 50 { restart } else { PlayingTime::Live };
+        let time = if tick < 50 {
+            restart
+        } else {
+            PlayingTime::Live
+        };
         sample(&mut census, &field, tick, HOME, (0, 0), time);
     }
     for tick in 1_000..2_000 {
@@ -118,7 +122,11 @@ fn possessions_are_counted_from_how_they_began_and_ended() {
         sample(&mut census, &field, tick, AWAY, (0, 0), PlayingTime::Live);
     }
     for tick in 2_000..3_000 {
-        let time = if tick < 2_100 { restart } else { PlayingTime::Live };
+        let time = if tick < 2_100 {
+            restart
+        } else {
+            PlayingTime::Live
+        };
         sample(&mut census, &field, tick, HOME, (0, 0), time);
     }
     let mut tally = MatchTally::default();

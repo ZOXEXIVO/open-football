@@ -39,6 +39,10 @@ edition = "2024"
 [workspace.lints.clippy]
 module_inception = "allow"
 too_many_arguments = "allow"
+too_many_lines = "deny"
+
+[workspace.lints.rust]
+unfulfilled_lint_expectations = "deny"
 
 [package]
 name = "open_football"

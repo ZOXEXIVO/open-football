@@ -1,7 +1,7 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::slug::{PlayerPage, resolve_player_page};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::slug::{PlayerPage, resolve_player_page};
 use crate::player::events::PlayerEventsCounter;
 use crate::player::newspaper::PlayerNewsCounter;
 use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
@@ -100,6 +100,7 @@ pub struct ClauseDto {
     pub value: String,
 }
 
+#[expect(clippy::too_many_lines)]
 pub async fn player_contract_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<PlayerContractRequest>,
@@ -221,6 +222,7 @@ pub async fn player_contract_action(
     .into_response())
 }
 
+#[expect(clippy::too_many_lines)]
 fn build_contract_detail(
     player: &Player,
     team_opt: Option<&core::Team>,

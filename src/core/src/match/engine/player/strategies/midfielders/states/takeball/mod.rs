@@ -1,8 +1,8 @@
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{
+use crate::r#match::midfielders::states::shared::{
     ActivityIntensity, MidfielderCondition, MidfielderRead,
 };
-use crate::r#match::player::strategies::common::states::LooseBallChase;
+use crate::r#match::player::strategies::shared::states::LooseBallChase;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };

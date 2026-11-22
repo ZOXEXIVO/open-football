@@ -219,7 +219,9 @@ impl SpellCloser {
         report: &PartingReport,
         cause: SeparationCause,
     ) {
-        if memory.grievance.contains(GrievanceFlags::BIG_MATCH_UNTRUSTED)
+        if memory
+            .grievance
+            .contains(GrievanceFlags::BIG_MATCH_UNTRUSTED)
             || memory.flags.contains(CoachMemoryFlags::BIG_MATCH_FAILED)
         {
             record.scars.insert(ScarFlags::BIG_MATCH_FLOP);
@@ -307,7 +309,8 @@ impl SpellCloser {
         temperament: f32,
     ) -> f32 {
         let medals = (record.medals.count() as f32 / DossierTuning::WARMTH_MEDALS_FULL).min(1.0);
-        let scars = (record.scars.weight() * DossierTuning::temperament_scale(temperament)).min(1.0);
+        let scars =
+            (record.scars.weight() * DossierTuning::temperament_scale(temperament)).min(1.0);
 
         let mut parting = cause.warmth_term(memory.standing_score);
         if parting < 0.0 {
@@ -336,19 +339,28 @@ impl SpellCloser {
         let player = ActorRef::player(report.player_id);
         if medals.contains(MedalFlags::CORNERSTONE | MedalFlags::NEVER_LET_ME_DOWN) && level >= 0.70
         {
-            staff
-                .mind
-                .conclude(FactClaim::HeIsWorthBuildingAround, player, Self::CONVICTION_STRENGTH, today);
+            staff.mind.conclude(
+                FactClaim::HeIsWorthBuildingAround,
+                player,
+                Self::CONVICTION_STRENGTH,
+                today,
+            );
         }
         if medals.contains(MedalFlags::REPAID_FAITH) {
-            staff
-                .mind
-                .conclude(FactClaim::HeRepaidMyFaith, player, Self::CONVICTION_STRENGTH, today);
+            staff.mind.conclude(
+                FactClaim::HeRepaidMyFaith,
+                player,
+                Self::CONVICTION_STRENGTH,
+                today,
+            );
         }
         if scars.contains(ScarFlags::POISONOUS) || scars.contains(ScarFlags::WANTED_OUT) {
-            staff
-                .mind
-                .conclude(FactClaim::HeLetMeDown, player, Self::CONVICTION_STRENGTH, today);
+            staff.mind.conclude(
+                FactClaim::HeLetMeDown,
+                player,
+                Self::CONVICTION_STRENGTH,
+                today,
+            );
         }
     }
 

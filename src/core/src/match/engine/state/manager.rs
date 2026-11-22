@@ -1,8 +1,6 @@
 use crate::r#match::engine::flow::field::ResetReason;
 use crate::r#match::engine::goal::assign_kickoff;
-use crate::r#match::{
-    MatchContext, MatchField, MatchState, Score, TeamsTactics,
-};
+use crate::r#match::{MatchContext, MatchField, MatchState, Score, TeamsTactics};
 
 pub struct StateManager {
     current_state: MatchState,

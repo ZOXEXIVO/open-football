@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::leagues::address::LeagueAddress;
 use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
@@ -63,6 +63,7 @@ pub struct PlayoffLinkDto {
     pub name: String,
 }
 
+#[expect(clippy::too_many_lines)]
 pub async fn country_get_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<CountryGetRequest>,

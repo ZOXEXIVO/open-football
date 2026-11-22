@@ -133,6 +133,7 @@ impl ShapeBuilder<'_> {
         previous + delta.signum() * max_step
     }
 
+    #[expect(clippy::too_many_lines)]
     pub(in crate::r#match::engine::teamplay::plans) fn build(&self, shape: &mut TeamShape) {
         let field_width = self.field.size.width as f32;
         let field_height = self.field.size.height as f32;

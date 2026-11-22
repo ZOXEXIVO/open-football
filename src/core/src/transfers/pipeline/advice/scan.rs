@@ -148,6 +148,7 @@ struct RecommendationAction {
 struct SnapshotPass;
 
 impl SnapshotPass {
+    #[expect(clippy::too_many_lines)]
     fn build(
         country: &Country,
         tick: AdviceTick,
@@ -575,6 +576,7 @@ impl<'a> ClubAdviceScan<'a> {
     /// attribute, then ranks the country's snapshots by what he *perceives*
     /// them to be — so a sharp scout converges on the genuine best target and
     /// a weaker one legitimately disagrees.
+    #[expect(clippy::too_many_lines)]
     fn scout_network(&self, actions: &mut Vec<RecommendationAction>) {
         let club = self.club;
         let resolved = &self.resolved;
@@ -752,6 +754,7 @@ impl<'a> ClubAdviceScan<'a> {
 
     /// Players who have advertised themselves as available — Lst, Req or Unh —
     /// surfacing to the clubs whose tier window matches their quality.
+    #[expect(clippy::too_many_lines)]
     fn listed_stars(&self, actions: &mut Vec<RecommendationAction>) {
         let club = self.club;
         let plan = self.plan;
@@ -1034,6 +1037,7 @@ impl<'a> ClubAdviceScan<'a> {
     /// Quality players whose contracts are running down, circulated to clubs
     /// where they are a plausible, affordable depth or future-resale add even
     /// without an open positional request.
+    #[expect(clippy::too_many_lines)]
     fn expiring_contracts(&self, actions: &mut Vec<RecommendationAction>) {
         let club = self.club;
         let plan = self.plan;

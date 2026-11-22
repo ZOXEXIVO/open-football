@@ -4,8 +4,8 @@
 //! data: consumed by passing/shooting/first-touch/fatigue/injury logic via
 //! `EnvModifiers`, which only returns deterministic deltas.
 
-use crate::r#match::engine::flow::context::rng::MatchRng;
 use crate::r#match::FixtureContext;
+use crate::r#match::engine::flow::context::rng::MatchRng;
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 
@@ -157,7 +157,11 @@ pub enum Season {
 impl Season {
     pub fn of(fixture: &FixtureContext) -> Self {
         let month = fixture.date.month();
-        let month = if fixture.southern { (month + 5) % 12 + 1 } else { month };
+        let month = if fixture.southern {
+            (month + 5) % 12 + 1
+        } else {
+            month
+        };
         match month {
             12 | 1 | 2 => Season::Winter,
             3..=5 => Season::Spring,
@@ -245,47 +249,47 @@ impl Weather {
     pub fn modifiers(self) -> EnvModifiers {
         let mut m = EnvModifiers::default();
         match self {
-        Weather::Clear => {}
-        Weather::Rain => {
-            m.pass_accuracy = -0.04;
-            m.first_touch = -0.06;
-            m.sliding_tackle_success = 0.04;
-            m.injury_risk = 0.03;
-            m.long_shot_rebound_chance = 0.05;
+            Weather::Clear => {}
+            Weather::Rain => {
+                m.pass_accuracy = -0.04;
+                m.first_touch = -0.06;
+                m.sliding_tackle_success = 0.04;
+                m.injury_risk = 0.03;
+                m.long_shot_rebound_chance = 0.05;
+            }
+            Weather::HeavyRain => {
+                m.pass_accuracy = -0.09;
+                m.first_touch = -0.11;
+                m.dribble_control = -0.08;
+                m.goalkeeper_handling = -0.08;
+                m.injury_risk = 0.07;
+                m.long_shot_rebound_chance = 0.08;
+            }
+            Weather::Wind => {
+                m.long_pass_accuracy = -0.08;
+                m.cross_accuracy = -0.10;
+                m.shot_accuracy_long = -0.05;
+                m.goalkeeper_claim_cross = -0.05;
+            }
+            Weather::Snow => {
+                // Treated like a heavier-rain + cold blend.
+                m.pass_accuracy = -0.07;
+                m.first_touch = -0.09;
+                m.dribble_control = -0.06;
+                m.acceleration = -0.05;
+                m.injury_risk = 0.05;
+            }
+            Weather::Hot => {
+                m.fatigue_rate = 0.10;
+                m.recovery_rate = -0.08;
+                m.high_press_intensity_cap = -0.08;
+            }
+            Weather::Cold => {
+                m.injury_risk = 0.03;
+                m.early_touch_penalty_first_15min = -0.03;
+            }
         }
-        Weather::HeavyRain => {
-            m.pass_accuracy = -0.09;
-            m.first_touch = -0.11;
-            m.dribble_control = -0.08;
-            m.goalkeeper_handling = -0.08;
-            m.injury_risk = 0.07;
-            m.long_shot_rebound_chance = 0.08;
-        }
-        Weather::Wind => {
-            m.long_pass_accuracy = -0.08;
-            m.cross_accuracy = -0.10;
-            m.shot_accuracy_long = -0.05;
-            m.goalkeeper_claim_cross = -0.05;
-        }
-        Weather::Snow => {
-            // Treated like a heavier-rain + cold blend.
-            m.pass_accuracy = -0.07;
-            m.first_touch = -0.09;
-            m.dribble_control = -0.06;
-            m.acceleration = -0.05;
-            m.injury_risk = 0.05;
-        }
-        Weather::Hot => {
-            m.fatigue_rate = 0.10;
-            m.recovery_rate = -0.08;
-            m.high_press_intensity_cap = -0.08;
-        }
-        Weather::Cold => {
-            m.injury_risk = 0.03;
-            m.early_touch_penalty_first_15min = -0.03;
-        }
-    }
-    m
+        m
     }
 }
 
@@ -296,9 +300,17 @@ impl Pitch {
     pub fn draw(weather: Weather, season: Season, roll: f32) -> Self {
         let odds: &[(Pitch, f32)] = match weather {
             Weather::HeavyRain => &[(Pitch::Muddy, 0.55), (Pitch::Wet, 0.45)],
-            Weather::Rain => &[(Pitch::Wet, 0.60), (Pitch::Normal, 0.30), (Pitch::Muddy, 0.10)],
+            Weather::Rain => &[
+                (Pitch::Wet, 0.60),
+                (Pitch::Normal, 0.30),
+                (Pitch::Muddy, 0.10),
+            ],
             Weather::Snow => &[(Pitch::Muddy, 0.50), (Pitch::Worn, 0.50)],
-            Weather::Hot => &[(Pitch::DryFast, 0.60), (Pitch::Normal, 0.30), (Pitch::Worn, 0.10)],
+            Weather::Hot => &[
+                (Pitch::DryFast, 0.60),
+                (Pitch::Normal, 0.30),
+                (Pitch::Worn, 0.10),
+            ],
             _ if season == Season::Summer => &[
                 (Pitch::Perfect, 0.25),
                 (Pitch::Normal, 0.50),
@@ -325,35 +337,35 @@ impl Pitch {
     pub fn modifiers(self) -> EnvModifiers {
         let mut m = EnvModifiers::default();
         match self {
-        Pitch::Perfect => {
-            m.pass_accuracy = 0.02;
-            m.first_touch = 0.02;
+            Pitch::Perfect => {
+                m.pass_accuracy = 0.02;
+                m.first_touch = 0.02;
+            }
+            Pitch::Normal => {}
+            Pitch::Worn => {
+                m.pass_accuracy = -0.03;
+                m.first_touch = -0.03;
+                m.injury_risk = 0.02;
+            }
+            Pitch::Wet => {
+                m.ball_roll_speed = 0.08;
+                m.first_touch = -0.05;
+                m.slide_tackle_range_units = 1.5;
+            }
+            Pitch::Muddy => {
+                m.ball_roll_speed = -0.10;
+                m.acceleration = -0.07;
+                m.fatigue_rate = 0.08;
+                m.dribble_success = -0.06;
+            }
+            Pitch::DryFast => {
+                m.ball_roll_speed = 0.05;
+                m.pass_speed = 0.04;
+                // Faster ball makes first touch slightly harder.
+                m.first_touch = -0.03;
+            }
         }
-        Pitch::Normal => {}
-        Pitch::Worn => {
-            m.pass_accuracy = -0.03;
-            m.first_touch = -0.03;
-            m.injury_risk = 0.02;
-        }
-        Pitch::Wet => {
-            m.ball_roll_speed = 0.08;
-            m.first_touch = -0.05;
-            m.slide_tackle_range_units = 1.5;
-        }
-        Pitch::Muddy => {
-            m.ball_roll_speed = -0.10;
-            m.acceleration = -0.07;
-            m.fatigue_rate = 0.08;
-            m.dribble_success = -0.06;
-        }
-        Pitch::DryFast => {
-            m.ball_roll_speed = 0.05;
-            m.pass_speed = 0.04;
-            // Faster ball makes first touch slightly harder.
-            m.first_touch = -0.03;
-        }
-    }
-    m
+        m
     }
 }
 

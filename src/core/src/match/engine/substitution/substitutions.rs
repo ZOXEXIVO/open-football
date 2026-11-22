@@ -4,15 +4,15 @@ use std::cmp::Ordering;
 
 use crate::club::staff::{CoachDecisionEngine, CoachLiveMatchContext};
 use crate::r#match::engine::coach::TacticalNeed;
+use crate::r#match::engine::flow::context::MATCH_TIME_INCREMENT_MS;
 use crate::r#match::engine::flow::result::SubstitutionReason;
 use crate::r#match::engine::flow::touchline::SubstitutionBreak;
-use crate::r#match::engine::sub_scoring::{LiveSubstitutionStats, SubScoring};
-use crate::r#match::engine::urgency::{BenchPressure, ChangeOpportunity, SubstitutionUrgency};
-use crate::r#match::field::MatchField;
-use crate::r#match::engine::flow::context::MATCH_TIME_INCREMENT_MS;
 use crate::r#match::engine::officiating::management::TimeWastingRestart;
 use crate::r#match::engine::player::injury::MatchInjury;
 use crate::r#match::engine::result::DeadTime;
+use crate::r#match::engine::sub_scoring::{LiveSubstitutionStats, SubScoring};
+use crate::r#match::engine::urgency::{BenchPressure, ChangeOpportunity, SubstitutionUrgency};
+use crate::r#match::field::MatchField;
 use crate::r#match::{Bench, MatchContext, MatchPlayer};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 
@@ -449,6 +449,7 @@ impl Substitutions {
         }
     }
 
+    #[expect(clippy::too_many_lines)]
     fn process_inner(
         field: &mut MatchField,
         context: &mut MatchContext,
@@ -1336,8 +1337,8 @@ impl CoachLiveAdapter {
 mod tests {
     use super::*;
     use crate::club::player::builder::PlayerBuilder;
-    use crate::r#match::{CoachCard, MatchRng};
     use crate::r#match::engine::environment::EnvModifiers;
+    use crate::r#match::{CoachCard, MatchRng};
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositions, PlayerSkills,
@@ -1445,7 +1446,7 @@ mod tests {
     #[test]
     fn higher_starting_recovery_debt_drains_condition_faster_in_match() {
         use crate::r#match::ConditionContext;
-        use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+        use crate::r#match::defenders::states::shared::{ActivityIntensity, DefenderCondition};
         use nalgebra::Vector3;
 
         let mut fresh = build_match_player(d(1998, 1, 1), PlayerPositionType::MidfielderCenter);

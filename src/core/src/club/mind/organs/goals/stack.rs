@@ -548,8 +548,8 @@ impl GoalCensus {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::catalog::GoalSubject;
+    use super::*;
 
     const TODAY: EpochDay = 10_000;
 
@@ -1043,7 +1043,10 @@ mod tests {
             GoalSubject::OwningClub,
         ]);
 
-        assert!(build(domestic), "a ceiling he has not moved off is still a ceiling");
+        assert!(
+            build(domestic),
+            "a ceiling he has not moved off is still a ceiling"
+        );
         assert!(!build(SOLD), "abroad answers it");
     }
 

@@ -1,7 +1,7 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::potential_stars::{PotentialStarsView, StarRating};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::potential_stars::{PotentialStarsView, StarRating};
 use crate::leagues::address::LeagueAddress;
 use crate::teams::newspaper::NewspaperCounter;
 use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
@@ -93,6 +93,7 @@ pub struct AcademyPlayer {
     pub risk_injury_prone: bool,
 }
 
+#[expect(clippy::too_many_lines)]
 pub async fn team_academy_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<TeamAcademyRequest>,

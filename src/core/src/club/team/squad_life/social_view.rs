@@ -5,8 +5,8 @@
 //! squad rather than always-zero defaults.
 
 use crate::Player;
-use crate::club::player::core::player::SquadSocialView;
 use crate::club::player::language::Language;
+use crate::club::player::model::player::SquadSocialView;
 
 /// Minimum proficiency (0..100) at which a non-native language counts as
 /// a "chat-ready" shared language between teammates. Below this, comms

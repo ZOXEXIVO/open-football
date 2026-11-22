@@ -14,8 +14,8 @@ use std::collections::HashMap;
 use crate::club::player::mind::{KickoffMind, MindSwitch};
 use crate::club::team::talks::{TeamTalkReception, TeamTalkTone};
 use crate::r#match::MatchPlayer;
-use crate::r#match::engine::teamplay::coach::card::Temperament;
 use crate::r#match::engine::environment::MatchEnvironment;
+use crate::r#match::engine::teamplay::coach::card::Temperament;
 
 /// Per-player transient state tracked across the match.
 ///
@@ -126,7 +126,11 @@ impl Psychology {
 
     /// Kickoff confidence: how good he feels and how happy he is, and — on
     /// a night that matters — whether he is a man who rises to it.
-    pub fn initial_confidence(mind: &KickoffMind, important_matches_0_20: f32, occasion: f32) -> f32 {
+    pub fn initial_confidence(
+        mind: &KickoffMind,
+        important_matches_0_20: f32,
+        occasion: f32,
+    ) -> f32 {
         let morale = ((mind.morale - 50.0) / 50.0).clamp(-1.0, 1.0) * 0.15;
         let belief = mind.self_belief.clamp(-1.0, 1.0) * 0.25;
         let rises = ((important_matches_0_20 / 20.0).clamp(0.0, 1.0) - 0.5) * 0.10 * occasion;
@@ -158,7 +162,12 @@ impl Psychology {
 
     /// His psychology at kickoff, read off the state of mind he brought and
     /// the match he walked into, seeded at `tick`.
-    pub fn kickoff_state(player: &MatchPlayer, standard: f32, occasion: f32, tick: u64) -> PsychState {
+    pub fn kickoff_state(
+        player: &MatchPlayer,
+        standard: f32,
+        occasion: f32,
+        tick: u64,
+    ) -> PsychState {
         let mind = &player.kickoff_mind;
         let step_up = mind.assurance.map_or(0.0, |a| (standard - a).max(0.0));
         let nerves = Self::initial_nervousness(
@@ -170,7 +179,11 @@ impl Psychology {
             player.skills.mental.composure,
         );
         PsychState {
-            confidence: Self::initial_confidence(mind, player.attributes.important_matches, occasion),
+            confidence: Self::initial_confidence(
+                mind,
+                player.attributes.important_matches,
+                occasion,
+            ),
             nervousness: nerves,
             kickoff_nerves: nerves,
             seeded_tick: tick,
@@ -513,8 +526,10 @@ impl PsychologyState {
             };
             let minutes = tick.saturating_sub(s.seeded_tick) as f32 / Self::TICKS_PER_MINUTE;
             let settled = Psychology::settled_share(minutes, player.skills.mental.composure);
-            let moment =
-                Psychology::felt_pressure(moment.for_team(player.team_id), player.attributes.pressure);
+            let moment = Psychology::felt_pressure(
+                moment.for_team(player.team_id),
+                player.attributes.pressure,
+            );
             s.nervousness = s.kickoff_nerves * settled + s.event_nerves + s.talk_nerves + moment;
             s.clamp();
         }
@@ -641,7 +656,10 @@ mod tests {
         let low = Psychology::initial_confidence(&down, 12.0, 0.5);
         assert!(high > low);
         assert!((-0.5..=0.5).contains(&high) && (-0.5..=0.5).contains(&low));
-        assert_eq!(Psychology::initial_confidence(&KickoffMind::neutral(), 10.0, 0.0), 0.0);
+        assert_eq!(
+            Psychology::initial_confidence(&KickoffMind::neutral(), 10.0, 0.0),
+            0.0
+        );
     }
 
     #[test]
@@ -701,7 +719,12 @@ mod tests {
         away: 0.0,
     };
 
-    fn nerves_after(p: &mut PsychologyState, player: &MatchPlayer, tick: u64, moment: &PressureMoment) -> f32 {
+    fn nerves_after(
+        p: &mut PsychologyState,
+        player: &MatchPlayer,
+        tick: u64,
+        moment: &PressureMoment,
+    ) -> f32 {
         p.refresh(std::slice::from_ref(player), tick, moment);
         p.get(player.id).unwrap().nervousness
     }
@@ -935,7 +958,13 @@ mod tests {
 
     /// A man whose personality is `temperament`, `pressure`,
     /// `determination` and `professionalism`.
-    fn listener(id: u32, temperament: f32, pressure: f32, determination: f32, professionalism: f32) -> MatchPlayer {
+    fn listener(
+        id: u32,
+        temperament: f32,
+        pressure: f32,
+        determination: f32,
+        professionalism: f32,
+    ) -> MatchPlayer {
         let mut p = player(id, 1, KickoffMind::neutral(), pressure, 10.0);
         p.attributes.temperament = temperament;
         p.attributes.professionalism = professionalism;
@@ -973,7 +1002,10 @@ mod tests {
 
     #[test]
     fn a_good_motivator_moves_a_side_more() {
-        let side = [listener(1, 10.0, 10.0, 10.0, 10.0), listener(2, 12.0, 15.0, 12.0, 12.0)];
+        let side = [
+            listener(1, 10.0, 10.0, 10.0, 10.0),
+            listener(2, 12.0, 15.0, 12.0, 12.0),
+        ];
         let strong = after_the_talk(TeamTalkTone::Encourage, coach(0.5, 0.9), &side);
         let weak = after_the_talk(TeamTalkTone::Encourage, coach(0.5, 0.1), &side);
         for (s, w) in strong.iter().zip(&weak) {
@@ -1005,7 +1037,12 @@ mod tests {
     fn a_man_on_the_bench_carries_the_talk_onto_the_pitch() {
         let sub = listener(7, 10.0, 16.0, 12.0, 12.0);
         let mut heard = PsychologyState::default();
-        heard.on_half_time_talk(TeamTalkTone::Praise, &coach(0.8, 0.8), false, [&sub].into_iter());
+        heard.on_half_time_talk(
+            TeamTalkTone::Praise,
+            &coach(0.8, 0.8),
+            false,
+            [&sub].into_iter(),
+        );
         let mut deaf = PsychologyState::default();
         let tick = 60 * 6_000;
         heard.seed(&sub, 0.5, 0.3, tick);

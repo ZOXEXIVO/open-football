@@ -8,9 +8,6 @@
 
 use super::goal_celebration_tests::squad;
 use crate::PlayerFieldPositionGroup;
-use crate::r#match::common_states::{
-    BlockChallenge, ChallengeKind, ContactFoul, RecoveryChallenge,
-};
 use crate::r#match::defenders::states::{DefenderAttackingCornerState, DefenderState};
 use crate::r#match::engine::ball::ball::{Ball, PassOriginRestart};
 use crate::r#match::engine::player::events::players::{
@@ -23,6 +20,9 @@ use crate::r#match::officiating::management::professional_foul::{
 };
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::transition::TransitionSource;
+use crate::r#match::shared_states::{
+    BlockChallenge, ChallengeKind, ContactFoul, RecoveryChallenge,
+};
 use crate::r#match::team::ShapeDiscipline;
 use crate::r#match::{
     DefenceRefreshInputs, DefensivePlan, GameTickContext, MatchContext, MatchField,

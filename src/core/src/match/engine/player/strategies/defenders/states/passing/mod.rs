@@ -1,13 +1,13 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{
+use crate::r#match::defenders::states::shared::{
     ActivityIntensity, DefenderCondition, DefenderRead,
 };
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::player::strategies::common::players::ops::clearance::{
+use crate::r#match::player::strategies::shared::players::ops::clearance::{
     ClearanceCall, TouchlineCall,
 };
-use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::shared::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -18,6 +18,7 @@ use nalgebra::Vector3;
 pub struct DefenderPassingState {}
 
 impl StateProcessingHandler for DefenderPassingState {
+    #[expect(clippy::too_many_lines)]
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Check if the defender still has the ball
         if !ctx.player.has_ball(ctx) {

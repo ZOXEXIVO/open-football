@@ -1,10 +1,10 @@
 pub mod routes;
 
-use crate::common::default_handler::{
+use crate::shared::default_handler::{
     COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION, MATCH_VIEWER_AVAILABLE, MATCH_VIEWER_BYTES,
     MATCH_VIEWER_VERSION,
 };
-use crate::common::slug::player_history_slug;
+use crate::shared::slug::player_history_slug;
 use crate::face::skin::CountrySkin;
 use crate::leagues::address::LeagueAddress;
 use crate::views::{self, MenuSection};
@@ -375,6 +375,7 @@ impl PlayerJson {
     }
 }
 
+#[expect(clippy::too_many_lines)]
 pub async fn match_get_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<MatchGetRequest>,

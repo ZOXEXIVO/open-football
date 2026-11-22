@@ -1,5 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{
+use crate::r#match::defenders::states::shared::{
     ActivityIntensity, DefenderCondition, DefenderRead, ReadLevel,
 };
 use crate::r#match::engine::ball::ball::KICKABLE_DISTANCE;
@@ -43,7 +43,7 @@ impl StateProcessingHandler for DefenderAttackingCornerState {
         #[cfg(feature = "match-logs")]
         {
             use std::sync::atomic::Ordering;
-            crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::DEF_CORNER_ATTACK_TICKS.fetch_add(1, Ordering::Relaxed);
+            crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::mid_run_diag::DEF_CORNER_ATTACK_TICKS.fetch_add(1, Ordering::Relaxed);
         }
 
         // Received / won the ball in the box (cross controlled rather than
@@ -88,13 +88,13 @@ impl StateProcessingHandler for DefenderAttackingCornerState {
             #[cfg(feature = "match-logs")]
             {
                 use std::sync::atomic::Ordering;
-                crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::DEF_CORNER_HEAD_CHANCE.fetch_add(1, Ordering::Relaxed);
+                crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::mid_run_diag::DEF_CORNER_HEAD_CHANCE.fetch_add(1, Ordering::Relaxed);
             }
             if awarded || self.win_header(ctx) {
                 #[cfg(feature = "match-logs")]
                 {
                     use std::sync::atomic::Ordering;
-                    crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::DEF_CORNER_HEADER.fetch_add(1, Ordering::Relaxed);
+                    crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::mid_run_diag::DEF_CORNER_HEADER.fetch_add(1, Ordering::Relaxed);
                 }
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::AttackingCorner,

@@ -975,9 +975,17 @@ fn a_called_up_player_is_away_for_the_whole_window() {
     while day <= window.closes + Duration::days(1) {
         data.date = day.and_hms_opt(0, 0, 0).unwrap();
         data.process_world_national_team_callups();
-        assert_eq!(away(&data), day <= window.closes, "{day} before the release pass");
+        assert_eq!(
+            away(&data),
+            day <= window.closes,
+            "{day} before the release pass"
+        );
         data.process_world_national_team_release();
-        assert_eq!(away(&data), day < window.closes, "{day} after the release pass");
+        assert_eq!(
+            away(&data),
+            day < window.closes,
+            "{day} after the release pass"
+        );
         day += Duration::days(1);
     }
 }

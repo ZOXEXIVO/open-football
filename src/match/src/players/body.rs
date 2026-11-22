@@ -1877,6 +1877,7 @@ impl BodyParts {
     /// Cuts every part of the pattern, one mesh each. The composed working
     /// set is [`Self::new`] above; the tests' rasteriser walks these instead,
     /// because a preview has to show a collar against its shirt.
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn tailor(meshes: &mut Assets<Mesh>, grain: Grain) -> Cuts {
         Cuts {
             #[cfg(test)]
@@ -4651,6 +4652,7 @@ impl Joint {
     /// folds on a positive one. Every amplitude is interpolated out of
     /// standing still, which is what lets a player come to a stop without an
     /// idle animation to blend into.
+    #[expect(clippy::too_many_lines)]
     pub fn pose_in(&self, gait: &Gait, posture: &Posture) -> Quat {
         // The left leg is half a cycle behind the right.
         let leg = gait.phase + if self.side < 0.0 { PI } else { 0.0 };
@@ -7403,6 +7405,7 @@ impl Footballer {
     /// and stride. Legs hang from the [`Carriage`] so the torso can lean without
     /// taking the feet with it; arms and head hang from the torso so that they
     /// do.
+    #[expect(clippy::too_many_lines)]
     pub fn assemble(
         commands: &mut Commands,
         root: Entity,

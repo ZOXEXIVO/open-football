@@ -1528,6 +1528,7 @@ impl NewsStoryKind {
         NewsStoryKind::KeeperLoanWantsPermanent,
     ];
 
+    #[expect(clippy::too_many_lines)]
     pub fn desk(self) -> NewsDesk {
         match self {
             NewsStoryKind::LeagueWin
@@ -1903,6 +1904,7 @@ impl NewsStoryKind {
 
     /// Stable identifier the web layer expands into the headline and
     /// body translation keys. Never reuse a stem across kinds.
+    #[expect(clippy::too_many_lines)]
     pub fn key_stem(self) -> &'static str {
         match self {
             NewsStoryKind::LeagueWin => "league_win",
@@ -2289,6 +2291,7 @@ impl NewsStoryKind {
     ///
     /// Ties are safe — the editor breaks them deterministically on date,
     /// stem and ids — so a new kind only has to land in the right band.
+    #[expect(clippy::too_many_lines)]
     pub fn base_priority(self) -> u16 {
         match self {
             NewsStoryKind::TrophyWon => 900,
@@ -2942,6 +2945,7 @@ impl NewsStoryKind {
     }
 
     /// How the editor decides whether a story has already been printed.
+    #[expect(clippy::too_many_lines)]
     pub fn recurrence(self) -> NewsRecurrence {
         match self {
             // Something that happened on a date. It can only be

@@ -1,16 +1,16 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{
+use crate::r#match::defenders::states::shared::{
     ActivityIntensity, DefenderCondition, DefenderRead,
 };
 use crate::r#match::events::Event;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::defender_census::{ChallengeOutcome, DefenderCensus};
 use crate::r#match::player::events::{FoulCommitted, FoulSource, PlayerEvent};
-use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
-use crate::r#match::player::strategies::common::states::{
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::player::strategies::shared::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::shared::states::{
     BlockChallenge, ChallengeKind, ClosingPoint, RecoveryChallenge, TackleDecision, TackleOutcome,
 };
-use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,

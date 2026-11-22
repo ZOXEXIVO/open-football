@@ -21,9 +21,9 @@ use super::goal_celebration_tests::squad;
 use super::recording_globals::RecordingGlobals;
 use crate::MatchRuntime;
 use crate::r#match::RecordingScope;
+use crate::r#match::engine::engine::MATCH_TIME_MS;
 use crate::r#match::{CompetitionKind, FixtureContext, Match};
 use chrono::NaiveDate;
-use crate::r#match::engine::engine::MATCH_TIME_MS;
 
 /// Play one friendly and report whether the recording came out with anything
 /// in it, and how far into the match it reaches.

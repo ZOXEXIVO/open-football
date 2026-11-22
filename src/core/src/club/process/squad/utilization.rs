@@ -1,0 +1,1292 @@
+//! The monthly utilization audit: who the club is not using.
+//!
+//! One sweep, every squad. It reads minutes where minutes exist, positional
+//! surplus where they do not, squad size against the board's ceiling, and —
+//! the only branch that reads the bank rather than the pitch — the wage bill
+//! against the mandate. Everything it concludes lands as a
+//! [`SquadDecision`]; [`Club::process_underutilized_players`] is the single
+//! place those become statuses, listings and loan candidates.
+
+use crate::club::CareerRunway;
+use crate::club::player::statistics::StuckCareerScan;
+use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
+use crate::club::team::squad::{SquadAssetClass, SquadAssetContext, SquadEvidenceContext};
+use crate::transfers::loan::agreement::ParentWillingness;
+use crate::transfers::loan::guard::LoanAssetGuard;
+use crate::transfers::pipeline::LoanOutReason;
+use crate::{
+    Club, ContractType, Person, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel,
+};
+use chrono::NaiveDate;
+use rustc_hash::{FxHashMap, FxHashSet};
+
+use super::super::treasury::WageReliefSale;
+use super::decision::SquadDecision;
+use super::depth::{KeeperLoanView, PromotionBar};
+use super::loans::LoanSweep;
+
+impl Club {
+    /// Prime left at or above which a season elsewhere can still be
+    /// collected on …
+    const SPELL_IS_WORTH_IT: f32 = 0.5;
+    /// … and the gap between what the staff think he could be and what
+    /// they see, that makes it worth arranging.
+    const GROWTH_WORTH_A_SPELL: i16 = 5;
+    /// Prime left at or below which the club has seen the whole of him.
+    const CAREER_IS_SPENT: f32 = 0.1;
+
+    /// Monthly audit: identify underutilized players in non-main teams and
+    /// list them for loan/transfer.
+    #[expect(clippy::too_many_lines)]
+    pub(in crate::club::process) fn audit_squad_utilization(&mut self, date: NaiveDate) {
+        // Days after a permanent / loan move during which a player's idle days
+        // are not yet read as underutilization — he hasn't had a fair chance to
+        // break into the squad. Mirrors the post-transfer settling window the
+        // happiness model uses for playing-time grievances.
+        const RECENT_TRANSFER_GRACE_DAYS: i64 = 30;
+
+        let main_idx = match self.teams.main_index() {
+            Some(idx) => idx,
+            None => return,
+        };
+
+        let rep_level = self.teams.teams[main_idx].reputation.level();
+
+        // Wealthy clubs are more patient with underutilized players
+        let (idle_threshold, games_threshold) = match rep_level {
+            ReputationLevel::Elite => (120u16, 5u16),
+            ReputationLevel::Continental => (90, 4),
+            ReputationLevel::National => (60, 3),
+            ReputationLevel::Regional => (45, 2),
+            _ => (30, 1),
+        };
+
+        // How many seasons a club of this standing pays a man it does not
+        // pick before the wage itself is the reason to act. The wealth
+        // that buys patience with a quiet autumn buys it with a quiet year,
+        // not with a career.
+        let dead_wage_seasons: u16 = match rep_level {
+            ReputationLevel::Elite => 3,
+            ReputationLevel::Continental | ReputationLevel::National => 2,
+            _ => 1,
+        };
+
+        // Wealthy clubs within squad targets don't need to aggressively list
+        let total_squad: usize = self.teams.iter().map(|t| t.players.len()).sum();
+        let max_squad = self
+            .board
+            .season_targets
+            .as_ref()
+            .map(|t| t.max_squad_size as usize)
+            .unwrap_or(50);
+        let wealthy_within_limits = matches!(
+            rep_level,
+            ReputationLevel::Elite | ReputationLevel::Continental
+        ) && total_squad < max_squad;
+
+        // Central squad-asset classifier, built once against the senior
+        // squad's level. Every non-main player is measured against it so a
+        // reserve player who is really first-team-useful (or a development
+        // prospect) is routed correctly instead of being transfer-listed
+        // off idle days alone.
+        let asset_ctx = SquadAssetContext::build(self, date);
+
+        // Collect underutilized player decisions
+        let mut loan_players: Vec<SquadDecision> = Vec::new();
+        let mut transfer_players: Vec<SquadDecision> = Vec::new();
+
+        // The first team's promotion bar, per position group — the same one
+        // the weekly `rebalance_squads` promotes off. The youth
+        // development-loan pass only fires BELOW it, and the parked-prime pass
+        // only above it, so a promotion-bound player is left for the rebalance
+        // to call up rather than shipped out the week before.
+        let promotion_bar = PromotionBar::snapshot(&self.teams.teams[main_idx]);
+
+        // The goalkeeping department's say over its own keepers. Two things
+        // this audit cannot work out on its own: that the boy it is about to
+        // farm out is the one the first team has just started travelling
+        // with, and that the twenty-one-year-old it is about to leave alone
+        // has three keepers ahead of him and needs a season of men's
+        // football. Both are the specialist's judgement, already made.
+        let keepers = KeeperLoanView::of(self.keeper_plan(), date);
+
+        // The main squad is included. Excluding it left the club's largest
+        // roster — the one that actually holds the frozen-out senior
+        // players — outside the only sweep that reads MINUTES at all: every
+        // other main-team path keys on ability versus the squad average, so
+        // an average-CA player who simply never got picked tripped nothing.
+        // Nothing about the loop below is main-team specific, and the guards
+        // it already applies (availability, signing protection, thin sample,
+        // competitiveness with the first team, and finally the squad-asset
+        // classifier, which only lets genuine surplus and blocked prospects
+        // through) are exactly the protections a first team needs. Squad
+        // depth is protected downstream too — the country listing pass caps
+        // every club-decided listing at its position-group minimum.
+        for (ti, team) in self.teams.iter().enumerate() {
+            // Squads that don't play official/league football — youth sides
+            // (U18..U23) AND any non-main team without a league — never
+            // accumulate the official appearances the idle-days signal below
+            // relies on (friendlies don't count), so the early-season gate
+            // would skip them every single tick (a youth side could carry
+            // three keepers forever; a league-less reserve side never sheds
+            // anyone). Assess them on positional SURPLUS instead — generic
+            // across positions and contract types (the one path that loans
+            // full-time *and* youth-contract prospects out). Youth sides
+            // additionally get age-based development loans: a senior-ready
+            // youngster blocked from the first team should go out for minutes,
+            // not stagnate in the youth squad.
+            let plays_league_football = team.league_id.is_some() && !team.team_type.is_youth();
+            if !plays_league_football {
+                LoanSweep::positional_surplus(self, team, ti, date, &keepers, &mut loan_players);
+                if team.team_type.is_youth() {
+                    LoanSweep::youth_development(
+                        self,
+                        team,
+                        ti,
+                        &promotion_bar,
+                        &keepers,
+                        date,
+                        &mut loan_players,
+                    );
+                }
+                LoanSweep::keeper_department(self, team, ti, &keepers, &mut loan_players);
+                continue;
+            }
+            LoanSweep::keeper_department(self, team, ti, &keepers, &mut loan_players);
+
+            // A senior reserve side (B / Second / Reserve) plays real league
+            // football, so its regulars are never idle and the minutes-based
+            // sweep below skipped them forever. That is precisely the trap:
+            // a prime-age professional starting thirty games a season for
+            // the B team has a full fixture list and no first-team career,
+            // and no pass in the club could see it. Resolve those cases on
+            // their own terms before falling through to the idle sweep.
+            if team.team_type.is_senior_reserve() {
+                Self::collect_parked_prime_resolutions(
+                    team,
+                    ti,
+                    &promotion_bar,
+                    &asset_ctx,
+                    date,
+                    &mut loan_players,
+                    &mut transfer_players,
+                );
+            }
+
+            // Thin-sample protection: until this league squad has played a
+            // meaningful number of official matches, a player's idle days
+            // don't yet distinguish "surplus" from "hasn't had his chance".
+            if SquadEvidenceContext::from_squad(&team.players).is_early_season() {
+                continue;
+            }
+
+            for player in team.players.iter() {
+                // Skip youth contracts
+                if player
+                    .contract
+                    .as_ref()
+                    .map(|c| c.contract_type == ContractType::Youth)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+
+                // Skip loan players
+                if player.is_on_loan() {
+                    continue;
+                }
+
+                // Skip already listed/loaned
+                if player.statuses.has(PlayerStatusType::Lst)
+                    || player.statuses.has(PlayerStatusType::Loa)
+                {
+                    continue;
+                }
+
+                // Manager-pinned players: never auto-list, transfer or loan.
+                if player.is_force_match_selection {
+                    continue;
+                }
+
+                // The board kept him off a listing nobody answered because
+                // it plays him, and it still does.
+                if self.transfer_plan.keeps_in_the_side(player, date) {
+                    continue;
+                }
+
+                // Missing minutes that aren't a squad-management signal: a
+                // player out injured, recovering, suspended, or short of
+                // match fitness hasn't been benched by choice, so his idle
+                // days say nothing about whether the club wants him.
+                // Likewise a player still inside his post-transfer grace
+                // period hasn't had a fair chance to break in yet.
+                if !player.is_ready_for_match() {
+                    continue;
+                }
+                if player
+                    .days_since_transfer(date)
+                    .map(|d| d < RECENT_TRANSFER_GRACE_DAYS)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                let days_idle = player.player_attributes.days_since_last_match;
+                let total_games = player.statistics.total_games();
+
+                // Seasons on the books without first-team football, read
+                // off the ledger rather than this autumn's counters: the
+                // one signal a quiet current season, a wealthy owner or a
+                // flattering level cannot excuse. A man breaking through
+                // right now is not a dead wage, whatever last year says.
+                let dead_wage = total_games < games_threshold * 2
+                    && StuckCareerScan::of_in_squad(player, date, team.team_type)
+                        .is_some_and(|scan| scan.stuck_years >= dead_wage_seasons);
+
+                // A man the club PAID for is judged against what it told
+                // him he would play, not against a table of idle days. The
+                // table was never about him: it asks what a club of this
+                // standing is patient with, and the answer for a signing is
+                // whatever the board promised when it signed the cheque.
+                //
+                // Everyone else — the squad a world starts with, an academy
+                // graduate, a free arrival — keeps the reputation table and
+                // the evaluation window that always governed them.
+                let purchased = player.mandate().is_some_and(|m| m.is_purchase());
+                if purchased {
+                    // Inside the first season he is settling, not surplus.
+                    if player
+                        .plan
+                        .as_ref()
+                        .is_some_and(|p| p.season_index(date) == 0)
+                    {
+                        continue;
+                    }
+                    if player.mandate_on_schedule(date) {
+                        continue;
+                    }
+                } else {
+                    if player.signing_protection_active(date) {
+                        continue;
+                    }
+                    if !dead_wage && (days_idle < idle_threshold || total_games >= games_threshold)
+                    {
+                        continue;
+                    }
+                }
+
+                let age = player.age(date);
+                // Squad decisions read what the coach can see — the
+                // observable current level (visible skill + results +
+                // training), never the hidden CA digit — and the observable
+                // ceiling, never the hidden biological PA.
+                let level = AbilityEstimator::observable_level(player);
+                let pa = PotentialEstimator::observable_ceiling(player, date);
+
+                // Compare the player's assessed level to the main team's
+                // assessed average (the same CA-blind metric the classifier
+                // ranks by) — don't list players still competitive with the
+                // first team.
+                let main_avg_level = asset_ctx.squad_avg_level();
+
+                // Wealthy clubs within squad limits: only list truly unwanted players
+                if wealthy_within_limits && level >= 50 && !dead_wage {
+                    continue;
+                }
+
+                // Still competitive with the first team, and the wage is
+                // not dead. Seasons of not being picked are the coach's
+                // verdict on that level already.
+                let runway = CareerRunway::at(age);
+                if level >= main_avg_level.saturating_sub(10) && runway > 0.0 && !dead_wage {
+                    continue;
+                }
+
+                // Central squad-asset policy gates the disposal. Useful
+                // seniors (core / first-team / credible rotation) and
+                // players the club hasn't been able to evaluate yet are
+                // never shipped out on idle-days evidence alone; a blocked
+                // young prospect goes out on loan for minutes, not the
+                // transfer list; only genuine surplus falls through to the
+                // existing transfer/loan profile below.
+                match asset_ctx.classify_in_squad(player, date, team.team_type) {
+                    SquadAssetClass::CorePlayer
+                    | SquadAssetClass::FirstTeamUseful
+                    | SquadAssetClass::UnknownNeedsEvaluation => continue,
+                    // Credible depth is worth carrying for a season, not
+                    // for a career: once the wage has been dead for years
+                    // the rotation label is the club's excuse, not its plan.
+                    SquadAssetClass::RotationUseful if !dead_wage => continue,
+                    SquadAssetClass::RotationUseful => {}
+                    SquadAssetClass::ProspectDevelopment => {
+                        // …unless he is the club's own first choice in
+                        // that shirt. The class is minted from a squad
+                        // label a teenager gets on his birth year, so it
+                        // reads a nineteen-year-old starter as a loan
+                        // asset; standing does not.
+                        if LoanAssetGuard::willingness_for(self, player, date).score
+                            >= ParentWillingness::ENTERTAINS
+                        {
+                            loan_players.push(SquadDecision::loan(
+                                ti,
+                                player.id,
+                                SquadDecision::YOUNG_DEVELOP,
+                                LoanOutReason::BlockedByDepth,
+                            ));
+                        }
+                        continue;
+                    }
+                    SquadAssetClass::TrueSurplus => {}
+                }
+
+                // Sell or send out? One reading, not a set of birthdays:
+                // how much of him is left that a season elsewhere could
+                // still be worth. A staff that sees more in him and a
+                // career with time to collect it means a spell; a career
+                // the club has seen the whole of means the list.
+                let believed_growth = pa as i16 - level as i16;
+                if runway >= Self::SPELL_IS_WORTH_IT && believed_growth > Self::GROWTH_WORTH_A_SPELL
+                {
+                    loan_players.push(SquadDecision::loan(
+                        ti,
+                        player.id,
+                        SquadDecision::YOUNG_DEVELOP,
+                        LoanOutReason::NeedsGameTime,
+                    ));
+                } else if level < 60 && pa < 70 {
+                    transfer_players.push(SquadDecision::new(
+                        ti,
+                        player.id,
+                        SquadDecision::LOW_ABILITY_SURPLUS,
+                    ));
+                } else if runway <= Self::CAREER_IS_SPENT
+                    && level < main_avg_level.saturating_sub(20)
+                {
+                    transfer_players.push(SquadDecision::new(
+                        ti,
+                        player.id,
+                        SquadDecision::AGING_SURPLUS,
+                    ));
+                } else if LoanAssetGuard::willingness_for(self, player, date).score
+                    >= ParentWillingness::ENTERTAINS
+                {
+                    loan_players.push(SquadDecision::loan(
+                        ti,
+                        player.id,
+                        if dead_wage {
+                            SquadDecision::DEAD_WAGE
+                        } else {
+                            SquadDecision::UNDERUTILIZED_TOP_CLUB
+                        },
+                        if dead_wage {
+                            LoanOutReason::FinancialRelief
+                        } else {
+                            LoanOutReason::LackOfPlayingTime
+                        },
+                    ));
+                } else {
+                    transfer_players.push(SquadDecision::new(
+                        ti,
+                        player.id,
+                        if dead_wage {
+                            SquadDecision::DEAD_WAGE
+                        } else {
+                            SquadDecision::UNDERUTILIZED
+                        },
+                    ));
+                }
+            }
+        }
+
+        // In-season size discipline. The board flags `squad_excess` once the
+        // total squad exceeds its ceiling by more than five, but nothing
+        // consumed it — so an over-limit squad that tripped no per-position
+        // glut just bloated all season. Give that determination a consumer:
+        // when over the ceiling, list the worst genuine surplus across ALL
+        // teams, worst-first, until the excess is cleared. Distinct from the
+        // idle sweep above: this one fires on squad SIZE regardless of how
+        // much anyone has played.
+        const SIZE_TRIM_MARGIN: usize = 5;
+        if total_squad > max_squad + SIZE_TRIM_MARGIN {
+            let already: FxHashSet<u32> = loan_players
+                .iter()
+                .chain(transfer_players.iter())
+                .map(|d| d.player_id)
+                .collect();
+            let excess = total_squad - max_squad;
+            // Main-team position-group headcounts. A group at (or below) its
+            // normal complement is not where the excess lives — trimming its
+            // weakest body (classically the third keeper) just forces the
+            // depth sweeps to re-buy the same profile next window.
+            let mut main_group_counts: FxHashMap<PlayerFieldPositionGroup, usize> =
+                FxHashMap::default();
+            for p in self.teams.teams[main_idx].players.iter() {
+                *main_group_counts
+                    .entry(p.position().position_group())
+                    .or_insert(0) += 1;
+            }
+            // (team_idx, id, observable level, age) — rank lowest assessed
+            // level first, then older first, so the weakest genuine surplus
+            // goes before anyone the coach still rates.
+            let mut surplus: Vec<(usize, u32, u8, u8)> = Vec::new();
+            for (ti, team) in self.teams.iter().enumerate() {
+                for player in team.players.iter() {
+                    // `Lst` matters as much as the contract flag here: this
+                    // very pass lists via the status only, so without it the
+                    // same player was re-picked and re-listed every month.
+                    // A man the club signed this window is not the excess
+                    // either: the ceiling was already over him when the
+                    // board approved the signing.
+                    if already.contains(&player.id)
+                        || player.is_on_loan()
+                        || player.is_force_match_selection
+                        || self.transfer_plan.keeps_in_the_side(player, date)
+                        || player.statuses.has(PlayerStatusType::Lst)
+                        || player
+                            .contract
+                            .as_ref()
+                            .map(|c| c.is_transfer_listed)
+                            .unwrap_or(true)
+                        || player
+                            .days_since_transfer(date)
+                            .map(|d| d < RECENT_TRANSFER_GRACE_DAYS)
+                            .unwrap_or(false)
+                        || player.signing_protection_active(date)
+                    {
+                        continue;
+                    }
+                    if ti == main_idx {
+                        let group = player.position().position_group();
+                        if main_group_counts.get(&group).copied().unwrap_or(0)
+                            <= group.main_depth_cap()
+                        {
+                            continue;
+                        }
+                    }
+                    if !matches!(
+                        asset_ctx.classify_in_squad(player, date, team.team_type),
+                        SquadAssetClass::TrueSurplus
+                    ) {
+                        continue;
+                    }
+                    surplus.push((
+                        ti,
+                        player.id,
+                        AbilityEstimator::observable_level(player),
+                        player.age(date),
+                    ));
+                }
+            }
+            surplus.sort_by(|a, b| a.2.cmp(&b.2).then(b.3.cmp(&a.3)));
+            for (ti, id, _, _) in surplus.into_iter().take(excess) {
+                transfer_players.push(SquadDecision::new(ti, id, SquadDecision::UNDERUTILIZED));
+            }
+        }
+
+        // Wage-relief sales. Every branch above lists for *sporting* reasons;
+        // this is the only one that reads the bank balance.
+        self.collect_wage_relief_sales(date, &asset_ctx, &mut transfer_players);
+
+        self.process_underutilized_players(date, main_idx, &loan_players, &transfer_players);
+    }
+
+    /// Put players on the market because the club cannot afford its wage bill.
+    ///
+    /// Ranked least-essential-first, then biggest-earner-first, so the club
+    /// sheds the most wage for the least sporting damage — and stops as soon
+    /// as the projected saving clears the target, rather than emptying the
+    /// squad. Which classes are eligible escalates with severity; see
+    /// [`WageReliefSale`].
+    fn collect_wage_relief_sales(
+        &self,
+        date: NaiveDate,
+        asset_ctx: &SquadAssetContext,
+        transfer_players: &mut Vec<SquadDecision>,
+    ) {
+        let total_annual_wages: i64 = self
+            .teams
+            .iter()
+            .map(|t| t.get_annual_salary() as i64)
+            .sum();
+        let wage_budget = self
+            .finance
+            .wage_budget
+            .as_ref()
+            .map(|b| b.amount.max(0.0) as i64)
+            .unwrap_or(0);
+        let standing = self.finance.debt.standing;
+        let distress = self.finance.distress_level;
+
+        let already: FxHashSet<u32> = transfer_players.iter().map(|d| d.player_id).collect();
+
+        // Wages already committed to leaving: players on the market from a
+        // previous pass, plus anyone the sporting sweeps listed earlier in
+        // this same tick. Credited against the target so the club doesn't
+        // stack a fresh batch on top of an unsold one every month.
+        //
+        // The credit is deliberately open-ended. Expiring it after a
+        // window — so a club whose listings the market had refused would
+        // go looking for more names — was measured over a season and
+        // rejected: it doubled the world's population of players carrying
+        // the sell flag with no market row (1582 → 3558), because each
+        // fresh wave outran the per-position caps that turn a flag into a
+        // listing a buyer can actually see. A listing the market has
+        // refused is a PRICE problem, and it already has two owners: the
+        // tier-cascading seller push and the board's window-close review.
+        // What a club in real trouble needs is not more names but better
+        // ones, which is what the debt-standing escalation now gives it.
+        let already_listed_wages: i64 = self
+            .teams
+            .iter()
+            .flat_map(|t| t.players.iter())
+            .filter(|p| {
+                !p.is_on_loan()
+                    && (already.contains(&p.id)
+                        || p.statuses.has(PlayerStatusType::Lst)
+                        || p.contract
+                            .as_ref()
+                            .map(|c| c.is_transfer_listed)
+                            .unwrap_or(false))
+            })
+            .filter_map(|p| p.contract.as_ref())
+            .map(|c| c.salary as i64)
+            .sum();
+
+        let mut remaining = WageReliefSale::target_reduction(
+            total_annual_wages,
+            wage_budget,
+            already_listed_wages,
+            standing,
+            distress,
+        );
+        if remaining <= 0 {
+            return;
+        }
+        let ignore_patience = WageReliefSale::overrides_signing_protection(standing, distress);
+
+        // (team_idx, player_id, sale priority, annual salary)
+        let mut candidates: Vec<(usize, u32, u8, i64)> = Vec::new();
+        for (ti, team) in self.teams.iter().enumerate() {
+            for player in team.players.iter() {
+                if already.contains(&player.id)
+                    || player.is_on_loan()
+                    || player.is_force_match_selection
+                    || self.transfer_plan.keeps_in_the_side(player, date)
+                    || player.statuses.has(PlayerStatusType::Lst)
+                    || player
+                        .contract
+                        .as_ref()
+                        .map(|c| c.is_transfer_listed || c.contract_type == ContractType::Youth)
+                        .unwrap_or(true)
+                {
+                    continue;
+                }
+                if !ignore_patience && player.signing_protection_active(date) {
+                    continue;
+                }
+                let class = asset_ctx.classify_in_squad(player, date, team.team_type);
+                if !WageReliefSale::sellable(standing, distress, class) {
+                    continue;
+                }
+                let salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0) as i64;
+                if salary <= 0 {
+                    continue;
+                }
+                candidates.push((ti, player.id, WageReliefSale::sale_priority(class), salary));
+            }
+        }
+
+        // Fringe before spine; within a tier, the biggest earner first.
+        candidates.sort_by(|a, b| a.2.cmp(&b.2).then(b.3.cmp(&a.3)));
+
+        for (ti, id, _, salary) in candidates {
+            if remaining <= 0 {
+                break;
+            }
+            transfer_players.push(SquadDecision::new(ti, id, SquadDecision::WAGE_RELIEF));
+            remaining -= salary;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PlayerFieldPositionGroup;
+    use crate::academy::ClubAcademy;
+    use crate::club::board::SeasonTargets;
+    use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
+    use crate::club::player::model::builder::PlayerBuilder;
+    use crate::club::player::plan::PlayerPlan;
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
+        PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills, PlayerSquadStatus, StaffCollection, Team, TeamBuilder,
+        TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+    };
+    use chrono::{Duration, NaiveDate, NaiveTime};
+
+    /// Fixtures for the underutilization audit: a CA-130 first team plus a
+    /// reserve squad. The reserve always carries one "busy" regular so the
+    /// thin-sample gate is cleared and the audit actually runs.
+    struct Fx;
+
+    impl Fx {
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 5, 1).unwrap()
+        }
+
+        /// Flat skills tuned so the position-weighted visible ability lands
+        /// on `target`. The utilization audit now judges players by their
+        /// observable level (visible skill + results + training), so fixtures
+        /// express quality through skills rather than the hidden CA digit.
+        fn skills_for(target: u8) -> PlayerSkills {
+            PlayerSkills::flat_for_ability(target)
+        }
+
+        /// `played` seeds official appearances (early-season sample);
+        /// `idle` drives the underutilization trigger; condition is set
+        /// full so the new match-readiness guard doesn't short-circuit.
+        /// Visible ability is set from `ca` via skills; `current_ability` is
+        /// also stamped to `ca` for the paths (promotion floor) that still
+        /// read it.
+        fn player(
+            id: u32,
+            ca: u8,
+            pa: u8,
+            age: u8,
+            status: PlayerSquadStatus,
+            played: u16,
+            idle: u16,
+        ) -> Player {
+            let mut attrs = PlayerAttributes {
+                current_ability: ca,
+                potential_ability: pa,
+                ..Default::default()
+            };
+            attrs.condition = 10_000; // fully fit -> is_ready_for_match()
+            attrs.days_since_last_match = idle;
+            let mut contract =
+                PlayerClubContract::new(20_000, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
+            contract.squad_status = status;
+            let mut p = PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("U".into(), format!("P{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(2026 - age as i32, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(Fx::skills_for(ca))
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(attrs)
+                .contract(Some(contract))
+                .build()
+                .unwrap();
+            p.statistics.played = played;
+            p
+        }
+
+        /// A full-time youth goalkeeper (the case the user hit: U19 keepers
+        /// on full contracts, so the youth-contract skip doesn't apply).
+        fn gk(id: u32, ca: u8, age: u8) -> Player {
+            let attrs = PlayerAttributes {
+                current_ability: ca,
+                potential_ability: ca.saturating_add(30),
+                condition: 10_000,
+                ..Default::default()
+            };
+            let mut contract =
+                PlayerClubContract::new(20_000, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
+            contract.squad_status = PlayerSquadStatus::NotYetSet;
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("G".into(), format!("K{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(2026 - age as i32, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(Fx::skills_for(ca))
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::Goalkeeper,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(attrs)
+                .contract(Some(contract))
+                .build()
+                .unwrap()
+        }
+
+        fn team(id: u32, tt: TeamType, players: Vec<Player>) -> Team {
+            TeamBuilder::new()
+                .id(id)
+                .league_id(Some(1))
+                .club_id(100)
+                .name(format!("t{id}"))
+                .slug(format!("t{id}"))
+                .team_type(tt)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(500, 500, 500))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap()
+        }
+
+        /// Like [`Self::team`] but with NO league — a friendly-only
+        /// squad, which an official-appearance idle gate skips forever.
+        fn team_no_league(id: u32, tt: TeamType, players: Vec<Player>) -> Team {
+            TeamBuilder::new()
+                .id(id)
+                .league_id(None)
+                .club_id(100)
+                .name(format!("t{id}"))
+                .slug(format!("t{id}"))
+                .team_type(tt)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(500, 500, 500))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap()
+        }
+
+        fn club(reserve_extra: Vec<Player>) -> Club {
+            let main: Vec<Player> = (1..=5)
+                .map(|i| Fx::player(i, 130, 130, 27, PlayerSquadStatus::FirstTeamRegular, 20, 0))
+                .collect();
+            // id 90: a "busy" reserve regular so the reserve squad clears
+            // the early-season sample gate (and is itself skipped, having
+            // enough games).
+            let mut reserve = vec![Fx::player(
+                90,
+                100,
+                100,
+                24,
+                PlayerSquadStatus::FirstTeamSquadRotation,
+                12,
+                0,
+            )];
+            reserve.extend(reserve_extra);
+            Club::new(
+                100,
+                "Club".to_string(),
+                Location::new(1),
+                ClubFinances::new(1_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![
+                    Fx::team(10, TeamType::Main, main),
+                    Fx::team(11, TeamType::Reserve, reserve),
+                ]),
+                ClubFacilities::default(),
+            )
+        }
+
+        fn has(club: &Club, id: u32, s: PlayerStatusType) -> bool {
+            club.teams.teams.iter().any(|t| {
+                t.players
+                    .players
+                    .iter()
+                    .any(|p| p.id == id && p.statuses.has(s))
+            })
+        }
+
+        fn listed(club: &Club, id: u32) -> bool {
+            Fx::has(club, id, PlayerStatusType::Lst) || Fx::has(club, id, PlayerStatusType::Loa)
+        }
+    }
+
+    /// A blocked young prospect with a real squad sample and no minutes is
+    /// loan-listed for development, never transfer-listed.
+    #[test]
+    fn blocked_prospect_is_loan_listed_not_transfer_listed() {
+        let mut club = Fx::club(vec![Fx::player(
+            200,
+            100,
+            130,
+            19,
+            PlayerSquadStatus::NotYetSet,
+            0,
+            150,
+        )]);
+        club.audit_squad_utilization(Fx::date());
+        assert!(
+            Fx::has(&club, 200, PlayerStatusType::Loa),
+            "a blocked prospect should be loan-listed"
+        );
+        assert!(
+            !Fx::has(&club, 200, PlayerStatusType::Lst),
+            "a blocked prospect must NOT be transfer-listed"
+        );
+    }
+
+    /// A reserve player competitive with the first team is not listed just
+    /// because he's been idle.
+    #[test]
+    fn competitive_reserve_player_is_not_listed() {
+        let mut club = Fx::club(vec![Fx::player(
+            201,
+            125,
+            125,
+            30,
+            PlayerSquadStatus::NotYetSet,
+            0,
+            150,
+        )]);
+        club.audit_squad_utilization(Fx::date());
+        assert!(
+            !Fx::listed(&club, 201),
+            "a reserve player competitive with the first team must not be listed off idle days"
+        );
+    }
+
+    /// A genuinely surplus, low-ability older reserve player can still be
+    /// transfer-listed.
+    #[test]
+    fn low_ability_older_surplus_is_still_listed() {
+        let mut club = Fx::club(vec![Fx::player(
+            202,
+            55,
+            60,
+            35,
+            PlayerSquadStatus::NotYetSet,
+            0,
+            150,
+        )]);
+        club.audit_squad_utilization(Fx::date());
+        assert!(
+            Fx::has(&club, 202, PlayerStatusType::Lst),
+            "a clearly-surplus low-ability veteran should still be transfer-listed"
+        );
+    }
+
+    /// An injured player's idle days are not a squad-management signal — he
+    /// is left alone.
+    #[test]
+    fn injured_player_is_not_listed() {
+        let mut injured = Fx::player(203, 55, 60, 33, PlayerSquadStatus::NotYetSet, 0, 200);
+        injured.player_attributes.is_injured = true;
+        let mut club = Fx::club(vec![injured]);
+        club.audit_squad_utilization(Fx::date());
+        assert!(
+            !Fx::listed(&club, 203),
+            "an injured player must not be transfer-listed off idle days"
+        );
+    }
+
+    /// The size trim lists a player via the `Lst` status only, so its
+    /// already-listed guard must read that status too — without it the same
+    /// player was re-picked and got a duplicate "board transfer-listed"
+    /// decision row every month (the Pinsoglio Aug-1 / Sep-1 double entry).
+    #[test]
+    fn size_trim_does_not_relist_a_listed_player() {
+        let deadwood = Fx::player(300, 55, 60, 34, PlayerSquadStatus::NotYetSet, 0, 0);
+        let mut club = Fx::club(vec![deadwood]);
+        club.board.season_targets = Some(SeasonTargets {
+            transfer_budget: 0,
+            wage_budget: 0,
+            max_squad_size: 0,
+            min_squad_size: 0,
+            expected_position: 5,
+            min_acceptable_position: 10,
+            ..Default::default()
+        });
+
+        club.audit_squad_utilization(Fx::date());
+        assert!(
+            Fx::has(&club, 300, PlayerStatusType::Lst),
+            "over the squad ceiling, the worst genuine surplus is trimmed"
+        );
+
+        // A month later the audit runs again — the listing must not repeat.
+        club.audit_squad_utilization(Fx::date());
+        let rows = club
+            .teams
+            .teams
+            .iter()
+            .flat_map(|t| t.players.players.iter())
+            .find(|p| p.id == 300)
+            .unwrap()
+            .decision_history
+            .items
+            .iter()
+            .filter(|d| d.movement == "dec_board_transfer_listed")
+            .count();
+        assert_eq!(rows, 1, "an already-listed player is never re-listed");
+    }
+
+    /// The size trim is a squad-size rule, not a verdict on the man the
+    /// club signed three weeks ago.
+    #[test]
+    fn size_trim_leaves_a_fresh_signing_alone() {
+        let over_the_ceiling = || SeasonTargets {
+            transfer_budget: 0,
+            wage_budget: 0,
+            max_squad_size: 0,
+            min_squad_size: 0,
+            expected_position: 5,
+            min_acceptable_position: 10,
+            ..Default::default()
+        };
+        let signed_on = Fx::date() - Duration::days(19);
+
+        // The same man, read as just another body: trimmed.
+        let deadwood = Fx::player(300, 55, 60, 34, PlayerSquadStatus::NotYetSet, 0, 0);
+        let mut club = Fx::club(vec![deadwood]);
+        club.board.season_targets = Some(over_the_ceiling());
+        club.audit_squad_utilization(Fx::date());
+        assert!(Fx::has(&club, 300, PlayerStatusType::Lst));
+
+        // The same man, signed three weeks ago: left alone.
+        let mut signing = Fx::player(301, 55, 60, 34, PlayerSquadStatus::NotYetSet, 0, 0);
+        signing.last_transfer_date = Some(signed_on);
+        signing.plan = Some(PlayerPlan::from_mandate(
+            SigningMandate::new(
+                MandatePurpose::Cover,
+                PlayerFieldPositionGroup::Midfielder,
+                34,
+                signed_on,
+                MandateAuthor::Manager,
+            )
+            .with_money(0.0, 0.0),
+            signed_on,
+        ));
+        let mut club = Fx::club(vec![signing]);
+        club.board.season_targets = Some(over_the_ceiling());
+        club.audit_squad_utilization(Fx::date());
+        assert!(
+            !Fx::listed(&club, 301),
+            "a signing still inside its plan is never the excess"
+        );
+    }
+
+    /// Over the ceiling, the trim takes the surplus the club is free to
+    /// sell, not the man the board kept off a listing because it plays him.
+    #[test]
+    fn size_trim_leaves_a_man_the_board_keeps_alone() {
+        let mut kept = Fx::player(300, 55, 60, 34, PlayerSquadStatus::NotYetSet, 0, 0);
+        kept.happiness.starter_ratio = 0.9;
+        kept.happiness.appearances_tracked = 30;
+        let deadwood = Fx::player(301, 55, 60, 34, PlayerSquadStatus::NotYetSet, 0, 0);
+        let mut club = Fx::club(vec![kept, deadwood]);
+        club.transfer_plan.kept_in_the_side.insert(300);
+        club.board.season_targets = Some(SeasonTargets {
+            transfer_budget: 0,
+            wage_budget: 0,
+            max_squad_size: 0,
+            min_squad_size: 0,
+            expected_position: 5,
+            min_acceptable_position: 10,
+            ..Default::default()
+        });
+
+        club.audit_squad_utilization(Fx::date());
+
+        assert!(
+            Fx::has(&club, 301, PlayerStatusType::Lst),
+            "precondition: the trim runs"
+        );
+        assert!(!Fx::listed(&club, 300));
+    }
+
+    /// The badge is the visible half of a board listing; the contract flag
+    /// is the half that survives the listing pass's badge reconciliation,
+    /// blocks a renewal offer, and tells the pass this is a club decision
+    /// to materialise. Without it a listed keeper was re-signed twice with
+    /// raises and re-listed every window.
+    #[test]
+    fn board_transfer_listing_sets_the_contract_flag() {
+        let deadwood = Fx::player(300, 55, 60, 34, PlayerSquadStatus::NotYetSet, 0, 0);
+        let mut club = Fx::club(vec![deadwood]);
+        club.board.season_targets = Some(SeasonTargets {
+            transfer_budget: 0,
+            wage_budget: 0,
+            max_squad_size: 0,
+            min_squad_size: 0,
+            expected_position: 5,
+            min_acceptable_position: 10,
+            ..Default::default()
+        });
+
+        club.audit_squad_utilization(Fx::date());
+
+        let flagged = club
+            .teams
+            .teams
+            .iter()
+            .flat_map(|t| t.players.players.iter())
+            .find(|p| p.id == 300)
+            .and_then(|p| p.contract.as_ref())
+            .map(|c| c.is_transfer_listed)
+            .unwrap_or(false);
+        assert!(
+            Fx::has(&club, 300, PlayerStatusType::Lst) && flagged,
+            "a board listing is a badge AND a durable sale intent on the contract"
+        );
+    }
+
+    /// The size trim never breaks up a main-team position group at (or
+    /// below) its normal complement: a club over its headcount ceiling
+    /// still keeps its third keeper — trimming him only forces the depth
+    /// sweeps to re-buy the same profile. The excess is taken from where
+    /// it actually lives instead.
+    #[test]
+    fn size_trim_keeps_the_third_keeper_of_a_normal_complement() {
+        let mut main: Vec<Player> = (1..=5)
+            .map(|i| Fx::player(i, 130, 130, 27, PlayerSquadStatus::FirstTeamRegular, 20, 0))
+            .collect();
+        main.push(Fx::gk(201, 130, 28));
+        main.push(Fx::gk(202, 120, 27));
+        // The veteran third keeper: far below the squad level, no rescue
+        // from character (defaults are 0) — TrueSurplus to the classifier,
+        // so only the complement guard keeps him off the trim list.
+        main.push(Fx::gk(300, 55, 35));
+        // Genuine excess on the reserve roster.
+        let deadwood = Fx::player(301, 55, 60, 34, PlayerSquadStatus::NotYetSet, 0, 0);
+        let mut club = Club::new(
+            100,
+            "Club".to_string(),
+            Location::new(1),
+            ClubFinances::new(1_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(vec![
+                Fx::team(10, TeamType::Main, main),
+                Fx::team(
+                    11,
+                    TeamType::Reserve,
+                    vec![
+                        Fx::player(
+                            90,
+                            100,
+                            100,
+                            24,
+                            PlayerSquadStatus::FirstTeamSquadRotation,
+                            12,
+                            0,
+                        ),
+                        deadwood,
+                    ],
+                ),
+            ]),
+            ClubFacilities::default(),
+        );
+        club.board.season_targets = Some(SeasonTargets {
+            transfer_budget: 0,
+            wage_budget: 0,
+            max_squad_size: 0,
+            min_squad_size: 0,
+            expected_position: 5,
+            min_acceptable_position: 10,
+            ..Default::default()
+        });
+
+        club.audit_squad_utilization(Fx::date());
+
+        assert!(
+            !Fx::listed(&club, 300),
+            "the third keeper of a three-man complement must never be size-trimmed"
+        );
+        assert!(
+            Fx::has(&club, 301, PlayerStatusType::Lst),
+            "the trim still clears genuine excess elsewhere"
+        );
+    }
+
+    /// The reported case: a U19 squad carries THREE keepers on full-time
+    /// contracts. The youth-contract skip doesn't apply (they're full-time)
+    /// and the old early-season gate skipped the squad forever (youth
+    /// leagues are friendlies → no official minutes). The positional-surplus
+    /// path keeps the best two and loans the third out for development.
+    #[test]
+    fn youth_team_surplus_keeper_is_loan_listed_for_development() {
+        let main: Vec<Player> = (1..=5)
+            .map(|i| Fx::player(i, 130, 130, 27, PlayerSquadStatus::FirstTeamRegular, 20, 0))
+            .collect();
+        let u19 = vec![
+            Fx::gk(401, 90, 18),
+            Fx::gk(402, 85, 18),
+            Fx::gk(403, 80, 18),
+        ];
+        let mut club = Club::new(
+            100,
+            "Club".to_string(),
+            Location::new(1),
+            ClubFinances::new(1_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(vec![
+                Fx::team(10, TeamType::Main, main),
+                Fx::team(11, TeamType::U19, u19),
+            ]),
+            ClubFacilities::default(),
+        );
+
+        club.audit_squad_utilization(Fx::date());
+
+        assert!(
+            Fx::has(&club, 403, PlayerStatusType::Loa),
+            "the surplus third keeper must be loan-listed for development"
+        );
+        assert!(
+            !Fx::has(&club, 401, PlayerStatusType::Loa)
+                && !Fx::has(&club, 402, PlayerStatusType::Loa),
+            "the two best keepers stay at the club"
+        );
+    }
+
+    /// B: a non-main team WITHOUT a league plays only friendlies, which
+    /// an official-appearance idle gate skips forever. It is assessed on
+    /// positional surplus like a youth side instead, so depth beyond the
+    /// rotation need is loan-listed.
+    #[test]
+    fn league_less_reserve_surplus_is_loan_listed() {
+        let main: Vec<Player> = (1..=5)
+            .map(|i| Fx::player(i, 130, 130, 27, PlayerSquadStatus::FirstTeamRegular, 20, 0))
+            .collect();
+        // Nine midfielders on a league-less Second team — keep_for(MID)=7, so
+        // the two weakest are surplus and must be loan-listed.
+        let reserve: Vec<Player> = (300..309)
+            .map(|i| Fx::player(i, 90, 90, 24, PlayerSquadStatus::NotYetSet, 0, 0))
+            .collect();
+        let mut club = Club::new(
+            100,
+            "Club".to_string(),
+            Location::new(1),
+            ClubFinances::new(1_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(vec![
+                Fx::team(10, TeamType::Main, main),
+                Fx::team_no_league(11, TeamType::Second, reserve),
+            ]),
+            ClubFacilities::default(),
+        );
+
+        club.audit_squad_utilization(Fx::date());
+
+        let loaned = (300..309)
+            .filter(|id| Fx::has(&club, *id, PlayerStatusType::Loa))
+            .count();
+        assert_eq!(
+            loaned, 2,
+            "surplus beyond keep_for(MID)=7 on a league-less side must be loan-listed"
+        );
+    }
+
+    /// C: two U19 keepers blocked by a three-deep main GK line. They are NOT a
+    /// positional surplus (<= keep_for(GK)=2) but they ARE senior-ready and
+    /// can't break in, so the older one is sent out on a development loan; the
+    /// youth side keeps one to field a match.
+    #[test]
+    fn senior_ready_youth_blocked_from_first_team_is_loaned() {
+        let main = vec![Fx::gk(1, 150, 28), Fx::gk(2, 150, 28), Fx::gk(3, 150, 28)];
+        let u19 = vec![Fx::gk(401, 80, 19), Fx::gk(402, 80, 18)];
+        let mut club = Club::new(
+            100,
+            "Club".to_string(),
+            Location::new(1),
+            ClubFinances::new(1_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(vec![
+                Fx::team(10, TeamType::Main, main),
+                Fx::team(11, TeamType::U19, u19),
+            ]),
+            ClubFacilities::default(),
+        );
+
+        club.audit_squad_utilization(Fx::date());
+
+        assert!(
+            Fx::has(&club, 401, PlayerStatusType::Loa),
+            "the older blocked U19 keeper should get a development loan"
+        );
+        assert!(
+            !Fx::has(&club, 402, PlayerStatusType::Loa),
+            "the youth side must keep one keeper to field a match"
+        );
+    }
+
+    /// C never strips a youth group below its fielding minimum — a side's ONLY
+    /// keeper is kept even when blocked and senior-ready.
+    #[test]
+    fn last_youth_keeper_is_never_loaned() {
+        let main = vec![Fx::gk(1, 150, 28), Fx::gk(2, 150, 28), Fx::gk(3, 150, 28)];
+        let u19 = vec![Fx::gk(401, 80, 19)];
+        let mut club = Club::new(
+            100,
+            "Club".to_string(),
+            Location::new(1),
+            ClubFinances::new(1_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(vec![
+                Fx::team(10, TeamType::Main, main),
+                Fx::team(11, TeamType::U19, u19),
+            ]),
+            ClubFacilities::default(),
+        );
+
+        club.audit_squad_utilization(Fx::date());
+
+        assert!(
+            !Fx::has(&club, 401, PlayerStatusType::Loa),
+            "a youth side's only keeper must never be loaned out"
+        );
+    }
+
+    /// C respects the promotion bar: a youngster above the main-team promotion
+    /// floor is left for the rebalance to promote, not loaned; only the
+    /// below-floor (genuinely blocked) keeper goes out.
+    #[test]
+    fn promotion_ready_youth_is_left_for_promotion() {
+        // Main two keepers at CA 90 → promotion floor = 91.
+        let main = vec![Fx::gk(1, 90, 28), Fx::gk(2, 90, 28)];
+        // 401 clears the floor (promotion-bound); 402 is below it (blocked).
+        let u19 = vec![Fx::gk(401, 120, 19), Fx::gk(402, 70, 19)];
+        let mut club = Club::new(
+            100,
+            "Club".to_string(),
+            Location::new(1),
+            ClubFinances::new(1_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(vec![
+                Fx::team(10, TeamType::Main, main),
+                Fx::team(11, TeamType::U19, u19),
+            ]),
+            ClubFacilities::default(),
+        );
+
+        club.audit_squad_utilization(Fx::date());
+
+        assert!(
+            !Fx::has(&club, 401, PlayerStatusType::Loa),
+            "a promotion-ready youth keeper must be kept for promotion, not loaned"
+        );
+        assert!(
+            Fx::has(&club, 402, PlayerStatusType::Loa),
+            "the blocked below-floor keeper should still get a development loan"
+        );
+    }
+}

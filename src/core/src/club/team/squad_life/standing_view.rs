@@ -17,7 +17,7 @@
 
 use chrono::NaiveDate;
 
-use crate::club::player::core::player::SquadStandingView;
+use crate::club::player::model::player::SquadStandingView;
 use crate::club::staff::StaffCollection;
 use crate::club::staff::perception::AbilityEstimator;
 use crate::club::team::model::TeamCoachingScores;

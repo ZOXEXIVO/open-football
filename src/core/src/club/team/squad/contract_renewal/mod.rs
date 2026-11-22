@@ -93,6 +93,7 @@ impl ContractRenewalManager {
     /// One squad's renewal pass. Wage-structure caps read the squad's own
     /// hierarchy; the budget gate reads (and returns) the club-wide bill so
     /// sequential squad passes share one pot.
+    #[expect(clippy::too_many_lines)]
     fn run_squad(
         teams: &mut [Team],
         main_idx: usize,
@@ -741,6 +742,7 @@ impl ContractRenewalManager {
         }
     }
 
+    #[expect(clippy::too_many_lines)]
     fn build_offer(
         player: &Player,
         negotiation_skill: u8,
@@ -1815,7 +1817,11 @@ mod loanee_evaluate_tests {
 
         let entry = *team.staffs.head_coach().squad_plan.entry(5).unwrap();
         assert_eq!(entry.place, 0, "nobody else plays right-back");
-        assert!(entry.role.is_at_least(PlannedRole::Starter), "{:?}", entry.role);
+        assert!(
+            entry.role.is_at_least(PlannedRole::Starter),
+            "{:?}",
+            entry.role
+        );
         assert!(
             ContractRenewalManager::collect_candidates(&team, today)
                 .iter()

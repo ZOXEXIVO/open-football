@@ -1,7 +1,6 @@
 pub mod catching;
 pub mod clearing;
 pub mod comingout;
-pub mod common;
 pub mod distributing;
 pub mod diving;
 pub mod getting_up;
@@ -13,6 +12,7 @@ pub mod picking_up;
 pub mod preparing_for_save;
 pub mod punching;
 pub mod returning_goal;
+pub mod shared;
 pub mod standing;
 pub mod state;
 pub mod takeball;

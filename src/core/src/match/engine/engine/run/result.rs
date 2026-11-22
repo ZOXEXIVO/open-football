@@ -8,6 +8,7 @@ use crate::r#match::engine::result::HighlightSelector;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
+    #[expect(clippy::too_many_lines)]
     pub(in crate::r#match::engine::engine) fn build_result(
         field: MatchField,
         mut context: MatchContext,
@@ -24,7 +25,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         #[cfg(feature = "match-logs")]
         context.defender_census.get_mut().finish(&mut result.tally);
         #[cfg(feature = "match-logs")]
-        context.midfielder_census.get_mut().finish(&mut result.tally);
+        context
+            .midfielder_census
+            .get_mut()
+            .finish(&mut result.tally);
         #[cfg(feature = "match-logs")]
         context.forward_census.get_mut().finish(&mut result.tally);
         #[cfg(feature = "match-logs")]

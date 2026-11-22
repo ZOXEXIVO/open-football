@@ -24,6 +24,7 @@ use super::DatabaseGenerator;
 use super::staffs::ScoutMarketSeed;
 
 impl DatabaseGenerator {
+    #[expect(clippy::too_many_lines)]
     pub(super) fn generate_clubs(
         scout_seed: &ScoutMarketSeed<'_>,
         country_reputation: u16,

@@ -11,6 +11,7 @@ use core::{
 };
 
 /// Convert a database NationalCompetitionEntity to a runtime NationalCompetitionConfig
+#[expect(clippy::too_many_lines)]
 pub fn convert_national_competition(
     entity: &NationalCompetitionEntity,
 ) -> NationalCompetitionConfig {

@@ -270,6 +270,7 @@ impl WorldNationalCompetitions {
     /// Apply a single match's outcome: record into the source continent's
     /// competition state, fan stats/Elo/schedule out across the world, and
     /// produce the MatchResult for the global match store.
+    #[expect(clippy::too_many_lines)]
     fn apply_match_outcome(
         continents: &mut [Continent],
         stamp: &StampedFixture,

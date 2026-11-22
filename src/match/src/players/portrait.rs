@@ -316,6 +316,7 @@ impl Landmarks {
     /// honestly give. The EYE LINE, which anatomy cannot give at all (hair
     /// moves the top of a head and nothing else does), is looked for in the
     /// picture from the first.
+    #[expect(clippy::too_many_lines)]
     fn of(pixels: &[u8], width: u32, height: u32) -> Option<Landmarks> {
         let head = Silhouette::of(pixels, width, height);
         #[cfg(test)]

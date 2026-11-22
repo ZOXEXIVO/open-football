@@ -65,8 +65,17 @@ mod tests {
             possession_last_10: 0.5,
             ..Default::default()
         };
-        assert_eq!(TacticalNeed::from_coach(0.7, read, 0.8), TacticalNeed::Chasing);
-        assert_eq!(TacticalNeed::from_coach(-0.7, read, 0.8), TacticalNeed::ProtectingLead);
-        assert_eq!(TacticalNeed::from_coach(0.0, read, 0.8), TacticalNeed::Fatigue);
+        assert_eq!(
+            TacticalNeed::from_coach(0.7, read, 0.8),
+            TacticalNeed::Chasing
+        );
+        assert_eq!(
+            TacticalNeed::from_coach(-0.7, read, 0.8),
+            TacticalNeed::ProtectingLead
+        );
+        assert_eq!(
+            TacticalNeed::from_coach(0.0, read, 0.8),
+            TacticalNeed::Fatigue
+        );
     }
 }

@@ -4,7 +4,7 @@
 //! coordinator. Each connection runs through one `Handshake` exchange
 //! and then a stream of `PlayBatch` requests.
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND};
 use crate::r#match::stores::MatchStore;
 use crate::worker::protocol::{
     MatchEnvelope, MatchOutcome, PROTOCOL_VERSION, RecordingSettings, Request, Response,
@@ -108,6 +108,7 @@ impl WorkerConnection {
         WorkerConnection { stream }
     }
 
+    #[expect(clippy::too_many_lines)]
     async fn serve(mut self) -> std::io::Result<()> {
         // Handshake is the mandatory first frame on every connection.
         let first: Request = Frame::read(&mut self.stream).await?;

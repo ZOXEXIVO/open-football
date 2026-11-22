@@ -502,6 +502,7 @@ impl Player {
     /// coach credibility, dressing-room status, club fit, pressure
     /// load, promise trust). Takes `ClubMoraleContext` so the derived
     /// axes can read coach scores and facility quality.
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn process_happiness_full(
         &mut self,
         result: &mut PlayerResult,

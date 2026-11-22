@@ -35,14 +35,14 @@
 use crate::Club;
 use crate::MatchRuntime;
 use crate::context::GlobalContext;
-use crate::league::core::PlayoffFormat;
+use crate::league::model::PlayoffFormat;
 use crate::league::schedule::cup;
 use crate::league::schedule::cup::CupCalendar;
 use crate::league::simulation::matchday::MatchdayCommitments;
 use crate::league::{
     CompetitionLevel, CupHistoryEntry, KickoffClock, League, LeagueBuildOutput, LeagueMatch,
-    LeaguePendingState, LeagueResult, LeagueTableResult, MatchStorage, Schedule, ScheduleItem,
-    ScheduleTour,
+    LeaguePendingState, LeagueResult, LeagueTableResult, LeagueTableRow, MatchStorage, Schedule,
+    ScheduleItem, ScheduleTour,
 };
 use crate::r#match::{MatchResult, Score};
 use chrono::{Datelike, Duration, NaiveDate};
@@ -58,6 +58,19 @@ pub struct StandingRow {
     pub points: u16,
     pub wins: u8,
     pub goal_difference: i32,
+}
+
+impl StandingRow {
+    /// Project a league-table row into the standings shape the playoff
+    /// seeds from (points/wins/GD are enough for seeding and hosting).
+    pub fn from_table_row(row: &LeagueTableRow) -> Self {
+        StandingRow {
+            team_id: row.team_id,
+            points: row.effective_points() as u16,
+            wins: row.win,
+            goal_difference: row.goal_difference(),
+        }
+    }
 }
 
 /// A snapshot of one group's current standings, handed to the playoff by

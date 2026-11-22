@@ -16,7 +16,7 @@ impl RosterRevision {
 
 #[cfg(test)]
 mod tests {
-    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, Player, PlayerAttributes, PlayerCollection, PlayerPosition,

@@ -4,9 +4,9 @@ use crate::utils::DateUtils;
 use crate::{Player, Staff};
 
 use super::ability::AbilityEstimator;
+use super::noise::PerceptionNoise;
 use super::potential::{EstimationContext, PotentialEstimator};
 use super::profile::CoachProfile;
-use super::utils::{date_to_week, perception_noise_raw};
 
 /// The judge's eye — the number a coach report prints next to "Potential".
 ///
@@ -153,10 +153,10 @@ impl CoachEye {
     /// The judge's opinion in [-1, 1]: a settled view of this player that
     /// never changes, blended with a mood that re-rolls every four weeks.
     fn opinion(seed: u32, player_id: u32, date: NaiveDate) -> f32 {
-        let settled = perception_noise_raw(seed, player_id, Self::SETTLED_SALT);
-        let period = date_to_week(date) / 4;
+        let settled = PerceptionNoise::raw(seed, player_id, Self::SETTLED_SALT);
+        let period = PerceptionNoise::week(date) / 4;
         let monthly_salt = Self::MONTHLY_SALT.wrapping_add(period.wrapping_mul(11));
-        let monthly = perception_noise_raw(seed, player_id, monthly_salt);
+        let monthly = PerceptionNoise::raw(seed, player_id, monthly_salt);
         Self::SETTLED_SHARE * settled + (1.0 - Self::SETTLED_SHARE) * monthly
     }
 

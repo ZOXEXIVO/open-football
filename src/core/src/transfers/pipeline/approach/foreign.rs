@@ -13,11 +13,11 @@
 //! seller-side facts staged here because the buying country's resolver cannot
 //! reach back over the border to recompute them.
 
-use crate::transfers::value::PlayerValuationCalculator;
-use crate::club::core::SellerCover;
+use crate::club::process::SellerCover;
 use crate::transfers::gate::build::Suitor;
 use crate::transfers::loan::LoanAssetGuard;
 use crate::transfers::pipeline::approach::ApproachPass;
+use crate::transfers::value::PlayerValuationCalculator;
 use crate::transfers::value::asking::AskingPrice;
 use crate::transfers::view::club::ClubView;
 use crate::transfers::view::player::PlayerView;
@@ -266,6 +266,7 @@ impl ForeignApproachPass {
 
     /// Pass 2 — resolve one candidate: read both sides, gate the move, and
     /// stage the seller-side facts the buyer's own country cannot recompute.
+    #[expect(clippy::too_many_lines)]
     fn resolve(
         data: &SimulatorData,
         cand: &ForeignCandidate,
@@ -465,6 +466,7 @@ impl ForeignApproachPass {
     /// The buying side: who is asking, what it can spend, and — from the
     /// director of football — whether this is a buy, a loan, or a loan with
     /// an option.
+    #[expect(clippy::too_many_lines)]
     fn buyer<'a>(
         data: &'a SimulatorData,
         cand: &ForeignCandidate,
@@ -598,6 +600,7 @@ impl ForeignApproachPass {
     }
 
     /// The offer, from the shared builder, plus the staging this reach adds.
+    #[expect(clippy::too_many_lines)]
     fn offer(
         seller: ForeignSeller<'_>,
         buyer: ForeignBuyer<'_>,

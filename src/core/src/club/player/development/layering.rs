@@ -23,7 +23,7 @@ impl AttributeWrites {
     const OWNERS: [&'static str; 5] = [
         "club/player/development/",
         "club/player/generators/",
-        "club/player/core/builder.rs",
+        "club/player/model/builder.rs",
         "club/player/ability/",
         "match/",
     ];

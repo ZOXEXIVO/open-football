@@ -1,12 +1,11 @@
 use crate::PlayerFieldPositionGroup;
 use crate::club::player::skills::GoalkeeperSpeedContext;
-use crate::r#match::common_states::ChallengeKind;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::ball::ball::AerialReach;
 use crate::r#match::engine::flow::goal::GOAL_HEIGHT;
 use crate::r#match::events::EventCollection;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::goalkeepers::states::common::{KeeperDebug, KeeperSplitStep};
+use crate::r#match::goalkeepers::states::shared::{KeeperDebug, KeeperSplitStep};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
 #[cfg(feature = "match-logs")]
@@ -15,6 +14,7 @@ use crate::r#match::player::diagnostics::keeper_census::ClaimEnd;
 use crate::r#match::player::diagnostics::motion_diag::StateCensus;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::transition::TransitionSource;
+use crate::r#match::shared_states::ChallengeKind;
 use crate::r#match::{
     ClaimIntent, GameTickContext, MatchContext, MatchPlayer, MovementEffort, StateProcessingResult,
 };
@@ -42,15 +42,11 @@ impl PlayerState {
             self,
             PlayerState::Defender(
                 DefenderState::Pressing | DefenderState::Jockeying | DefenderState::Tackling
+            ) | PlayerState::Midfielder(
+                MidfielderState::Pressing | MidfielderState::Jockeying | MidfielderState::Tackling
+            ) | PlayerState::Forward(
+                ForwardState::Pressing | ForwardState::Jockeying | ForwardState::Tackling
             )
-                | PlayerState::Midfielder(
-                    MidfielderState::Pressing
-                        | MidfielderState::Jockeying
-                        | MidfielderState::Tackling
-                )
-                | PlayerState::Forward(
-                    ForwardState::Pressing | ForwardState::Jockeying | ForwardState::Tackling
-                )
         )
     }
 
@@ -502,6 +498,7 @@ impl DecisionResolver {
 pub struct PlayerMatchState;
 
 impl PlayerMatchState {
+    #[expect(clippy::too_many_lines)]
     pub fn process(
         player: &mut MatchPlayer,
         context: &MatchContext,
@@ -985,8 +982,10 @@ impl PlayerMatchState {
                 || MovementEffort::ramp_legacy()
             {
                 let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
-                let max_accel =
-                    sprint_capability * agility_normalized * 0.7 * (1.0 + context.conditions.acceleration);
+                let max_accel = sprint_capability
+                    * agility_normalized
+                    * 0.7
+                    * (1.0 + context.conditions.acceleration);
                 let delta = velocity - player.velocity;
                 let delta_sq = delta.norm_squared();
                 let velocity = if delta_sq > max_accel * max_accel && delta_sq > 0.0 {

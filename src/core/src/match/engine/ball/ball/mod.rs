@@ -57,20 +57,20 @@ pub use restarts::{
 // the set pieces live.
 #[cfg(feature = "match-logs")]
 pub use diagnostics::{
-    arrival_diag, assist_diag, block_diag, delivery_diag, flight_diag, frame_trace,
-    goal_kick_diag, knock_diag, lane_diag, strike_diag, teleport,
+    arrival_diag, assist_diag, block_diag, delivery_diag, flight_diag, frame_trace, goal_kick_diag,
+    knock_diag, lane_diag, strike_diag, teleport,
 };
 
 use crate::r#match::engine::ball::ball::frame::GoalFrame;
 use crate::r#match::engine::ball::ball::net::BallInNet;
+use crate::r#match::engine::corner_shape::{CornerShapeHold, CornerStation};
 use crate::r#match::engine::goal::GoalPosition;
 use crate::r#match::engine::officiating::restart_shape::RestartStation;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::psychology::LapseFamily;
-use crate::r#match::engine::corner_shape::{CornerShapeHold, CornerStation};
+use crate::r#match::engine::result::{DeadTime, PlayingTime};
 use crate::r#match::engine::set_pieces::CornerRoutine;
 use crate::r#match::player::strategies::passing::CrossType;
-use crate::r#match::engine::result::{DeadTime, PlayingTime};
 use crate::r#match::{MatchPlayer, PlayerSide};
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::{CrossDiag, PassWeightCensus};
@@ -539,7 +539,7 @@ pub struct Ball {
     /// [`KickoffDelivery`] for the measurement, and [`KickoffShape`] for
     /// the team-mate it puts beside him.
     ///
-    /// [`KickoffDelivery`]: crate::r#match::common_states::KickoffDelivery
+    /// [`KickoffDelivery`]: crate::r#match::shared_states::KickoffDelivery
     /// [`KickoffShape`]: crate::r#match::engine::kickoff_shape::KickoffShape
     pub kickoff_taker: Option<u32>,
     /// …and that team-mate, who is who the kick-off is played to.
@@ -550,7 +550,7 @@ pub struct Ball {
     /// kick he was not going to shoot was walked away from the mark rather
     /// than played. See [`SetPieceKick`].
     ///
-    /// [`SetPieceKick`]: crate::r#match::common_states::SetPieceKick
+    /// [`SetPieceKick`]: crate::r#match::shared_states::SetPieceKick
     pub set_piece_kicker: Option<u32>,
     /// **The man handed a goal kick he has not yet kicked.** Law 16 puts
     /// the ball in play once it is kicked and clearly moves, and until
@@ -986,6 +986,7 @@ impl Ball {
         Self::travel_passes(ball, velocity, landing, man, LOOSE_CLAIM_DISTANCE)
     }
 
+    #[expect(clippy::too_many_lines)]
     pub fn with_coord(field_width: f32, field_height: f32) -> Self {
         let x = field_width / 2.0;
         let y = field_height / 2.0;
@@ -1843,7 +1844,10 @@ impl Ball {
                 ownership::reception_diag::DIED_DEAD_BALL.fetch_add(1, Ordering::Relaxed);
             }
             if let Some(ledger) = self.delivery_ledger.take() {
-                ledger.close(delivery_diag::DeliveryCensus::LOOSE, &mut self.delivery_tally);
+                ledger.close(
+                    delivery_diag::DeliveryCensus::LOOSE,
+                    &mut self.delivery_tally,
+                );
             }
         }
         self.shot_met = None;
@@ -2134,7 +2138,10 @@ impl Ball {
             self.pass_block_census = None;
             self.strike_origin = None;
             if let Some(ledger) = self.delivery_ledger.take() {
-                ledger.close(delivery_diag::DeliveryCensus::LOOSE, &mut self.delivery_tally);
+                ledger.close(
+                    delivery_diag::DeliveryCensus::LOOSE,
+                    &mut self.delivery_tally,
+                );
             }
         }
         self.cached_landing_position = self.position;

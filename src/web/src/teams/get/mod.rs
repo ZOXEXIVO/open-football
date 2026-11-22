@@ -1,8 +1,8 @@
 pub mod ai_report;
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::potential_stars::{PotentialStarsView, StarRating};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::potential_stars::{PotentialStarsView, StarRating};
 use crate::leagues::address::LeagueAddress;
 use crate::player::PlayerStatusDto;
 use crate::teams::newspaper::NewspaperCounter;
@@ -92,6 +92,7 @@ pub struct TeamPlayer {
     pub status: PlayerStatusDto,
 }
 
+#[expect(clippy::too_many_lines)]
 pub async fn team_get_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<TeamGetRequest>,

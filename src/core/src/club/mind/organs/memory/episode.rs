@@ -251,6 +251,7 @@ impl EpisodeSpec {
 impl EpisodeKind {
     /// The catalog. One row per kind — adding a remembered event means
     /// adding a variant and a row here, nothing else.
+    #[expect(clippy::too_many_lines)]
     pub fn spec(self) -> EpisodeSpec {
         use EpisodeDomain as D;
         use EpisodeSpec as S;

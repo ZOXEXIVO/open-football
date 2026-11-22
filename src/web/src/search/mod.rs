@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -106,6 +106,7 @@ pub struct SearchResultsDto {
 
 const MAX_RESULTS_PER_KIND: usize = 15;
 
+#[expect(clippy::too_many_lines)]
 pub async fn search_api_action(
     State(state): State<GameAppData>,
     Query(query): Query<SearchApiQuery>,

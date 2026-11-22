@@ -22,6 +22,7 @@ pub use state::*;
 
 // teamplay/ — re-export the modules (preserve `engine::<module>::` paths)
 // and the items previously surfaced at the engine root.
+pub use teamplay::adherence::Adherence;
 pub use teamplay::attack::{AttackPlan, AttackRefreshInputs, BoxSlot};
 pub use teamplay::chemistry::{
     ChemistryInputs, ChemistryMap, ChemistryModifiers, Lane, Role, TacticalFamiliarity,
@@ -30,7 +31,6 @@ pub use teamplay::chemistry::{
 pub use teamplay::coach::*;
 pub use teamplay::defence::{DefenceRefreshInputs, DefensiveDuty, DefensivePlan};
 pub use teamplay::shape::{ShapeRefreshInputs, TeamShape};
-pub use teamplay::adherence::Adherence;
 pub use teamplay::standard::MatchStandard;
 pub use teamplay::tactical::*;
 pub use teamplay::wide::{Flank, WidePlan};
@@ -82,8 +82,8 @@ pub use rating::*;
 pub use player::{
     BallOperationsImpl, ClaimIntent, ClaimOutcome, GraphEdge, GraphInvariantViolation, MatchPlayer,
     MatchPlayerLite, PlayerSide, SaveOutcome, TransitionGraph, TransitionSource, behaviours,
-    closure, common_states, defender_states, defenders, forwarders, goalkeepers,
-    midfielders, objects, passing, team, transition,
+    closure, defender_states, defenders, forwarders, goalkeepers, midfielders, objects, passing,
+    shared_states, team, transition,
 };
 
 // Re-export specific types from player submodules that code expects at this level
@@ -94,7 +94,6 @@ pub use player::positions::{
     SpatialGrid, ball as position_ball, closure as position_closure, objects as position_objects,
     players as position_players,
 };
-pub use player::strategies::common_states::{ActivityIntensity, MovementEffort};
 pub use player::strategies::passing::PassEvaluator;
 pub use player::strategies::players::{
     PlayerOpponentsOperationsImpl, PlayerTeammatesOperationsImpl,
@@ -103,6 +102,7 @@ pub use player::strategies::processor::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     StateProcessingResult, StateProcessor,
 };
+pub use player::strategies::shared_states::{ActivityIntensity, MovementEffort};
 // Export modules for those who want to access them
 pub use player::context as player_context;
 pub use player::positions as player_positions;

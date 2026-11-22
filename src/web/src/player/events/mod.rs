@@ -1,7 +1,7 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::slug::{PlayerPage, player_from_slug, resolve_player_page};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::slug::{PlayerPage, player_from_slug, resolve_player_page};
 use crate::leagues::address::LeagueAddress;
 use crate::player::newspaper::PlayerNewsCounter;
 use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
@@ -242,6 +242,7 @@ pub struct PlayerEventsTemplate {
     pub mood_tiles: Vec<EventFilterTile>,
 }
 
+#[expect(clippy::too_many_lines)]
 pub async fn player_events_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<PlayerEventsRequest>,
@@ -511,6 +512,7 @@ fn is_big_event(event_type: &HappinessEventType) -> bool {
     )
 }
 
+#[expect(clippy::too_many_lines)]
 pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
     match event_type {
         HappinessEventType::ManagerPraise => "event_manager_praise",
@@ -1228,6 +1230,7 @@ impl EventContextRenderer {
     /// event's cause, followed by AT MOST ONE evidence sentence picked
     /// by [`EvidencePicker::pick`]. Keeps the explanation specific
     /// without dumping every evidence atom on the user.
+    #[expect(clippy::too_many_lines)]
     fn detail_sentences(ctx: &HappinessEventContext, events_i18n: &EventI18n) -> Option<String> {
         // Selection events override the generic relationship cause —
         // the football-specific "manager preferred a fitter teammate"
@@ -3635,6 +3638,7 @@ struct HeadlineDispatcher<'a> {
 }
 
 impl<'a> HeadlineDispatcher<'a> {
+    #[expect(clippy::too_many_lines)]
     fn try_render(&self) -> Option<(String, bool)> {
         let ctx = self.event.context.as_ref()?;
         let ev = &self.event.event_type;

@@ -35,18 +35,18 @@ use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::ball::ball::contest::interception::InterceptionDuel;
 #[cfg(feature = "match-logs")]
-use crate::r#match::engine::ball::ball::diagnostics::delivery_diag::TouchKind;
-#[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::block_diag::{BlockDiag, PassBlockCensus};
 #[cfg(feature = "match-logs")]
-use crate::r#match::engine::ball::ball::diagnostics::strike_diag::GrantPath;
+use crate::r#match::engine::ball::ball::diagnostics::delivery_diag::TouchKind;
 #[cfg(feature = "match-logs")]
-use crate::r#match::player::diagnostics::defender_census::TakeRule;
+use crate::r#match::engine::ball::ball::diagnostics::strike_diag::GrantPath;
 use crate::r#match::engine::ball::ball::flight::motion::Carrier;
 use crate::r#match::engine::ball::ball::{
     AerialReach, Ball, BlockContact, CONTROL_DISTANCE, FlightProtection, GRAVITY_PER_TICK,
 };
 use crate::r#match::events::EventCollection;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::TakeRule;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext as EffSkillCtx, effective_skill,
@@ -431,6 +431,7 @@ impl Ball {
     /// One roll per pass at getting a body in its way. Runs on unowned
     /// balls in flight that are NOT shots — see the module note for why
     /// the two are kept apart.
+    #[expect(clippy::too_many_lines)]
     pub fn try_block_pass(
         &mut self,
         context: &MatchContext,
@@ -584,6 +585,7 @@ impl Ball {
     }
 
     /// Turn a won pass-block into a deflection, at the blocker.
+    #[expect(clippy::too_many_lines)]
     fn resolve_pass_block(
         &mut self,
         commit: PassBlockCommit,
@@ -675,10 +677,11 @@ impl Ball {
             #[cfg(feature = "match-logs")]
             {
                 self.open_arrival(GrantPath::CONTEST, blocker.position);
-                context
-                    .defender_census
-                    .borrow_mut()
-                    .tag_take(TakeRule::PassBlock, blocker_id, tick);
+                context.defender_census.borrow_mut().tag_take(
+                    TakeRule::PassBlock,
+                    blocker_id,
+                    tick,
+                );
             }
             self.current_owner = Some(blocker_id);
             self.touch(blocker_id, Carrier::of(blocker));
@@ -858,8 +861,14 @@ mod pass_block_tests {
         // Halfway (no danger) and too soon to read it: only his body.
         let square = PassBlock::chance(&at(0.0, 16.0, 10.0, 1.0, 0.0), 0.6, 0.6);
         let off_the_line = PassBlock::chance(&at(6.0, 16.0, 10.0, 1.0, 0.0), 0.6, 0.6);
-        assert!(square > 0.0, "a ball struck into a body is not a ball through it");
-        assert!(square > off_the_line, "{square} square on vs {off_the_line} a toe away");
+        assert!(
+            square > 0.0,
+            "a ball struck into a body is not a ball through it"
+        );
+        assert!(
+            square > off_the_line,
+            "{square} square on vs {off_the_line} a toe away"
+        );
     }
 
     /// A metre off its line the charge-down is a toe's.

@@ -20,6 +20,7 @@ impl DugoutDesk {
     /// reporting the noise rather than the relationship. The sourest
     /// version that applies wins, because that is the one a reader
     /// remembers.
+    #[expect(clippy::too_many_lines)]
     pub fn file_player(
         out: &mut Vec<NewsStory>,
         player: &Player,

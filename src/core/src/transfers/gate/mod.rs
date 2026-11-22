@@ -1173,6 +1173,7 @@ impl StandingFit {
 }
 
 impl TransferMovePlausibility {
+    #[expect(clippy::too_many_lines)]
     pub fn assess(inputs: &TransferPlausibilityInputs) -> TransferMoveAssessment {
         let importance = TransferPlausibilityEvaluator::player_importance(inputs);
         let drop = TransferPlausibilityEvaluator::sporting_drop(inputs);

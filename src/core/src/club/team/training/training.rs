@@ -444,6 +444,7 @@ impl TeamTraining {
     /// pairs. Magnitude is non-trivial when an event lands so chemistry
     /// actually moves — but we gate event emission so the player history
     /// only sees meaningful bonds.
+    #[expect(clippy::too_many_lines)]
     fn apply_pairwise_bonding(
         team: &mut Team,
         participant_ids: &[u32],
@@ -1412,6 +1413,7 @@ impl WeeklyTrainingPlan {
     /// `congested` flag drops Speed / Pressing in favour of technical
     /// work to protect a tired squad. In season an uncongested week holds
     /// one strength or agility block, on its first main-load day.
+    #[expect(clippy::too_many_lines)]
     fn main_load_sessions(
         day: Weekday,
         phase: PeriodizationPhase,

@@ -300,7 +300,10 @@ mod tests {
 
     #[test]
     fn the_neutral_plan_reads_as_the_balanced_style() {
-        assert_eq!(StyleInputs::of_plan(&GamePlan::neutral()), StyleInputs::neutral());
+        assert_eq!(
+            StyleInputs::of_plan(&GamePlan::neutral()),
+            StyleInputs::neutral()
+        );
     }
 
     #[test]
@@ -371,19 +374,21 @@ mod tests {
             |difference: i32| Stance::reading(&outlook, &Temperament::neutral(), &at(difference));
         let (protecting, level) = (lever(1), lever(0));
         assert_eq!(outlook.occasion, Occasion::League);
-        for phase in [GamePhase::MidBlock, GamePhase::LowBlock, GamePhase::Progression] {
+        for phase in [
+            GamePhase::MidBlock,
+            GamePhase::LowBlock,
+            GamePhase::Progression,
+        ] {
             assert!(
-                TeamTacticalState::line_progress(phase, TeamTacticalState::STANCE_LINE * protecting)
-                    < TeamTacticalState::line_progress(phase, TeamTacticalState::STANCE_LINE * level)
+                TeamTacticalState::line_progress(
+                    phase,
+                    TeamTacticalState::STANCE_LINE * protecting
+                ) < TeamTacticalState::line_progress(phase, TeamTacticalState::STANCE_LINE * level)
             );
         }
         assert!(
             TeamTacticalState::compute_rest_defense_count(4.0, GamePhase::Progression, protecting)
-                > TeamTacticalState::compute_rest_defense_count(
-                    4.0,
-                    GamePhase::Progression,
-                    level
-                )
+                > TeamTacticalState::compute_rest_defense_count(4.0, GamePhase::Progression, level)
         );
     }
 

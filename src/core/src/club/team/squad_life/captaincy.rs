@@ -972,7 +972,7 @@ impl CaptaincyMagnitude {
 mod tests {
     use super::{CaptaincyAssigner, CaptaincyModel};
     use crate::club::player::builder::PlayerBuilder;
-    use crate::club::player::core::player::SquadSocialView;
+    use crate::club::player::model::player::SquadSocialView;
     use crate::club::team::squad_life::matchday_leadership::{
         LeadershipCandidate, MatchdayLeadership,
     };

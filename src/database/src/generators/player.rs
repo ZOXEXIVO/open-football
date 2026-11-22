@@ -178,6 +178,7 @@ impl SkillGroup {
 pub struct RoleArchetype;
 
 impl RoleArchetype {
+    #[expect(clippy::too_many_lines)]
     pub fn apply(weights: &mut [f32; SKILL_COUNT], position: &PositionType, roll: f32) {
         match position {
             PositionType::Goalkeeper => {
@@ -802,6 +803,7 @@ impl PlayerGenerator {
     ///      by how far that position's families have matured at his age.
     ///   6. Skills generated to target CA via per-exact-position weights and
     ///      rescaled until `calculate_ability_for_position` lands on target.
+    #[expect(clippy::too_many_lines)]
     pub fn generate(
         &self,
         country_id: u32,
@@ -973,6 +975,7 @@ impl PlayerGenerator {
 
     // ── Skill generation pipeline ───────────────────────────────────────
 
+    #[expect(clippy::too_many_lines)]
     fn generate_skills(
         primary_position: PlayerPositionType,
         age: u32,
@@ -1652,6 +1655,7 @@ impl PlayerGenerator {
     // uniformly rescaled so the position-weighted CA matches the record.
     // All randomness is seeded from the record id: same record, same player,
     // every save.
+    #[expect(clippy::too_many_lines)]
     pub fn generate_from_odb(
         record: &OdbPlayer,
         continent_id: u32,

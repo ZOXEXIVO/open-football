@@ -162,6 +162,7 @@ impl ProcessContractHandler {
         package_value(proposal, player)
     }
 
+    #[expect(clippy::too_many_lines)]
     pub fn process(
         player: &mut Player,
         proposal: PlayerContractProposal,

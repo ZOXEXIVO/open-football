@@ -5,7 +5,7 @@
 
 use super::substitution_break_tests::kickoff;
 use crate::r#match::ConditionContext;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::shared::{ActivityIntensity, DefenderCondition};
 use crate::r#match::engine::ball::ball::{Ball, BallRoll};
 use crate::r#match::engine::environment::{EnvModifiers, MatchEnvironment, Pitch, Weather};
 use crate::r#match::engine::player::events::players::PlayerEventDispatcher;

@@ -162,6 +162,7 @@ impl TeamTacticalState {
     /// Recompute both teams' tactical state in-place. Called periodically
     /// from the match tick loop (every ~10 ticks is enough — phase shifts
     /// settle over multiple seconds, not every frame).
+    #[expect(clippy::too_many_lines)]
     pub fn refresh(home: &mut Self, away: &mut Self, inputs: &TacticalRefreshInputs<'_>) {
         let field = inputs.field;
         let field_width = field.size.width as f32;

@@ -94,6 +94,7 @@ impl OpponentSelectionProfile {
     /// squad quality blended with a shape prior — a quick counter-
     /// attacking side and a towering set-piece side produce genuinely
     /// different selection pressure on the picking coach.
+    #[expect(clippy::too_many_lines)]
     pub fn from_opponent_team(opponent: &Team, own_reputation: u16) -> Self {
         let roster: Vec<&Player> = opponent
             .players
@@ -487,7 +488,10 @@ impl MatchSelectionGameModel {
             opponent_profile: OpponentSelectionProfile::neutral(),
             environmental_profile: EnvironmentSelectionProfile::neutral_home(),
             squad_state: SquadStateProfile::from_signals(available_len, staff),
-            coach_tendencies: CoachSelectionTendencies::from_profile(&profile, ctx.philosophy.as_ref()),
+            coach_tendencies: CoachSelectionTendencies::from_profile(
+                &profile,
+                ctx.philosophy.as_ref(),
+            ),
         }
     }
 

@@ -288,7 +288,10 @@ impl BlockDiag {
         SHOTS_STRUCK.fetch_add(1, Ordering::Relaxed);
         GOALSIDE_AT_STRIKE.fetch_add(goalside, Ordering::Relaxed);
         let metres = shot_range.max(0.0) * 0.125;
-        let band = [6.0, 11.0, 16.5, 22.0, 30.0].iter().position(|edge| metres < *edge).unwrap_or(5);
+        let band = [6.0, 11.0, 16.5, 22.0, 30.0]
+            .iter()
+            .position(|edge| metres < *edge)
+            .unwrap_or(5);
         STRUCK_BY_BAND[band].fetch_add(1, Ordering::Relaxed);
         GOALSIDE_BY_BAND[band].fetch_add(goalside, Ordering::Relaxed);
         GOALSIDE_NEAR_LINE.fetch_add(near_line, Ordering::Relaxed);

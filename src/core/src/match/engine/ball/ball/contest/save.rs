@@ -13,10 +13,10 @@ use crate::r#match::engine::ball::ball::{AerialReach, Ball, BallRoll, GRAVITY_PE
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH, GoalPosition};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::player::events::players::save_accounting_stats;
-use crate::r#match::events::EventCollection;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
-use crate::r#match::goalkeepers::states::common::{KeeperAppetite, KeeperShotReaction};
+use crate::r#match::events::EventCollection;
+use crate::r#match::goalkeepers::states::shared::{KeeperAppetite, KeeperShotReaction};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::keeper_census::{KeeperCensus, SaveSettlement};
@@ -1205,6 +1205,7 @@ impl Ball {
         self.cached_shot_target = None;
     }
 
+    #[expect(clippy::too_many_lines)]
     pub fn try_save_shot(
         &mut self,
         context: &MatchContext,
@@ -1897,7 +1898,7 @@ impl Ball {
             * hands
             * skid
             * KeeperAppetite::hold_share(appetite))
-            .clamp(0.05, 0.95);
+        .clamp(0.05, 0.95);
         // Of the ones he cannot hold, the share he still puts somewhere
         // safe — round the post, or wide of it — rather than back off his
         // palms into the danger area. Expressed as a SHARE of the ones he
@@ -2464,11 +2465,7 @@ mod tests {
                 // Through the same entry point the live roll uses, so
                 // that billing the flight to the keeper instead of the
                 // goal — which reverses this whole property — fails here.
-                SaveModel::settle_from_strike(
-                    struck_from,
-                    2.76,
-                    Vector3::new(0.0, goal_y, 0.0),
-                ),
+                SaveModel::settle_from_strike(struck_from, 2.76, Vector3::new(0.0, goal_y, 0.0)),
                 0.5,
                 SaveModel::NEUTRAL_THREAT,
                 0.0,

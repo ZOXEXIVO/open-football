@@ -11,8 +11,8 @@
 
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::traits::PlayerTrait;
-use crate::r#match::engine::coach::TacticalNeed;
 use crate::r#match::engine::ball::ball::Ball;
+use crate::r#match::engine::coach::TacticalNeed;
 use crate::r#match::engine::psychology::PsychState;
 use crate::r#match::engine::sub_scoring::SubScoring;
 use crate::r#match::player::strategies::players::ops::dribble_duel::{
@@ -114,7 +114,10 @@ fn a_nervous_receiver_spills_more_of_the_same_balls() {
     let (mis_edgy, heavy_edgy) = Ball::first_touch_chances(0.4, 0.55, Some(&nervous));
     assert!(mis_edgy > mis_calm * 2.0, "{mis_edgy} against {mis_calm}");
     assert!(heavy_edgy > heavy_calm);
-    assert_eq!(Ball::first_touch_chances(0.4, 0.55, None), (mis_calm, heavy_calm));
+    assert_eq!(
+        Ball::first_touch_chances(0.4, 0.55, None),
+        (mis_calm, heavy_calm)
+    );
 }
 
 #[test]
