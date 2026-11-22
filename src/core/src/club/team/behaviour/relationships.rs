@@ -10,136 +10,154 @@ use crate::{ChangeType, Person, Player, PlayerCollection};
 use rustc_hash::FxHashMap;
 
 impl TeamBehaviour {
-    /// Reputation dynamics: star players command respect or create tension
-    /// High-reputation players are admired by professional teammates but
-    /// resented by ambitious players who feel overshadowed
-    #[expect(clippy::too_many_lines)]
     pub(super) fn process_reputation_dynamics(
         players: &PlayerCollection,
         result: &mut TeamBehaviourResult,
     ) {
         for i in 0..players.players.len() {
             for j in i + 1..players.players.len() {
-                let player_i = &players.players[i];
-                let player_j = &players.players[j];
-
-                let rep_i = player_i.player_attributes.current_reputation as f32;
-                let rep_j = player_j.player_attributes.current_reputation as f32;
-                let rep_diff = (rep_i - rep_j).abs();
-
-                if rep_diff < 500.0 {
-                    // Similar reputation: mutual professional respect
-                    let max_rep = rep_i.max(rep_j);
-                    let respect_bonus = 0.03 * (max_rep / 10000.0).clamp(0.1, 1.0);
-
-                    if respect_bonus > 0.005 {
-                        result
-                            .players
-                            .relationship_result
-                            .push(PlayerRelationshipChangeResult {
-                                from_player_id: player_i.id,
-                                to_player_id: player_j.id,
-                                relationship_change: respect_bonus,
-                                change_type: ChangeType::ReputationAdmiration,
-                            });
-                        result
-                            .players
-                            .relationship_result
-                            .push(PlayerRelationshipChangeResult {
-                                from_player_id: player_j.id,
-                                to_player_id: player_i.id,
-                                relationship_change: respect_bonus,
-                                change_type: ChangeType::ReputationAdmiration,
-                            });
-                    }
-                } else if rep_diff > 3000.0 {
-                    // Large reputation gap: admiration or resentment
-                    let (star, lesser) = if rep_i > rep_j {
-                        (player_i, player_j)
-                    } else {
-                        (player_j, player_i)
-                    };
-                    let (star_id, lesser_id) = (star.id, lesser.id);
-
-                    // Lesser player's reaction depends on personality
-                    let admiration = (lesser.attributes.sportsmanship / 20.0) * 0.1
-                        + (lesser.attributes.professionalism / 20.0) * 0.05;
-
-                    let resentment = if lesser.attributes.ambition > 14.0 {
-                        (lesser.attributes.ambition - 14.0) / 6.0 * -0.08
-                    } else {
-                        0.0
-                    };
-
-                    let lesser_to_star = admiration + resentment;
-
-                    if lesser_to_star.abs() > 0.01 {
-                        let change_type = if lesser_to_star > 0.0 {
-                            ChangeType::ReputationAdmiration
-                        } else {
-                            ChangeType::ReputationTension
-                        };
-
-                        result
-                            .players
-                            .relationship_result
-                            .push(PlayerRelationshipChangeResult {
-                                from_player_id: lesser_id,
-                                to_player_id: star_id,
-                                relationship_change: lesser_to_star,
-                                change_type,
-                            });
-                    }
-
-                    // Star player's reaction: professional stars are approachable,
-                    // controversial stars create tension
-                    let star_to_lesser = if star.attributes.professionalism > 14.0 {
-                        0.04 * (star.attributes.professionalism / 20.0)
-                    } else if star.attributes.controversy > 14.0 {
-                        -0.06 * (star.attributes.controversy / 20.0)
-                    } else {
-                        0.0
-                    };
-
-                    if star_to_lesser.abs() > 0.01 {
-                        let change_type = if star_to_lesser > 0.0 {
-                            ChangeType::PersonalSupport
-                        } else {
-                            ChangeType::ReputationTension
-                        };
-
-                        result
-                            .players
-                            .relationship_result
-                            .push(PlayerRelationshipChangeResult {
-                                from_player_id: star_id,
-                                to_player_id: lesser_id,
-                                relationship_change: star_to_lesser,
-                                change_type,
-                            });
-                    }
-                } else if rep_diff > 1000.0 {
-                    // Moderate reputation gap: small professional respect toward higher-rep player
-                    let (higher_id, lower_id) = if rep_i > rep_j {
-                        (player_i.id, player_j.id)
-                    } else {
-                        (player_j.id, player_i.id)
-                    };
-
-                    let respect = 0.02 * (rep_i.max(rep_j) / 10000.0).clamp(0.1, 1.0);
-
-                    result
-                        .players
-                        .relationship_result
-                        .push(PlayerRelationshipChangeResult {
-                            from_player_id: lower_id,
-                            to_player_id: higher_id,
-                            relationship_change: respect,
-                            change_type: ChangeType::ReputationAdmiration,
-                        });
-                }
+                result
+                    .players
+                    .relationship_result
+                    .extend(Self::reputation_pair_changes(
+                        &players.players[i],
+                        &players.players[j],
+                    ));
             }
         }
+    }
+
+    /// Reputation dynamics for one pair: similar reputations command mutual
+    /// respect, a very large gap produces admiration or resentment, and a
+    /// moderate gap produces a one-way professional respect.
+    fn reputation_pair_changes(
+        player_i: &Player,
+        player_j: &Player,
+    ) -> Vec<PlayerRelationshipChangeResult> {
+        let rep_i = player_i.player_attributes.current_reputation as f32;
+        let rep_j = player_j.player_attributes.current_reputation as f32;
+        let rep_diff = (rep_i - rep_j).abs();
+
+        if rep_diff < 500.0 {
+            Self::similar_reputation_changes(player_i, player_j, rep_i.max(rep_j))
+        } else if rep_diff > 3000.0 {
+            Self::large_reputation_gap_changes(player_i, player_j, rep_i, rep_j)
+        } else if rep_diff > 1000.0 {
+            Self::moderate_reputation_gap_changes(player_i, player_j, rep_i, rep_j)
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Similar reputation: mutual professional respect.
+    fn similar_reputation_changes(
+        player_i: &Player,
+        player_j: &Player,
+        max_rep: f32,
+    ) -> Vec<PlayerRelationshipChangeResult> {
+        let respect_bonus = 0.03 * (max_rep / 10000.0).clamp(0.1, 1.0);
+        if respect_bonus <= 0.005 {
+            return Vec::new();
+        }
+        vec![
+            PlayerRelationshipChangeResult {
+                from_player_id: player_i.id,
+                to_player_id: player_j.id,
+                relationship_change: respect_bonus,
+                change_type: ChangeType::ReputationAdmiration,
+            },
+            PlayerRelationshipChangeResult {
+                from_player_id: player_j.id,
+                to_player_id: player_i.id,
+                relationship_change: respect_bonus,
+                change_type: ChangeType::ReputationAdmiration,
+            },
+        ]
+    }
+
+    /// Large gap: the lesser player admires or resents the star, and the
+    /// star responds with support or tension.
+    fn large_reputation_gap_changes(
+        player_i: &Player,
+        player_j: &Player,
+        rep_i: f32,
+        rep_j: f32,
+    ) -> Vec<PlayerRelationshipChangeResult> {
+        let (star, lesser) = if rep_i > rep_j {
+            (player_i, player_j)
+        } else {
+            (player_j, player_i)
+        };
+        let (star_id, lesser_id) = (star.id, lesser.id);
+        let mut changes = Vec::new();
+
+        // Lesser player's reaction depends on personality.
+        let admiration = (lesser.attributes.sportsmanship / 20.0) * 0.1
+            + (lesser.attributes.professionalism / 20.0) * 0.05;
+        let resentment = if lesser.attributes.ambition > 14.0 {
+            (lesser.attributes.ambition - 14.0) / 6.0 * -0.08
+        } else {
+            0.0
+        };
+        let lesser_to_star = admiration + resentment;
+        if lesser_to_star.abs() > 0.01 {
+            changes.push(PlayerRelationshipChangeResult {
+                from_player_id: lesser_id,
+                to_player_id: star_id,
+                relationship_change: lesser_to_star,
+                change_type: if lesser_to_star > 0.0 {
+                    ChangeType::ReputationAdmiration
+                } else {
+                    ChangeType::ReputationTension
+                },
+            });
+        }
+
+        // Star player's reaction: professional stars are approachable,
+        // controversial stars create tension.
+        let star_to_lesser = if star.attributes.professionalism > 14.0 {
+            0.04 * (star.attributes.professionalism / 20.0)
+        } else if star.attributes.controversy > 14.0 {
+            -0.06 * (star.attributes.controversy / 20.0)
+        } else {
+            0.0
+        };
+        if star_to_lesser.abs() > 0.01 {
+            changes.push(PlayerRelationshipChangeResult {
+                from_player_id: star_id,
+                to_player_id: lesser_id,
+                relationship_change: star_to_lesser,
+                change_type: if star_to_lesser > 0.0 {
+                    ChangeType::PersonalSupport
+                } else {
+                    ChangeType::ReputationTension
+                },
+            });
+        }
+
+        changes
+    }
+
+    /// Moderate gap: small professional respect toward the higher-reputation
+    /// player.
+    fn moderate_reputation_gap_changes(
+        player_i: &Player,
+        player_j: &Player,
+        rep_i: f32,
+        rep_j: f32,
+    ) -> Vec<PlayerRelationshipChangeResult> {
+        let (higher_id, lower_id) = if rep_i > rep_j {
+            (player_i.id, player_j.id)
+        } else {
+            (player_j.id, player_i.id)
+        };
+        let respect = 0.02 * (rep_i.max(rep_j) / 10000.0).clamp(0.1, 1.0);
+        vec![PlayerRelationshipChangeResult {
+            from_player_id: lower_id,
+            to_player_id: higher_id,
+            relationship_change: respect,
+            change_type: ChangeType::ReputationAdmiration,
+        }]
     }
 
     /// Mentorship dynamics: experienced veterans mentor young players

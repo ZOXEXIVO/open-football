@@ -501,15 +501,34 @@ impl WorkerRegistry {
     }
 
     async fn connect_and_handshake(address: String, coordinator_version: String) -> Worker {
-        let connect = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(&address)).await;
-        let mut stream = match connect {
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => return Self::unreachable(address, e.to_string()),
-            Err(_) => return Self::unreachable(address, "connect timeout".to_string()),
+        let mut stream = match Self::connect(&address).await {
+            Ok(stream) => stream,
+            Err(reason) => return Self::unreachable(address, reason),
         };
 
+        let response = match Self::exchange_handshake(&mut stream, &coordinator_version).await {
+            Ok(response) => response,
+            Err(reason) => return Self::unreachable(address, reason),
+        };
+
+        Self::worker_from_handshake(address, coordinator_version, response, stream)
+    }
+
+    async fn connect(address: &str) -> Result<TcpStream, String> {
+        let connect = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(address)).await;
+        match connect {
+            Ok(Ok(stream)) => Ok(stream),
+            Ok(Err(e)) => Err(e.to_string()),
+            Err(_) => Err("connect timeout".to_string()),
+        }
+    }
+
+    async fn exchange_handshake(
+        stream: &mut TcpStream,
+        coordinator_version: &str,
+    ) -> Result<Response, String> {
         let handshake = Request::Handshake {
-            coordinator_version: coordinator_version.clone(),
+            coordinator_version: coordinator_version.to_string(),
             protocol_version: PROTOCOL_VERSION,
             // The worker inherits this coordinator's recording switches. Read
             // here rather than cached at startup so a worker dialled after a
@@ -517,15 +536,22 @@ impl WorkerRegistry {
             recording: Self::recording_settings(),
         };
         let exchange = async {
-            Frame::write(&mut stream, &handshake).await?;
-            Frame::read(&mut stream).await
+            Frame::write(&mut *stream, &handshake).await?;
+            Frame::read::<Response>(&mut *stream).await
         };
-        let response: Response = match tokio::time::timeout(HANDSHAKE_TIMEOUT, exchange).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => return Self::unreachable(address, format!("handshake io: {}", e)),
-            Err(_) => return Self::unreachable(address, "handshake timeout".to_string()),
-        };
+        match tokio::time::timeout(HANDSHAKE_TIMEOUT, exchange).await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(e)) => Err(format!("handshake io: {}", e)),
+            Err(_) => Err("handshake timeout".to_string()),
+        }
+    }
 
+    fn worker_from_handshake(
+        address: String,
+        coordinator_version: String,
+        response: Response,
+        stream: TcpStream,
+    ) -> Worker {
         match response {
             Response::Handshake {
                 version,

@@ -51,7 +51,6 @@ impl SquadDepthChart {
     /// `development` is how far the side exists to develop players
     /// ([`crate::TeamType::development_weight`]): there the staff's belief
     /// in a man counts toward his standing as well as what he is today.
-    #[expect(clippy::too_many_lines)]
     pub fn build(
         players: &[&Player],
         tactics: &Tactics,
@@ -69,25 +68,52 @@ impl SquadDepthChart {
             })
             .collect();
 
-        let standing = |player: &Player, slot: PlayerPositionType| -> f32 {
-            let level = f32::from(AbilityEstimator::observable_level(player));
-            let familiarity = RoleFamiliarity::credit_at(RoleFamiliarity::level_for_slot(
-                &player.positions,
-                slot,
-            ));
-            let belief = if development > 0.0 {
-                development
-                    * Self::BELIEF_REACH
-                    * PotentialEstimator::believed_growth(player, today)
-            } else {
-                0.0
-            };
-            (level + belief) * familiarity
-                + StandingRead::chart_margin(memory.and_then(|m| m.standing_of(player.id)))
-        };
+        Self::fill_keeper_shirt(
+            &mut shirts,
+            players,
+            slots,
+            keepers,
+            memory,
+            development,
+            today,
+        );
+        Self::fill_outfield_shirts(&mut shirts, players, slots, memory, development, today);
 
-        // The gloves follow the goalkeeping department's declared order
-        // where it has one, and the coach's own eye behind it.
+        let places = Self::places_of(&shirts);
+        SquadDepthChart { shirts, places }
+    }
+
+    /// What the coach makes of a man in one shirt.
+    fn standing(
+        player: &Player,
+        slot: PlayerPositionType,
+        memory: Option<&CoachMemoryStore>,
+        development: f32,
+        today: NaiveDate,
+    ) -> f32 {
+        let level = f32::from(AbilityEstimator::observable_level(player));
+        let familiarity =
+            RoleFamiliarity::credit_at(RoleFamiliarity::level_for_slot(&player.positions, slot));
+        let belief = if development > 0.0 {
+            development * Self::BELIEF_REACH * PotentialEstimator::believed_growth(player, today)
+        } else {
+            0.0
+        };
+        (level + belief) * familiarity
+            + StandingRead::chart_margin(memory.and_then(|m| m.standing_of(player.id)))
+    }
+
+    /// The gloves follow the goalkeeping department's declared order
+    /// where it has one, and the coach's own eye behind it.
+    fn fill_keeper_shirt(
+        shirts: &mut [ShirtDepth],
+        players: &[&Player],
+        slots: &[PlayerPositionType],
+        keepers: Option<&KeeperRoomPlan>,
+        memory: Option<&CoachMemoryStore>,
+        development: f32,
+        today: NaiveDate,
+    ) {
         if let Some(goal) = slots
             .iter()
             .position(|slot| *slot == PlayerPositionType::Goalkeeper)
@@ -101,7 +127,18 @@ impl SquadDepthChart {
             let mut room: Vec<(u32, f32)> = players
                 .iter()
                 .filter(|p| p.positions.is_goalkeeper())
-                .map(|p| (p.id, standing(p, PlayerPositionType::Goalkeeper)))
+                .map(|p| {
+                    (
+                        p.id,
+                        Self::standing(
+                            p,
+                            PlayerPositionType::Goalkeeper,
+                            memory,
+                            development,
+                            today,
+                        ),
+                    )
+                })
                 .collect();
             room.sort_by(|a, b| {
                 declared(a.0)
@@ -111,12 +148,21 @@ impl SquadDepthChart {
             });
             shirts[goal].men = room;
         }
+    }
 
-        // Outfield shirts are filled a string at a time: one assignment
-        // names the first choices, the next names the men behind them from
-        // whoever is left, until everyone is planned somewhere. Nobody is
-        // planned for a shirt he cannot play: a shirt the squad has no one
-        // for is left to the day's team sheet.
+    /// Outfield shirts are filled a string at a time: one assignment
+    /// names the first choices, the next names the men behind them from
+    /// whoever is left, until everyone is planned somewhere. Nobody is
+    /// planned for a shirt he cannot play: a shirt the squad has no one
+    /// for is left to the day's team sheet.
+    fn fill_outfield_shirts(
+        shirts: &mut [ShirtDepth],
+        players: &[&Player],
+        slots: &[PlayerPositionType],
+        memory: Option<&CoachMemoryStore>,
+        development: f32,
+        today: NaiveDate,
+    ) {
         let outfield: Vec<usize> = (0..slots.len())
             .filter(|i| slots[*i] != PlayerPositionType::Goalkeeper)
             .collect();
@@ -135,7 +181,7 @@ impl SquadDepthChart {
                 .flat_map(|p| {
                     outfield.iter().map(|&shirt| {
                         if RoleFamiliarity::credit_at(familiarity(p, slots[shirt])) > 0.0 {
-                            standing(p, slots[shirt])
+                            Self::standing(p, slots[shirt], memory, development, today)
                         } else {
                             Self::CANNOT_PLAY
                         }
@@ -164,8 +210,24 @@ impl SquadDepthChart {
             }
             pool.sort_by_key(|p| p.id);
         }
-        // A man who can play no shirt of this shape stands last behind the
-        // one he is least unfamiliar with, among those somebody holds.
+
+        Self::place_unfamiliar(shirts, pool, &outfield, slots, memory, development, today);
+    }
+
+    /// A man who can play no shirt of this shape stands last behind the
+    /// one he is least unfamiliar with, among those somebody holds.
+    fn place_unfamiliar(
+        shirts: &mut [ShirtDepth],
+        pool: Vec<&Player>,
+        outfield: &[usize],
+        slots: &[PlayerPositionType],
+        memory: Option<&CoachMemoryStore>,
+        development: f32,
+        today: NaiveDate,
+    ) {
+        let familiarity = |player: &Player, slot: PlayerPositionType| -> f32 {
+            RoleFamiliarity::level_for_slot(&player.positions, slot)
+        };
         for player in pool {
             let shirt = outfield.iter().copied().max_by(|a, b| {
                 let key = |shirt: usize| {
@@ -179,12 +241,14 @@ impl SquadDepthChart {
                 held_a.cmp(&held_b).then(level_a.total_cmp(&level_b))
             });
             if let Some(shirt) = shirt {
-                let standing = standing(player, slots[shirt]);
+                let standing = Self::standing(player, slots[shirt], memory, development, today);
                 shirts[shirt].men.push((player.id, standing));
             }
         }
+    }
 
-        let places = shirts
+    fn places_of(shirts: &[ShirtDepth]) -> FxHashMap<u32, ChartPlace> {
+        shirts
             .iter()
             .enumerate()
             .flat_map(|(shirt, depth)| {
@@ -204,9 +268,7 @@ impl SquadDepthChart {
                         )
                     })
             })
-            .collect();
-
-        SquadDepthChart { shirts, places }
+            .collect()
     }
 
     pub fn shirts(&self) -> &[ShirtDepth] {

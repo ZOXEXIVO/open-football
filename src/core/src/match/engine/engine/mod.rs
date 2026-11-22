@@ -38,6 +38,7 @@ use crate::r#match::events::EventDispatcher;
 use crate::r#match::field::MatchField;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::statistics::MatchStatisticType;
+use crate::r#match::player::strategies::players::ops::effective_skill::ActionContext;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::result::ResultMatchPositionData;
 use crate::r#match::{
@@ -248,7 +249,7 @@ impl SkillAccumulator {
         // Use effective skills for the concentration / teamwork
         // average. Without `effective_skill` an exhausted side would
         // still register as "well-organised" purely on paper skill.
-        let mental = sc::EffActionContext::mental(minute);
+        let mental = ActionContext::mental(minute);
         let conc = sc::n(sc::eff(p, mental, |q| q.skills.mental.concentration));
         let team = sc::n(sc::eff(p, mental, |q| q.skills.mental.teamwork));
         self.conc_team_sum += (conc + team) * 0.5;

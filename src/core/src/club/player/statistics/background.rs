@@ -204,8 +204,41 @@ impl MatchExperienceBackground {
         (starts as f32 / Self::SEASON_MATCHES).clamp(0.0, 1.0)
     }
 
-    #[expect(clippy::too_many_lines)]
     pub fn from_player(player: &Player) -> Self {
+        let mut slices = Self::spell_slices(player);
+
+        let career_official_apps: u32 = slices.iter().map(|s| s.apps as u32).sum();
+        let career_official_starts: u32 = slices.iter().map(|s| s.starts as u32).sum();
+        let established = Self::established(career_official_apps);
+
+        let (peak_spell_reputation, peak_spell_season_year, peak_spell_apps) =
+            Self::peak_spell(&slices);
+
+        // Counted after the spells are tallied: the tally's order is the
+        // order the slices were read in.
+        slices.sort_unstable_by(|a, b| a.team_slug.cmp(b.team_slug));
+        let distinct_clubs = slices.chunk_by(|a, b| a.team_slug == b.team_slug).count() as u16;
+
+        let (recent_start_share, recent_loan_starts, recent_record_reputation) =
+            Self::recent_window(&slices);
+
+        MatchExperienceBackground {
+            career_official_apps,
+            career_official_starts,
+            recent_start_share,
+            recent_loan_starts,
+            recent_record_reputation,
+            peak_spell_reputation,
+            peak_spell_season_year,
+            peak_spell_apps,
+            distinct_clubs,
+            established,
+        }
+    }
+
+    /// Every completed official spell behind the player, excluding the
+    /// still-open current one — the present is not background.
+    fn spell_slices(player: &Player) -> Vec<SpellSlice<'_>> {
         let history = &player.statistics_history;
         let mut slices: Vec<SpellSlice<'_>> =
             Vec::with_capacity(history.season_ledger.len() + history.current.len());
@@ -241,15 +274,20 @@ impl MatchExperienceBackground {
                 is_loan: e.is_loan,
             });
         }
+        slices
+    }
 
-        let career_official_apps: u32 = slices.iter().map(|s| s.apps as u32).sum();
-        let career_official_starts: u32 = slices.iter().map(|s| s.starts as u32).sum();
-        let established = 1.0 - (-(career_official_apps as f32) / Self::ESTABLISHED_SCALE).exp();
+    /// Continuous 0..1 "established professional" saturation over career
+    /// official apps — no cliff between prospect and pro.
+    fn established(career_official_apps: u32) -> f32 {
+        1.0 - (-(career_official_apps as f32) / Self::ESTABLISHED_SCALE).exp()
+    }
 
-        // Peak spell: per (season, club) totals; only seasons with real
-        // involvement anchor the level the player has actually played at.
+    /// Peak spell: per (season, club) totals; only seasons with real
+    /// involvement anchor the level the player has actually played at.
+    fn peak_spell(slices: &[SpellSlice<'_>]) -> (u16, u16, u16) {
         let mut per_spell: FxHashMap<(u16, &str), (u16, u16)> = FxHashMap::default();
-        for s in &slices {
+        for s in slices {
             let entry = per_spell
                 .entry((s.season_year, s.team_slug))
                 .or_insert((0, s.team_reputation));
@@ -271,63 +309,50 @@ impl MatchExperienceBackground {
                 peak_spell_apps = *apps;
             }
         }
-
-        // Counted after the spells are tallied: the tally's order is the
-        // order the slices were read in.
-        slices.sort_unstable_by(|a, b| a.team_slug.cmp(b.team_slug));
-        let distinct_clubs = slices.chunk_by(|a, b| a.team_slug == b.team_slug).count() as u16;
-
-        // Recent window: the latest season-year in the record plus the one
-        // before it, weighted toward the latest.
-        let latest_year = slices.iter().map(|s| s.season_year).max();
-        let (recent_start_share, recent_loan_starts, recent_record_reputation) = match latest_year {
-            None => (0.0, 0, 0),
-            Some(latest) => {
-                let share_of = |year: u16| -> Option<f32> {
-                    let starts: u16 = slices
-                        .iter()
-                        .filter(|s| s.season_year == year)
-                        .map(|s| s.starts)
-                        .sum();
-                    let any = slices.iter().any(|s| s.season_year == year);
-                    any.then(|| (starts as f32 / Self::SEASON_MATCHES).clamp(0.0, 1.0))
-                };
-                let last = share_of(latest).unwrap_or(0.0);
-                let share = match latest.checked_sub(1).and_then(share_of) {
-                    Some(prev) => 0.65 * last + 0.35 * prev,
-                    None => last,
-                };
-                let recent = |s: &&SpellSlice| s.season_year + 1 >= latest;
-                let loan_starts: u16 = slices
-                    .iter()
-                    .filter(recent)
-                    .filter(|s| s.is_loan)
-                    .map(|s| s.starts)
-                    .sum();
-                let (rep_weighted, weight): (u32, u32) =
-                    slices.iter().filter(recent).fold((0, 0), |(rw, w), s| {
-                        (
-                            rw + s.team_reputation as u32 * s.apps as u32,
-                            w + s.apps as u32,
-                        )
-                    });
-                let record_rep = rep_weighted.checked_div(weight).unwrap_or(0) as u16;
-                (share, loan_starts, record_rep)
-            }
-        };
-
-        MatchExperienceBackground {
-            career_official_apps,
-            career_official_starts,
-            recent_start_share,
-            recent_loan_starts,
-            recent_record_reputation,
+        (
             peak_spell_reputation,
             peak_spell_season_year,
             peak_spell_apps,
-            distinct_clubs,
-            established,
-        }
+        )
+    }
+
+    /// Recent window: the latest season-year in the record plus the one
+    /// before it, weighted toward the latest.
+    fn recent_window(slices: &[SpellSlice<'_>]) -> (f32, u16, u16) {
+        let latest_year = slices.iter().map(|s| s.season_year).max();
+        let Some(latest) = latest_year else {
+            return (0.0, 0, 0);
+        };
+        let share_of = |year: u16| -> Option<f32> {
+            let starts: u16 = slices
+                .iter()
+                .filter(|s| s.season_year == year)
+                .map(|s| s.starts)
+                .sum();
+            let any = slices.iter().any(|s| s.season_year == year);
+            any.then(|| (starts as f32 / Self::SEASON_MATCHES).clamp(0.0, 1.0))
+        };
+        let last = share_of(latest).unwrap_or(0.0);
+        let share = match latest.checked_sub(1).and_then(share_of) {
+            Some(prev) => 0.65 * last + 0.35 * prev,
+            None => last,
+        };
+        let recent = |s: &&SpellSlice| s.season_year + 1 >= latest;
+        let loan_starts: u16 = slices
+            .iter()
+            .filter(recent)
+            .filter(|s| s.is_loan)
+            .map(|s| s.starts)
+            .sum();
+        let (rep_weighted, weight): (u32, u32) =
+            slices.iter().filter(recent).fold((0, 0), |(rw, w), s| {
+                (
+                    rw + s.team_reputation as u32 * s.apps as u32,
+                    w + s.apps as u32,
+                )
+            });
+        let record_rep = rep_weighted.checked_div(weight).unwrap_or(0) as u16;
+        (share, loan_starts, record_rep)
     }
 
     /// Adaptation-score contribution: official football behind him means

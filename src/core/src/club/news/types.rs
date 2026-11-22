@@ -1528,748 +1528,834 @@ impl NewsStoryKind {
         NewsStoryKind::KeeperLoanWantsPermanent,
     ];
 
-    #[expect(clippy::too_many_lines)]
-    pub fn desk(self) -> NewsDesk {
-        match self {
-            NewsStoryKind::LeagueWin
-            | NewsStoryKind::LeagueDraw
-            | NewsStoryKind::GoallessDraw
-            | NewsStoryKind::LeagueDefeat
-            | NewsStoryKind::Rout
-            | NewsStoryKind::HeavyDefeat
-            | NewsStoryKind::DerbyWin
-            | NewsStoryKind::DerbyDefeat
-            | NewsStoryKind::CupWin
-            | NewsStoryKind::CupExit
-            | NewsStoryKind::LateWinner
-            | NewsStoryKind::StoppageTimeDrama
-            | NewsStoryKind::ComebackWin
-            | NewsStoryKind::LeadThrownAway
-            | NewsStoryKind::InstantReply
-            | NewsStoryKind::EarlyBlitz
-            | NewsStoryKind::GoalFest
-            | NewsStoryKind::TenManWin
-            | NewsStoryKind::WinningRun
-            | NewsStoryKind::UnbeatenRun
-            | NewsStoryKind::WinlessRun
-            | NewsStoryKind::TitleCharge
-            | NewsStoryKind::RelegationFight
-            | NewsStoryKind::GoalsDriedUp
-            | NewsStoryKind::DefensiveCrisis
-            | NewsStoryKind::FortressHome
-            | NewsStoryKind::ContinentalNightWin
-            | NewsStoryKind::ContinentalDefeat
-            | NewsStoryKind::ContinentalRout
-            | NewsStoryKind::ContinentalHiding
-            | NewsStoryKind::PlayoffGameWin
-            | NewsStoryKind::PlayoffGameDefeat
-            | NewsStoryKind::PlayoffTieWon
-            | NewsStoryKind::PlayoffTieLost
-            | NewsStoryKind::PlayoffFinalReached
-            | NewsStoryKind::AwayDayForm => NewsDesk::Match,
-
-            NewsStoryKind::HatTrick
-            | NewsStoryKind::StarForm
-            | NewsStoryKind::RisingStar
-            | NewsStoryKind::KeeperWall
-            | NewsStoryKind::KeeperMasterclass
-            | NewsStoryKind::KeeperPenaltySave
-            | NewsStoryKind::KeeperOverrun
-            | NewsStoryKind::KeeperBlunder
-            | NewsStoryKind::KeeperShutoutMilestone
-            | NewsStoryKind::KeeperGoldenGlove
-            | NewsStoryKind::InjuryBlow
-            | NewsStoryKind::InjuryReturn
-            | NewsStoryKind::InjurySetback
-            | NewsStoryKind::RedCard
-            | NewsStoryKind::Suspension
-            | NewsStoryKind::YouthDebut
-            | NewsStoryKind::MilestoneApps
-            | NewsStoryKind::MilestoneGoals
-            | NewsStoryKind::PlayerOfMonth
-            | NewsStoryKind::TeamOfTheWeek
-            | NewsStoryKind::CaptainNamed
-            | NewsStoryKind::NationalCallUp
-            | NewsStoryKind::GoalDrought
-            | NewsStoryKind::DroughtEnded
-            | NewsStoryKind::FormerClubGoal
-            | NewsStoryKind::ClubServant
-            | NewsStoryKind::RetirementAnnounced
-            | NewsStoryKind::TrainingBustUp
-            | NewsStoryKind::ContractRenewed
-            | NewsStoryKind::FirstClubGoal
-            | NewsStoryKind::WonStartingPlace
-            | NewsStoryKind::LeaderEmerging
-            | NewsStoryKind::SettlingIn
-            | NewsStoryKind::TeammateFarewell
-            | NewsStoryKind::InternationalRetirement
-            | NewsStoryKind::CoachingAmbition
-            | NewsStoryKind::CaptaincyLost
-            | NewsStoryKind::ShirtUnderThreat
-            | NewsStoryKind::PathwayBlocked
-            | NewsStoryKind::CareerTwilight
-            | NewsStoryKind::HomesickAbroad
-            | NewsStoryKind::StrugglingToSettle
-            | NewsStoryKind::HomeCalling
-            | NewsStoryKind::SettledAtLast
-            | NewsStoryKind::ColdShoulder
-            | NewsStoryKind::TeammateConflict
-            | NewsStoryKind::TakenUnderWing
-            | NewsStoryKind::DressingRoomSpeech
-            | NewsStoryKind::TrainingGroundBuzz
-            | NewsStoryKind::TrainingConcerns
-            | NewsStoryKind::BenchFrustration
-            | NewsStoryKind::DroppedByCountry
-            | NewsStoryKind::LeftOutOfSquadList
-            | NewsStoryKind::OffFieldControversy
-            | NewsStoryKind::WageEnvy
-            | NewsStoryKind::ShirtNumberHandover
-            | NewsStoryKind::OutgrownDivision
-            | NewsStoryKind::RelegationNerves
-            | NewsStoryKind::ContractTornUp
-            | NewsStoryKind::SeasonAward
-            | NewsStoryKind::DreamMoveComplete
-            | NewsStoryKind::StatusShock
-            | NewsStoryKind::PayWindfall
-            | NewsStoryKind::WageRealityCheck
-            | NewsStoryKind::PlayerOfWeek
-            | NewsStoryKind::YoungPlayerOfWeek
-            | NewsStoryKind::TeamOfMonthNod
-            | NewsStoryKind::YoungPlayerOfMonthAward
-            | NewsStoryKind::YoungPlayerOfSeasonAward
-            | NewsStoryKind::BanServed
-            | NewsStoryKind::PlayingForContract
-            | NewsStoryKind::PersonalTrainingPlan
-            | NewsStoryKind::RoleRetraining
-            | NewsStoryKind::HomegrownBlocked
-            | NewsStoryKind::FamilyUnsettled
-            | NewsStoryKind::FamilyCelebration
-            | NewsStoryKind::CompassionateLeave
-            | NewsStoryKind::LanguageLessons
-            | NewsStoryKind::VeteranHomecomingWish
-            | NewsStoryKind::LegendWontLeave
-            | NewsStoryKind::RefusesRivalMove
-            | NewsStoryKind::SeeksQuieterStage
-            | NewsStoryKind::TrainingStandardsRow
-            | NewsStoryKind::PositionRivalryFeud
-            | NewsStoryKind::LeadershipPowerStruggle
-            | NewsStoryKind::ForcedToRetire
-            | NewsStoryKind::HomegrownQuotaOmission
-            | NewsStoryKind::ForeignQuotaOmission
-            | NewsStoryKind::HamstringBlow
-            | NewsStoryKind::KneeLigamentBlow
-            | NewsStoryKind::BrokenBoneBlow
-            | NewsStoryKind::SquadKnitsTogether
-            | NewsStoryKind::TurnoverToll
-            | NewsStoryKind::CliqueConcerns
-            | NewsStoryKind::FormationRevolution
-            | NewsStoryKind::BreakthroughSeason
-            | NewsStoryKind::TrainingTransformation
-            | NewsStoryKind::StalledProspect
-            | NewsStoryKind::PowersFading
-            | NewsStoryKind::TournamentTriumph
-            | NewsStoryKind::TournamentHeartbreak => NewsDesk::Squad,
-
-            NewsStoryKind::ManOfTheMatch
-            | NewsStoryKind::MatchMasterclass
-            | NewsStoryKind::AssistShow
-            | NewsStoryKind::CreatorInChief
-            | NewsStoryKind::DefensiveRock
-            | NewsStoryKind::DribblingDisplay
-            | NewsStoryKind::SuperSub
-            | NewsStoryKind::DerbyHero
-            | NewsStoryKind::MatchStinker
-            | NewsStoryKind::WastefulFinishing
-            | NewsStoryKind::CostlyError
-            | NewsStoryKind::OwnGoalShame
-            | NewsStoryKind::PenaltyMissed
-            | NewsStoryKind::HookedEarly
-            | NewsStoryKind::BraceHero
-            | NewsStoryKind::GoalAndAssistShow
-            | NewsStoryKind::TeenageStarTurn
-            | NewsStoryKind::RolledBackYears
-            | NewsStoryKind::DreamDebut
-            | NewsStoryKind::DebutNightmare
-            | NewsStoryKind::GoalFromDefence
-            | NewsStoryKind::MidfieldEngine
-            | NewsStoryKind::FoulTrouble => NewsDesk::Verdicts,
-
-            NewsStoryKind::NewSigning
-            | NewsStoryKind::RecordSigning
-            | NewsStoryKind::FreeSigning
-            | NewsStoryKind::LoanArrival
-            | NewsStoryKind::HomecomingSigning
-            | NewsStoryKind::LoanMadePermanent
-            | NewsStoryKind::ProspectSigned
-            | NewsStoryKind::VeteranArrives
-            | NewsStoryKind::RivalRaid
-            | NewsStoryKind::ScoutingCoup
-            | NewsStoryKind::SuccessionSigning
-            | NewsStoryKind::DepthSigning
-            | NewsStoryKind::GapPlugged
-            | NewsStoryKind::MarqueeUpgrade
-            | NewsStoryKind::BargainBuy
-            | NewsStoryKind::AcademyGraduate
-            | NewsStoryKind::LoanedOutToGrow
-            | NewsStoryKind::TransferAgreed
-            | NewsStoryKind::RumourCools
-            | NewsStoryKind::CommitsToClub
-            | NewsStoryKind::ContractRunningDown
-            | NewsStoryKind::PlayerSold
-            | NewsStoryKind::StarSold
-            | NewsStoryKind::FreeExit
-            | NewsStoryKind::LoanExit
-            | NewsStoryKind::LoanReturn
-            | NewsStoryKind::TransferSpeculation
-            | NewsStoryKind::TransferListed
-            | NewsStoryKind::ContractStandoff
-            | NewsStoryKind::RumourInterest
-            | NewsStoryKind::RumourRival
-            | NewsStoryKind::ScoutsWatching
-            | NewsStoryKind::AgentTouting
-            | NewsStoryKind::HomecomingLink
-            | NewsStoryKind::BidRejected
-            | NewsStoryKind::TalksExpected
-            | NewsStoryKind::TransferRequestFiled
-            | NewsStoryKind::ToldNotInPlans
-            | NewsStoryKind::ContractTalksStalled
-            | NewsStoryKind::MoveCollapsed
-            | NewsStoryKind::AmbitionWarning
-            | NewsStoryKind::UnsoldStillHere
-            | NewsStoryKind::SigningNotWorking
-            | NewsStoryKind::LeverageUsed
-            | NewsStoryKind::ContinentalAmbition
-            | NewsStoryKind::LoanReturnTriumph
-            | NewsStoryKind::LoanReturnWasted
-            | NewsStoryKind::KeeperLoanReturnTriumph
-            | NewsStoryKind::KeeperLoanReturnWasted
-            | NewsStoryKind::KeeperLoanReturn
-            | NewsStoryKind::SigningComesGood => NewsDesk::Market,
-
-            NewsStoryKind::LoanWatchStarter
-            | NewsStoryKind::LoanWatchGoals
-            | NewsStoryKind::LoanWatchBenched
-            | NewsStoryKind::LoanWantsReturn
-            | NewsStoryKind::LoanWantsPermanent
-            | NewsStoryKind::LoanFedUp
-            | NewsStoryKind::LoanRecallTalk
-            | NewsStoryKind::LoanSpellEnds
-            | NewsStoryKind::LoanFlop
-            | NewsStoryKind::LoanStepTooBig
-            | NewsStoryKind::KeeperLoanWatchShutouts
-            | NewsStoryKind::KeeperLoanWantsPermanent => NewsDesk::Loan,
-
-            NewsStoryKind::FansChant
-            | NewsStoryKind::FansTurnOnTeam
-            | NewsStoryKind::FansGetBehind
-            | NewsStoryKind::FansAngryAtRumour
-            | NewsStoryKind::MediaPressure
-            | NewsStoryKind::ProtestBrewing
-            | NewsStoryKind::PromotionFever
-            | NewsStoryKind::RelegationDread
-            | NewsStoryKind::FansFurySale
-            | NewsStoryKind::FansDreamSigning
-            | NewsStoryKind::CupHumiliationFallout
-            | NewsStoryKind::TravellingSupportRewarded
-            | NewsStoryKind::AcademyDarling
-            | NewsStoryKind::MediaDarling => NewsDesk::Fans,
-
-            NewsStoryKind::ManagerPressure
-            | NewsStoryKind::BoardBacking
-            | NewsStoryKind::ManagerSacked
-            | NewsStoryKind::SeverancePaid
-            | NewsStoryKind::NewManagerArrives
-            | NewsStoryKind::ManagerPoached
-            | NewsStoryKind::CaretakerTakesCharge
-            | NewsStoryKind::CaretakerConfirmed
-            | NewsStoryKind::ManagerHunt
-            | NewsStoryKind::ManagerTargetLinked
-            | NewsStoryKind::ManagerWanted
-            | NewsStoryKind::ManagerUltimatum
-            | NewsStoryKind::ManagerContractExtended
-            | NewsStoryKind::TakeoverRumour
-            | NewsStoryKind::TakeoverCompleted
-            | NewsStoryKind::TakeoverCollapsed
-            | NewsStoryKind::StadiumExpansion
-            | NewsStoryKind::FacilityUpgrade
-            | NewsStoryKind::WarChest
-            | NewsStoryKind::BudgetCut
-            | NewsStoryKind::BoardPromiseBroken
-            | NewsStoryKind::DressingRoomInquest
-            | NewsStoryKind::SquadRallies
-            | NewsStoryKind::BoardInvests
-            | NewsStoryKind::TrophyWon
-            | NewsStoryKind::PromotionWon
-            | NewsStoryKind::RelegationConfirmed
-            | NewsStoryKind::CupFinalHeartbreak
-            | NewsStoryKind::EuropeSecured
-            | NewsStoryKind::AcademyPraise
-            | NewsStoryKind::MoneyWorries
-            | NewsStoryKind::AdministrationEntered
-            | NewsStoryKind::AdministrationExited
-            | NewsStoryKind::OwnerBailout
-            | NewsStoryKind::SponsorSigned
-            | NewsStoryKind::SponsorshipLost
-            | NewsStoryKind::SellOnWindfall
-            | NewsStoryKind::PromotionBonusDue
-            | NewsStoryKind::PreContractAgreed
-            | NewsStoryKind::BosmanDepartureLooms
-            | NewsStoryKind::DebtMountain
-            | NewsStoryKind::TransferEmbargo
-            | NewsStoryKind::WageBillCrisis
-            | NewsStoryKind::CrisisTalks
-            | NewsStoryKind::BoardDemandsSale
-            | NewsStoryKind::BoardBlocksDeal
-            | NewsStoryKind::FacilityPlanRejected
-            | NewsStoryKind::IntakeDay
-            | NewsStoryKind::GoldenGeneration
-            | NewsStoryKind::GraduationDay
-            | NewsStoryKind::BackroomEmpty
-            | NewsStoryKind::MustSellBeforeBuying => NewsDesk::Boardroom,
-
-            NewsStoryKind::LeagueTopScorer
-            | NewsStoryKind::LeagueScoringChase
-            | NewsStoryKind::LeaguePlayerOfMonth
-            | NewsStoryKind::LeagueYoungStar
-            | NewsStoryKind::LeagueAssistKing
-            | NewsStoryKind::LeagueAssistChase
-            | NewsStoryKind::LeagueRatingsLeader
-            | NewsStoryKind::LeagueTeamOfMonth => NewsDesk::Charts,
-            NewsStoryKind::RunEnded
-            | NewsStoryKind::FirstWinInAges
-            | NewsStoryKind::LateEqualiserConceded
-            | NewsStoryKind::PointRescued
-            | NewsStoryKind::TopOfTheTable
-            | NewsStoryKind::EuropeRace
-            | NewsStoryKind::MidTableDrift
-            | NewsStoryKind::HalfwayReport
-            | NewsStoryKind::FinalStanding => NewsDesk::Match,
-            NewsStoryKind::NextUpDerby
-            | NewsStoryKind::NextUpSummit
-            | NewsStoryKind::NextUpSixPointer
-            | NewsStoryKind::NextUpLeaders
-            | NewsStoryKind::NextUpCupTie
-            | NewsStoryKind::NextUpOldBoy
-            | NewsStoryKind::NextUpHome
-            | NewsStoryKind::NextUpAway => NewsDesk::Preview,
-            NewsStoryKind::PromisedHisChance
-            | NewsStoryKind::ManagerOnWin
-            | NewsStoryKind::ManagerOnDraw
-            | NewsStoryKind::ManagerOnDefeat
-            | NewsStoryKind::ManagerBacksPlayer
-            | NewsStoryKind::ManagerCallsOutPlayer
-            | NewsStoryKind::DroppedForBigMatch
-            | NewsStoryKind::PromiseBroken
-            | NewsStoryKind::PlayerFined
-            | NewsStoryKind::ClearTheAir
-            | NewsStoryKind::NewManagerBounce
-            | NewsStoryKind::ManagerExitUnsettles
-            | NewsStoryKind::PromiseKept
-            | NewsStoryKind::FavouritismGrumbles
-            | NewsStoryKind::RotationRested
-            | NewsStoryKind::TacticalOmission
-            | NewsStoryKind::DroppedOnForm
-            | NewsStoryKind::DisciplinaryOmission
-            | NewsStoryKind::BigMatchTrust
-            | NewsStoryKind::ManagerDoubtsLinger
-            | NewsStoryKind::FrozenOutOfTheSide
-            | NewsStoryKind::ReunitedWithHisManager
-            | NewsStoryKind::OldWoundsReopened
-            | NewsStoryKind::RoleFrustration => NewsDesk::Dugout,
-            NewsStoryKind::PeckingOrderUp
-            | NewsStoryKind::PeckingOrderDown
-            | NewsStoryKind::NoRoleInTheShape
-            | NewsStoryKind::BigClubAura
-            | NewsStoryKind::StuckInTheQueue
-            | NewsStoryKind::InjuryCrisis
-            | NewsStoryKind::InternationalExodus => NewsDesk::Squad,
-            NewsStoryKind::PersonalTermsAgreed
-            | NewsStoryKind::TurnsDownMove
-            | NewsStoryKind::SteppingStoneTalk => NewsDesk::Market,
-            NewsStoryKind::BidLodged
-            | NewsStoryKind::LoanApproach
-            | NewsStoryKind::FeeAgreed
-            | NewsStoryKind::MedicalBooked
-            | NewsStoryKind::PricedOut
-            | NewsStoryKind::NotForSale
-            | NewsStoryKind::TargetSaysNo
-            | NewsStoryKind::MedicalFailed
-            | NewsStoryKind::DealDiesAtDeadline => NewsDesk::Targets,
-            NewsStoryKind::WindowOpens
-            | NewsStoryKind::WindowShuts
-            | NewsStoryKind::FeeWrittenOff
-            | NewsStoryKind::BoardRaisesItsOffer => NewsDesk::Boardroom,
-        }
+    /// Read one row out of a story-kind catalog.
+    fn lookup<T: Copy>(self, table: &[(NewsStoryKind, T)]) -> T {
+        table
+            .iter()
+            .find_map(|(kind, value)| (*kind == self).then_some(*value))
+            .expect("every news story kind has a row in its catalog")
     }
+
+    pub fn desk(self) -> NewsDesk {
+        self.lookup(Self::DESKS)
+    }
+
+    /// The desk each kind is filed on.
+    const DESKS: &[(NewsStoryKind, NewsDesk)] = &[
+        (NewsStoryKind::LeagueWin, NewsDesk::Match),
+        (NewsStoryKind::LeagueDraw, NewsDesk::Match),
+        (NewsStoryKind::GoallessDraw, NewsDesk::Match),
+        (NewsStoryKind::LeagueDefeat, NewsDesk::Match),
+        (NewsStoryKind::Rout, NewsDesk::Match),
+        (NewsStoryKind::HeavyDefeat, NewsDesk::Match),
+        (NewsStoryKind::DerbyWin, NewsDesk::Match),
+        (NewsStoryKind::DerbyDefeat, NewsDesk::Match),
+        (NewsStoryKind::CupWin, NewsDesk::Match),
+        (NewsStoryKind::CupExit, NewsDesk::Match),
+        (NewsStoryKind::LateWinner, NewsDesk::Match),
+        (NewsStoryKind::StoppageTimeDrama, NewsDesk::Match),
+        (NewsStoryKind::ComebackWin, NewsDesk::Match),
+        (NewsStoryKind::LeadThrownAway, NewsDesk::Match),
+        (NewsStoryKind::InstantReply, NewsDesk::Match),
+        (NewsStoryKind::EarlyBlitz, NewsDesk::Match),
+        (NewsStoryKind::GoalFest, NewsDesk::Match),
+        (NewsStoryKind::TenManWin, NewsDesk::Match),
+        (NewsStoryKind::WinningRun, NewsDesk::Match),
+        (NewsStoryKind::UnbeatenRun, NewsDesk::Match),
+        (NewsStoryKind::WinlessRun, NewsDesk::Match),
+        (NewsStoryKind::TitleCharge, NewsDesk::Match),
+        (NewsStoryKind::RelegationFight, NewsDesk::Match),
+        (NewsStoryKind::GoalsDriedUp, NewsDesk::Match),
+        (NewsStoryKind::DefensiveCrisis, NewsDesk::Match),
+        (NewsStoryKind::FortressHome, NewsDesk::Match),
+        (NewsStoryKind::ContinentalNightWin, NewsDesk::Match),
+        (NewsStoryKind::ContinentalDefeat, NewsDesk::Match),
+        (NewsStoryKind::ContinentalRout, NewsDesk::Match),
+        (NewsStoryKind::ContinentalHiding, NewsDesk::Match),
+        (NewsStoryKind::PlayoffGameWin, NewsDesk::Match),
+        (NewsStoryKind::PlayoffGameDefeat, NewsDesk::Match),
+        (NewsStoryKind::PlayoffTieWon, NewsDesk::Match),
+        (NewsStoryKind::PlayoffTieLost, NewsDesk::Match),
+        (NewsStoryKind::PlayoffFinalReached, NewsDesk::Match),
+        (NewsStoryKind::AwayDayForm, NewsDesk::Match),
+        (NewsStoryKind::HatTrick, NewsDesk::Squad),
+        (NewsStoryKind::StarForm, NewsDesk::Squad),
+        (NewsStoryKind::RisingStar, NewsDesk::Squad),
+        (NewsStoryKind::KeeperWall, NewsDesk::Squad),
+        (NewsStoryKind::KeeperMasterclass, NewsDesk::Squad),
+        (NewsStoryKind::KeeperPenaltySave, NewsDesk::Squad),
+        (NewsStoryKind::KeeperOverrun, NewsDesk::Squad),
+        (NewsStoryKind::KeeperBlunder, NewsDesk::Squad),
+        (NewsStoryKind::KeeperShutoutMilestone, NewsDesk::Squad),
+        (NewsStoryKind::KeeperGoldenGlove, NewsDesk::Squad),
+        (NewsStoryKind::InjuryBlow, NewsDesk::Squad),
+        (NewsStoryKind::InjuryReturn, NewsDesk::Squad),
+        (NewsStoryKind::InjurySetback, NewsDesk::Squad),
+        (NewsStoryKind::RedCard, NewsDesk::Squad),
+        (NewsStoryKind::Suspension, NewsDesk::Squad),
+        (NewsStoryKind::YouthDebut, NewsDesk::Squad),
+        (NewsStoryKind::MilestoneApps, NewsDesk::Squad),
+        (NewsStoryKind::MilestoneGoals, NewsDesk::Squad),
+        (NewsStoryKind::PlayerOfMonth, NewsDesk::Squad),
+        (NewsStoryKind::TeamOfTheWeek, NewsDesk::Squad),
+        (NewsStoryKind::CaptainNamed, NewsDesk::Squad),
+        (NewsStoryKind::NationalCallUp, NewsDesk::Squad),
+        (NewsStoryKind::GoalDrought, NewsDesk::Squad),
+        (NewsStoryKind::DroughtEnded, NewsDesk::Squad),
+        (NewsStoryKind::FormerClubGoal, NewsDesk::Squad),
+        (NewsStoryKind::ClubServant, NewsDesk::Squad),
+        (NewsStoryKind::RetirementAnnounced, NewsDesk::Squad),
+        (NewsStoryKind::TrainingBustUp, NewsDesk::Squad),
+        (NewsStoryKind::ContractRenewed, NewsDesk::Squad),
+        (NewsStoryKind::FirstClubGoal, NewsDesk::Squad),
+        (NewsStoryKind::WonStartingPlace, NewsDesk::Squad),
+        (NewsStoryKind::LeaderEmerging, NewsDesk::Squad),
+        (NewsStoryKind::SettlingIn, NewsDesk::Squad),
+        (NewsStoryKind::TeammateFarewell, NewsDesk::Squad),
+        (NewsStoryKind::InternationalRetirement, NewsDesk::Squad),
+        (NewsStoryKind::CoachingAmbition, NewsDesk::Squad),
+        (NewsStoryKind::CaptaincyLost, NewsDesk::Squad),
+        (NewsStoryKind::ShirtUnderThreat, NewsDesk::Squad),
+        (NewsStoryKind::PathwayBlocked, NewsDesk::Squad),
+        (NewsStoryKind::CareerTwilight, NewsDesk::Squad),
+        (NewsStoryKind::HomesickAbroad, NewsDesk::Squad),
+        (NewsStoryKind::StrugglingToSettle, NewsDesk::Squad),
+        (NewsStoryKind::HomeCalling, NewsDesk::Squad),
+        (NewsStoryKind::SettledAtLast, NewsDesk::Squad),
+        (NewsStoryKind::ColdShoulder, NewsDesk::Squad),
+        (NewsStoryKind::TeammateConflict, NewsDesk::Squad),
+        (NewsStoryKind::TakenUnderWing, NewsDesk::Squad),
+        (NewsStoryKind::DressingRoomSpeech, NewsDesk::Squad),
+        (NewsStoryKind::TrainingGroundBuzz, NewsDesk::Squad),
+        (NewsStoryKind::TrainingConcerns, NewsDesk::Squad),
+        (NewsStoryKind::BenchFrustration, NewsDesk::Squad),
+        (NewsStoryKind::DroppedByCountry, NewsDesk::Squad),
+        (NewsStoryKind::LeftOutOfSquadList, NewsDesk::Squad),
+        (NewsStoryKind::OffFieldControversy, NewsDesk::Squad),
+        (NewsStoryKind::WageEnvy, NewsDesk::Squad),
+        (NewsStoryKind::ShirtNumberHandover, NewsDesk::Squad),
+        (NewsStoryKind::OutgrownDivision, NewsDesk::Squad),
+        (NewsStoryKind::RelegationNerves, NewsDesk::Squad),
+        (NewsStoryKind::ContractTornUp, NewsDesk::Squad),
+        (NewsStoryKind::SeasonAward, NewsDesk::Squad),
+        (NewsStoryKind::DreamMoveComplete, NewsDesk::Squad),
+        (NewsStoryKind::StatusShock, NewsDesk::Squad),
+        (NewsStoryKind::PayWindfall, NewsDesk::Squad),
+        (NewsStoryKind::WageRealityCheck, NewsDesk::Squad),
+        (NewsStoryKind::PlayerOfWeek, NewsDesk::Squad),
+        (NewsStoryKind::YoungPlayerOfWeek, NewsDesk::Squad),
+        (NewsStoryKind::TeamOfMonthNod, NewsDesk::Squad),
+        (NewsStoryKind::YoungPlayerOfMonthAward, NewsDesk::Squad),
+        (NewsStoryKind::YoungPlayerOfSeasonAward, NewsDesk::Squad),
+        (NewsStoryKind::BanServed, NewsDesk::Squad),
+        (NewsStoryKind::PlayingForContract, NewsDesk::Squad),
+        (NewsStoryKind::PersonalTrainingPlan, NewsDesk::Squad),
+        (NewsStoryKind::RoleRetraining, NewsDesk::Squad),
+        (NewsStoryKind::HomegrownBlocked, NewsDesk::Squad),
+        (NewsStoryKind::FamilyUnsettled, NewsDesk::Squad),
+        (NewsStoryKind::FamilyCelebration, NewsDesk::Squad),
+        (NewsStoryKind::CompassionateLeave, NewsDesk::Squad),
+        (NewsStoryKind::LanguageLessons, NewsDesk::Squad),
+        (NewsStoryKind::VeteranHomecomingWish, NewsDesk::Squad),
+        (NewsStoryKind::LegendWontLeave, NewsDesk::Squad),
+        (NewsStoryKind::RefusesRivalMove, NewsDesk::Squad),
+        (NewsStoryKind::SeeksQuieterStage, NewsDesk::Squad),
+        (NewsStoryKind::TrainingStandardsRow, NewsDesk::Squad),
+        (NewsStoryKind::PositionRivalryFeud, NewsDesk::Squad),
+        (NewsStoryKind::LeadershipPowerStruggle, NewsDesk::Squad),
+        (NewsStoryKind::ForcedToRetire, NewsDesk::Squad),
+        (NewsStoryKind::HomegrownQuotaOmission, NewsDesk::Squad),
+        (NewsStoryKind::ForeignQuotaOmission, NewsDesk::Squad),
+        (NewsStoryKind::HamstringBlow, NewsDesk::Squad),
+        (NewsStoryKind::KneeLigamentBlow, NewsDesk::Squad),
+        (NewsStoryKind::BrokenBoneBlow, NewsDesk::Squad),
+        (NewsStoryKind::SquadKnitsTogether, NewsDesk::Squad),
+        (NewsStoryKind::TurnoverToll, NewsDesk::Squad),
+        (NewsStoryKind::CliqueConcerns, NewsDesk::Squad),
+        (NewsStoryKind::FormationRevolution, NewsDesk::Squad),
+        (NewsStoryKind::BreakthroughSeason, NewsDesk::Squad),
+        (NewsStoryKind::TrainingTransformation, NewsDesk::Squad),
+        (NewsStoryKind::StalledProspect, NewsDesk::Squad),
+        (NewsStoryKind::PowersFading, NewsDesk::Squad),
+        (NewsStoryKind::TournamentTriumph, NewsDesk::Squad),
+        (NewsStoryKind::TournamentHeartbreak, NewsDesk::Squad),
+        (NewsStoryKind::ManOfTheMatch, NewsDesk::Verdicts),
+        (NewsStoryKind::MatchMasterclass, NewsDesk::Verdicts),
+        (NewsStoryKind::AssistShow, NewsDesk::Verdicts),
+        (NewsStoryKind::CreatorInChief, NewsDesk::Verdicts),
+        (NewsStoryKind::DefensiveRock, NewsDesk::Verdicts),
+        (NewsStoryKind::DribblingDisplay, NewsDesk::Verdicts),
+        (NewsStoryKind::SuperSub, NewsDesk::Verdicts),
+        (NewsStoryKind::DerbyHero, NewsDesk::Verdicts),
+        (NewsStoryKind::MatchStinker, NewsDesk::Verdicts),
+        (NewsStoryKind::WastefulFinishing, NewsDesk::Verdicts),
+        (NewsStoryKind::CostlyError, NewsDesk::Verdicts),
+        (NewsStoryKind::OwnGoalShame, NewsDesk::Verdicts),
+        (NewsStoryKind::PenaltyMissed, NewsDesk::Verdicts),
+        (NewsStoryKind::HookedEarly, NewsDesk::Verdicts),
+        (NewsStoryKind::BraceHero, NewsDesk::Verdicts),
+        (NewsStoryKind::GoalAndAssistShow, NewsDesk::Verdicts),
+        (NewsStoryKind::TeenageStarTurn, NewsDesk::Verdicts),
+        (NewsStoryKind::RolledBackYears, NewsDesk::Verdicts),
+        (NewsStoryKind::DreamDebut, NewsDesk::Verdicts),
+        (NewsStoryKind::DebutNightmare, NewsDesk::Verdicts),
+        (NewsStoryKind::GoalFromDefence, NewsDesk::Verdicts),
+        (NewsStoryKind::MidfieldEngine, NewsDesk::Verdicts),
+        (NewsStoryKind::FoulTrouble, NewsDesk::Verdicts),
+        (NewsStoryKind::NewSigning, NewsDesk::Market),
+        (NewsStoryKind::RecordSigning, NewsDesk::Market),
+        (NewsStoryKind::FreeSigning, NewsDesk::Market),
+        (NewsStoryKind::LoanArrival, NewsDesk::Market),
+        (NewsStoryKind::HomecomingSigning, NewsDesk::Market),
+        (NewsStoryKind::LoanMadePermanent, NewsDesk::Market),
+        (NewsStoryKind::ProspectSigned, NewsDesk::Market),
+        (NewsStoryKind::VeteranArrives, NewsDesk::Market),
+        (NewsStoryKind::RivalRaid, NewsDesk::Market),
+        (NewsStoryKind::ScoutingCoup, NewsDesk::Market),
+        (NewsStoryKind::SuccessionSigning, NewsDesk::Market),
+        (NewsStoryKind::DepthSigning, NewsDesk::Market),
+        (NewsStoryKind::GapPlugged, NewsDesk::Market),
+        (NewsStoryKind::MarqueeUpgrade, NewsDesk::Market),
+        (NewsStoryKind::BargainBuy, NewsDesk::Market),
+        (NewsStoryKind::AcademyGraduate, NewsDesk::Market),
+        (NewsStoryKind::LoanedOutToGrow, NewsDesk::Market),
+        (NewsStoryKind::TransferAgreed, NewsDesk::Market),
+        (NewsStoryKind::RumourCools, NewsDesk::Market),
+        (NewsStoryKind::CommitsToClub, NewsDesk::Market),
+        (NewsStoryKind::ContractRunningDown, NewsDesk::Market),
+        (NewsStoryKind::PlayerSold, NewsDesk::Market),
+        (NewsStoryKind::StarSold, NewsDesk::Market),
+        (NewsStoryKind::FreeExit, NewsDesk::Market),
+        (NewsStoryKind::LoanExit, NewsDesk::Market),
+        (NewsStoryKind::LoanReturn, NewsDesk::Market),
+        (NewsStoryKind::TransferSpeculation, NewsDesk::Market),
+        (NewsStoryKind::TransferListed, NewsDesk::Market),
+        (NewsStoryKind::ContractStandoff, NewsDesk::Market),
+        (NewsStoryKind::RumourInterest, NewsDesk::Market),
+        (NewsStoryKind::RumourRival, NewsDesk::Market),
+        (NewsStoryKind::ScoutsWatching, NewsDesk::Market),
+        (NewsStoryKind::AgentTouting, NewsDesk::Market),
+        (NewsStoryKind::HomecomingLink, NewsDesk::Market),
+        (NewsStoryKind::BidRejected, NewsDesk::Market),
+        (NewsStoryKind::TalksExpected, NewsDesk::Market),
+        (NewsStoryKind::TransferRequestFiled, NewsDesk::Market),
+        (NewsStoryKind::ToldNotInPlans, NewsDesk::Market),
+        (NewsStoryKind::ContractTalksStalled, NewsDesk::Market),
+        (NewsStoryKind::MoveCollapsed, NewsDesk::Market),
+        (NewsStoryKind::AmbitionWarning, NewsDesk::Market),
+        (NewsStoryKind::UnsoldStillHere, NewsDesk::Market),
+        (NewsStoryKind::SigningNotWorking, NewsDesk::Market),
+        (NewsStoryKind::LeverageUsed, NewsDesk::Market),
+        (NewsStoryKind::ContinentalAmbition, NewsDesk::Market),
+        (NewsStoryKind::LoanReturnTriumph, NewsDesk::Market),
+        (NewsStoryKind::LoanReturnWasted, NewsDesk::Market),
+        (NewsStoryKind::KeeperLoanReturnTriumph, NewsDesk::Market),
+        (NewsStoryKind::KeeperLoanReturnWasted, NewsDesk::Market),
+        (NewsStoryKind::KeeperLoanReturn, NewsDesk::Market),
+        (NewsStoryKind::SigningComesGood, NewsDesk::Market),
+        (NewsStoryKind::LoanWatchStarter, NewsDesk::Loan),
+        (NewsStoryKind::LoanWatchGoals, NewsDesk::Loan),
+        (NewsStoryKind::LoanWatchBenched, NewsDesk::Loan),
+        (NewsStoryKind::LoanWantsReturn, NewsDesk::Loan),
+        (NewsStoryKind::LoanWantsPermanent, NewsDesk::Loan),
+        (NewsStoryKind::LoanFedUp, NewsDesk::Loan),
+        (NewsStoryKind::LoanRecallTalk, NewsDesk::Loan),
+        (NewsStoryKind::LoanSpellEnds, NewsDesk::Loan),
+        (NewsStoryKind::LoanFlop, NewsDesk::Loan),
+        (NewsStoryKind::LoanStepTooBig, NewsDesk::Loan),
+        (NewsStoryKind::KeeperLoanWatchShutouts, NewsDesk::Loan),
+        (NewsStoryKind::KeeperLoanWantsPermanent, NewsDesk::Loan),
+        (NewsStoryKind::FansChant, NewsDesk::Fans),
+        (NewsStoryKind::FansTurnOnTeam, NewsDesk::Fans),
+        (NewsStoryKind::FansGetBehind, NewsDesk::Fans),
+        (NewsStoryKind::FansAngryAtRumour, NewsDesk::Fans),
+        (NewsStoryKind::MediaPressure, NewsDesk::Fans),
+        (NewsStoryKind::ProtestBrewing, NewsDesk::Fans),
+        (NewsStoryKind::PromotionFever, NewsDesk::Fans),
+        (NewsStoryKind::RelegationDread, NewsDesk::Fans),
+        (NewsStoryKind::FansFurySale, NewsDesk::Fans),
+        (NewsStoryKind::FansDreamSigning, NewsDesk::Fans),
+        (NewsStoryKind::CupHumiliationFallout, NewsDesk::Fans),
+        (NewsStoryKind::TravellingSupportRewarded, NewsDesk::Fans),
+        (NewsStoryKind::AcademyDarling, NewsDesk::Fans),
+        (NewsStoryKind::MediaDarling, NewsDesk::Fans),
+        (NewsStoryKind::ManagerPressure, NewsDesk::Boardroom),
+        (NewsStoryKind::BoardBacking, NewsDesk::Boardroom),
+        (NewsStoryKind::ManagerSacked, NewsDesk::Boardroom),
+        (NewsStoryKind::SeverancePaid, NewsDesk::Boardroom),
+        (NewsStoryKind::NewManagerArrives, NewsDesk::Boardroom),
+        (NewsStoryKind::ManagerPoached, NewsDesk::Boardroom),
+        (NewsStoryKind::CaretakerTakesCharge, NewsDesk::Boardroom),
+        (NewsStoryKind::CaretakerConfirmed, NewsDesk::Boardroom),
+        (NewsStoryKind::ManagerHunt, NewsDesk::Boardroom),
+        (NewsStoryKind::ManagerTargetLinked, NewsDesk::Boardroom),
+        (NewsStoryKind::ManagerWanted, NewsDesk::Boardroom),
+        (NewsStoryKind::ManagerUltimatum, NewsDesk::Boardroom),
+        (NewsStoryKind::ManagerContractExtended, NewsDesk::Boardroom),
+        (NewsStoryKind::TakeoverRumour, NewsDesk::Boardroom),
+        (NewsStoryKind::TakeoverCompleted, NewsDesk::Boardroom),
+        (NewsStoryKind::TakeoverCollapsed, NewsDesk::Boardroom),
+        (NewsStoryKind::StadiumExpansion, NewsDesk::Boardroom),
+        (NewsStoryKind::FacilityUpgrade, NewsDesk::Boardroom),
+        (NewsStoryKind::WarChest, NewsDesk::Boardroom),
+        (NewsStoryKind::BudgetCut, NewsDesk::Boardroom),
+        (NewsStoryKind::BoardPromiseBroken, NewsDesk::Boardroom),
+        (NewsStoryKind::DressingRoomInquest, NewsDesk::Boardroom),
+        (NewsStoryKind::SquadRallies, NewsDesk::Boardroom),
+        (NewsStoryKind::BoardInvests, NewsDesk::Boardroom),
+        (NewsStoryKind::TrophyWon, NewsDesk::Boardroom),
+        (NewsStoryKind::PromotionWon, NewsDesk::Boardroom),
+        (NewsStoryKind::RelegationConfirmed, NewsDesk::Boardroom),
+        (NewsStoryKind::CupFinalHeartbreak, NewsDesk::Boardroom),
+        (NewsStoryKind::EuropeSecured, NewsDesk::Boardroom),
+        (NewsStoryKind::AcademyPraise, NewsDesk::Boardroom),
+        (NewsStoryKind::MoneyWorries, NewsDesk::Boardroom),
+        (NewsStoryKind::AdministrationEntered, NewsDesk::Boardroom),
+        (NewsStoryKind::AdministrationExited, NewsDesk::Boardroom),
+        (NewsStoryKind::OwnerBailout, NewsDesk::Boardroom),
+        (NewsStoryKind::SponsorSigned, NewsDesk::Boardroom),
+        (NewsStoryKind::SponsorshipLost, NewsDesk::Boardroom),
+        (NewsStoryKind::SellOnWindfall, NewsDesk::Boardroom),
+        (NewsStoryKind::PromotionBonusDue, NewsDesk::Boardroom),
+        (NewsStoryKind::PreContractAgreed, NewsDesk::Boardroom),
+        (NewsStoryKind::BosmanDepartureLooms, NewsDesk::Boardroom),
+        (NewsStoryKind::DebtMountain, NewsDesk::Boardroom),
+        (NewsStoryKind::TransferEmbargo, NewsDesk::Boardroom),
+        (NewsStoryKind::WageBillCrisis, NewsDesk::Boardroom),
+        (NewsStoryKind::CrisisTalks, NewsDesk::Boardroom),
+        (NewsStoryKind::BoardDemandsSale, NewsDesk::Boardroom),
+        (NewsStoryKind::BoardBlocksDeal, NewsDesk::Boardroom),
+        (NewsStoryKind::FacilityPlanRejected, NewsDesk::Boardroom),
+        (NewsStoryKind::IntakeDay, NewsDesk::Boardroom),
+        (NewsStoryKind::GoldenGeneration, NewsDesk::Boardroom),
+        (NewsStoryKind::GraduationDay, NewsDesk::Boardroom),
+        (NewsStoryKind::BackroomEmpty, NewsDesk::Boardroom),
+        (NewsStoryKind::MustSellBeforeBuying, NewsDesk::Boardroom),
+        (NewsStoryKind::LeagueTopScorer, NewsDesk::Charts),
+        (NewsStoryKind::LeagueScoringChase, NewsDesk::Charts),
+        (NewsStoryKind::LeaguePlayerOfMonth, NewsDesk::Charts),
+        (NewsStoryKind::LeagueYoungStar, NewsDesk::Charts),
+        (NewsStoryKind::LeagueAssistKing, NewsDesk::Charts),
+        (NewsStoryKind::LeagueAssistChase, NewsDesk::Charts),
+        (NewsStoryKind::LeagueRatingsLeader, NewsDesk::Charts),
+        (NewsStoryKind::LeagueTeamOfMonth, NewsDesk::Charts),
+        (NewsStoryKind::RunEnded, NewsDesk::Match),
+        (NewsStoryKind::FirstWinInAges, NewsDesk::Match),
+        (NewsStoryKind::LateEqualiserConceded, NewsDesk::Match),
+        (NewsStoryKind::PointRescued, NewsDesk::Match),
+        (NewsStoryKind::TopOfTheTable, NewsDesk::Match),
+        (NewsStoryKind::EuropeRace, NewsDesk::Match),
+        (NewsStoryKind::MidTableDrift, NewsDesk::Match),
+        (NewsStoryKind::HalfwayReport, NewsDesk::Match),
+        (NewsStoryKind::FinalStanding, NewsDesk::Match),
+        (NewsStoryKind::NextUpDerby, NewsDesk::Preview),
+        (NewsStoryKind::NextUpSummit, NewsDesk::Preview),
+        (NewsStoryKind::NextUpSixPointer, NewsDesk::Preview),
+        (NewsStoryKind::NextUpLeaders, NewsDesk::Preview),
+        (NewsStoryKind::NextUpCupTie, NewsDesk::Preview),
+        (NewsStoryKind::NextUpOldBoy, NewsDesk::Preview),
+        (NewsStoryKind::NextUpHome, NewsDesk::Preview),
+        (NewsStoryKind::NextUpAway, NewsDesk::Preview),
+        (NewsStoryKind::PromisedHisChance, NewsDesk::Dugout),
+        (NewsStoryKind::ManagerOnWin, NewsDesk::Dugout),
+        (NewsStoryKind::ManagerOnDraw, NewsDesk::Dugout),
+        (NewsStoryKind::ManagerOnDefeat, NewsDesk::Dugout),
+        (NewsStoryKind::ManagerBacksPlayer, NewsDesk::Dugout),
+        (NewsStoryKind::ManagerCallsOutPlayer, NewsDesk::Dugout),
+        (NewsStoryKind::DroppedForBigMatch, NewsDesk::Dugout),
+        (NewsStoryKind::PromiseBroken, NewsDesk::Dugout),
+        (NewsStoryKind::PlayerFined, NewsDesk::Dugout),
+        (NewsStoryKind::ClearTheAir, NewsDesk::Dugout),
+        (NewsStoryKind::NewManagerBounce, NewsDesk::Dugout),
+        (NewsStoryKind::ManagerExitUnsettles, NewsDesk::Dugout),
+        (NewsStoryKind::PromiseKept, NewsDesk::Dugout),
+        (NewsStoryKind::FavouritismGrumbles, NewsDesk::Dugout),
+        (NewsStoryKind::RotationRested, NewsDesk::Dugout),
+        (NewsStoryKind::TacticalOmission, NewsDesk::Dugout),
+        (NewsStoryKind::DroppedOnForm, NewsDesk::Dugout),
+        (NewsStoryKind::DisciplinaryOmission, NewsDesk::Dugout),
+        (NewsStoryKind::BigMatchTrust, NewsDesk::Dugout),
+        (NewsStoryKind::ManagerDoubtsLinger, NewsDesk::Dugout),
+        (NewsStoryKind::FrozenOutOfTheSide, NewsDesk::Dugout),
+        (NewsStoryKind::ReunitedWithHisManager, NewsDesk::Dugout),
+        (NewsStoryKind::OldWoundsReopened, NewsDesk::Dugout),
+        (NewsStoryKind::RoleFrustration, NewsDesk::Dugout),
+        (NewsStoryKind::PeckingOrderUp, NewsDesk::Squad),
+        (NewsStoryKind::PeckingOrderDown, NewsDesk::Squad),
+        (NewsStoryKind::NoRoleInTheShape, NewsDesk::Squad),
+        (NewsStoryKind::BigClubAura, NewsDesk::Squad),
+        (NewsStoryKind::StuckInTheQueue, NewsDesk::Squad),
+        (NewsStoryKind::InjuryCrisis, NewsDesk::Squad),
+        (NewsStoryKind::InternationalExodus, NewsDesk::Squad),
+        (NewsStoryKind::PersonalTermsAgreed, NewsDesk::Market),
+        (NewsStoryKind::TurnsDownMove, NewsDesk::Market),
+        (NewsStoryKind::SteppingStoneTalk, NewsDesk::Market),
+        (NewsStoryKind::BidLodged, NewsDesk::Targets),
+        (NewsStoryKind::LoanApproach, NewsDesk::Targets),
+        (NewsStoryKind::FeeAgreed, NewsDesk::Targets),
+        (NewsStoryKind::MedicalBooked, NewsDesk::Targets),
+        (NewsStoryKind::PricedOut, NewsDesk::Targets),
+        (NewsStoryKind::NotForSale, NewsDesk::Targets),
+        (NewsStoryKind::TargetSaysNo, NewsDesk::Targets),
+        (NewsStoryKind::MedicalFailed, NewsDesk::Targets),
+        (NewsStoryKind::DealDiesAtDeadline, NewsDesk::Targets),
+        (NewsStoryKind::WindowOpens, NewsDesk::Boardroom),
+        (NewsStoryKind::WindowShuts, NewsDesk::Boardroom),
+        (NewsStoryKind::FeeWrittenOff, NewsDesk::Boardroom),
+        (NewsStoryKind::BoardRaisesItsOffer, NewsDesk::Boardroom),
+    ];
 
     /// Stable identifier the web layer expands into the headline and
     /// body translation keys. Never reuse a stem across kinds.
-    #[expect(clippy::too_many_lines)]
     pub fn key_stem(self) -> &'static str {
-        match self {
-            NewsStoryKind::LeagueWin => "league_win",
-            NewsStoryKind::LeagueDraw => "league_draw",
-            NewsStoryKind::GoallessDraw => "goalless_draw",
-            NewsStoryKind::LeagueDefeat => "league_defeat",
-            NewsStoryKind::Rout => "rout",
-            NewsStoryKind::HeavyDefeat => "heavy_defeat",
-            NewsStoryKind::DerbyWin => "derby_win",
-            NewsStoryKind::DerbyDefeat => "derby_defeat",
-            NewsStoryKind::CupWin => "cup_win",
-            NewsStoryKind::CupExit => "cup_exit",
-            NewsStoryKind::LateWinner => "late_winner",
-            NewsStoryKind::StoppageTimeDrama => "stoppage_time_drama",
-            NewsStoryKind::ComebackWin => "comeback_win",
-            NewsStoryKind::LeadThrownAway => "lead_thrown_away",
-            NewsStoryKind::InstantReply => "instant_reply",
-            NewsStoryKind::EarlyBlitz => "early_blitz",
-            NewsStoryKind::GoalFest => "goal_fest",
-            NewsStoryKind::TenManWin => "ten_man_win",
-            NewsStoryKind::WinningRun => "winning_run",
-            NewsStoryKind::UnbeatenRun => "unbeaten_run",
-            NewsStoryKind::WinlessRun => "winless_run",
-            NewsStoryKind::TitleCharge => "title_charge",
-            NewsStoryKind::RelegationFight => "relegation_fight",
-            NewsStoryKind::GoalsDriedUp => "goals_dried_up",
-            NewsStoryKind::DefensiveCrisis => "defensive_crisis",
-            NewsStoryKind::FortressHome => "fortress_home",
-            NewsStoryKind::AwayDayForm => "away_day_form",
-            NewsStoryKind::ContinentalNightWin => "continental_night_win",
-            NewsStoryKind::ContinentalDefeat => "continental_defeat",
-            NewsStoryKind::ContinentalRout => "continental_rout",
-            NewsStoryKind::ContinentalHiding => "continental_hiding",
-            NewsStoryKind::PlayoffGameWin => "playoff_game_win",
-            NewsStoryKind::PlayoffGameDefeat => "playoff_game_defeat",
-            NewsStoryKind::PlayoffTieWon => "playoff_tie_won",
-            NewsStoryKind::PlayoffTieLost => "playoff_tie_lost",
-            NewsStoryKind::PlayoffFinalReached => "playoff_final_reached",
-            NewsStoryKind::HatTrick => "hat_trick",
-            NewsStoryKind::StarForm => "star_form",
-            NewsStoryKind::RisingStar => "rising_star",
-            NewsStoryKind::BreakthroughSeason => "breakthrough_season",
-            NewsStoryKind::TrainingTransformation => "training_transformation",
-            NewsStoryKind::StalledProspect => "stalled_prospect",
-            NewsStoryKind::PowersFading => "powers_fading",
-            NewsStoryKind::KeeperWall => "keeper_wall",
-            NewsStoryKind::KeeperMasterclass => "keeper_masterclass",
-            NewsStoryKind::KeeperPenaltySave => "keeper_penalty_save",
-            NewsStoryKind::KeeperOverrun => "keeper_overrun",
-            NewsStoryKind::KeeperBlunder => "keeper_blunder",
-            NewsStoryKind::KeeperShutoutMilestone => "keeper_shutout_milestone",
-            NewsStoryKind::KeeperGoldenGlove => "keeper_golden_glove",
-            NewsStoryKind::InjuryBlow => "injury_blow",
-            NewsStoryKind::InjuryReturn => "injury_return",
-            NewsStoryKind::InjurySetback => "injury_setback",
-            NewsStoryKind::RedCard => "red_card",
-            NewsStoryKind::Suspension => "suspension",
-            NewsStoryKind::YouthDebut => "youth_debut",
-            NewsStoryKind::MilestoneApps => "milestone_apps",
-            NewsStoryKind::MilestoneGoals => "milestone_goals",
-            NewsStoryKind::PlayerOfMonth => "player_of_month",
-            NewsStoryKind::TeamOfTheWeek => "team_of_the_week",
-            NewsStoryKind::CaptainNamed => "captain_named",
-            NewsStoryKind::NationalCallUp => "national_callup",
-            NewsStoryKind::TournamentTriumph => "tournament_triumph",
-            NewsStoryKind::TournamentHeartbreak => "tournament_heartbreak",
-            NewsStoryKind::GoalDrought => "goal_drought",
-            NewsStoryKind::DroughtEnded => "drought_ended",
-            NewsStoryKind::FormerClubGoal => "former_club_goal",
-            NewsStoryKind::ClubServant => "club_servant",
-            NewsStoryKind::RetirementAnnounced => "retirement_announced",
-            NewsStoryKind::TrainingBustUp => "training_bust_up",
-            NewsStoryKind::ContractRenewed => "contract_renewed",
-            NewsStoryKind::FirstClubGoal => "first_club_goal",
-            NewsStoryKind::WonStartingPlace => "won_starting_place",
-            NewsStoryKind::LeaderEmerging => "leader_emerging",
-            NewsStoryKind::SettlingIn => "settling_in",
-            NewsStoryKind::TeammateFarewell => "teammate_farewell",
-            NewsStoryKind::InternationalRetirement => "international_retirement",
-            NewsStoryKind::CoachingAmbition => "coaching_ambition",
-            NewsStoryKind::CaptaincyLost => "captaincy_lost",
-            NewsStoryKind::ShirtUnderThreat => "shirt_under_threat",
-            NewsStoryKind::PathwayBlocked => "pathway_blocked",
-            NewsStoryKind::CareerTwilight => "career_twilight",
-            NewsStoryKind::HomesickAbroad => "homesick_abroad",
-            NewsStoryKind::StrugglingToSettle => "struggling_to_settle",
-            NewsStoryKind::HomeCalling => "home_calling",
-            NewsStoryKind::SettledAtLast => "settled_at_last",
-            NewsStoryKind::ColdShoulder => "cold_shoulder",
-            NewsStoryKind::TeammateConflict => "teammate_conflict",
-            NewsStoryKind::TrainingStandardsRow => "training_standards_row",
-            NewsStoryKind::PositionRivalryFeud => "position_rivalry_feud",
-            NewsStoryKind::LeadershipPowerStruggle => "leadership_power_struggle",
-            NewsStoryKind::RotationRested => "rotation_rested",
-            NewsStoryKind::TacticalOmission => "tactical_omission",
-            NewsStoryKind::DroppedOnForm => "dropped_on_form",
-            NewsStoryKind::DisciplinaryOmission => "disciplinary_omission",
-            NewsStoryKind::ForcedToRetire => "forced_to_retire",
-            NewsStoryKind::LoanReturnTriumph => "loan_return_triumph",
-            NewsStoryKind::LoanReturnWasted => "loan_return_wasted",
-            NewsStoryKind::KeeperLoanReturnTriumph => "keeper_loan_return_triumph",
-            NewsStoryKind::KeeperLoanReturnWasted => "keeper_loan_return_wasted",
-            NewsStoryKind::KeeperLoanReturn => "keeper_loan_return",
-            NewsStoryKind::HomegrownQuotaOmission => "homegrown_quota_omission",
-            NewsStoryKind::ForeignQuotaOmission => "foreign_quota_omission",
-            NewsStoryKind::HamstringBlow => "hamstring_blow",
-            NewsStoryKind::KneeLigamentBlow => "knee_ligament_blow",
-            NewsStoryKind::BrokenBoneBlow => "broken_bone_blow",
-            NewsStoryKind::TakenUnderWing => "taken_under_wing",
-            NewsStoryKind::DressingRoomSpeech => "dressing_room_speech",
-            NewsStoryKind::SquadKnitsTogether => "squad_knits_together",
-            NewsStoryKind::TurnoverToll => "turnover_toll",
-            NewsStoryKind::CliqueConcerns => "clique_concerns",
-            NewsStoryKind::BigMatchTrust => "big_match_trust",
-            NewsStoryKind::ManagerDoubtsLinger => "manager_doubts_linger",
-            NewsStoryKind::FrozenOutOfTheSide => "frozen_out_of_the_side",
-            NewsStoryKind::ReunitedWithHisManager => "reunited_with_his_manager",
-            NewsStoryKind::OldWoundsReopened => "old_wounds_reopened",
-            NewsStoryKind::TrainingGroundBuzz => "training_ground_buzz",
-            NewsStoryKind::FormationRevolution => "formation_revolution",
-            NewsStoryKind::TrainingConcerns => "training_concerns",
-            NewsStoryKind::BenchFrustration => "bench_frustration",
-            NewsStoryKind::DroppedByCountry => "dropped_by_country",
-            NewsStoryKind::LeftOutOfSquadList => "left_out_of_squad_list",
-            NewsStoryKind::OffFieldControversy => "off_field_controversy",
-            NewsStoryKind::WageEnvy => "wage_envy",
-            NewsStoryKind::ShirtNumberHandover => "shirt_number_handover",
-            NewsStoryKind::OutgrownDivision => "outgrown_division",
-            NewsStoryKind::RelegationNerves => "relegation_nerves",
-            NewsStoryKind::ContractTornUp => "contract_torn_up",
-            NewsStoryKind::SeasonAward => "season_award",
-            NewsStoryKind::DreamMoveComplete => "dream_move_complete",
-            NewsStoryKind::StatusShock => "status_shock",
-            NewsStoryKind::PayWindfall => "pay_windfall",
-            NewsStoryKind::WageRealityCheck => "wage_reality_check",
-            NewsStoryKind::PlayerOfWeek => "player_of_week",
-            NewsStoryKind::YoungPlayerOfWeek => "young_player_of_week",
-            NewsStoryKind::TeamOfMonthNod => "team_of_month_nod",
-            NewsStoryKind::YoungPlayerOfMonthAward => "young_player_of_month",
-            NewsStoryKind::YoungPlayerOfSeasonAward => "young_player_of_season",
-            NewsStoryKind::NewManagerBounce => "new_manager_bounce",
-            NewsStoryKind::ManagerExitUnsettles => "manager_exit_unsettles",
-            NewsStoryKind::PromiseKept => "promise_kept",
-            NewsStoryKind::BanServed => "ban_served",
-            NewsStoryKind::PlayingForContract => "playing_for_contract",
-            NewsStoryKind::PersonalTrainingPlan => "personal_training_plan",
-            NewsStoryKind::RoleRetraining => "role_retraining",
-            NewsStoryKind::HomegrownBlocked => "homegrown_blocked",
-            NewsStoryKind::FavouritismGrumbles => "favouritism_grumbles",
-            NewsStoryKind::FamilyUnsettled => "family_unsettled",
-            NewsStoryKind::FamilyCelebration => "family_celebration",
-            NewsStoryKind::CompassionateLeave => "compassionate_leave",
-            NewsStoryKind::LanguageLessons => "language_lessons",
-            NewsStoryKind::VeteranHomecomingWish => "veteran_homecoming_wish",
-            NewsStoryKind::LegendWontLeave => "legend_wont_leave",
-            NewsStoryKind::RefusesRivalMove => "refuses_rival_move",
-            NewsStoryKind::SeeksQuieterStage => "seeks_quieter_stage",
-            NewsStoryKind::ManOfTheMatch => "man_of_the_match",
-            NewsStoryKind::MatchMasterclass => "match_masterclass",
-            NewsStoryKind::AssistShow => "assist_show",
-            NewsStoryKind::CreatorInChief => "creator_in_chief",
-            NewsStoryKind::DefensiveRock => "defensive_rock",
-            NewsStoryKind::DribblingDisplay => "dribbling_display",
-            NewsStoryKind::SuperSub => "super_sub",
-            NewsStoryKind::DerbyHero => "derby_hero",
-            NewsStoryKind::MatchStinker => "match_stinker",
-            NewsStoryKind::WastefulFinishing => "wasteful_finishing",
-            NewsStoryKind::CostlyError => "costly_error",
-            NewsStoryKind::OwnGoalShame => "own_goal_shame",
-            NewsStoryKind::PenaltyMissed => "penalty_missed",
-            NewsStoryKind::HookedEarly => "hooked_early",
-            NewsStoryKind::FoulTrouble => "foul_trouble",
-            NewsStoryKind::BraceHero => "brace_hero",
-            NewsStoryKind::GoalAndAssistShow => "goal_and_assist_show",
-            NewsStoryKind::TeenageStarTurn => "teenage_star_turn",
-            NewsStoryKind::RolledBackYears => "rolled_back_years",
-            NewsStoryKind::DreamDebut => "dream_debut",
-            NewsStoryKind::DebutNightmare => "debut_nightmare",
-            NewsStoryKind::GoalFromDefence => "goal_from_defence",
-            NewsStoryKind::MidfieldEngine => "midfield_engine",
-            NewsStoryKind::RoleFrustration => "role_frustration",
-            NewsStoryKind::MoveCollapsed => "move_collapsed",
-            NewsStoryKind::AmbitionWarning => "ambition_warning",
-            NewsStoryKind::UnsoldStillHere => "unsold_still_here",
-            NewsStoryKind::LoanFedUp => "loan_fed_up",
-            NewsStoryKind::ManagerBacksPlayer => "manager_backs_player",
-            NewsStoryKind::ManagerCallsOutPlayer => "manager_calls_out",
-            NewsStoryKind::DroppedForBigMatch => "dropped_big_match",
-            NewsStoryKind::PromiseBroken => "promise_broken",
-            NewsStoryKind::PlayerFined => "player_fined",
-            NewsStoryKind::ClearTheAir => "clear_the_air",
-            NewsStoryKind::NewSigning => "new_signing",
-            NewsStoryKind::RecordSigning => "record_signing",
-            NewsStoryKind::FreeSigning => "free_signing",
-            NewsStoryKind::LoanArrival => "loan_arrival",
-            NewsStoryKind::HomecomingSigning => "homecoming_signing",
-            NewsStoryKind::LoanMadePermanent => "loan_made_permanent",
-            NewsStoryKind::ProspectSigned => "prospect_signed",
-            NewsStoryKind::VeteranArrives => "veteran_arrives",
-            NewsStoryKind::TransferAgreed => "transfer_agreed",
-            NewsStoryKind::RumourCools => "rumour_cools",
-            NewsStoryKind::CommitsToClub => "commits_to_club",
-            NewsStoryKind::ContractRunningDown => "contract_running_down",
-            NewsStoryKind::PlayerSold => "player_sold",
-            NewsStoryKind::StarSold => "star_sold",
-            NewsStoryKind::FreeExit => "free_exit",
-            NewsStoryKind::RivalRaid => "rival_raid",
-            NewsStoryKind::ScoutingCoup => "scouting_coup",
-            NewsStoryKind::SuccessionSigning => "succession_signing",
-            NewsStoryKind::DepthSigning => "depth_signing",
-            NewsStoryKind::GapPlugged => "gap_plugged",
-            NewsStoryKind::MarqueeUpgrade => "marquee_upgrade",
-            NewsStoryKind::BargainBuy => "bargain_buy",
-            NewsStoryKind::AcademyGraduate => "academy_graduate",
-            NewsStoryKind::LoanedOutToGrow => "loaned_out_to_grow",
-            NewsStoryKind::LoanExit => "loan_exit",
-            NewsStoryKind::LoanReturn => "loan_return",
-            NewsStoryKind::TransferSpeculation => "transfer_speculation",
-            NewsStoryKind::TransferListed => "transfer_listed",
-            NewsStoryKind::ContractStandoff => "contract_standoff",
-            NewsStoryKind::RumourInterest => "rumour_interest",
-            NewsStoryKind::RumourRival => "rumour_rival",
-            NewsStoryKind::ScoutsWatching => "scouts_watching",
-            NewsStoryKind::AgentTouting => "agent_touting",
-            NewsStoryKind::HomecomingLink => "homecoming_link",
-            NewsStoryKind::BidRejected => "bid_rejected",
-            NewsStoryKind::TalksExpected => "talks_expected",
-            NewsStoryKind::TransferRequestFiled => "transfer_request",
-            NewsStoryKind::ToldNotInPlans => "told_not_in_plans",
-            NewsStoryKind::ContractTalksStalled => "contract_talks_stalled",
-            NewsStoryKind::SigningNotWorking => "signing_not_working",
-            NewsStoryKind::SigningComesGood => "signing_comes_good",
-            NewsStoryKind::LeverageUsed => "leverage_used",
-            NewsStoryKind::ContinentalAmbition => "continental_ambition",
-            NewsStoryKind::LoanWatchStarter => "loan_watch_starter",
-            NewsStoryKind::LoanWatchGoals => "loan_watch_goals",
-            NewsStoryKind::KeeperLoanWatchShutouts => "keeper_loan_watch_shutouts",
-            NewsStoryKind::KeeperLoanWantsPermanent => "keeper_loan_wants_permanent",
-            NewsStoryKind::LoanWatchBenched => "loan_watch_benched",
-            NewsStoryKind::LoanWantsReturn => "loan_wants_return",
-            NewsStoryKind::LoanWantsPermanent => "loan_wants_permanent",
-            NewsStoryKind::LoanRecallTalk => "loan_recall_talk",
-            NewsStoryKind::LoanSpellEnds => "loan_spell_ends",
-            NewsStoryKind::LoanFlop => "loan_flop",
-            NewsStoryKind::LoanStepTooBig => "loan_step_too_big",
-            NewsStoryKind::FansChant => "fans_chant",
-            NewsStoryKind::FansTurnOnTeam => "fans_turn",
-            NewsStoryKind::FansGetBehind => "fans_get_behind",
-            NewsStoryKind::FansAngryAtRumour => "fans_angry_rumour",
-            NewsStoryKind::MediaPressure => "media_pressure",
-            NewsStoryKind::MediaDarling => "media_darling",
-            NewsStoryKind::ProtestBrewing => "protest_brewing",
-            NewsStoryKind::PromotionFever => "promotion_fever",
-            NewsStoryKind::RelegationDread => "relegation_dread",
-            NewsStoryKind::FansFurySale => "fans_fury_sale",
-            NewsStoryKind::FansDreamSigning => "fans_dream_signing",
-            NewsStoryKind::CupHumiliationFallout => "cup_humiliation_fallout",
-            NewsStoryKind::TravellingSupportRewarded => "travelling_support_rewarded",
-            NewsStoryKind::AcademyDarling => "academy_darling",
-            NewsStoryKind::ManagerPressure => "manager_pressure",
-            NewsStoryKind::BoardBacking => "board_backing",
-            NewsStoryKind::ManagerSacked => "manager_sacked",
-            NewsStoryKind::SeverancePaid => "severance_paid",
-            NewsStoryKind::NewManagerArrives => "new_manager",
-            NewsStoryKind::ManagerPoached => "manager_poached",
-            NewsStoryKind::CaretakerTakesCharge => "caretaker_takes_charge",
-            NewsStoryKind::CaretakerConfirmed => "caretaker_confirmed",
-            NewsStoryKind::ManagerHunt => "manager_hunt",
-            NewsStoryKind::ManagerTargetLinked => "manager_target_linked",
-            NewsStoryKind::ManagerWanted => "manager_wanted",
-            NewsStoryKind::ManagerUltimatum => "manager_ultimatum",
-            NewsStoryKind::ManagerContractExtended => "manager_contract_extended",
-            NewsStoryKind::TakeoverRumour => "takeover_rumour",
-            NewsStoryKind::TakeoverCompleted => "takeover_completed",
-            NewsStoryKind::TakeoverCollapsed => "takeover_collapsed",
-            NewsStoryKind::StadiumExpansion => "stadium_expansion",
-            NewsStoryKind::FacilityUpgrade => "facility_upgrade",
-            NewsStoryKind::WarChest => "war_chest",
-            NewsStoryKind::BudgetCut => "budget_cut",
-            NewsStoryKind::BoardPromiseBroken => "board_promise_broken",
-            NewsStoryKind::DressingRoomInquest => "dressing_room_inquest",
-            NewsStoryKind::SquadRallies => "squad_rallies",
-            NewsStoryKind::BoardInvests => "board_invests",
-            NewsStoryKind::TrophyWon => "trophy_won",
-            NewsStoryKind::PromotionWon => "promotion_won",
-            NewsStoryKind::RelegationConfirmed => "relegation_confirmed",
-            NewsStoryKind::CupFinalHeartbreak => "cup_final_heartbreak",
-            NewsStoryKind::EuropeSecured => "europe_secured",
-            NewsStoryKind::AcademyPraise => "academy_praise",
-            NewsStoryKind::BackroomEmpty => "backroom_empty",
-            NewsStoryKind::IntakeDay => "intake_day",
-            NewsStoryKind::GoldenGeneration => "golden_generation",
-            NewsStoryKind::GraduationDay => "graduation_day",
-            NewsStoryKind::MoneyWorries => "money_worries",
-            NewsStoryKind::AdministrationEntered => "administration_entered",
-            NewsStoryKind::AdministrationExited => "administration_exited",
-            NewsStoryKind::OwnerBailout => "owner_bailout",
-            NewsStoryKind::SponsorSigned => "sponsor_signed",
-            NewsStoryKind::SponsorshipLost => "sponsorship_lost",
-            NewsStoryKind::SellOnWindfall => "sell_on_windfall",
-            NewsStoryKind::PromotionBonusDue => "promotion_bonus_due",
-            NewsStoryKind::PreContractAgreed => "pre_contract_agreed",
-            NewsStoryKind::BosmanDepartureLooms => "bosman_departure_looms",
-            NewsStoryKind::DebtMountain => "debt_mountain",
-            NewsStoryKind::TransferEmbargo => "transfer_embargo",
-            NewsStoryKind::WageBillCrisis => "wage_bill_crisis",
-            NewsStoryKind::MustSellBeforeBuying => "must_sell_before_buying",
-            NewsStoryKind::CrisisTalks => "crisis_talks",
-            NewsStoryKind::BoardDemandsSale => "board_demands_sale",
-            NewsStoryKind::BoardBlocksDeal => "board_blocks_deal",
-            NewsStoryKind::FacilityPlanRejected => "facility_plan_rejected",
-            NewsStoryKind::LeagueTopScorer => "league_top_scorer",
-            NewsStoryKind::LeagueScoringChase => "league_scoring_chase",
-            NewsStoryKind::LeaguePlayerOfMonth => "league_player_of_month",
-            NewsStoryKind::LeagueYoungStar => "league_young_star",
-            NewsStoryKind::LeagueAssistKing => "league_assist_king",
-            NewsStoryKind::LeagueAssistChase => "league_assist_chase",
-            NewsStoryKind::LeagueRatingsLeader => "league_ratings_leader",
-            NewsStoryKind::LeagueTeamOfMonth => "league_team_of_month",
-            NewsStoryKind::RunEnded => "run_ended",
-            NewsStoryKind::FirstWinInAges => "first_win_in_ages",
-            NewsStoryKind::LateEqualiserConceded => "late_equaliser_conceded",
-            NewsStoryKind::PointRescued => "point_rescued",
-            NewsStoryKind::TopOfTheTable => "top_of_the_table",
-            NewsStoryKind::EuropeRace => "europe_race",
-            NewsStoryKind::MidTableDrift => "mid_table_drift",
-            NewsStoryKind::HalfwayReport => "halfway_report",
-            NewsStoryKind::FinalStanding => "final_standing",
-            NewsStoryKind::NextUpDerby => "next_up_derby",
-            NewsStoryKind::NextUpSummit => "next_up_summit",
-            NewsStoryKind::NextUpSixPointer => "next_up_six_pointer",
-            NewsStoryKind::NextUpLeaders => "next_up_leaders",
-            NewsStoryKind::NextUpCupTie => "next_up_cup_tie",
-            NewsStoryKind::NextUpOldBoy => "next_up_old_boy",
-            NewsStoryKind::NextUpHome => "next_up_home",
-            NewsStoryKind::NextUpAway => "next_up_away",
-            NewsStoryKind::PromisedHisChance => "promised_his_chance",
-            NewsStoryKind::ManagerOnWin => "manager_on_win",
-            NewsStoryKind::ManagerOnDraw => "manager_on_draw",
-            NewsStoryKind::ManagerOnDefeat => "manager_on_defeat",
-            NewsStoryKind::PeckingOrderUp => "pecking_order_up",
-            NewsStoryKind::PeckingOrderDown => "pecking_order_down",
-            NewsStoryKind::NoRoleInTheShape => "no_role_in_the_shape",
-            NewsStoryKind::BigClubAura => "big_club_aura",
-            NewsStoryKind::StuckInTheQueue => "stuck_in_the_queue",
-            NewsStoryKind::InjuryCrisis => "injury_crisis",
-            NewsStoryKind::InternationalExodus => "international_exodus",
-            NewsStoryKind::PersonalTermsAgreed => "personal_terms_agreed",
-            NewsStoryKind::TurnsDownMove => "turns_down_move",
-            NewsStoryKind::SteppingStoneTalk => "stepping_stone_talk",
-            NewsStoryKind::BidLodged => "bid_lodged",
-            NewsStoryKind::LoanApproach => "loan_approach",
-            NewsStoryKind::FeeAgreed => "fee_agreed",
-            NewsStoryKind::MedicalBooked => "medical_booked",
-            NewsStoryKind::PricedOut => "priced_out",
-            NewsStoryKind::NotForSale => "not_for_sale",
-            NewsStoryKind::TargetSaysNo => "target_says_no",
-            NewsStoryKind::MedicalFailed => "medical_failed",
-            NewsStoryKind::DealDiesAtDeadline => "deal_dies_at_deadline",
-            NewsStoryKind::WindowOpens => "window_opens",
-            NewsStoryKind::WindowShuts => "window_shuts",
-            NewsStoryKind::FeeWrittenOff => "fee_written_off",
-            NewsStoryKind::BoardRaisesItsOffer => "board_raises_its_offer",
-        }
+        self.lookup(Self::KEY_STEMS)
     }
+
+    /// The translation stem each kind is set under.
+    const KEY_STEMS: &[(NewsStoryKind, &'static str)] = &[
+        (NewsStoryKind::LeagueWin, "league_win"),
+        (NewsStoryKind::LeagueDraw, "league_draw"),
+        (NewsStoryKind::GoallessDraw, "goalless_draw"),
+        (NewsStoryKind::LeagueDefeat, "league_defeat"),
+        (NewsStoryKind::Rout, "rout"),
+        (NewsStoryKind::HeavyDefeat, "heavy_defeat"),
+        (NewsStoryKind::DerbyWin, "derby_win"),
+        (NewsStoryKind::DerbyDefeat, "derby_defeat"),
+        (NewsStoryKind::CupWin, "cup_win"),
+        (NewsStoryKind::CupExit, "cup_exit"),
+        (NewsStoryKind::LateWinner, "late_winner"),
+        (NewsStoryKind::StoppageTimeDrama, "stoppage_time_drama"),
+        (NewsStoryKind::ComebackWin, "comeback_win"),
+        (NewsStoryKind::LeadThrownAway, "lead_thrown_away"),
+        (NewsStoryKind::InstantReply, "instant_reply"),
+        (NewsStoryKind::EarlyBlitz, "early_blitz"),
+        (NewsStoryKind::GoalFest, "goal_fest"),
+        (NewsStoryKind::TenManWin, "ten_man_win"),
+        (NewsStoryKind::WinningRun, "winning_run"),
+        (NewsStoryKind::UnbeatenRun, "unbeaten_run"),
+        (NewsStoryKind::WinlessRun, "winless_run"),
+        (NewsStoryKind::TitleCharge, "title_charge"),
+        (NewsStoryKind::RelegationFight, "relegation_fight"),
+        (NewsStoryKind::GoalsDriedUp, "goals_dried_up"),
+        (NewsStoryKind::DefensiveCrisis, "defensive_crisis"),
+        (NewsStoryKind::FortressHome, "fortress_home"),
+        (NewsStoryKind::AwayDayForm, "away_day_form"),
+        (NewsStoryKind::ContinentalNightWin, "continental_night_win"),
+        (NewsStoryKind::ContinentalDefeat, "continental_defeat"),
+        (NewsStoryKind::ContinentalRout, "continental_rout"),
+        (NewsStoryKind::ContinentalHiding, "continental_hiding"),
+        (NewsStoryKind::PlayoffGameWin, "playoff_game_win"),
+        (NewsStoryKind::PlayoffGameDefeat, "playoff_game_defeat"),
+        (NewsStoryKind::PlayoffTieWon, "playoff_tie_won"),
+        (NewsStoryKind::PlayoffTieLost, "playoff_tie_lost"),
+        (NewsStoryKind::PlayoffFinalReached, "playoff_final_reached"),
+        (NewsStoryKind::HatTrick, "hat_trick"),
+        (NewsStoryKind::StarForm, "star_form"),
+        (NewsStoryKind::RisingStar, "rising_star"),
+        (NewsStoryKind::BreakthroughSeason, "breakthrough_season"),
+        (
+            NewsStoryKind::TrainingTransformation,
+            "training_transformation",
+        ),
+        (NewsStoryKind::StalledProspect, "stalled_prospect"),
+        (NewsStoryKind::PowersFading, "powers_fading"),
+        (NewsStoryKind::KeeperWall, "keeper_wall"),
+        (NewsStoryKind::KeeperMasterclass, "keeper_masterclass"),
+        (NewsStoryKind::KeeperPenaltySave, "keeper_penalty_save"),
+        (NewsStoryKind::KeeperOverrun, "keeper_overrun"),
+        (NewsStoryKind::KeeperBlunder, "keeper_blunder"),
+        (
+            NewsStoryKind::KeeperShutoutMilestone,
+            "keeper_shutout_milestone",
+        ),
+        (NewsStoryKind::KeeperGoldenGlove, "keeper_golden_glove"),
+        (NewsStoryKind::InjuryBlow, "injury_blow"),
+        (NewsStoryKind::InjuryReturn, "injury_return"),
+        (NewsStoryKind::InjurySetback, "injury_setback"),
+        (NewsStoryKind::RedCard, "red_card"),
+        (NewsStoryKind::Suspension, "suspension"),
+        (NewsStoryKind::YouthDebut, "youth_debut"),
+        (NewsStoryKind::MilestoneApps, "milestone_apps"),
+        (NewsStoryKind::MilestoneGoals, "milestone_goals"),
+        (NewsStoryKind::PlayerOfMonth, "player_of_month"),
+        (NewsStoryKind::TeamOfTheWeek, "team_of_the_week"),
+        (NewsStoryKind::CaptainNamed, "captain_named"),
+        (NewsStoryKind::NationalCallUp, "national_callup"),
+        (NewsStoryKind::TournamentTriumph, "tournament_triumph"),
+        (NewsStoryKind::TournamentHeartbreak, "tournament_heartbreak"),
+        (NewsStoryKind::GoalDrought, "goal_drought"),
+        (NewsStoryKind::DroughtEnded, "drought_ended"),
+        (NewsStoryKind::FormerClubGoal, "former_club_goal"),
+        (NewsStoryKind::ClubServant, "club_servant"),
+        (NewsStoryKind::RetirementAnnounced, "retirement_announced"),
+        (NewsStoryKind::TrainingBustUp, "training_bust_up"),
+        (NewsStoryKind::ContractRenewed, "contract_renewed"),
+        (NewsStoryKind::FirstClubGoal, "first_club_goal"),
+        (NewsStoryKind::WonStartingPlace, "won_starting_place"),
+        (NewsStoryKind::LeaderEmerging, "leader_emerging"),
+        (NewsStoryKind::SettlingIn, "settling_in"),
+        (NewsStoryKind::TeammateFarewell, "teammate_farewell"),
+        (
+            NewsStoryKind::InternationalRetirement,
+            "international_retirement",
+        ),
+        (NewsStoryKind::CoachingAmbition, "coaching_ambition"),
+        (NewsStoryKind::CaptaincyLost, "captaincy_lost"),
+        (NewsStoryKind::ShirtUnderThreat, "shirt_under_threat"),
+        (NewsStoryKind::PathwayBlocked, "pathway_blocked"),
+        (NewsStoryKind::CareerTwilight, "career_twilight"),
+        (NewsStoryKind::HomesickAbroad, "homesick_abroad"),
+        (NewsStoryKind::StrugglingToSettle, "struggling_to_settle"),
+        (NewsStoryKind::HomeCalling, "home_calling"),
+        (NewsStoryKind::SettledAtLast, "settled_at_last"),
+        (NewsStoryKind::ColdShoulder, "cold_shoulder"),
+        (NewsStoryKind::TeammateConflict, "teammate_conflict"),
+        (
+            NewsStoryKind::TrainingStandardsRow,
+            "training_standards_row",
+        ),
+        (NewsStoryKind::PositionRivalryFeud, "position_rivalry_feud"),
+        (
+            NewsStoryKind::LeadershipPowerStruggle,
+            "leadership_power_struggle",
+        ),
+        (NewsStoryKind::RotationRested, "rotation_rested"),
+        (NewsStoryKind::TacticalOmission, "tactical_omission"),
+        (NewsStoryKind::DroppedOnForm, "dropped_on_form"),
+        (NewsStoryKind::DisciplinaryOmission, "disciplinary_omission"),
+        (NewsStoryKind::ForcedToRetire, "forced_to_retire"),
+        (NewsStoryKind::LoanReturnTriumph, "loan_return_triumph"),
+        (NewsStoryKind::LoanReturnWasted, "loan_return_wasted"),
+        (
+            NewsStoryKind::KeeperLoanReturnTriumph,
+            "keeper_loan_return_triumph",
+        ),
+        (
+            NewsStoryKind::KeeperLoanReturnWasted,
+            "keeper_loan_return_wasted",
+        ),
+        (NewsStoryKind::KeeperLoanReturn, "keeper_loan_return"),
+        (
+            NewsStoryKind::HomegrownQuotaOmission,
+            "homegrown_quota_omission",
+        ),
+        (
+            NewsStoryKind::ForeignQuotaOmission,
+            "foreign_quota_omission",
+        ),
+        (NewsStoryKind::HamstringBlow, "hamstring_blow"),
+        (NewsStoryKind::KneeLigamentBlow, "knee_ligament_blow"),
+        (NewsStoryKind::BrokenBoneBlow, "broken_bone_blow"),
+        (NewsStoryKind::TakenUnderWing, "taken_under_wing"),
+        (NewsStoryKind::DressingRoomSpeech, "dressing_room_speech"),
+        (NewsStoryKind::SquadKnitsTogether, "squad_knits_together"),
+        (NewsStoryKind::TurnoverToll, "turnover_toll"),
+        (NewsStoryKind::CliqueConcerns, "clique_concerns"),
+        (NewsStoryKind::BigMatchTrust, "big_match_trust"),
+        (NewsStoryKind::ManagerDoubtsLinger, "manager_doubts_linger"),
+        (NewsStoryKind::FrozenOutOfTheSide, "frozen_out_of_the_side"),
+        (
+            NewsStoryKind::ReunitedWithHisManager,
+            "reunited_with_his_manager",
+        ),
+        (NewsStoryKind::OldWoundsReopened, "old_wounds_reopened"),
+        (NewsStoryKind::TrainingGroundBuzz, "training_ground_buzz"),
+        (NewsStoryKind::FormationRevolution, "formation_revolution"),
+        (NewsStoryKind::TrainingConcerns, "training_concerns"),
+        (NewsStoryKind::BenchFrustration, "bench_frustration"),
+        (NewsStoryKind::DroppedByCountry, "dropped_by_country"),
+        (NewsStoryKind::LeftOutOfSquadList, "left_out_of_squad_list"),
+        (NewsStoryKind::OffFieldControversy, "off_field_controversy"),
+        (NewsStoryKind::WageEnvy, "wage_envy"),
+        (NewsStoryKind::ShirtNumberHandover, "shirt_number_handover"),
+        (NewsStoryKind::OutgrownDivision, "outgrown_division"),
+        (NewsStoryKind::RelegationNerves, "relegation_nerves"),
+        (NewsStoryKind::ContractTornUp, "contract_torn_up"),
+        (NewsStoryKind::SeasonAward, "season_award"),
+        (NewsStoryKind::DreamMoveComplete, "dream_move_complete"),
+        (NewsStoryKind::StatusShock, "status_shock"),
+        (NewsStoryKind::PayWindfall, "pay_windfall"),
+        (NewsStoryKind::WageRealityCheck, "wage_reality_check"),
+        (NewsStoryKind::PlayerOfWeek, "player_of_week"),
+        (NewsStoryKind::YoungPlayerOfWeek, "young_player_of_week"),
+        (NewsStoryKind::TeamOfMonthNod, "team_of_month_nod"),
+        (
+            NewsStoryKind::YoungPlayerOfMonthAward,
+            "young_player_of_month",
+        ),
+        (
+            NewsStoryKind::YoungPlayerOfSeasonAward,
+            "young_player_of_season",
+        ),
+        (NewsStoryKind::NewManagerBounce, "new_manager_bounce"),
+        (
+            NewsStoryKind::ManagerExitUnsettles,
+            "manager_exit_unsettles",
+        ),
+        (NewsStoryKind::PromiseKept, "promise_kept"),
+        (NewsStoryKind::BanServed, "ban_served"),
+        (NewsStoryKind::PlayingForContract, "playing_for_contract"),
+        (
+            NewsStoryKind::PersonalTrainingPlan,
+            "personal_training_plan",
+        ),
+        (NewsStoryKind::RoleRetraining, "role_retraining"),
+        (NewsStoryKind::HomegrownBlocked, "homegrown_blocked"),
+        (NewsStoryKind::FavouritismGrumbles, "favouritism_grumbles"),
+        (NewsStoryKind::FamilyUnsettled, "family_unsettled"),
+        (NewsStoryKind::FamilyCelebration, "family_celebration"),
+        (NewsStoryKind::CompassionateLeave, "compassionate_leave"),
+        (NewsStoryKind::LanguageLessons, "language_lessons"),
+        (
+            NewsStoryKind::VeteranHomecomingWish,
+            "veteran_homecoming_wish",
+        ),
+        (NewsStoryKind::LegendWontLeave, "legend_wont_leave"),
+        (NewsStoryKind::RefusesRivalMove, "refuses_rival_move"),
+        (NewsStoryKind::SeeksQuieterStage, "seeks_quieter_stage"),
+        (NewsStoryKind::ManOfTheMatch, "man_of_the_match"),
+        (NewsStoryKind::MatchMasterclass, "match_masterclass"),
+        (NewsStoryKind::AssistShow, "assist_show"),
+        (NewsStoryKind::CreatorInChief, "creator_in_chief"),
+        (NewsStoryKind::DefensiveRock, "defensive_rock"),
+        (NewsStoryKind::DribblingDisplay, "dribbling_display"),
+        (NewsStoryKind::SuperSub, "super_sub"),
+        (NewsStoryKind::DerbyHero, "derby_hero"),
+        (NewsStoryKind::MatchStinker, "match_stinker"),
+        (NewsStoryKind::WastefulFinishing, "wasteful_finishing"),
+        (NewsStoryKind::CostlyError, "costly_error"),
+        (NewsStoryKind::OwnGoalShame, "own_goal_shame"),
+        (NewsStoryKind::PenaltyMissed, "penalty_missed"),
+        (NewsStoryKind::HookedEarly, "hooked_early"),
+        (NewsStoryKind::FoulTrouble, "foul_trouble"),
+        (NewsStoryKind::BraceHero, "brace_hero"),
+        (NewsStoryKind::GoalAndAssistShow, "goal_and_assist_show"),
+        (NewsStoryKind::TeenageStarTurn, "teenage_star_turn"),
+        (NewsStoryKind::RolledBackYears, "rolled_back_years"),
+        (NewsStoryKind::DreamDebut, "dream_debut"),
+        (NewsStoryKind::DebutNightmare, "debut_nightmare"),
+        (NewsStoryKind::GoalFromDefence, "goal_from_defence"),
+        (NewsStoryKind::MidfieldEngine, "midfield_engine"),
+        (NewsStoryKind::RoleFrustration, "role_frustration"),
+        (NewsStoryKind::MoveCollapsed, "move_collapsed"),
+        (NewsStoryKind::AmbitionWarning, "ambition_warning"),
+        (NewsStoryKind::UnsoldStillHere, "unsold_still_here"),
+        (NewsStoryKind::LoanFedUp, "loan_fed_up"),
+        (NewsStoryKind::ManagerBacksPlayer, "manager_backs_player"),
+        (NewsStoryKind::ManagerCallsOutPlayer, "manager_calls_out"),
+        (NewsStoryKind::DroppedForBigMatch, "dropped_big_match"),
+        (NewsStoryKind::PromiseBroken, "promise_broken"),
+        (NewsStoryKind::PlayerFined, "player_fined"),
+        (NewsStoryKind::ClearTheAir, "clear_the_air"),
+        (NewsStoryKind::NewSigning, "new_signing"),
+        (NewsStoryKind::RecordSigning, "record_signing"),
+        (NewsStoryKind::FreeSigning, "free_signing"),
+        (NewsStoryKind::LoanArrival, "loan_arrival"),
+        (NewsStoryKind::HomecomingSigning, "homecoming_signing"),
+        (NewsStoryKind::LoanMadePermanent, "loan_made_permanent"),
+        (NewsStoryKind::ProspectSigned, "prospect_signed"),
+        (NewsStoryKind::VeteranArrives, "veteran_arrives"),
+        (NewsStoryKind::TransferAgreed, "transfer_agreed"),
+        (NewsStoryKind::RumourCools, "rumour_cools"),
+        (NewsStoryKind::CommitsToClub, "commits_to_club"),
+        (NewsStoryKind::ContractRunningDown, "contract_running_down"),
+        (NewsStoryKind::PlayerSold, "player_sold"),
+        (NewsStoryKind::StarSold, "star_sold"),
+        (NewsStoryKind::FreeExit, "free_exit"),
+        (NewsStoryKind::RivalRaid, "rival_raid"),
+        (NewsStoryKind::ScoutingCoup, "scouting_coup"),
+        (NewsStoryKind::SuccessionSigning, "succession_signing"),
+        (NewsStoryKind::DepthSigning, "depth_signing"),
+        (NewsStoryKind::GapPlugged, "gap_plugged"),
+        (NewsStoryKind::MarqueeUpgrade, "marquee_upgrade"),
+        (NewsStoryKind::BargainBuy, "bargain_buy"),
+        (NewsStoryKind::AcademyGraduate, "academy_graduate"),
+        (NewsStoryKind::LoanedOutToGrow, "loaned_out_to_grow"),
+        (NewsStoryKind::LoanExit, "loan_exit"),
+        (NewsStoryKind::LoanReturn, "loan_return"),
+        (NewsStoryKind::TransferSpeculation, "transfer_speculation"),
+        (NewsStoryKind::TransferListed, "transfer_listed"),
+        (NewsStoryKind::ContractStandoff, "contract_standoff"),
+        (NewsStoryKind::RumourInterest, "rumour_interest"),
+        (NewsStoryKind::RumourRival, "rumour_rival"),
+        (NewsStoryKind::ScoutsWatching, "scouts_watching"),
+        (NewsStoryKind::AgentTouting, "agent_touting"),
+        (NewsStoryKind::HomecomingLink, "homecoming_link"),
+        (NewsStoryKind::BidRejected, "bid_rejected"),
+        (NewsStoryKind::TalksExpected, "talks_expected"),
+        (NewsStoryKind::TransferRequestFiled, "transfer_request"),
+        (NewsStoryKind::ToldNotInPlans, "told_not_in_plans"),
+        (
+            NewsStoryKind::ContractTalksStalled,
+            "contract_talks_stalled",
+        ),
+        (NewsStoryKind::SigningNotWorking, "signing_not_working"),
+        (NewsStoryKind::SigningComesGood, "signing_comes_good"),
+        (NewsStoryKind::LeverageUsed, "leverage_used"),
+        (NewsStoryKind::ContinentalAmbition, "continental_ambition"),
+        (NewsStoryKind::LoanWatchStarter, "loan_watch_starter"),
+        (NewsStoryKind::LoanWatchGoals, "loan_watch_goals"),
+        (
+            NewsStoryKind::KeeperLoanWatchShutouts,
+            "keeper_loan_watch_shutouts",
+        ),
+        (
+            NewsStoryKind::KeeperLoanWantsPermanent,
+            "keeper_loan_wants_permanent",
+        ),
+        (NewsStoryKind::LoanWatchBenched, "loan_watch_benched"),
+        (NewsStoryKind::LoanWantsReturn, "loan_wants_return"),
+        (NewsStoryKind::LoanWantsPermanent, "loan_wants_permanent"),
+        (NewsStoryKind::LoanRecallTalk, "loan_recall_talk"),
+        (NewsStoryKind::LoanSpellEnds, "loan_spell_ends"),
+        (NewsStoryKind::LoanFlop, "loan_flop"),
+        (NewsStoryKind::LoanStepTooBig, "loan_step_too_big"),
+        (NewsStoryKind::FansChant, "fans_chant"),
+        (NewsStoryKind::FansTurnOnTeam, "fans_turn"),
+        (NewsStoryKind::FansGetBehind, "fans_get_behind"),
+        (NewsStoryKind::FansAngryAtRumour, "fans_angry_rumour"),
+        (NewsStoryKind::MediaPressure, "media_pressure"),
+        (NewsStoryKind::MediaDarling, "media_darling"),
+        (NewsStoryKind::ProtestBrewing, "protest_brewing"),
+        (NewsStoryKind::PromotionFever, "promotion_fever"),
+        (NewsStoryKind::RelegationDread, "relegation_dread"),
+        (NewsStoryKind::FansFurySale, "fans_fury_sale"),
+        (NewsStoryKind::FansDreamSigning, "fans_dream_signing"),
+        (
+            NewsStoryKind::CupHumiliationFallout,
+            "cup_humiliation_fallout",
+        ),
+        (
+            NewsStoryKind::TravellingSupportRewarded,
+            "travelling_support_rewarded",
+        ),
+        (NewsStoryKind::AcademyDarling, "academy_darling"),
+        (NewsStoryKind::ManagerPressure, "manager_pressure"),
+        (NewsStoryKind::BoardBacking, "board_backing"),
+        (NewsStoryKind::ManagerSacked, "manager_sacked"),
+        (NewsStoryKind::SeverancePaid, "severance_paid"),
+        (NewsStoryKind::NewManagerArrives, "new_manager"),
+        (NewsStoryKind::ManagerPoached, "manager_poached"),
+        (
+            NewsStoryKind::CaretakerTakesCharge,
+            "caretaker_takes_charge",
+        ),
+        (NewsStoryKind::CaretakerConfirmed, "caretaker_confirmed"),
+        (NewsStoryKind::ManagerHunt, "manager_hunt"),
+        (NewsStoryKind::ManagerTargetLinked, "manager_target_linked"),
+        (NewsStoryKind::ManagerWanted, "manager_wanted"),
+        (NewsStoryKind::ManagerUltimatum, "manager_ultimatum"),
+        (
+            NewsStoryKind::ManagerContractExtended,
+            "manager_contract_extended",
+        ),
+        (NewsStoryKind::TakeoverRumour, "takeover_rumour"),
+        (NewsStoryKind::TakeoverCompleted, "takeover_completed"),
+        (NewsStoryKind::TakeoverCollapsed, "takeover_collapsed"),
+        (NewsStoryKind::StadiumExpansion, "stadium_expansion"),
+        (NewsStoryKind::FacilityUpgrade, "facility_upgrade"),
+        (NewsStoryKind::WarChest, "war_chest"),
+        (NewsStoryKind::BudgetCut, "budget_cut"),
+        (NewsStoryKind::BoardPromiseBroken, "board_promise_broken"),
+        (NewsStoryKind::DressingRoomInquest, "dressing_room_inquest"),
+        (NewsStoryKind::SquadRallies, "squad_rallies"),
+        (NewsStoryKind::BoardInvests, "board_invests"),
+        (NewsStoryKind::TrophyWon, "trophy_won"),
+        (NewsStoryKind::PromotionWon, "promotion_won"),
+        (NewsStoryKind::RelegationConfirmed, "relegation_confirmed"),
+        (NewsStoryKind::CupFinalHeartbreak, "cup_final_heartbreak"),
+        (NewsStoryKind::EuropeSecured, "europe_secured"),
+        (NewsStoryKind::AcademyPraise, "academy_praise"),
+        (NewsStoryKind::BackroomEmpty, "backroom_empty"),
+        (NewsStoryKind::IntakeDay, "intake_day"),
+        (NewsStoryKind::GoldenGeneration, "golden_generation"),
+        (NewsStoryKind::GraduationDay, "graduation_day"),
+        (NewsStoryKind::MoneyWorries, "money_worries"),
+        (
+            NewsStoryKind::AdministrationEntered,
+            "administration_entered",
+        ),
+        (NewsStoryKind::AdministrationExited, "administration_exited"),
+        (NewsStoryKind::OwnerBailout, "owner_bailout"),
+        (NewsStoryKind::SponsorSigned, "sponsor_signed"),
+        (NewsStoryKind::SponsorshipLost, "sponsorship_lost"),
+        (NewsStoryKind::SellOnWindfall, "sell_on_windfall"),
+        (NewsStoryKind::PromotionBonusDue, "promotion_bonus_due"),
+        (NewsStoryKind::PreContractAgreed, "pre_contract_agreed"),
+        (
+            NewsStoryKind::BosmanDepartureLooms,
+            "bosman_departure_looms",
+        ),
+        (NewsStoryKind::DebtMountain, "debt_mountain"),
+        (NewsStoryKind::TransferEmbargo, "transfer_embargo"),
+        (NewsStoryKind::WageBillCrisis, "wage_bill_crisis"),
+        (
+            NewsStoryKind::MustSellBeforeBuying,
+            "must_sell_before_buying",
+        ),
+        (NewsStoryKind::CrisisTalks, "crisis_talks"),
+        (NewsStoryKind::BoardDemandsSale, "board_demands_sale"),
+        (NewsStoryKind::BoardBlocksDeal, "board_blocks_deal"),
+        (
+            NewsStoryKind::FacilityPlanRejected,
+            "facility_plan_rejected",
+        ),
+        (NewsStoryKind::LeagueTopScorer, "league_top_scorer"),
+        (NewsStoryKind::LeagueScoringChase, "league_scoring_chase"),
+        (NewsStoryKind::LeaguePlayerOfMonth, "league_player_of_month"),
+        (NewsStoryKind::LeagueYoungStar, "league_young_star"),
+        (NewsStoryKind::LeagueAssistKing, "league_assist_king"),
+        (NewsStoryKind::LeagueAssistChase, "league_assist_chase"),
+        (NewsStoryKind::LeagueRatingsLeader, "league_ratings_leader"),
+        (NewsStoryKind::LeagueTeamOfMonth, "league_team_of_month"),
+        (NewsStoryKind::RunEnded, "run_ended"),
+        (NewsStoryKind::FirstWinInAges, "first_win_in_ages"),
+        (
+            NewsStoryKind::LateEqualiserConceded,
+            "late_equaliser_conceded",
+        ),
+        (NewsStoryKind::PointRescued, "point_rescued"),
+        (NewsStoryKind::TopOfTheTable, "top_of_the_table"),
+        (NewsStoryKind::EuropeRace, "europe_race"),
+        (NewsStoryKind::MidTableDrift, "mid_table_drift"),
+        (NewsStoryKind::HalfwayReport, "halfway_report"),
+        (NewsStoryKind::FinalStanding, "final_standing"),
+        (NewsStoryKind::NextUpDerby, "next_up_derby"),
+        (NewsStoryKind::NextUpSummit, "next_up_summit"),
+        (NewsStoryKind::NextUpSixPointer, "next_up_six_pointer"),
+        (NewsStoryKind::NextUpLeaders, "next_up_leaders"),
+        (NewsStoryKind::NextUpCupTie, "next_up_cup_tie"),
+        (NewsStoryKind::NextUpOldBoy, "next_up_old_boy"),
+        (NewsStoryKind::NextUpHome, "next_up_home"),
+        (NewsStoryKind::NextUpAway, "next_up_away"),
+        (NewsStoryKind::PromisedHisChance, "promised_his_chance"),
+        (NewsStoryKind::ManagerOnWin, "manager_on_win"),
+        (NewsStoryKind::ManagerOnDraw, "manager_on_draw"),
+        (NewsStoryKind::ManagerOnDefeat, "manager_on_defeat"),
+        (NewsStoryKind::PeckingOrderUp, "pecking_order_up"),
+        (NewsStoryKind::PeckingOrderDown, "pecking_order_down"),
+        (NewsStoryKind::NoRoleInTheShape, "no_role_in_the_shape"),
+        (NewsStoryKind::BigClubAura, "big_club_aura"),
+        (NewsStoryKind::StuckInTheQueue, "stuck_in_the_queue"),
+        (NewsStoryKind::InjuryCrisis, "injury_crisis"),
+        (NewsStoryKind::InternationalExodus, "international_exodus"),
+        (NewsStoryKind::PersonalTermsAgreed, "personal_terms_agreed"),
+        (NewsStoryKind::TurnsDownMove, "turns_down_move"),
+        (NewsStoryKind::SteppingStoneTalk, "stepping_stone_talk"),
+        (NewsStoryKind::BidLodged, "bid_lodged"),
+        (NewsStoryKind::LoanApproach, "loan_approach"),
+        (NewsStoryKind::FeeAgreed, "fee_agreed"),
+        (NewsStoryKind::MedicalBooked, "medical_booked"),
+        (NewsStoryKind::PricedOut, "priced_out"),
+        (NewsStoryKind::NotForSale, "not_for_sale"),
+        (NewsStoryKind::TargetSaysNo, "target_says_no"),
+        (NewsStoryKind::MedicalFailed, "medical_failed"),
+        (NewsStoryKind::DealDiesAtDeadline, "deal_dies_at_deadline"),
+        (NewsStoryKind::WindowOpens, "window_opens"),
+        (NewsStoryKind::WindowShuts, "window_shuts"),
+        (NewsStoryKind::FeeWrittenOff, "fee_written_off"),
+        (NewsStoryKind::BoardRaisesItsOffer, "board_raises_its_offer"),
+    ];
 
     /// Newsworthiness before per-story modifiers. Calibrated against
     /// how a local paper really ranks its page: silverware and a derby
@@ -2291,1126 +2377,1186 @@ impl NewsStoryKind {
     ///
     /// Ties are safe — the editor breaks them deterministically on date,
     /// stem and ids — so a new kind only has to land in the right band.
-    #[expect(clippy::too_many_lines)]
     pub fn base_priority(self) -> u16 {
-        match self {
-            NewsStoryKind::TrophyWon => 900,
-            // Going up and going down are the two editions a town keeps.
-            NewsStoryKind::PromotionWon => 890,
-            NewsStoryKind::RelegationConfirmed => 870,
-            // Administration outranks a sacking and very nearly a
-            // relegation: it takes points off a club that has not played
-            // for them, and it is the one boardroom morning a supporter
-            // still talks about twenty years later.
-            NewsStoryKind::AdministrationEntered => 860,
-            NewsStoryKind::ManagerSacked => 820,
-            // The pay-off is a footnote to the sacking on the same page,
-            // and a real one: it is the number a supporter quotes back
-            // the next time the board says there is no money.
-            NewsStoryKind::SeverancePaid => 430,
-            // Losing the manager to somebody bigger is very nearly the
-            // same size of morning as sacking him, and it hurts more:
-            // nobody at the club wanted this one.
-            NewsStoryKind::ManagerPoached => 810,
-            // New owners. The loudest thing that can happen to a club
-            // without a ball being kicked.
-            NewsStoryKind::TakeoverCompleted => 800,
-            // Coming out the other side. Smaller than going in — the
-            // damage is already done and the town has lived with it for
-            // a year — but the day the sanctions lift is still page one.
-            NewsStoryKind::AdministrationExited => 700,
-            NewsStoryKind::DerbyWin | NewsStoryKind::DerbyDefeat => 720,
-            NewsStoryKind::RecordSigning => 700,
-            NewsStoryKind::NewManagerArrives => 690,
-            // The stand-in gets it for keeps. Smaller than unveiling a
-            // stranger, and a story the town has stronger feelings
-            // about, because it already knows him.
-            NewsStoryKind::CaretakerConfirmed => 660,
-            // The public ultimatum. Louder than the standing "pressure
-            // builds" piece because it happened on a day.
-            NewsStoryKind::ManagerUltimatum => 620,
-            // The final lost is the week the whole town went quiet.
-            NewsStoryKind::CupFinalHeartbreak => 680,
-            NewsStoryKind::StarSold => 660,
-            // Continental football is a season-defining prize for
-            // everybody outside the handful of clubs that expect it.
-            NewsStoryKind::EuropeSecured => 650,
-            NewsStoryKind::CupWin => 640,
-            NewsStoryKind::CupExit => 620,
-            NewsStoryKind::Rout | NewsStoryKind::HeavyDefeat => 600,
-            // How it happened, when how it happened was the story. All
-            // of these outrank the plain report of the same afternoon,
-            // which is the right way round: no paper leads on "won 3-2"
-            // when it can lead on "two down at half time".
-            NewsStoryKind::ComebackWin => 615,
-            NewsStoryKind::LeadThrownAway => 610,
-            NewsStoryKind::StoppageTimeDrama => 605,
-            NewsStoryKind::LateWinner => 590,
-            // Winning a man short is a story about the ten who stayed
-            // on, and it is told about them for years.
-            NewsStoryKind::TenManWin => 585,
-            NewsStoryKind::HatTrick => 580,
-            // The month's leading scorer leads the division's own paper
-            // the way a trophy leads a club's. It is the one thing that
-            // page exists to say, and it outranks every live transfer
-            // link on it — a chart is settled, a rumour is not.
-            NewsStoryKind::LeagueTopScorer => 760,
-            // The rest of the chart. Deliberately below a rejected bid
-            // and a transfer request: after the man at the top, the
-            // biggest thing on a back page is somebody trying to leave.
-            NewsStoryKind::LeagueScoringChase => 470,
-            // The division's verdict on a month. Just below the scoring
-            // chart, which is the one thing that page exists to settle.
-            NewsStoryKind::LeaguePlayerOfMonth => 740,
-            NewsStoryKind::LeagueYoungStar => 620,
-            // The other chart. Below the goals, because it always is,
-            // and above everything else on the page.
-            NewsStoryKind::LeagueAssistKing => 560,
-            NewsStoryKind::LeagueAssistChase => 440,
-            NewsStoryKind::LeagueRatingsLeader => 520,
-            NewsStoryKind::LeagueTeamOfMonth => 458,
-            NewsStoryKind::RunEnded => 430,
-            NewsStoryKind::FirstWinInAges => 450,
-            NewsStoryKind::LateEqualiserConceded => 420,
-            NewsStoryKind::PointRescued => 430,
-            NewsStoryKind::TopOfTheTable => 560,
-            NewsStoryKind::EuropeRace => 330,
-            NewsStoryKind::MidTableDrift => 230,
-            NewsStoryKind::HalfwayReport => 420,
-            NewsStoryKind::FinalStanding => 600,
-            NewsStoryKind::NextUpDerby => 430,
-            NewsStoryKind::NextUpSummit => 440,
-            NewsStoryKind::NextUpSixPointer => 430,
-            NewsStoryKind::NextUpLeaders => 380,
-            NewsStoryKind::NextUpCupTie => 400,
-            NewsStoryKind::NextUpOldBoy => 360,
-            NewsStoryKind::NextUpHome => 260,
-            NewsStoryKind::NextUpAway => 260,
-            NewsStoryKind::PromisedHisChance => 300,
-            NewsStoryKind::ManagerOnWin => 395,
-            NewsStoryKind::ManagerOnDraw => 385,
-            NewsStoryKind::ManagerOnDefeat => 405,
-            NewsStoryKind::PeckingOrderUp => 330,
-            NewsStoryKind::PeckingOrderDown => 380,
-            NewsStoryKind::NoRoleInTheShape => 370,
-            NewsStoryKind::BigClubAura => 320,
-            NewsStoryKind::StuckInTheQueue => 360,
-            NewsStoryKind::InjuryCrisis => 470,
-            NewsStoryKind::InternationalExodus => 400,
-            NewsStoryKind::PersonalTermsAgreed => 560,
-            NewsStoryKind::TurnsDownMove => 540,
-            NewsStoryKind::SteppingStoneTalk => 400,
-            NewsStoryKind::BidLodged => 480,
-            NewsStoryKind::LoanApproach => 400,
-            NewsStoryKind::FeeAgreed => 530,
-            NewsStoryKind::MedicalBooked => 500,
-            NewsStoryKind::PricedOut => 470,
-            NewsStoryKind::NotForSale => 460,
-            NewsStoryKind::TargetSaysNo => 500,
-            NewsStoryKind::MedicalFailed => 520,
-            NewsStoryKind::DealDiesAtDeadline => 440,
-            NewsStoryKind::WindowOpens => 350,
-            NewsStoryKind::WindowShuts => 520,
-            // A fee the club never got back outranks the window audit: it
-            // is the one boardroom number a supporter still argues about
-            // two seasons later.
-            NewsStoryKind::FeeWrittenOff => 560,
-            NewsStoryKind::BoardRaisesItsOffer => 500,
-            // A shoot-out kept out is the save a town retells for
-            // twenty years, and it decided the tie it happened in.
-            NewsStoryKind::KeeperPenaltySave => 575,
-            // The keeper who won the match on his own. Rare enough
-            // that when it happens it leads.
-            NewsStoryKind::KeeperMasterclass => 545,
-            NewsStoryKind::RetirementAnnounced => 560,
-            // Somebody has to pick the team on Saturday, and the paper
-            // has to tell its readers who.
-            NewsStoryKind::CaretakerTakesCharge => 558,
-            // Rumours of a sale. It changes nothing yet and everybody
-            // talks about nothing else.
-            NewsStoryKind::TakeoverRumour => 556,
-            // Another club has come asking about ours. A supporter's
-            // week is ruined by the asking, never mind the answer.
-            NewsStoryKind::ManagerWanted => 545,
-            NewsStoryKind::TitleCharge | NewsStoryKind::RelegationFight => 540,
-            NewsStoryKind::ManagerPressure => 520,
-            // Tying the man down. Quieter than appointing one, and the
-            // clearest statement of intent a board ever makes.
-            NewsStoryKind::ManagerContractExtended => 500,
-            NewsStoryKind::TransferRequestFiled => 510,
-            NewsStoryKind::PromiseBroken => 505,
-            NewsStoryKind::WinningRun | NewsStoryKind::WinlessRun => 500,
-            // Six goals in one match. Nobody reads the table for this
-            // one, they read it because it was a good afternoon out.
-            NewsStoryKind::GoalFest => 480,
-            // The two halves of a bad run that a phone-in argues about
-            // separately: we cannot score, and we cannot defend.
-            NewsStoryKind::GoalsDriedUp => 462,
-            NewsStoryKind::DefensiveCrisis => 458,
-            // Form with an address on it. Away wins persuade a town its
-            // side is real; a long unbeaten home run is the thing
-            // visiting managers get asked about.
-            NewsStoryKind::AwayDayForm => 450,
-            // A European night is a bigger evening than any domestic
-            // fixture that is not a derby, and a town treats it that way.
-            NewsStoryKind::ContinentalNightWin => 650,
-            NewsStoryKind::ContinentalDefeat => 596,
-            NewsStoryKind::ContinentalRout => 690,
-            NewsStoryKind::ContinentalHiding => 664,
-            // A playoff game is worth more than the identical scoreline
-            // in April, and every supporter knows exactly why.
-            NewsStoryKind::PlayoffGameWin => 618,
-            NewsStoryKind::PlayoffGameDefeat => 606,
-            // A series settled. The whole point of a playoff, and a
-            // bigger morning than any single game inside it.
-            NewsStoryKind::PlayoffTieWon => 700,
-            NewsStoryKind::PlayoffTieLost => 686,
-            // One game from everything. The largest thing that can
-            // happen to a club without anything actually being won.
-            NewsStoryKind::PlayoffFinalReached => 780,
-            NewsStoryKind::FortressHome => 446,
-            // Over inside twenty minutes, and the reply that said it
-            // was not. Both are shapes of an afternoon rather than
-            // results, so they sit below the run-of-form pieces.
-            NewsStoryKind::EarlyBlitz => 444,
-            NewsStoryKind::InstantReply => 432,
-            NewsStoryKind::FansTurnOnTeam => 495,
-            NewsStoryKind::BidRejected => 490,
-            // A deal agreed is louder than a deal rumoured and quieter
-            // than a deal done — the exact register of "medical booked".
-            NewsStoryKind::TransferAgreed => 486,
-            // The prodigal outranks a routine signing of the same size:
-            // the town already knows the name.
-            NewsStoryKind::HomecomingSigning => 484,
-            NewsStoryKind::NewSigning => 480,
-            // Keeping a loanee is quieter news than unveiling a
-            // stranger — everybody has already seen him play.
-            NewsStoryKind::LoanMadePermanent => 468,
-            // The summer everybody remembers is the one where the move
-            // fell through, not the one where it went smoothly.
-            NewsStoryKind::MoveCollapsed => 478,
-            // A local kid coming through is the story a town wants
-            // most, and it outranks the same form from a senior pro.
-            NewsStoryKind::RisingStar => 475,
-            // A young player who has visibly got better. The story a
-            // club's own supporters most want to be true.
-            NewsStoryKind::BreakthroughSeason => 462,
-            NewsStoryKind::TrainingTransformation => 418,
-            NewsStoryKind::StalledProspect => 386,
-            // A veteran going backwards. Everybody sees it before
-            // anybody says it, which is what makes it printable.
-            NewsStoryKind::PowersFading => 424,
-            NewsStoryKind::UnbeatenRun => 470,
-            // The club has moved for somebody else's manager, and the
-            // sale that was going to change everything fell over. Both
-            // are stories about a thing that has not happened.
-            NewsStoryKind::ManagerTargetLinked => 472,
-            NewsStoryKind::TakeoverCollapsed => 468,
-            NewsStoryKind::PlayerSold => 460,
-            // The vacancy itself, week after week: no manager, no
-            // signature, and a list of names in the papers.
-            NewsStoryKind::ManagerHunt => 452,
-            NewsStoryKind::ClubServant => 450,
-            NewsStoryKind::LeagueWin | NewsStoryKind::LeagueDefeat => 440,
-            NewsStoryKind::RumourInterest | NewsStoryKind::RumourRival => 430,
-            NewsStoryKind::MilestoneGoals | NewsStoryKind::MilestoneApps => 420,
-            // The board's word, and what it bought. A promise not kept
-            // outranks the money itself: the money can come back.
-            NewsStoryKind::BoardPromiseBroken => 425,
-            NewsStoryKind::StadiumExpansion => 430,
-            // The owner keeping the lights on. Big news, and news a
-            // supporter reads with relief rather than pleasure — money
-            // that covers a hole buys nobody.
-            NewsStoryKind::OwnerBailout => 462,
-            // Barred from signing anybody at all. It decides the club's
-            // next two windows and every rumour printed in between.
-            NewsStoryKind::TransferEmbargo => 445,
-            // The debt figure itself: the number a phone-in quotes for
-            // the next five years.
-            NewsStoryKind::DebtMountain => 428,
-            // Wages against income. Duller than the debt and the reason
-            // for it.
-            NewsStoryKind::WageBillCrisis => 396,
-            // "Nobody comes in until somebody goes out" — the market's
-            // version of a balance sheet, and the line the rumour mill
-            // runs on all summer.
-            NewsStoryKind::MustSellBeforeBuying => 388,
-            // The board summoning everybody is one step from a sacking
-            // and every supporter in the town knows it.
-            NewsStoryKind::CrisisTalks => 588,
-            NewsStoryKind::BoardDemandsSale => 512,
-            NewsStoryKind::BoardBlocksDeal => 496,
-            NewsStoryKind::FacilityPlanRejected => 384,
-            NewsStoryKind::WarChest => 410,
-            // Commercial news. It pays for everything and nobody sings
-            // about it, so it sits below the football and above the
-            // small change.
-            NewsStoryKind::SponsorSigned => 358,
-            NewsStoryKind::SponsorshipLost => 366,
-            // Money for a player the club no longer owns. A promotion
-            // bonus is the sweeter of the two — somebody else went up
-            // and it paid us — so it leads the pair.
-            NewsStoryKind::PromotionBonusDue => 392,
-            NewsStoryKind::SellOnWindfall => 384,
-            // Losing a man for nothing is the louder half of a Bosman
-            // by a distance: one club has done good business, the
-            // other has to explain itself for the rest of the season.
-            NewsStoryKind::BosmanDepartureLooms => 498,
-            NewsStoryKind::PreContractAgreed => 462,
-            NewsStoryKind::PlayerOfMonth => 410,
-            // A player telling his own club he has been away long
-            // enough is the loan column's loudest week — it outranks
-            // the ordinary "get me out of here" line, which is about
-            // the borrowing club rather than about home.
-            NewsStoryKind::LoanFedUp => 408,
-            NewsStoryKind::LoanWantsReturn => 405,
-            // A dressing-room name saying the club is not good enough
-            // for him is a back page in itself.
-            NewsStoryKind::AmbitionWarning => 402,
-            NewsStoryKind::DressingRoomInquest => 415,
-            NewsStoryKind::InjuryBlow => 400,
-            NewsStoryKind::ContractRenewed => 395,
-            NewsStoryKind::TrainingBustUp => 390,
-            NewsStoryKind::SigningNotWorking => 385,
-            NewsStoryKind::LeagueDraw => 380,
-            NewsStoryKind::BudgetCut => 360,
-            // The last cap. A player can be finished with his country
-            // and nowhere near finished with his club.
-            NewsStoryKind::InternationalRetirement => 348,
-            // Off the mark. Every signing is asked about this goal at
-            // every press conference until he scores it.
-            NewsStoryKind::FirstClubGoal => 342,
-            NewsStoryKind::TalksExpected => 375,
-            NewsStoryKind::RedCard => 370,
-            // The season's best goalkeeper, by the one award nobody
-            // else can win.
-            NewsStoryKind::KeeperGoldenGlove => 425,
-            // A keeper's own mistake in his own net: the shortest
-            // route from anonymity to the back page.
-            NewsStoryKind::KeeperBlunder => 405,
-            // Beaten four times. Whether it was him or the ten in
-            // front is the argument, and the argument is the story.
-            NewsStoryKind::KeeperOverrun => 372,
-            NewsStoryKind::GoallessDraw => 365,
-            NewsStoryKind::YouthDebut => 360,
-            NewsStoryKind::ToldNotInPlans => 355,
-            NewsStoryKind::ManagerCallsOutPlayer => 352,
-            NewsStoryKind::StarForm => 350,
-            // A raid on the neighbours is enjoyed twice: once for the
-            // player and once for where he came from. It outranks any
-            // signing of the same size that came from nobody in
-            // particular.
-            NewsStoryKind::RivalRaid => 520,
-            // The upgrade the club paid for, and the bargain it did
-            // not. Both are the ordinary signing report with a reason
-            // attached, so both sit just above it.
-            NewsStoryKind::MarqueeUpgrade => 486,
-            // One of our own, promoted. A local readership takes this
-            // more personally than a signing of any size.
-            NewsStoryKind::AcademyGraduate => 448,
-            NewsStoryKind::BargainBuy => 442,
-            // Signing a man to replace somebody who is still in the
-            // building is the transfer with a subject nobody names.
-            NewsStoryKind::SuccessionSigning => 436,
-            NewsStoryKind::GapPlugged => 412,
-            // The scouting department's own find, with the confidence
-            // it filed the report at.
-            NewsStoryKind::ScoutingCoup => 406,
-            // One for the future: real news, but the paper cannot rave
-            // about a kid nobody has seen play yet.
-            NewsStoryKind::ProspectSigned => 398,
-            NewsStoryKind::VeteranArrives => 368,
-            // Cover is the least glamorous business a club does and
-            // the reason a season survives February.
-            NewsStoryKind::DepthSigning => 352,
-            // A lad sent out to play, told from the parent's page.
-            NewsStoryKind::LoanedOutToGrow => 268,
-            NewsStoryKind::NationalCallUp => 345,
-            // A player of this club has won an international
-            // tournament. The largest thing that can appear on a club
-            // page that the club had nothing to do with.
-            NewsStoryKind::TournamentTriumph => 820,
-            NewsStoryKind::TournamentHeartbreak => 640,
-            NewsStoryKind::MoneyWorries => 340,
-            // Losing the armband is the sharper end of the captaincy
-            // story, so it runs a shade above the naming of one.
-            NewsStoryKind::CaptaincyLost => 338,
-            NewsStoryKind::CaptainNamed => 335,
-            // The club's own kid kept out by a borrowed player is the
-            // grievance a local readership takes personally.
-            NewsStoryKind::PathwayBlocked => 332,
-            NewsStoryKind::Suspension => 330,
-            NewsStoryKind::DroppedForBigMatch => 325,
-            // Whether the old warrior has one more season in him is a
-            // story the town starts telling long before he answers it.
-            NewsStoryKind::CareerTwilight => 318,
-            NewsStoryKind::FreeSigning | NewsStoryKind::LoanArrival => 320,
-            NewsStoryKind::ContractTalksStalled => 315,
-            // Silence from upstairs with the clock running: quieter
-            // than talks breaking down, sharper than plain speculation.
-            NewsStoryKind::ContractRunningDown => 312,
-            // "I am going nowhere" is a story precisely because the
-            // paper spent a month printing the opposite.
-            NewsStoryKind::CommitsToClub => 296,
-            NewsStoryKind::LoanWantsPermanent => 310,
-            NewsStoryKind::KeeperLoanWantsPermanent => 312,
-            NewsStoryKind::DroughtEnded => 305,
-            NewsStoryKind::KeeperWall => 300,
-            // He has taken somebody's shirt. The paper has always run
-            // the losing half of this story and never the winning one.
-            NewsStoryKind::WonStartingPlace => 302,
-            // A voice in the dressing room where there was not one.
-            NewsStoryKind::LeaderEmerging => 292,
-            // A friend gone. The transfer was somebody else's story;
-            // this is what it did to the man left behind.
-            NewsStoryKind::TeammateFarewell => 266,
-            // Looking at the other side of the white line. Half the
-            // coaches in the game gave this interview once.
-            NewsStoryKind::CoachingAmbition => 252,
-            // Settling in: the language coming, a compatriot arriving.
-            NewsStoryKind::SettlingIn => 238,
-            // Money spent where a supporter cannot see it.
-            NewsStoryKind::FacilityUpgrade => 232,
-            // The number a goalkeeper's career is really counted in.
-            NewsStoryKind::KeeperShutoutMilestone => 415,
-            NewsStoryKind::FreeExit => 295,
-            NewsStoryKind::LoanFlop => 292,
-            NewsStoryKind::TransferListed => 290,
-            NewsStoryKind::ClearTheAir => 288,
-            // Somebody has come for his shirt — squad news, not a
-            // headline, until he loses it.
-            NewsStoryKind::ShirtUnderThreat => 286,
-            NewsStoryKind::RoleFrustration => 284,
-            // Still here, still unwanted: a standing embarrassment
-            // rather than an event, and the paper runs it quietly.
-            NewsStoryKind::UnsoldStillHere => 276,
-            NewsStoryKind::LoanWatchGoals => 285,
-            NewsStoryKind::KeeperLoanWatchShutouts => 283,
-            NewsStoryKind::MediaPressure => 282,
-            NewsStoryKind::ContractStandoff => 280,
-            NewsStoryKind::SquadRallies => 278,
-            NewsStoryKind::HomecomingLink => 275,
-            NewsStoryKind::SigningComesGood => 272,
-            // Interest from elsewhere, converted into a better deal here.
-            // The most cynical thing in football and the most ordinary.
-            NewsStoryKind::LeverageUsed => 380,
-            NewsStoryKind::ContinentalAmbition => 402,
-            NewsStoryKind::FormerClubGoal => 270,
-            NewsStoryKind::PlayerFined => 268,
-            NewsStoryKind::AgentTouting => 265,
-            NewsStoryKind::FansGetBehind => 262,
-            NewsStoryKind::TransferSpeculation => 260,
-            NewsStoryKind::LoanStepTooBig => 258,
-            NewsStoryKind::TeamOfTheWeek => 255,
-            NewsStoryKind::BoardInvests => 252,
-            NewsStoryKind::LoanRecallTalk => 250,
-            NewsStoryKind::InjurySetback => 245,
-            NewsStoryKind::FansAngryAtRumour => 242,
-            NewsStoryKind::LoanExit => 240,
-            // A rumour ending is a paragraph, not a lead — but a paper
-            // that never closes its own stories reads as noise.
-            NewsStoryKind::RumourCools => 236,
-            NewsStoryKind::GoalDrought => 235,
-            NewsStoryKind::AcademyPraise => 230,
-            // A club with no coaching staff at all. Not an interim
-            // appointment — an institution with nobody left in it.
-            NewsStoryKind::BackroomEmpty => 604,
-            // One morning a year, and the only day the academy is
-            // visible from outside the building.
-            NewsStoryKind::IntakeDay => 396,
-            NewsStoryKind::GoldenGeneration => 528,
-            NewsStoryKind::GraduationDay => 470,
-            NewsStoryKind::LoanWatchStarter => 225,
-            NewsStoryKind::BoardBacking => 220,
-            NewsStoryKind::MediaDarling => 218,
-            // Unrest that has organised itself. Above every other mood
-            // piece, because it is no longer a mood.
-            NewsStoryKind::ProtestBrewing => 610,
-            NewsStoryKind::PromotionFever => 500,
-            NewsStoryKind::RelegationDread => 516,
-            // Selling somebody the ground had decided was theirs. The
-            // loudest thing a board can do to a supporter without
-            // touching the manager.
-            NewsStoryKind::FansFurySale => 544,
-            NewsStoryKind::FansDreamSigning => 468,
-            NewsStoryKind::CupHumiliationFallout => 556,
-            NewsStoryKind::TravellingSupportRewarded => 412,
-            NewsStoryKind::AcademyDarling => 452,
-            NewsStoryKind::ScoutsWatching => 215,
-            NewsStoryKind::LoanReturn => 210,
-            NewsStoryKind::KeeperLoanReturn => 212,
-            NewsStoryKind::ManagerBacksPlayer => 205,
-            NewsStoryKind::InjuryReturn => 200,
-            NewsStoryKind::LoanWatchBenched => 195,
-            NewsStoryKind::LoanSpellEnds => 190,
-            NewsStoryKind::FansChant => 180,
-
-            // ── The ratings page ──────────────────────────────────
-            // What one man did in one afternoon. These rank high on
-            // purpose: individual performance is most of what a real
-            // football paper is, and the desk that files them was
-            // added because the page had almost none of it.
-            //
-            // Winning a derby on your own is the loudest thing a
-            // player can do in a shirt.
-            NewsStoryKind::DerbyHero => 468,
-            // An eight-out-of-ten afternoon: the game a supporter
-            // still brings up a decade later.
-            NewsStoryKind::MatchMasterclass => 432,
-            // Twelve yards, his to settle, and he missed. Louder than
-            // any good thing he did the same afternoon.
-            NewsStoryKind::PenaltyMissed => 414,
-            // Into his own net. Nobody's fault and entirely his.
-            NewsStoryKind::OwnGoalShame => 401,
-            // His mistake, their goal — and unlike a keeper's, this
-            // one had a keeper behind it.
-            NewsStoryKind::CostlyError => 397,
-            // Three made for other people in one game.
-            NewsStoryKind::AssistShow => 394,
-            NewsStoryKind::ManOfTheMatch => 391,
-            // The chances were there. This is the afternoon a town
-            // argues about all week, which is exactly why it prints
-            // above the ordinary bad display.
-            NewsStoryKind::WastefulFinishing => 357,
-            // Marked down. The half of a ratings column that sells it.
-            NewsStoryKind::MatchStinker => 345,
-            NewsStoryKind::SuperSub => 337,
-            NewsStoryKind::DefensiveRock => 307,
-            // A manager's verdict delivered in public, at 55 minutes.
-            NewsStoryKind::HookedEarly => 293,
-            NewsStoryKind::CreatorInChief => 289,
-            NewsStoryKind::DribblingDisplay => 281,
-            NewsStoryKind::FoulTrouble => 273,
-            // Two goals. Below a hat-trick and above every other verdict
-            // the column can reach for, because it decided the match.
-            NewsStoryKind::BraceHero => 552,
-            NewsStoryKind::GoalAndAssistShow => 486,
-            // A kid doing it against grown men. Above the plain
-            // masterclass, because the age is the story.
-            NewsStoryKind::TeenageStarTurn => 540,
-            NewsStoryKind::RolledBackYears => 528,
-            // First afternoon in the shirt, and it went perfectly. A
-            // player only ever gets one of these.
-            NewsStoryKind::DreamDebut => 572,
-            NewsStoryKind::DebutNightmare => 508,
-            NewsStoryKind::GoalFromDefence => 494,
-            NewsStoryKind::MidfieldEngine => 424,
-
-            // ── A foreign player's life ───────────────────────────
-            // Wanting out of the country is a different story from
-            // wanting out of the club, and a bigger one: form can be
-            // coached, homesickness cannot.
-            NewsStoryKind::HomesickAbroad => 393,
-            // …and the version with a destination attached.
-            NewsStoryKind::HomeCalling => 373,
-            // Signed from the neighbours. A dressing room forgets
-            // nothing and a local paper forgets less.
-            NewsStoryKind::ColdShoulder => 317,
-            // Still on his own after a year. The explanation nobody
-            // reaches for when a signing is not working.
-            NewsStoryKind::StrugglingToSettle => 309,
-            NewsStoryKind::SettledAtLast => 244,
-
-            // ── The room ──────────────────────────────────────────
-            NewsStoryKind::TeammateConflict => 387,
-            // The three rows a dressing room actually has. All a shade
-            // above the flat conflict piece they were folded into,
-            // because a named grievance is a bigger story than a spat.
-            NewsStoryKind::TrainingStandardsRow => 366,
-            NewsStoryKind::PositionRivalryFeud => 372,
-            NewsStoryKind::LeadershipPowerStruggle => 380,
-            // Being rested is the one omission that is not a story, and
-            // printing it as one is how a paper loses a reader. Filler,
-            // deliberately.
-            NewsStoryKind::RotationRested => 232,
-            NewsStoryKind::TacticalOmission => 318,
-            NewsStoryKind::DroppedOnForm => 348,
-            // Left out as a punishment. Not a selection call at all, and
-            // the only omission a dressing room reads as news.
-            NewsStoryKind::DisciplinaryOmission => 402,
-            // A career ended by a body rather than by a decision. Above
-            // the planned farewell, because nobody got to say goodbye.
-            NewsStoryKind::ForcedToRetire => 640,
-            // The loan finally says how it went. A spell that worked is a
-            // squad option the manager did not have in August.
-            NewsStoryKind::LoanReturnTriumph => 404,
-            NewsStoryKind::LoanReturnWasted => 386,
-            // A goalkeeper coming home in form is a selection story on
-            // top of a homecoming one — the club now has two of them
-            // for one shirt — so it edges the outfield version.
-            NewsStoryKind::KeeperLoanReturnTriumph => 420,
-            NewsStoryKind::KeeperLoanReturnWasted => 388,
-            // Left off a list because of how the squad was assembled
-            // rather than because of him. A story about the club.
-            NewsStoryKind::HomegrownQuotaOmission => 356,
-            NewsStoryKind::ForeignQuotaOmission => 350,
-            // The three injuries a supporter can picture. All above the
-            // generic blow they were folded into: naming the injury is
-            // the difference between a squad note and news.
-            NewsStoryKind::HamstringBlow => 404,
-            // The one every supporter fears by name.
-            NewsStoryKind::KneeLigamentBlow => 620,
-            NewsStoryKind::BrokenBoneBlow => 560,
-            NewsStoryKind::DressingRoomSpeech => 263,
-            // The room, read as a whole. Above most individual squad
-            // beats because it is about all of them at once.
-            NewsStoryKind::SquadKnitsTogether => 372,
-            NewsStoryKind::TurnoverToll => 388,
-            NewsStoryKind::CliqueConcerns => 396,
-            // What the manager privately thinks, inferred from the press
-            // box rather than said out loud by anybody.
-            NewsStoryKind::BigMatchTrust => 342,
-            NewsStoryKind::ManagerDoubtsLinger => 356,
-            // A man frozen out of the side is a bigger story than a man
-            // the manager has doubts about: one is a mood and the other is
-            // a decision with a career attached to it.
-            NewsStoryKind::FrozenOutOfTheSide => 430,
-            NewsStoryKind::ReunitedWithHisManager => 360,
-            NewsStoryKind::OldWoundsReopened => 395,
-            NewsStoryKind::TakenUnderWing => 233,
-
-            // ── Everything else a real back page carries ──────────
-            // The season's individual honours. Above every weekly
-            // beat: a player of the year is a front page anywhere.
-            NewsStoryKind::SeasonAward => 442,
-            // The move he would have taken for nothing. Bigger than the
-            // transfer report beside it, which only knows the fee.
-            NewsStoryKind::DreamMoveComplete => 470,
-            NewsStoryKind::StatusShock => 340,
-            NewsStoryKind::PayWindfall => 330,
-            NewsStoryKind::WageRealityCheck => 336,
-            // The week's award, and the young one. Smaller than the
-            // month, and the only honour most players ever collect.
-            NewsStoryKind::PlayerOfWeek => 372,
-            NewsStoryKind::YoungPlayerOfWeek => 368,
-            NewsStoryKind::TeamOfMonthNod => 396,
-            NewsStoryKind::YoungPlayerOfMonthAward => 430,
-            // A season's verdict on a kid. One of the few individual
-            // honours a town remembers the year of.
-            NewsStoryKind::YoungPlayerOfSeasonAward => 560,
-            NewsStoryKind::NewManagerBounce => 348,
-            NewsStoryKind::ManagerExitUnsettles => 342,
-            // Somebody at the club said a thing and then did it. Quieter
-            // than the broken promise the page has always printed, and
-            // the reason a dressing room believes the next one.
-            NewsStoryKind::PromiseKept => 358,
-            NewsStoryKind::BanServed => 286,
-            NewsStoryKind::PlayingForContract => 322,
-            NewsStoryKind::PersonalTrainingPlan => 250,
-            NewsStoryKind::RoleRetraining => 262,
-            // A local kid behind an import, and a squad list that says so
-            // out loud. The grievance a local readership owns.
-            NewsStoryKind::HomegrownBlocked => 334,
-            NewsStoryKind::FavouritismGrumbles => 344,
-            // A footballer's family is the half of a transfer nobody
-            // negotiates and the half that decides most of them.
-            NewsStoryKind::FamilyUnsettled => 316,
-            NewsStoryKind::FamilyCelebration => 306,
-            // Reported plainly and high, the way a paper reports a
-            // bereavement: above the week's ordinary squad news and
-            // written without an exclamation mark anywhere near it.
-            NewsStoryKind::CompassionateLeave => 372,
-            NewsStoryKind::LanguageLessons => 244,
-            NewsStoryKind::VeteranHomecomingWish => 388,
-            NewsStoryKind::LegendWontLeave => 396,
-            // He said no to the neighbours, and to a better contract at
-            // the same time. A supporter will forgive him a great deal
-            // for this one.
-            NewsStoryKind::RefusesRivalMove => 428,
-            NewsStoryKind::SeeksQuieterStage => 352,
-            // Off-field trouble. Every paper's favourite story.
-            NewsStoryKind::OffFieldControversy => 427,
-            NewsStoryKind::ContractTornUp => 403,
-            // His country has stopped picking him — the quiet end of
-            // an international career, and it runs a shade under the
-            // call-up that started it.
-            NewsStoryKind::DroppedByCountry => 329,
-            NewsStoryKind::OutgrownDivision => 322,
-            // Ineligible rather than dropped: worse, and it takes a
-            // window to undo.
-            NewsStoryKind::LeftOutOfSquadList => 313,
-            NewsStoryKind::BenchFrustration => 303,
-            NewsStoryKind::WageEnvy => 297,
-            NewsStoryKind::RelegationNerves => 287,
-            NewsStoryKind::TrainingConcerns => 247,
-            NewsStoryKind::ShirtNumberHandover => 228,
-            // The week's quietest story, and the one that most often
-            // comes before a run in the side.
-            NewsStoryKind::TrainingGroundBuzz => 213,
-            // The manager has changed the shape and stuck with it. Read
-            // off the match log rather than announced anywhere, which is
-            // also how a supporter works it out.
-            NewsStoryKind::FormationRevolution => 388,
-        }
+        self.lookup(Self::BASE_PRIORITIES)
     }
+
+    /// The table a story's newsworthiness starts from.
+    const BASE_PRIORITIES: &[(NewsStoryKind, u16)] = &[
+        (NewsStoryKind::TrophyWon, 900),
+        // Going up and going down are the two editions a town keeps.
+        (NewsStoryKind::PromotionWon, 890),
+        (NewsStoryKind::RelegationConfirmed, 870),
+        // Administration outranks a sacking and very nearly a
+        // relegation: it takes points off a club that has not played
+        // for them, and it is the one boardroom morning a supporter
+        // still talks about twenty years later.
+        (NewsStoryKind::AdministrationEntered, 860),
+        (NewsStoryKind::ManagerSacked, 820),
+        // The pay-off is a footnote to the sacking on the same page,
+        // and a real one: it is the number a supporter quotes back
+        // the next time the board says there is no money.
+        (NewsStoryKind::SeverancePaid, 430),
+        // Losing the manager to somebody bigger is very nearly the
+        // same size of morning as sacking him, and it hurts more:
+        // nobody at the club wanted this one.
+        (NewsStoryKind::ManagerPoached, 810),
+        // New owners. The loudest thing that can happen to a club
+        // without a ball being kicked.
+        (NewsStoryKind::TakeoverCompleted, 800),
+        // Coming out the other side. Smaller than going in — the
+        // damage is already done and the town has lived with it for
+        // a year — but the day the sanctions lift is still page one.
+        (NewsStoryKind::AdministrationExited, 700),
+        (NewsStoryKind::DerbyWin, 720),
+        (NewsStoryKind::DerbyDefeat, 720),
+        (NewsStoryKind::RecordSigning, 700),
+        (NewsStoryKind::NewManagerArrives, 690),
+        // The stand-in gets it for keeps. Smaller than unveiling a
+        // stranger, and a story the town has stronger feelings
+        // about, because it already knows him.
+        (NewsStoryKind::CaretakerConfirmed, 660),
+        // The public ultimatum. Louder than the standing "pressure
+        // builds" piece because it happened on a day.
+        (NewsStoryKind::ManagerUltimatum, 620),
+        // The final lost is the week the whole town went quiet.
+        (NewsStoryKind::CupFinalHeartbreak, 680),
+        (NewsStoryKind::StarSold, 660),
+        // Continental football is a season-defining prize for
+        // everybody outside the handful of clubs that expect it.
+        (NewsStoryKind::EuropeSecured, 650),
+        (NewsStoryKind::CupWin, 640),
+        (NewsStoryKind::CupExit, 620),
+        (NewsStoryKind::Rout, 600),
+        (NewsStoryKind::HeavyDefeat, 600),
+        // How it happened, when how it happened was the story. All
+        // of these outrank the plain report of the same afternoon,
+        // which is the right way round: no paper leads on "won 3-2"
+        // when it can lead on "two down at half time".
+        (NewsStoryKind::ComebackWin, 615),
+        (NewsStoryKind::LeadThrownAway, 610),
+        (NewsStoryKind::StoppageTimeDrama, 605),
+        (NewsStoryKind::LateWinner, 590),
+        // Winning a man short is a story about the ten who stayed
+        // on, and it is told about them for years.
+        (NewsStoryKind::TenManWin, 585),
+        (NewsStoryKind::HatTrick, 580),
+        // The month's leading scorer leads the division's own paper
+        // the way a trophy leads a club's. It is the one thing that
+        // page exists to say, and it outranks every live transfer
+        // link on it — a chart is settled, a rumour is not.
+        (NewsStoryKind::LeagueTopScorer, 760),
+        // The rest of the chart. Deliberately below a rejected bid
+        // and a transfer request: after the man at the top, the
+        // biggest thing on a back page is somebody trying to leave.
+        (NewsStoryKind::LeagueScoringChase, 470),
+        // The division's verdict on a month. Just below the scoring
+        // chart, which is the one thing that page exists to settle.
+        (NewsStoryKind::LeaguePlayerOfMonth, 740),
+        (NewsStoryKind::LeagueYoungStar, 620),
+        // The other chart. Below the goals, because it always is,
+        // and above everything else on the page.
+        (NewsStoryKind::LeagueAssistKing, 560),
+        (NewsStoryKind::LeagueAssistChase, 440),
+        (NewsStoryKind::LeagueRatingsLeader, 520),
+        (NewsStoryKind::LeagueTeamOfMonth, 458),
+        (NewsStoryKind::RunEnded, 430),
+        (NewsStoryKind::FirstWinInAges, 450),
+        (NewsStoryKind::LateEqualiserConceded, 420),
+        (NewsStoryKind::PointRescued, 430),
+        (NewsStoryKind::TopOfTheTable, 560),
+        (NewsStoryKind::EuropeRace, 330),
+        (NewsStoryKind::MidTableDrift, 230),
+        (NewsStoryKind::HalfwayReport, 420),
+        (NewsStoryKind::FinalStanding, 600),
+        (NewsStoryKind::NextUpDerby, 430),
+        (NewsStoryKind::NextUpSummit, 440),
+        (NewsStoryKind::NextUpSixPointer, 430),
+        (NewsStoryKind::NextUpLeaders, 380),
+        (NewsStoryKind::NextUpCupTie, 400),
+        (NewsStoryKind::NextUpOldBoy, 360),
+        (NewsStoryKind::NextUpHome, 260),
+        (NewsStoryKind::NextUpAway, 260),
+        (NewsStoryKind::PromisedHisChance, 300),
+        (NewsStoryKind::ManagerOnWin, 395),
+        (NewsStoryKind::ManagerOnDraw, 385),
+        (NewsStoryKind::ManagerOnDefeat, 405),
+        (NewsStoryKind::PeckingOrderUp, 330),
+        (NewsStoryKind::PeckingOrderDown, 380),
+        (NewsStoryKind::NoRoleInTheShape, 370),
+        (NewsStoryKind::BigClubAura, 320),
+        (NewsStoryKind::StuckInTheQueue, 360),
+        (NewsStoryKind::InjuryCrisis, 470),
+        (NewsStoryKind::InternationalExodus, 400),
+        (NewsStoryKind::PersonalTermsAgreed, 560),
+        (NewsStoryKind::TurnsDownMove, 540),
+        (NewsStoryKind::SteppingStoneTalk, 400),
+        (NewsStoryKind::BidLodged, 480),
+        (NewsStoryKind::LoanApproach, 400),
+        (NewsStoryKind::FeeAgreed, 530),
+        (NewsStoryKind::MedicalBooked, 500),
+        (NewsStoryKind::PricedOut, 470),
+        (NewsStoryKind::NotForSale, 460),
+        (NewsStoryKind::TargetSaysNo, 500),
+        (NewsStoryKind::MedicalFailed, 520),
+        (NewsStoryKind::DealDiesAtDeadline, 440),
+        (NewsStoryKind::WindowOpens, 350),
+        (NewsStoryKind::WindowShuts, 520),
+        // A fee the club never got back outranks the window audit: it
+        // is the one boardroom number a supporter still argues about
+        // two seasons later.
+        (NewsStoryKind::FeeWrittenOff, 560),
+        (NewsStoryKind::BoardRaisesItsOffer, 500),
+        // A shoot-out kept out is the save a town retells for
+        // twenty years, and it decided the tie it happened in.
+        (NewsStoryKind::KeeperPenaltySave, 575),
+        // The keeper who won the match on his own. Rare enough
+        // that when it happens it leads.
+        (NewsStoryKind::KeeperMasterclass, 545),
+        (NewsStoryKind::RetirementAnnounced, 560),
+        // Somebody has to pick the team on Saturday, and the paper
+        // has to tell its readers who.
+        (NewsStoryKind::CaretakerTakesCharge, 558),
+        // Rumours of a sale. It changes nothing yet and everybody
+        // talks about nothing else.
+        (NewsStoryKind::TakeoverRumour, 556),
+        // Another club has come asking about ours. A supporter's
+        // week is ruined by the asking, never mind the answer.
+        (NewsStoryKind::ManagerWanted, 545),
+        (NewsStoryKind::TitleCharge, 540),
+        (NewsStoryKind::RelegationFight, 540),
+        (NewsStoryKind::ManagerPressure, 520),
+        // Tying the man down. Quieter than appointing one, and the
+        // clearest statement of intent a board ever makes.
+        (NewsStoryKind::ManagerContractExtended, 500),
+        (NewsStoryKind::TransferRequestFiled, 510),
+        (NewsStoryKind::PromiseBroken, 505),
+        (NewsStoryKind::WinningRun, 500),
+        (NewsStoryKind::WinlessRun, 500),
+        // Six goals in one match. Nobody reads the table for this
+        // one, they read it because it was a good afternoon out.
+        (NewsStoryKind::GoalFest, 480),
+        // The two halves of a bad run that a phone-in argues about
+        // separately: we cannot score, and we cannot defend.
+        (NewsStoryKind::GoalsDriedUp, 462),
+        (NewsStoryKind::DefensiveCrisis, 458),
+        // Form with an address on it. Away wins persuade a town its
+        // side is real; a long unbeaten home run is the thing
+        // visiting managers get asked about.
+        (NewsStoryKind::AwayDayForm, 450),
+        // A European night is a bigger evening than any domestic
+        // fixture that is not a derby, and a town treats it that way.
+        (NewsStoryKind::ContinentalNightWin, 650),
+        (NewsStoryKind::ContinentalDefeat, 596),
+        (NewsStoryKind::ContinentalRout, 690),
+        (NewsStoryKind::ContinentalHiding, 664),
+        // A playoff game is worth more than the identical scoreline
+        // in April, and every supporter knows exactly why.
+        (NewsStoryKind::PlayoffGameWin, 618),
+        (NewsStoryKind::PlayoffGameDefeat, 606),
+        // A series settled. The whole point of a playoff, and a
+        // bigger morning than any single game inside it.
+        (NewsStoryKind::PlayoffTieWon, 700),
+        (NewsStoryKind::PlayoffTieLost, 686),
+        // One game from everything. The largest thing that can
+        // happen to a club without anything actually being won.
+        (NewsStoryKind::PlayoffFinalReached, 780),
+        (NewsStoryKind::FortressHome, 446),
+        // Over inside twenty minutes, and the reply that said it
+        // was not. Both are shapes of an afternoon rather than
+        // results, so they sit below the run-of-form pieces.
+        (NewsStoryKind::EarlyBlitz, 444),
+        (NewsStoryKind::InstantReply, 432),
+        (NewsStoryKind::FansTurnOnTeam, 495),
+        (NewsStoryKind::BidRejected, 490),
+        // A deal agreed is louder than a deal rumoured and quieter
+        // than a deal done — the exact register of "medical booked".
+        (NewsStoryKind::TransferAgreed, 486),
+        // The prodigal outranks a routine signing of the same size:
+        // the town already knows the name.
+        (NewsStoryKind::HomecomingSigning, 484),
+        (NewsStoryKind::NewSigning, 480),
+        // Keeping a loanee is quieter news than unveiling a
+        // stranger — everybody has already seen him play.
+        (NewsStoryKind::LoanMadePermanent, 468),
+        // The summer everybody remembers is the one where the move
+        // fell through, not the one where it went smoothly.
+        (NewsStoryKind::MoveCollapsed, 478),
+        // A local kid coming through is the story a town wants
+        // most, and it outranks the same form from a senior pro.
+        (NewsStoryKind::RisingStar, 475),
+        // A young player who has visibly got better. The story a
+        // club's own supporters most want to be true.
+        (NewsStoryKind::BreakthroughSeason, 462),
+        (NewsStoryKind::TrainingTransformation, 418),
+        (NewsStoryKind::StalledProspect, 386),
+        // A veteran going backwards. Everybody sees it before
+        // anybody says it, which is what makes it printable.
+        (NewsStoryKind::PowersFading, 424),
+        (NewsStoryKind::UnbeatenRun, 470),
+        // The club has moved for somebody else's manager, and the
+        // sale that was going to change everything fell over. Both
+        // are stories about a thing that has not happened.
+        (NewsStoryKind::ManagerTargetLinked, 472),
+        (NewsStoryKind::TakeoverCollapsed, 468),
+        (NewsStoryKind::PlayerSold, 460),
+        // The vacancy itself, week after week: no manager, no
+        // signature, and a list of names in the papers.
+        (NewsStoryKind::ManagerHunt, 452),
+        (NewsStoryKind::ClubServant, 450),
+        (NewsStoryKind::LeagueWin, 440),
+        (NewsStoryKind::LeagueDefeat, 440),
+        (NewsStoryKind::RumourInterest, 430),
+        (NewsStoryKind::RumourRival, 430),
+        (NewsStoryKind::MilestoneGoals, 420),
+        (NewsStoryKind::MilestoneApps, 420),
+        // The board's word, and what it bought. A promise not kept
+        // outranks the money itself: the money can come back.
+        (NewsStoryKind::BoardPromiseBroken, 425),
+        (NewsStoryKind::StadiumExpansion, 430),
+        // The owner keeping the lights on. Big news, and news a
+        // supporter reads with relief rather than pleasure — money
+        // that covers a hole buys nobody.
+        (NewsStoryKind::OwnerBailout, 462),
+        // Barred from signing anybody at all. It decides the club's
+        // next two windows and every rumour printed in between.
+        (NewsStoryKind::TransferEmbargo, 445),
+        // The debt figure itself: the number a phone-in quotes for
+        // the next five years.
+        (NewsStoryKind::DebtMountain, 428),
+        // Wages against income. Duller than the debt and the reason
+        // for it.
+        (NewsStoryKind::WageBillCrisis, 396),
+        // "Nobody comes in until somebody goes out" — the market's
+        // version of a balance sheet, and the line the rumour mill
+        // runs on all summer.
+        (NewsStoryKind::MustSellBeforeBuying, 388),
+        // The board summoning everybody is one step from a sacking
+        // and every supporter in the town knows it.
+        (NewsStoryKind::CrisisTalks, 588),
+        (NewsStoryKind::BoardDemandsSale, 512),
+        (NewsStoryKind::BoardBlocksDeal, 496),
+        (NewsStoryKind::FacilityPlanRejected, 384),
+        (NewsStoryKind::WarChest, 410),
+        // Commercial news. It pays for everything and nobody sings
+        // about it, so it sits below the football and above the
+        // small change.
+        (NewsStoryKind::SponsorSigned, 358),
+        (NewsStoryKind::SponsorshipLost, 366),
+        // Money for a player the club no longer owns. A promotion
+        // bonus is the sweeter of the two — somebody else went up
+        // and it paid us — so it leads the pair.
+        (NewsStoryKind::PromotionBonusDue, 392),
+        (NewsStoryKind::SellOnWindfall, 384),
+        // Losing a man for nothing is the louder half of a Bosman
+        // by a distance: one club has done good business, the
+        // other has to explain itself for the rest of the season.
+        (NewsStoryKind::BosmanDepartureLooms, 498),
+        (NewsStoryKind::PreContractAgreed, 462),
+        (NewsStoryKind::PlayerOfMonth, 410),
+        // A player telling his own club he has been away long
+        // enough is the loan column's loudest week — it outranks
+        // the ordinary "get me out of here" line, which is about
+        // the borrowing club rather than about home.
+        (NewsStoryKind::LoanFedUp, 408),
+        (NewsStoryKind::LoanWantsReturn, 405),
+        // A dressing-room name saying the club is not good enough
+        // for him is a back page in itself.
+        (NewsStoryKind::AmbitionWarning, 402),
+        (NewsStoryKind::DressingRoomInquest, 415),
+        (NewsStoryKind::InjuryBlow, 400),
+        (NewsStoryKind::ContractRenewed, 395),
+        (NewsStoryKind::TrainingBustUp, 390),
+        (NewsStoryKind::SigningNotWorking, 385),
+        (NewsStoryKind::LeagueDraw, 380),
+        (NewsStoryKind::BudgetCut, 360),
+        // The last cap. A player can be finished with his country
+        // and nowhere near finished with his club.
+        (NewsStoryKind::InternationalRetirement, 348),
+        // Off the mark. Every signing is asked about this goal at
+        // every press conference until he scores it.
+        (NewsStoryKind::FirstClubGoal, 342),
+        (NewsStoryKind::TalksExpected, 375),
+        (NewsStoryKind::RedCard, 370),
+        // The season's best goalkeeper, by the one award nobody
+        // else can win.
+        (NewsStoryKind::KeeperGoldenGlove, 425),
+        // A keeper's own mistake in his own net: the shortest
+        // route from anonymity to the back page.
+        (NewsStoryKind::KeeperBlunder, 405),
+        // Beaten four times. Whether it was him or the ten in
+        // front is the argument, and the argument is the story.
+        (NewsStoryKind::KeeperOverrun, 372),
+        (NewsStoryKind::GoallessDraw, 365),
+        (NewsStoryKind::YouthDebut, 360),
+        (NewsStoryKind::ToldNotInPlans, 355),
+        (NewsStoryKind::ManagerCallsOutPlayer, 352),
+        (NewsStoryKind::StarForm, 350),
+        // A raid on the neighbours is enjoyed twice: once for the
+        // player and once for where he came from. It outranks any
+        // signing of the same size that came from nobody in
+        // particular.
+        (NewsStoryKind::RivalRaid, 520),
+        // The upgrade the club paid for, and the bargain it did
+        // not. Both are the ordinary signing report with a reason
+        // attached, so both sit just above it.
+        (NewsStoryKind::MarqueeUpgrade, 486),
+        // One of our own, promoted. A local readership takes this
+        // more personally than a signing of any size.
+        (NewsStoryKind::AcademyGraduate, 448),
+        (NewsStoryKind::BargainBuy, 442),
+        // Signing a man to replace somebody who is still in the
+        // building is the transfer with a subject nobody names.
+        (NewsStoryKind::SuccessionSigning, 436),
+        (NewsStoryKind::GapPlugged, 412),
+        // The scouting department's own find, with the confidence
+        // it filed the report at.
+        (NewsStoryKind::ScoutingCoup, 406),
+        // One for the future: real news, but the paper cannot rave
+        // about a kid nobody has seen play yet.
+        (NewsStoryKind::ProspectSigned, 398),
+        (NewsStoryKind::VeteranArrives, 368),
+        // Cover is the least glamorous business a club does and
+        // the reason a season survives February.
+        (NewsStoryKind::DepthSigning, 352),
+        // A lad sent out to play, told from the parent's page.
+        (NewsStoryKind::LoanedOutToGrow, 268),
+        (NewsStoryKind::NationalCallUp, 345),
+        // A player of this club has won an international
+        // tournament. The largest thing that can appear on a club
+        // page that the club had nothing to do with.
+        (NewsStoryKind::TournamentTriumph, 820),
+        (NewsStoryKind::TournamentHeartbreak, 640),
+        (NewsStoryKind::MoneyWorries, 340),
+        // Losing the armband is the sharper end of the captaincy
+        // story, so it runs a shade above the naming of one.
+        (NewsStoryKind::CaptaincyLost, 338),
+        (NewsStoryKind::CaptainNamed, 335),
+        // The club's own kid kept out by a borrowed player is the
+        // grievance a local readership takes personally.
+        (NewsStoryKind::PathwayBlocked, 332),
+        (NewsStoryKind::Suspension, 330),
+        (NewsStoryKind::DroppedForBigMatch, 325),
+        // Whether the old warrior has one more season in him is a
+        // story the town starts telling long before he answers it.
+        (NewsStoryKind::CareerTwilight, 318),
+        (NewsStoryKind::FreeSigning, 320),
+        (NewsStoryKind::LoanArrival, 320),
+        (NewsStoryKind::ContractTalksStalled, 315),
+        // Silence from upstairs with the clock running: quieter
+        // than talks breaking down, sharper than plain speculation.
+        (NewsStoryKind::ContractRunningDown, 312),
+        // "I am going nowhere" is a story precisely because the
+        // paper spent a month printing the opposite.
+        (NewsStoryKind::CommitsToClub, 296),
+        (NewsStoryKind::LoanWantsPermanent, 310),
+        (NewsStoryKind::KeeperLoanWantsPermanent, 312),
+        (NewsStoryKind::DroughtEnded, 305),
+        (NewsStoryKind::KeeperWall, 300),
+        // He has taken somebody's shirt. The paper has always run
+        // the losing half of this story and never the winning one.
+        (NewsStoryKind::WonStartingPlace, 302),
+        // A voice in the dressing room where there was not one.
+        (NewsStoryKind::LeaderEmerging, 292),
+        // A friend gone. The transfer was somebody else's story;
+        // this is what it did to the man left behind.
+        (NewsStoryKind::TeammateFarewell, 266),
+        // Looking at the other side of the white line. Half the
+        // coaches in the game gave this interview once.
+        (NewsStoryKind::CoachingAmbition, 252),
+        // Settling in: the language coming, a compatriot arriving.
+        (NewsStoryKind::SettlingIn, 238),
+        // Money spent where a supporter cannot see it.
+        (NewsStoryKind::FacilityUpgrade, 232),
+        // The number a goalkeeper's career is really counted in.
+        (NewsStoryKind::KeeperShutoutMilestone, 415),
+        (NewsStoryKind::FreeExit, 295),
+        (NewsStoryKind::LoanFlop, 292),
+        (NewsStoryKind::TransferListed, 290),
+        (NewsStoryKind::ClearTheAir, 288),
+        // Somebody has come for his shirt — squad news, not a
+        // headline, until he loses it.
+        (NewsStoryKind::ShirtUnderThreat, 286),
+        (NewsStoryKind::RoleFrustration, 284),
+        // Still here, still unwanted: a standing embarrassment
+        // rather than an event, and the paper runs it quietly.
+        (NewsStoryKind::UnsoldStillHere, 276),
+        (NewsStoryKind::LoanWatchGoals, 285),
+        (NewsStoryKind::KeeperLoanWatchShutouts, 283),
+        (NewsStoryKind::MediaPressure, 282),
+        (NewsStoryKind::ContractStandoff, 280),
+        (NewsStoryKind::SquadRallies, 278),
+        (NewsStoryKind::HomecomingLink, 275),
+        (NewsStoryKind::SigningComesGood, 272),
+        // Interest from elsewhere, converted into a better deal here.
+        // The most cynical thing in football and the most ordinary.
+        (NewsStoryKind::LeverageUsed, 380),
+        (NewsStoryKind::ContinentalAmbition, 402),
+        (NewsStoryKind::FormerClubGoal, 270),
+        (NewsStoryKind::PlayerFined, 268),
+        (NewsStoryKind::AgentTouting, 265),
+        (NewsStoryKind::FansGetBehind, 262),
+        (NewsStoryKind::TransferSpeculation, 260),
+        (NewsStoryKind::LoanStepTooBig, 258),
+        (NewsStoryKind::TeamOfTheWeek, 255),
+        (NewsStoryKind::BoardInvests, 252),
+        (NewsStoryKind::LoanRecallTalk, 250),
+        (NewsStoryKind::InjurySetback, 245),
+        (NewsStoryKind::FansAngryAtRumour, 242),
+        (NewsStoryKind::LoanExit, 240),
+        // A rumour ending is a paragraph, not a lead — but a paper
+        // that never closes its own stories reads as noise.
+        (NewsStoryKind::RumourCools, 236),
+        (NewsStoryKind::GoalDrought, 235),
+        (NewsStoryKind::AcademyPraise, 230),
+        // A club with no coaching staff at all. Not an interim
+        // appointment — an institution with nobody left in it.
+        (NewsStoryKind::BackroomEmpty, 604),
+        // One morning a year, and the only day the academy is
+        // visible from outside the building.
+        (NewsStoryKind::IntakeDay, 396),
+        (NewsStoryKind::GoldenGeneration, 528),
+        (NewsStoryKind::GraduationDay, 470),
+        (NewsStoryKind::LoanWatchStarter, 225),
+        (NewsStoryKind::BoardBacking, 220),
+        (NewsStoryKind::MediaDarling, 218),
+        // Unrest that has organised itself. Above every other mood
+        // piece, because it is no longer a mood.
+        (NewsStoryKind::ProtestBrewing, 610),
+        (NewsStoryKind::PromotionFever, 500),
+        (NewsStoryKind::RelegationDread, 516),
+        // Selling somebody the ground had decided was theirs. The
+        // loudest thing a board can do to a supporter without
+        // touching the manager.
+        (NewsStoryKind::FansFurySale, 544),
+        (NewsStoryKind::FansDreamSigning, 468),
+        (NewsStoryKind::CupHumiliationFallout, 556),
+        (NewsStoryKind::TravellingSupportRewarded, 412),
+        (NewsStoryKind::AcademyDarling, 452),
+        (NewsStoryKind::ScoutsWatching, 215),
+        (NewsStoryKind::LoanReturn, 210),
+        (NewsStoryKind::KeeperLoanReturn, 212),
+        (NewsStoryKind::ManagerBacksPlayer, 205),
+        (NewsStoryKind::InjuryReturn, 200),
+        (NewsStoryKind::LoanWatchBenched, 195),
+        (NewsStoryKind::LoanSpellEnds, 190),
+        (NewsStoryKind::FansChant, 180),
+        // ── The ratings page ──────────────────────────────────
+        // What one man did in one afternoon. These rank high on
+        // purpose: individual performance is most of what a real
+        // football paper is, and the desk that files them was
+        // added because the page had almost none of it.
+        //
+        // Winning a derby on your own is the loudest thing a
+        // player can do in a shirt.
+        (NewsStoryKind::DerbyHero, 468),
+        // An eight-out-of-ten afternoon: the game a supporter
+        // still brings up a decade later.
+        (NewsStoryKind::MatchMasterclass, 432),
+        // Twelve yards, his to settle, and he missed. Louder than
+        // any good thing he did the same afternoon.
+        (NewsStoryKind::PenaltyMissed, 414),
+        // Into his own net. Nobody's fault and entirely his.
+        (NewsStoryKind::OwnGoalShame, 401),
+        // His mistake, their goal — and unlike a keeper's, this
+        // one had a keeper behind it.
+        (NewsStoryKind::CostlyError, 397),
+        // Three made for other people in one game.
+        (NewsStoryKind::AssistShow, 394),
+        (NewsStoryKind::ManOfTheMatch, 391),
+        // The chances were there. This is the afternoon a town
+        // argues about all week, which is exactly why it prints
+        // above the ordinary bad display.
+        (NewsStoryKind::WastefulFinishing, 357),
+        // Marked down. The half of a ratings column that sells it.
+        (NewsStoryKind::MatchStinker, 345),
+        (NewsStoryKind::SuperSub, 337),
+        (NewsStoryKind::DefensiveRock, 307),
+        // A manager's verdict delivered in public, at 55 minutes.
+        (NewsStoryKind::HookedEarly, 293),
+        (NewsStoryKind::CreatorInChief, 289),
+        (NewsStoryKind::DribblingDisplay, 281),
+        (NewsStoryKind::FoulTrouble, 273),
+        // Two goals. Below a hat-trick and above every other verdict
+        // the column can reach for, because it decided the match.
+        (NewsStoryKind::BraceHero, 552),
+        (NewsStoryKind::GoalAndAssistShow, 486),
+        // A kid doing it against grown men. Above the plain
+        // masterclass, because the age is the story.
+        (NewsStoryKind::TeenageStarTurn, 540),
+        (NewsStoryKind::RolledBackYears, 528),
+        // First afternoon in the shirt, and it went perfectly. A
+        // player only ever gets one of these.
+        (NewsStoryKind::DreamDebut, 572),
+        (NewsStoryKind::DebutNightmare, 508),
+        (NewsStoryKind::GoalFromDefence, 494),
+        (NewsStoryKind::MidfieldEngine, 424),
+        // ── A foreign player's life ───────────────────────────
+        // Wanting out of the country is a different story from
+        // wanting out of the club, and a bigger one: form can be
+        // coached, homesickness cannot.
+        (NewsStoryKind::HomesickAbroad, 393),
+        // …and the version with a destination attached.
+        (NewsStoryKind::HomeCalling, 373),
+        // Signed from the neighbours. A dressing room forgets
+        // nothing and a local paper forgets less.
+        (NewsStoryKind::ColdShoulder, 317),
+        // Still on his own after a year. The explanation nobody
+        // reaches for when a signing is not working.
+        (NewsStoryKind::StrugglingToSettle, 309),
+        (NewsStoryKind::SettledAtLast, 244),
+        // ── The room ──────────────────────────────────────────
+        (NewsStoryKind::TeammateConflict, 387),
+        // The three rows a dressing room actually has. All a shade
+        // above the flat conflict piece they were folded into,
+        // because a named grievance is a bigger story than a spat.
+        (NewsStoryKind::TrainingStandardsRow, 366),
+        (NewsStoryKind::PositionRivalryFeud, 372),
+        (NewsStoryKind::LeadershipPowerStruggle, 380),
+        // Being rested is the one omission that is not a story, and
+        // printing it as one is how a paper loses a reader. Filler,
+        // deliberately.
+        (NewsStoryKind::RotationRested, 232),
+        (NewsStoryKind::TacticalOmission, 318),
+        (NewsStoryKind::DroppedOnForm, 348),
+        // Left out as a punishment. Not a selection call at all, and
+        // the only omission a dressing room reads as news.
+        (NewsStoryKind::DisciplinaryOmission, 402),
+        // A career ended by a body rather than by a decision. Above
+        // the planned farewell, because nobody got to say goodbye.
+        (NewsStoryKind::ForcedToRetire, 640),
+        // The loan finally says how it went. A spell that worked is a
+        // squad option the manager did not have in August.
+        (NewsStoryKind::LoanReturnTriumph, 404),
+        (NewsStoryKind::LoanReturnWasted, 386),
+        // A goalkeeper coming home in form is a selection story on
+        // top of a homecoming one — the club now has two of them
+        // for one shirt — so it edges the outfield version.
+        (NewsStoryKind::KeeperLoanReturnTriumph, 420),
+        (NewsStoryKind::KeeperLoanReturnWasted, 388),
+        // Left off a list because of how the squad was assembled
+        // rather than because of him. A story about the club.
+        (NewsStoryKind::HomegrownQuotaOmission, 356),
+        (NewsStoryKind::ForeignQuotaOmission, 350),
+        // The three injuries a supporter can picture. All above the
+        // generic blow they were folded into: naming the injury is
+        // the difference between a squad note and news.
+        (NewsStoryKind::HamstringBlow, 404),
+        // The one every supporter fears by name.
+        (NewsStoryKind::KneeLigamentBlow, 620),
+        (NewsStoryKind::BrokenBoneBlow, 560),
+        (NewsStoryKind::DressingRoomSpeech, 263),
+        // The room, read as a whole. Above most individual squad
+        // beats because it is about all of them at once.
+        (NewsStoryKind::SquadKnitsTogether, 372),
+        (NewsStoryKind::TurnoverToll, 388),
+        (NewsStoryKind::CliqueConcerns, 396),
+        // What the manager privately thinks, inferred from the press
+        // box rather than said out loud by anybody.
+        (NewsStoryKind::BigMatchTrust, 342),
+        (NewsStoryKind::ManagerDoubtsLinger, 356),
+        // A man frozen out of the side is a bigger story than a man
+        // the manager has doubts about: one is a mood and the other is
+        // a decision with a career attached to it.
+        (NewsStoryKind::FrozenOutOfTheSide, 430),
+        (NewsStoryKind::ReunitedWithHisManager, 360),
+        (NewsStoryKind::OldWoundsReopened, 395),
+        (NewsStoryKind::TakenUnderWing, 233),
+        // ── Everything else a real back page carries ──────────
+        // The season's individual honours. Above every weekly
+        // beat: a player of the year is a front page anywhere.
+        (NewsStoryKind::SeasonAward, 442),
+        // The move he would have taken for nothing. Bigger than the
+        // transfer report beside it, which only knows the fee.
+        (NewsStoryKind::DreamMoveComplete, 470),
+        (NewsStoryKind::StatusShock, 340),
+        (NewsStoryKind::PayWindfall, 330),
+        (NewsStoryKind::WageRealityCheck, 336),
+        // The week's award, and the young one. Smaller than the
+        // month, and the only honour most players ever collect.
+        (NewsStoryKind::PlayerOfWeek, 372),
+        (NewsStoryKind::YoungPlayerOfWeek, 368),
+        (NewsStoryKind::TeamOfMonthNod, 396),
+        (NewsStoryKind::YoungPlayerOfMonthAward, 430),
+        // A season's verdict on a kid. One of the few individual
+        // honours a town remembers the year of.
+        (NewsStoryKind::YoungPlayerOfSeasonAward, 560),
+        (NewsStoryKind::NewManagerBounce, 348),
+        (NewsStoryKind::ManagerExitUnsettles, 342),
+        // Somebody at the club said a thing and then did it. Quieter
+        // than the broken promise the page has always printed, and
+        // the reason a dressing room believes the next one.
+        (NewsStoryKind::PromiseKept, 358),
+        (NewsStoryKind::BanServed, 286),
+        (NewsStoryKind::PlayingForContract, 322),
+        (NewsStoryKind::PersonalTrainingPlan, 250),
+        (NewsStoryKind::RoleRetraining, 262),
+        // A local kid behind an import, and a squad list that says so
+        // out loud. The grievance a local readership owns.
+        (NewsStoryKind::HomegrownBlocked, 334),
+        (NewsStoryKind::FavouritismGrumbles, 344),
+        // A footballer's family is the half of a transfer nobody
+        // negotiates and the half that decides most of them.
+        (NewsStoryKind::FamilyUnsettled, 316),
+        (NewsStoryKind::FamilyCelebration, 306),
+        // Reported plainly and high, the way a paper reports a
+        // bereavement: above the week's ordinary squad news and
+        // written without an exclamation mark anywhere near it.
+        (NewsStoryKind::CompassionateLeave, 372),
+        (NewsStoryKind::LanguageLessons, 244),
+        (NewsStoryKind::VeteranHomecomingWish, 388),
+        (NewsStoryKind::LegendWontLeave, 396),
+        // He said no to the neighbours, and to a better contract at
+        // the same time. A supporter will forgive him a great deal
+        // for this one.
+        (NewsStoryKind::RefusesRivalMove, 428),
+        (NewsStoryKind::SeeksQuieterStage, 352),
+        // Off-field trouble. Every paper's favourite story.
+        (NewsStoryKind::OffFieldControversy, 427),
+        (NewsStoryKind::ContractTornUp, 403),
+        // His country has stopped picking him — the quiet end of
+        // an international career, and it runs a shade under the
+        // call-up that started it.
+        (NewsStoryKind::DroppedByCountry, 329),
+        (NewsStoryKind::OutgrownDivision, 322),
+        // Ineligible rather than dropped: worse, and it takes a
+        // window to undo.
+        (NewsStoryKind::LeftOutOfSquadList, 313),
+        (NewsStoryKind::BenchFrustration, 303),
+        (NewsStoryKind::WageEnvy, 297),
+        (NewsStoryKind::RelegationNerves, 287),
+        (NewsStoryKind::TrainingConcerns, 247),
+        (NewsStoryKind::ShirtNumberHandover, 228),
+        // The week's quietest story, and the one that most often
+        // comes before a run in the side.
+        (NewsStoryKind::TrainingGroundBuzz, 213),
+        // The manager has changed the shape and stuck with it. Read
+        // off the match log rather than announced anywhere, which is
+        // also how a supporter works it out.
+        (NewsStoryKind::FormationRevolution, 388),
+    ];
 
     /// How the editor decides whether a story has already been printed.
-    #[expect(clippy::too_many_lines)]
     pub fn recurrence(self) -> NewsRecurrence {
-        match self {
-            // Something that happened on a date. It can only be
-            // detected once, so the back catalogue is never consulted.
-            NewsStoryKind::LeagueWin
-            | NewsStoryKind::LeagueDraw
-            | NewsStoryKind::GoallessDraw
-            | NewsStoryKind::LeagueDefeat
-            | NewsStoryKind::Rout
-            | NewsStoryKind::HeavyDefeat
-            | NewsStoryKind::DerbyWin
-            | NewsStoryKind::DerbyDefeat
-            | NewsStoryKind::CupWin
-            | NewsStoryKind::CupExit
-            // How one afternoon went. Read once off that week's goal
-            // feed, and never true of the same match twice.
-            | NewsStoryKind::LateWinner
-            | NewsStoryKind::StoppageTimeDrama
-            | NewsStoryKind::ComebackWin
-            | NewsStoryKind::LeadThrownAway
-            | NewsStoryKind::InstantReply
-            | NewsStoryKind::EarlyBlitz
-            | NewsStoryKind::GoalFest
-            | NewsStoryKind::TenManWin
-            | NewsStoryKind::HatTrick
-            // A goalkeeper's afternoon, read once off that week's stat
-            // lines — and the award, which is handed out once a season.
-            | NewsStoryKind::KeeperMasterclass
-            | NewsStoryKind::KeeperPenaltySave
-            | NewsStoryKind::KeeperOverrun
-            | NewsStoryKind::KeeperBlunder
-            | NewsStoryKind::KeeperGoldenGlove
-            | NewsStoryKind::RedCard
-            | NewsStoryKind::PlayerOfMonth
-            | NewsStoryKind::TeamOfTheWeek
-            | NewsStoryKind::CaptainNamed
-            | NewsStoryKind::NationalCallUp
-            | NewsStoryKind::DroughtEnded
-            | NewsStoryKind::FormerClubGoal
-            | NewsStoryKind::ClubServant
-            | NewsStoryKind::RetirementAnnounced
-            | NewsStoryKind::TrainingBustUp
-            | NewsStoryKind::ContractRenewed
-            | NewsStoryKind::FansChant
-            | NewsStoryKind::PromiseBroken
-            | NewsStoryKind::PlayerFined
-            | NewsStoryKind::ClearTheAir
-            | NewsStoryKind::CaptaincyLost
-            // Read from the seven-day feed on a seven-day tick, and
-            // emitted once per arrival / audit pass — the same shape as
-            // the bust-up and fine beats above.
-            | NewsStoryKind::ShirtUnderThreat
-            | NewsStoryKind::PathwayBlocked
-            | NewsStoryKind::RoleFrustration
-            | NewsStoryKind::DroppedForBigMatch
-            | NewsStoryKind::DressingRoomInquest
-            | NewsStoryKind::SquadRallies
-            | NewsStoryKind::BoardInvests
-            | NewsStoryKind::NewSigning
-            | NewsStoryKind::RecordSigning
-            | NewsStoryKind::FreeSigning
-            | NewsStoryKind::LoanArrival
-            // Completed business, read from the week's transfer ledger
-            // exactly once — same shape as every other arrival.
-            | NewsStoryKind::HomecomingSigning
-            | NewsStoryKind::LoanMadePermanent
-            | NewsStoryKind::ProspectSigned
-            | NewsStoryKind::VeteranArrives
-            // The same ledger row read for its motive rather than its
-            // fee. Still one row, still one day, still one edition.
-            | NewsStoryKind::RivalRaid
-            | NewsStoryKind::ScoutingCoup
-            | NewsStoryKind::SuccessionSigning
-            | NewsStoryKind::DepthSigning
-            | NewsStoryKind::GapPlugged
-            | NewsStoryKind::MarqueeUpgrade
-            | NewsStoryKind::BargainBuy
-            | NewsStoryKind::AcademyGraduate
-            // A reunion happens on the day the new man walks in, and
-            // it is one edition either way.
-            | NewsStoryKind::ReunitedWithHisManager
-            | NewsStoryKind::OldWoundsReopened
-            | NewsStoryKind::LoanedOutToGrow
-            | NewsStoryKind::PlayerSold
-            | NewsStoryKind::StarSold
-            | NewsStoryKind::FreeExit
-            | NewsStoryKind::LoanExit
-            | NewsStoryKind::LoanReturn
-            // The dugout and the boardroom, read from the club's own
-            // dated diary rather than from the state they leave behind.
-            // A log entry belongs to one day, so it belongs to exactly
-            // one edition — which is what makes these safe as `Event`
-            // where the old state-scraped versions were not.
-            | NewsStoryKind::ManagerSacked
-            | NewsStoryKind::SeverancePaid
-            | NewsStoryKind::NewManagerArrives
-            | NewsStoryKind::ManagerPoached
-            | NewsStoryKind::CaretakerTakesCharge
-            | NewsStoryKind::CaretakerConfirmed
-            | NewsStoryKind::ManagerUltimatum
-            | NewsStoryKind::ManagerContractExtended
-            | NewsStoryKind::TakeoverRumour
-            | NewsStoryKind::TakeoverCompleted
-            | NewsStoryKind::TakeoverCollapsed
-            | NewsStoryKind::StadiumExpansion
-            | NewsStoryKind::FacilityUpgrade
-            | NewsStoryKind::WarChest
-            | NewsStoryKind::BudgetCut
-            | NewsStoryKind::BoardPromiseBroken
-            // The balance sheet's dated moments, from the same diary:
-            // the day the club went in, the day it came out, the day the
-            // owner wired the money, the day a sponsor signed or walked.
-            // The CONDITIONS those leave behind (the debt, the embargo,
-            // the wage bill) are `Standing` and live further down.
-            | NewsStoryKind::AdministrationEntered
-            | NewsStoryKind::AdministrationExited
-            | NewsStoryKind::OwnerBailout
-            | NewsStoryKind::SponsorSigned
-            | NewsStoryKind::SponsorshipLost
-            // A clause fires on the day it fires and is retired by the
-            // settler, so it can only ever be read once.
-            | NewsStoryKind::SellOnWindfall
-            | NewsStoryKind::PromotionBonusDue
-            | NewsStoryKind::PreContractAgreed
-            | NewsStoryKind::BosmanDepartureLooms
-            // Squad life read from the seven-day feed on a seven-day
-            // tick — the same shape as the fine and bust-up beats.
-            | NewsStoryKind::FirstClubGoal
-            | NewsStoryKind::WonStartingPlace
-            | NewsStoryKind::LeaderEmerging
-            | NewsStoryKind::TeammateFarewell
-            | NewsStoryKind::InternationalRetirement
-            // Season verdicts fire once from the players' event feeds,
-            // the same Monday the whole squad carries them.
-            | NewsStoryKind::PromotionWon
-            | NewsStoryKind::RelegationConfirmed
-            | NewsStoryKind::CupFinalHeartbreak
-            | NewsStoryKind::EuropeSecured
-            | NewsStoryKind::TrophyWon
-            // The scoring charts are read off a frozen monthly snapshot,
-            // which exists exactly once per calendar month. A chart is
-            // not a status that lingers and it is not a tally that ticks
-            // — it is a table somebody closed on the last day of the
-            // month, so it belongs to that month's edition and no other.
-            | NewsStoryKind::LeagueTopScorer
-            | NewsStoryKind::LeagueScoringChase
-            // The whole ratings page. Every one of these is read off ONE
-            // afternoon's stat line out of the week just played — the
-            // same channel, and the same guarantee, as the goalkeeper
-            // beats above: the match happened on a date, its numbers
-            // never change again, and next Monday's facts are built from
-            // next week's fixtures. A verdict on Saturday is never
-            // re-detected, so the back catalogue is irrelevant to it.
-            | NewsStoryKind::ManOfTheMatch
-            | NewsStoryKind::MatchMasterclass
-            | NewsStoryKind::AssistShow
-            | NewsStoryKind::CreatorInChief
-            | NewsStoryKind::DefensiveRock
-            | NewsStoryKind::DribblingDisplay
-            | NewsStoryKind::SuperSub
-            | NewsStoryKind::DerbyHero
-            | NewsStoryKind::MatchStinker
-            | NewsStoryKind::WastefulFinishing
-            | NewsStoryKind::CostlyError
-            | NewsStoryKind::OwnGoalShame
-            | NewsStoryKind::PenaltyMissed
-            | NewsStoryKind::HookedEarly
-            | NewsStoryKind::FoulTrouble
-            // Squad life that happens on a day and is read from the
-            // seven-day feed on a seven-day tick — the same shape as the
-            // fine and bust-up beats above.
-            | NewsStoryKind::TeammateConflict
-            | NewsStoryKind::DressingRoomSpeech
-            | NewsStoryKind::OffFieldControversy
-            | NewsStoryKind::ShirtNumberHandover
-            | NewsStoryKind::ContractTornUp
-            | NewsStoryKind::DroppedByCountry
-            | NewsStoryKind::DreamMoveComplete
-            | NewsStoryKind::StatusShock
-            | NewsStoryKind::PayWindfall
-            | NewsStoryKind::WageRealityCheck
-            | NewsStoryKind::PlayerOfWeek
-            | NewsStoryKind::YoungPlayerOfWeek
-            | NewsStoryKind::TeamOfMonthNod
-            | NewsStoryKind::YoungPlayerOfMonthAward
-            | NewsStoryKind::YoungPlayerOfSeasonAward
-            | NewsStoryKind::NewManagerBounce
-            | NewsStoryKind::ManagerExitUnsettles
-            | NewsStoryKind::PromiseKept
-            | NewsStoryKind::BanServed
-            | NewsStoryKind::PersonalTrainingPlan
-            | NewsStoryKind::RoleRetraining
-            | NewsStoryKind::HomegrownBlocked
-            | NewsStoryKind::FavouritismGrumbles
-            | NewsStoryKind::LeverageUsed
-            | NewsStoryKind::FamilyCelebration
-            | NewsStoryKind::CompassionateLeave
-            | NewsStoryKind::BraceHero
-            | NewsStoryKind::GoalAndAssistShow
-            | NewsStoryKind::TeenageStarTurn
-            | NewsStoryKind::RolledBackYears
-            | NewsStoryKind::DreamDebut
-            | NewsStoryKind::DebutNightmare
-            | NewsStoryKind::GoalFromDefence
-            | NewsStoryKind::MidfieldEngine
-            | NewsStoryKind::CrisisTalks
-            | NewsStoryKind::BoardDemandsSale
-            | NewsStoryKind::BoardBlocksDeal
-            | NewsStoryKind::FacilityPlanRejected
-            | NewsStoryKind::LeaguePlayerOfMonth
-            | NewsStoryKind::LeagueYoungStar
-            | NewsStoryKind::LeagueAssistKing
-            | NewsStoryKind::LeagueAssistChase
-            | NewsStoryKind::LeagueRatingsLeader
-            | NewsStoryKind::LeagueTeamOfMonth
-            | NewsStoryKind::FansFurySale
-            | NewsStoryKind::FansDreamSigning
-            | NewsStoryKind::CupHumiliationFallout
-            | NewsStoryKind::TravellingSupportRewarded
-            | NewsStoryKind::AcademyDarling
-            | NewsStoryKind::TrainingStandardsRow
-            | NewsStoryKind::PositionRivalryFeud
-            | NewsStoryKind::LeadershipPowerStruggle
-            | NewsStoryKind::RotationRested
-            | NewsStoryKind::TacticalOmission
-            | NewsStoryKind::DroppedOnForm
-            | NewsStoryKind::DisciplinaryOmission
-            | NewsStoryKind::ForcedToRetire
-            | NewsStoryKind::LoanReturnTriumph
-            | NewsStoryKind::LoanReturnWasted
-            | NewsStoryKind::KeeperLoanReturnTriumph
-            | NewsStoryKind::KeeperLoanReturnWasted
-            | NewsStoryKind::KeeperLoanReturn
-            | NewsStoryKind::HamstringBlow
-            | NewsStoryKind::KneeLigamentBlow
-            | NewsStoryKind::BrokenBoneBlow
-            | NewsStoryKind::IntakeDay
-            | NewsStoryKind::GoldenGeneration
-            | NewsStoryKind::GraduationDay
-            | NewsStoryKind::ContinentalNightWin
-            | NewsStoryKind::ContinentalDefeat
-            | NewsStoryKind::ContinentalRout
-            | NewsStoryKind::ContinentalHiding
-            | NewsStoryKind::PlayoffGameWin
-            | NewsStoryKind::PlayoffGameDefeat
-            | NewsStoryKind::PlayoffTieWon
-            | NewsStoryKind::PlayoffTieLost
-            | NewsStoryKind::PlayoffFinalReached
-            | NewsStoryKind::BackroomEmpty
-            | NewsStoryKind::TournamentTriumph
-            | NewsStoryKind::TournamentHeartbreak
-            | NewsStoryKind::SeasonAward => NewsRecurrence::Event,
-
-            // A number that moves. The paper runs it again as soon as
-            // the number does — "make it five in a row".
-            NewsStoryKind::WinningRun
-            | NewsStoryKind::UnbeatenRun
-            | NewsStoryKind::WinlessRun
-            // The same shape of number, counted off the match log:
-            // weeks without scoring, weeks shipping them, and the two
-            // runs that have an address on them.
-            | NewsStoryKind::GoalsDriedUp
-            | NewsStoryKind::DefensiveCrisis
-            | NewsStoryKind::FortressHome
-            | NewsStoryKind::AwayDayForm
-            | NewsStoryKind::StarForm
-            | NewsStoryKind::KeeperWall
-            | NewsStoryKind::MilestoneApps
-            | NewsStoryKind::MilestoneGoals
-            | NewsStoryKind::GoalDrought
-            // Shut-outs arrive occasionally, never weekly — the shape
-            // `Progress` is for.
-            | NewsStoryKind::KeeperShutoutMilestone
-            // `Progress` is right only when the figure moves
-            // OCCASIONALLY — a goal, another win in a run. A figure that
-            // moves EVERY week (appearances) makes a fresh key every
-            // week, which is `Event` behaviour wearing a different name:
-            // the story reruns each Monday with the number nudged by
-            // one. Anything counting appearances belongs in `Standing`.
-            | NewsStoryKind::LoanWatchGoals
-            // The same shape in the other job: a shut-out arrives every
-            // few weeks, and the tally sits still in between.
-            | NewsStoryKind::KeeperLoanWatchShutouts => NewsRecurrence::Progress,
-
-            // A condition that persists. Printing it every week would
-            // read like a stuck record, so it waits its turn.
-            NewsStoryKind::TitleCharge
-            | NewsStoryKind::RelegationFight
-            | NewsStoryKind::InjuryBlow
-            | NewsStoryKind::InjuryReturn
-            | NewsStoryKind::InjurySetback
-            | NewsStoryKind::Suspension
-            | NewsStoryKind::YouthDebut
-            | NewsStoryKind::RisingStar
-            | NewsStoryKind::TransferSpeculation
-            | NewsStoryKind::TransferListed
-            | NewsStoryKind::ContractStandoff
-            | NewsStoryKind::RumourInterest
-            | NewsStoryKind::RumourRival
-            | NewsStoryKind::ScoutsWatching
-            | NewsStoryKind::AgentTouting
-            | NewsStoryKind::HomecomingLink
-            | NewsStoryKind::TalksExpected
-            | NewsStoryKind::ToldNotInPlans
-            | NewsStoryKind::ContractTalksStalled
-            // Read from a status that persists for months, or from the
-            // 16-day event window the rumour and verdict desks use on a
-            // 7-day tick. Either way the same fact is re-detected next
-            // Monday, so the back catalogue has to be consulted.
-            | NewsStoryKind::TransferRequestFiled
-            | NewsStoryKind::BidRejected
-            | NewsStoryKind::MoveCollapsed
-            // `Trn` sits on the player until the deal completes, the
-            // cooled-interest and loyalty-pledge beats come off the
-            // 16-day feed, and a run-down contract stays run down —
-            // all re-detected every Monday.
-            | NewsStoryKind::TransferAgreed
-            | NewsStoryKind::RumourCools
-            | NewsStoryKind::CommitsToClub
-            | NewsStoryKind::ContractRunningDown
-            | NewsStoryKind::AmbitionWarning
-            | NewsStoryKind::UnsoldStillHere
-            | NewsStoryKind::CareerTwilight
-            | NewsStoryKind::LoanFedUp
-            | NewsStoryKind::SigningNotWorking
-            | NewsStoryKind::SigningComesGood
-            | NewsStoryKind::LoanFlop
-            | NewsStoryKind::LoanWatchStarter
-            | NewsStoryKind::LoanWatchBenched
-            | NewsStoryKind::LoanWantsReturn
-            | NewsStoryKind::LoanWantsPermanent
-            | NewsStoryKind::KeeperLoanWantsPermanent
-            | NewsStoryKind::LoanRecallTalk
-            | NewsStoryKind::LoanSpellEnds
-            | NewsStoryKind::LoanStepTooBig
-            | NewsStoryKind::ManagerBacksPlayer
-            | NewsStoryKind::ManagerCallsOutPlayer
-            | NewsStoryKind::FansTurnOnTeam
-            | NewsStoryKind::FansGetBehind
-            | NewsStoryKind::FansAngryAtRumour
-            | NewsStoryKind::MediaPressure
-            | NewsStoryKind::MediaDarling
-            | NewsStoryKind::ManagerPressure
-            | NewsStoryKind::BoardBacking
-            // An open vacancy and an in-flight approach both persist:
-            // the search runs for weeks and an approach lives for days
-            // across a weekly tick, so both are re-detected on the next
-            // Monday and must consult the back catalogue.
-            | NewsStoryKind::ManagerHunt
-            | NewsStoryKind::ManagerTargetLinked
-            | NewsStoryKind::ManagerWanted
-            // Settling in and eyeing the coaching badges are conditions
-            // rather than days, and both are read from the fortnight
-            // window on a seven-day tick.
-            | NewsStoryKind::SettlingIn
-            | NewsStoryKind::CoachingAmbition
-            | NewsStoryKind::AcademyPraise
-            | NewsStoryKind::MoneyWorries
-            // What a balance sheet leaves behind rather than what it
-            // did on a day. All four are true for months at a time, and
-            // a paper that ran the debt figure every Monday would read
-            // like a stuck record about the one subject nobody enjoys.
-            | NewsStoryKind::DebtMountain
-            | NewsStoryKind::TransferEmbargo
-            | NewsStoryKind::WageBillCrisis
-            | NewsStoryKind::MustSellBeforeBuying
-            // A foreign player's life. Not one of these is a Tuesday:
-            // homesickness, isolation, a dressing room that has not
-            // forgiven where he came from, a senior pro quietly looking
-            // after him — all conditions, all read from the fortnight
-            // window on a seven-day tick, all re-detected next Monday.
-            | NewsStoryKind::HomesickAbroad
-            | NewsStoryKind::StrugglingToSettle
-            | NewsStoryKind::HomeCalling
-            | NewsStoryKind::SettledAtLast
-            | NewsStoryKind::ColdShoulder
-            | NewsStoryKind::TakenUnderWing
-            // …and the same for how he is training, how much he is
-            // playing, what he thinks of his wages, and whether the
-            // division is still big enough for him. Every one is a state
-            // he is in rather than something that happened, so a paper
-            // that ran them weekly would print the same man's grievance
-            // every Monday until it was resolved.
-            | NewsStoryKind::TrainingGroundBuzz
-            | NewsStoryKind::TrainingConcerns
-            | NewsStoryKind::BenchFrustration
-            | NewsStoryKind::WageEnvy
-            | NewsStoryKind::OutgrownDivision
-            | NewsStoryKind::RelegationNerves
-            // Ineligibility lasts as long as the registered list does.
-            | NewsStoryKind::PlayingForContract
-            | NewsStoryKind::ContinentalAmbition
-            | NewsStoryKind::FamilyUnsettled
-            | NewsStoryKind::LanguageLessons
-            | NewsStoryKind::VeteranHomecomingWish
-            | NewsStoryKind::LegendWontLeave
-            | NewsStoryKind::RefusesRivalMove
-            | NewsStoryKind::SeeksQuieterStage
-            | NewsStoryKind::ProtestBrewing
-            | NewsStoryKind::PromotionFever
-            | NewsStoryKind::RelegationDread
-            | NewsStoryKind::HomegrownQuotaOmission
-            | NewsStoryKind::ForeignQuotaOmission
-            | NewsStoryKind::SquadKnitsTogether
-            | NewsStoryKind::TurnoverToll
-            | NewsStoryKind::CliqueConcerns
-            | NewsStoryKind::BigMatchTrust
-            | NewsStoryKind::ManagerDoubtsLinger
-            | NewsStoryKind::FrozenOutOfTheSide
-            | NewsStoryKind::FormationRevolution
-            | NewsStoryKind::BreakthroughSeason
-            | NewsStoryKind::TrainingTransformation
-            | NewsStoryKind::StalledProspect
-            | NewsStoryKind::PowersFading
-            | NewsStoryKind::LeftOutOfSquadList => NewsRecurrence::Standing,
-            // Dated facts: a fixture next week, a run that ended on a
-            // Saturday, a bid lodged this week, a window that shut.
-            NewsStoryKind::RunEnded
-            | NewsStoryKind::FirstWinInAges
-            | NewsStoryKind::LateEqualiserConceded
-            | NewsStoryKind::PointRescued
-            | NewsStoryKind::HalfwayReport
-            | NewsStoryKind::FinalStanding
-            | NewsStoryKind::NextUpDerby
-            | NewsStoryKind::NextUpSummit
-            | NewsStoryKind::NextUpSixPointer
-            | NewsStoryKind::NextUpLeaders
-            | NewsStoryKind::NextUpCupTie
-            | NewsStoryKind::NextUpOldBoy
-            | NewsStoryKind::NextUpHome
-            | NewsStoryKind::NextUpAway
-            | NewsStoryKind::PromisedHisChance
-            | NewsStoryKind::ManagerOnWin
-            | NewsStoryKind::ManagerOnDraw
-            | NewsStoryKind::ManagerOnDefeat
-            | NewsStoryKind::PeckingOrderUp
-            | NewsStoryKind::PeckingOrderDown
-            | NewsStoryKind::InternationalExodus
-            | NewsStoryKind::BidLodged
-            | NewsStoryKind::LoanApproach
-            | NewsStoryKind::WindowOpens
-            | NewsStoryKind::WindowShuts
-            | NewsStoryKind::FeeWrittenOff
-            | NewsStoryKind::BoardRaisesItsOffer => NewsRecurrence::Event,
-            // Conditions read off state or a fortnight window: the
-            // table, a negotiation still open, an injury list.
-            NewsStoryKind::TopOfTheTable
-            | NewsStoryKind::EuropeRace
-            | NewsStoryKind::MidTableDrift
-            | NewsStoryKind::NoRoleInTheShape
-            | NewsStoryKind::BigClubAura
-            | NewsStoryKind::StuckInTheQueue
-            | NewsStoryKind::InjuryCrisis
-            | NewsStoryKind::PersonalTermsAgreed
-            | NewsStoryKind::TurnsDownMove
-            | NewsStoryKind::SteppingStoneTalk
-            | NewsStoryKind::FeeAgreed
-            | NewsStoryKind::MedicalBooked
-            | NewsStoryKind::PricedOut
-            | NewsStoryKind::NotForSale
-            | NewsStoryKind::TargetSaysNo
-            | NewsStoryKind::MedicalFailed
-            | NewsStoryKind::DealDiesAtDeadline => NewsRecurrence::Standing,
-        }
+        self.lookup(Self::RECURRENCES)
     }
+
+    /// How each kind is checked against the back catalogue.
+    const RECURRENCES: &[(NewsStoryKind, NewsRecurrence)] = &[
+        // Something that happened on a date. It can only be
+        // detected once, so the back catalogue is never consulted.
+        (NewsStoryKind::LeagueWin, NewsRecurrence::Event),
+        (NewsStoryKind::LeagueDraw, NewsRecurrence::Event),
+        (NewsStoryKind::GoallessDraw, NewsRecurrence::Event),
+        (NewsStoryKind::LeagueDefeat, NewsRecurrence::Event),
+        (NewsStoryKind::Rout, NewsRecurrence::Event),
+        (NewsStoryKind::HeavyDefeat, NewsRecurrence::Event),
+        (NewsStoryKind::DerbyWin, NewsRecurrence::Event),
+        (NewsStoryKind::DerbyDefeat, NewsRecurrence::Event),
+        (NewsStoryKind::CupWin, NewsRecurrence::Event),
+        (NewsStoryKind::CupExit, NewsRecurrence::Event),
+        // How one afternoon went. Read once off that week's goal
+        // feed, and never true of the same match twice.
+        (NewsStoryKind::LateWinner, NewsRecurrence::Event),
+        (NewsStoryKind::StoppageTimeDrama, NewsRecurrence::Event),
+        (NewsStoryKind::ComebackWin, NewsRecurrence::Event),
+        (NewsStoryKind::LeadThrownAway, NewsRecurrence::Event),
+        (NewsStoryKind::InstantReply, NewsRecurrence::Event),
+        (NewsStoryKind::EarlyBlitz, NewsRecurrence::Event),
+        (NewsStoryKind::GoalFest, NewsRecurrence::Event),
+        (NewsStoryKind::TenManWin, NewsRecurrence::Event),
+        (NewsStoryKind::HatTrick, NewsRecurrence::Event),
+        // A goalkeeper's afternoon, read once off that week's stat
+        // lines — and the award, which is handed out once a season.
+        (NewsStoryKind::KeeperMasterclass, NewsRecurrence::Event),
+        (NewsStoryKind::KeeperPenaltySave, NewsRecurrence::Event),
+        (NewsStoryKind::KeeperOverrun, NewsRecurrence::Event),
+        (NewsStoryKind::KeeperBlunder, NewsRecurrence::Event),
+        (NewsStoryKind::KeeperGoldenGlove, NewsRecurrence::Event),
+        (NewsStoryKind::RedCard, NewsRecurrence::Event),
+        (NewsStoryKind::PlayerOfMonth, NewsRecurrence::Event),
+        (NewsStoryKind::TeamOfTheWeek, NewsRecurrence::Event),
+        (NewsStoryKind::CaptainNamed, NewsRecurrence::Event),
+        (NewsStoryKind::NationalCallUp, NewsRecurrence::Event),
+        (NewsStoryKind::DroughtEnded, NewsRecurrence::Event),
+        (NewsStoryKind::FormerClubGoal, NewsRecurrence::Event),
+        (NewsStoryKind::ClubServant, NewsRecurrence::Event),
+        (NewsStoryKind::RetirementAnnounced, NewsRecurrence::Event),
+        (NewsStoryKind::TrainingBustUp, NewsRecurrence::Event),
+        (NewsStoryKind::ContractRenewed, NewsRecurrence::Event),
+        (NewsStoryKind::FansChant, NewsRecurrence::Event),
+        (NewsStoryKind::PromiseBroken, NewsRecurrence::Event),
+        (NewsStoryKind::PlayerFined, NewsRecurrence::Event),
+        (NewsStoryKind::ClearTheAir, NewsRecurrence::Event),
+        (NewsStoryKind::CaptaincyLost, NewsRecurrence::Event),
+        // Read from the seven-day feed on a seven-day tick, and
+        // emitted once per arrival / audit pass — the same shape as
+        // the bust-up and fine beats above.
+        (NewsStoryKind::ShirtUnderThreat, NewsRecurrence::Event),
+        (NewsStoryKind::PathwayBlocked, NewsRecurrence::Event),
+        (NewsStoryKind::RoleFrustration, NewsRecurrence::Event),
+        (NewsStoryKind::DroppedForBigMatch, NewsRecurrence::Event),
+        (NewsStoryKind::DressingRoomInquest, NewsRecurrence::Event),
+        (NewsStoryKind::SquadRallies, NewsRecurrence::Event),
+        (NewsStoryKind::BoardInvests, NewsRecurrence::Event),
+        (NewsStoryKind::NewSigning, NewsRecurrence::Event),
+        (NewsStoryKind::RecordSigning, NewsRecurrence::Event),
+        (NewsStoryKind::FreeSigning, NewsRecurrence::Event),
+        (NewsStoryKind::LoanArrival, NewsRecurrence::Event),
+        // Completed business, read from the week's transfer ledger
+        // exactly once — same shape as every other arrival.
+        (NewsStoryKind::HomecomingSigning, NewsRecurrence::Event),
+        (NewsStoryKind::LoanMadePermanent, NewsRecurrence::Event),
+        (NewsStoryKind::ProspectSigned, NewsRecurrence::Event),
+        (NewsStoryKind::VeteranArrives, NewsRecurrence::Event),
+        // The same ledger row read for its motive rather than its
+        // fee. Still one row, still one day, still one edition.
+        (NewsStoryKind::RivalRaid, NewsRecurrence::Event),
+        (NewsStoryKind::ScoutingCoup, NewsRecurrence::Event),
+        (NewsStoryKind::SuccessionSigning, NewsRecurrence::Event),
+        (NewsStoryKind::DepthSigning, NewsRecurrence::Event),
+        (NewsStoryKind::GapPlugged, NewsRecurrence::Event),
+        (NewsStoryKind::MarqueeUpgrade, NewsRecurrence::Event),
+        (NewsStoryKind::BargainBuy, NewsRecurrence::Event),
+        (NewsStoryKind::AcademyGraduate, NewsRecurrence::Event),
+        // A reunion happens on the day the new man walks in, and
+        // it is one edition either way.
+        (NewsStoryKind::ReunitedWithHisManager, NewsRecurrence::Event),
+        (NewsStoryKind::OldWoundsReopened, NewsRecurrence::Event),
+        (NewsStoryKind::LoanedOutToGrow, NewsRecurrence::Event),
+        (NewsStoryKind::PlayerSold, NewsRecurrence::Event),
+        (NewsStoryKind::StarSold, NewsRecurrence::Event),
+        (NewsStoryKind::FreeExit, NewsRecurrence::Event),
+        (NewsStoryKind::LoanExit, NewsRecurrence::Event),
+        (NewsStoryKind::LoanReturn, NewsRecurrence::Event),
+        // The dugout and the boardroom, read from the club's own
+        // dated diary rather than from the state they leave behind.
+        // A log entry belongs to one day, so it belongs to exactly
+        // one edition — which is what makes these safe as `Event`
+        // where the old state-scraped versions were not.
+        (NewsStoryKind::ManagerSacked, NewsRecurrence::Event),
+        (NewsStoryKind::SeverancePaid, NewsRecurrence::Event),
+        (NewsStoryKind::NewManagerArrives, NewsRecurrence::Event),
+        (NewsStoryKind::ManagerPoached, NewsRecurrence::Event),
+        (NewsStoryKind::CaretakerTakesCharge, NewsRecurrence::Event),
+        (NewsStoryKind::CaretakerConfirmed, NewsRecurrence::Event),
+        (NewsStoryKind::ManagerUltimatum, NewsRecurrence::Event),
+        (
+            NewsStoryKind::ManagerContractExtended,
+            NewsRecurrence::Event,
+        ),
+        (NewsStoryKind::TakeoverRumour, NewsRecurrence::Event),
+        (NewsStoryKind::TakeoverCompleted, NewsRecurrence::Event),
+        (NewsStoryKind::TakeoverCollapsed, NewsRecurrence::Event),
+        (NewsStoryKind::StadiumExpansion, NewsRecurrence::Event),
+        (NewsStoryKind::FacilityUpgrade, NewsRecurrence::Event),
+        (NewsStoryKind::WarChest, NewsRecurrence::Event),
+        (NewsStoryKind::BudgetCut, NewsRecurrence::Event),
+        (NewsStoryKind::BoardPromiseBroken, NewsRecurrence::Event),
+        // The balance sheet's dated moments, from the same diary:
+        // the day the club went in, the day it came out, the day the
+        // owner wired the money, the day a sponsor signed or walked.
+        // The CONDITIONS those leave behind (the debt, the embargo,
+        // the wage bill) are `Standing` and live further down.
+        (NewsStoryKind::AdministrationEntered, NewsRecurrence::Event),
+        (NewsStoryKind::AdministrationExited, NewsRecurrence::Event),
+        (NewsStoryKind::OwnerBailout, NewsRecurrence::Event),
+        (NewsStoryKind::SponsorSigned, NewsRecurrence::Event),
+        (NewsStoryKind::SponsorshipLost, NewsRecurrence::Event),
+        // A clause fires on the day it fires and is retired by the
+        // settler, so it can only ever be read once.
+        (NewsStoryKind::SellOnWindfall, NewsRecurrence::Event),
+        (NewsStoryKind::PromotionBonusDue, NewsRecurrence::Event),
+        (NewsStoryKind::PreContractAgreed, NewsRecurrence::Event),
+        (NewsStoryKind::BosmanDepartureLooms, NewsRecurrence::Event),
+        // Squad life read from the seven-day feed on a seven-day
+        // tick — the same shape as the fine and bust-up beats.
+        (NewsStoryKind::FirstClubGoal, NewsRecurrence::Event),
+        (NewsStoryKind::WonStartingPlace, NewsRecurrence::Event),
+        (NewsStoryKind::LeaderEmerging, NewsRecurrence::Event),
+        (NewsStoryKind::TeammateFarewell, NewsRecurrence::Event),
+        (
+            NewsStoryKind::InternationalRetirement,
+            NewsRecurrence::Event,
+        ),
+        // Season verdicts fire once from the players' event feeds,
+        // the same Monday the whole squad carries them.
+        (NewsStoryKind::PromotionWon, NewsRecurrence::Event),
+        (NewsStoryKind::RelegationConfirmed, NewsRecurrence::Event),
+        (NewsStoryKind::CupFinalHeartbreak, NewsRecurrence::Event),
+        (NewsStoryKind::EuropeSecured, NewsRecurrence::Event),
+        (NewsStoryKind::TrophyWon, NewsRecurrence::Event),
+        // The scoring charts are read off a frozen monthly snapshot,
+        // which exists exactly once per calendar month. A chart is
+        // not a status that lingers and it is not a tally that ticks
+        // — it is a table somebody closed on the last day of the
+        // month, so it belongs to that month's edition and no other.
+        (NewsStoryKind::LeagueTopScorer, NewsRecurrence::Event),
+        (NewsStoryKind::LeagueScoringChase, NewsRecurrence::Event),
+        // The whole ratings page. Every one of these is read off ONE
+        // afternoon's stat line out of the week just played — the
+        // same channel, and the same guarantee, as the goalkeeper
+        // beats above: the match happened on a date, its numbers
+        // never change again, and next Monday's facts are built from
+        // next week's fixtures. A verdict on Saturday is never
+        // re-detected, so the back catalogue is irrelevant to it.
+        (NewsStoryKind::ManOfTheMatch, NewsRecurrence::Event),
+        (NewsStoryKind::MatchMasterclass, NewsRecurrence::Event),
+        (NewsStoryKind::AssistShow, NewsRecurrence::Event),
+        (NewsStoryKind::CreatorInChief, NewsRecurrence::Event),
+        (NewsStoryKind::DefensiveRock, NewsRecurrence::Event),
+        (NewsStoryKind::DribblingDisplay, NewsRecurrence::Event),
+        (NewsStoryKind::SuperSub, NewsRecurrence::Event),
+        (NewsStoryKind::DerbyHero, NewsRecurrence::Event),
+        (NewsStoryKind::MatchStinker, NewsRecurrence::Event),
+        (NewsStoryKind::WastefulFinishing, NewsRecurrence::Event),
+        (NewsStoryKind::CostlyError, NewsRecurrence::Event),
+        (NewsStoryKind::OwnGoalShame, NewsRecurrence::Event),
+        (NewsStoryKind::PenaltyMissed, NewsRecurrence::Event),
+        (NewsStoryKind::HookedEarly, NewsRecurrence::Event),
+        (NewsStoryKind::FoulTrouble, NewsRecurrence::Event),
+        // Squad life that happens on a day and is read from the
+        // seven-day feed on a seven-day tick — the same shape as the
+        // fine and bust-up beats above.
+        (NewsStoryKind::TeammateConflict, NewsRecurrence::Event),
+        (NewsStoryKind::DressingRoomSpeech, NewsRecurrence::Event),
+        (NewsStoryKind::OffFieldControversy, NewsRecurrence::Event),
+        (NewsStoryKind::ShirtNumberHandover, NewsRecurrence::Event),
+        (NewsStoryKind::ContractTornUp, NewsRecurrence::Event),
+        (NewsStoryKind::DroppedByCountry, NewsRecurrence::Event),
+        (NewsStoryKind::DreamMoveComplete, NewsRecurrence::Event),
+        (NewsStoryKind::StatusShock, NewsRecurrence::Event),
+        (NewsStoryKind::PayWindfall, NewsRecurrence::Event),
+        (NewsStoryKind::WageRealityCheck, NewsRecurrence::Event),
+        (NewsStoryKind::PlayerOfWeek, NewsRecurrence::Event),
+        (NewsStoryKind::YoungPlayerOfWeek, NewsRecurrence::Event),
+        (NewsStoryKind::TeamOfMonthNod, NewsRecurrence::Event),
+        (
+            NewsStoryKind::YoungPlayerOfMonthAward,
+            NewsRecurrence::Event,
+        ),
+        (
+            NewsStoryKind::YoungPlayerOfSeasonAward,
+            NewsRecurrence::Event,
+        ),
+        (NewsStoryKind::NewManagerBounce, NewsRecurrence::Event),
+        (NewsStoryKind::ManagerExitUnsettles, NewsRecurrence::Event),
+        (NewsStoryKind::PromiseKept, NewsRecurrence::Event),
+        (NewsStoryKind::BanServed, NewsRecurrence::Event),
+        (NewsStoryKind::PersonalTrainingPlan, NewsRecurrence::Event),
+        (NewsStoryKind::RoleRetraining, NewsRecurrence::Event),
+        (NewsStoryKind::HomegrownBlocked, NewsRecurrence::Event),
+        (NewsStoryKind::FavouritismGrumbles, NewsRecurrence::Event),
+        (NewsStoryKind::LeverageUsed, NewsRecurrence::Event),
+        (NewsStoryKind::FamilyCelebration, NewsRecurrence::Event),
+        (NewsStoryKind::CompassionateLeave, NewsRecurrence::Event),
+        (NewsStoryKind::BraceHero, NewsRecurrence::Event),
+        (NewsStoryKind::GoalAndAssistShow, NewsRecurrence::Event),
+        (NewsStoryKind::TeenageStarTurn, NewsRecurrence::Event),
+        (NewsStoryKind::RolledBackYears, NewsRecurrence::Event),
+        (NewsStoryKind::DreamDebut, NewsRecurrence::Event),
+        (NewsStoryKind::DebutNightmare, NewsRecurrence::Event),
+        (NewsStoryKind::GoalFromDefence, NewsRecurrence::Event),
+        (NewsStoryKind::MidfieldEngine, NewsRecurrence::Event),
+        (NewsStoryKind::CrisisTalks, NewsRecurrence::Event),
+        (NewsStoryKind::BoardDemandsSale, NewsRecurrence::Event),
+        (NewsStoryKind::BoardBlocksDeal, NewsRecurrence::Event),
+        (NewsStoryKind::FacilityPlanRejected, NewsRecurrence::Event),
+        (NewsStoryKind::LeaguePlayerOfMonth, NewsRecurrence::Event),
+        (NewsStoryKind::LeagueYoungStar, NewsRecurrence::Event),
+        (NewsStoryKind::LeagueAssistKing, NewsRecurrence::Event),
+        (NewsStoryKind::LeagueAssistChase, NewsRecurrence::Event),
+        (NewsStoryKind::LeagueRatingsLeader, NewsRecurrence::Event),
+        (NewsStoryKind::LeagueTeamOfMonth, NewsRecurrence::Event),
+        (NewsStoryKind::FansFurySale, NewsRecurrence::Event),
+        (NewsStoryKind::FansDreamSigning, NewsRecurrence::Event),
+        (NewsStoryKind::CupHumiliationFallout, NewsRecurrence::Event),
+        (
+            NewsStoryKind::TravellingSupportRewarded,
+            NewsRecurrence::Event,
+        ),
+        (NewsStoryKind::AcademyDarling, NewsRecurrence::Event),
+        (NewsStoryKind::TrainingStandardsRow, NewsRecurrence::Event),
+        (NewsStoryKind::PositionRivalryFeud, NewsRecurrence::Event),
+        (
+            NewsStoryKind::LeadershipPowerStruggle,
+            NewsRecurrence::Event,
+        ),
+        (NewsStoryKind::RotationRested, NewsRecurrence::Event),
+        (NewsStoryKind::TacticalOmission, NewsRecurrence::Event),
+        (NewsStoryKind::DroppedOnForm, NewsRecurrence::Event),
+        (NewsStoryKind::DisciplinaryOmission, NewsRecurrence::Event),
+        (NewsStoryKind::ForcedToRetire, NewsRecurrence::Event),
+        (NewsStoryKind::LoanReturnTriumph, NewsRecurrence::Event),
+        (NewsStoryKind::LoanReturnWasted, NewsRecurrence::Event),
+        (
+            NewsStoryKind::KeeperLoanReturnTriumph,
+            NewsRecurrence::Event,
+        ),
+        (NewsStoryKind::KeeperLoanReturnWasted, NewsRecurrence::Event),
+        (NewsStoryKind::KeeperLoanReturn, NewsRecurrence::Event),
+        (NewsStoryKind::HamstringBlow, NewsRecurrence::Event),
+        (NewsStoryKind::KneeLigamentBlow, NewsRecurrence::Event),
+        (NewsStoryKind::BrokenBoneBlow, NewsRecurrence::Event),
+        (NewsStoryKind::IntakeDay, NewsRecurrence::Event),
+        (NewsStoryKind::GoldenGeneration, NewsRecurrence::Event),
+        (NewsStoryKind::GraduationDay, NewsRecurrence::Event),
+        (NewsStoryKind::ContinentalNightWin, NewsRecurrence::Event),
+        (NewsStoryKind::ContinentalDefeat, NewsRecurrence::Event),
+        (NewsStoryKind::ContinentalRout, NewsRecurrence::Event),
+        (NewsStoryKind::ContinentalHiding, NewsRecurrence::Event),
+        (NewsStoryKind::PlayoffGameWin, NewsRecurrence::Event),
+        (NewsStoryKind::PlayoffGameDefeat, NewsRecurrence::Event),
+        (NewsStoryKind::PlayoffTieWon, NewsRecurrence::Event),
+        (NewsStoryKind::PlayoffTieLost, NewsRecurrence::Event),
+        (NewsStoryKind::PlayoffFinalReached, NewsRecurrence::Event),
+        (NewsStoryKind::BackroomEmpty, NewsRecurrence::Event),
+        (NewsStoryKind::TournamentTriumph, NewsRecurrence::Event),
+        (NewsStoryKind::TournamentHeartbreak, NewsRecurrence::Event),
+        (NewsStoryKind::SeasonAward, NewsRecurrence::Event),
+        // A number that moves. The paper runs it again as soon as
+        // the number does — "make it five in a row".
+        (NewsStoryKind::WinningRun, NewsRecurrence::Progress),
+        (NewsStoryKind::UnbeatenRun, NewsRecurrence::Progress),
+        (NewsStoryKind::WinlessRun, NewsRecurrence::Progress),
+        // The same shape of number, counted off the match log:
+        // weeks without scoring, weeks shipping them, and the two
+        // runs that have an address on them.
+        (NewsStoryKind::GoalsDriedUp, NewsRecurrence::Progress),
+        (NewsStoryKind::DefensiveCrisis, NewsRecurrence::Progress),
+        (NewsStoryKind::FortressHome, NewsRecurrence::Progress),
+        (NewsStoryKind::AwayDayForm, NewsRecurrence::Progress),
+        (NewsStoryKind::StarForm, NewsRecurrence::Progress),
+        (NewsStoryKind::KeeperWall, NewsRecurrence::Progress),
+        (NewsStoryKind::MilestoneApps, NewsRecurrence::Progress),
+        (NewsStoryKind::MilestoneGoals, NewsRecurrence::Progress),
+        (NewsStoryKind::GoalDrought, NewsRecurrence::Progress),
+        // Shut-outs arrive occasionally, never weekly — the shape
+        // `Progress` is for.
+        (
+            NewsStoryKind::KeeperShutoutMilestone,
+            NewsRecurrence::Progress,
+        ),
+        // `Progress` is right only when the figure moves
+        // OCCASIONALLY — a goal, another win in a run. A figure that
+        // moves EVERY week (appearances) makes a fresh key every
+        // week, which is `Event` behaviour wearing a different name:
+        // the story reruns each Monday with the number nudged by
+        // one. Anything counting appearances belongs in `Standing`.
+        (NewsStoryKind::LoanWatchGoals, NewsRecurrence::Progress),
+        // The same shape in the other job: a shut-out arrives every
+        // few weeks, and the tally sits still in between.
+        (
+            NewsStoryKind::KeeperLoanWatchShutouts,
+            NewsRecurrence::Progress,
+        ),
+        // A condition that persists. Printing it every week would
+        // read like a stuck record, so it waits its turn.
+        (NewsStoryKind::TitleCharge, NewsRecurrence::Standing),
+        (NewsStoryKind::RelegationFight, NewsRecurrence::Standing),
+        (NewsStoryKind::InjuryBlow, NewsRecurrence::Standing),
+        (NewsStoryKind::InjuryReturn, NewsRecurrence::Standing),
+        (NewsStoryKind::InjurySetback, NewsRecurrence::Standing),
+        (NewsStoryKind::Suspension, NewsRecurrence::Standing),
+        (NewsStoryKind::YouthDebut, NewsRecurrence::Standing),
+        (NewsStoryKind::RisingStar, NewsRecurrence::Standing),
+        (NewsStoryKind::TransferSpeculation, NewsRecurrence::Standing),
+        (NewsStoryKind::TransferListed, NewsRecurrence::Standing),
+        (NewsStoryKind::ContractStandoff, NewsRecurrence::Standing),
+        (NewsStoryKind::RumourInterest, NewsRecurrence::Standing),
+        (NewsStoryKind::RumourRival, NewsRecurrence::Standing),
+        (NewsStoryKind::ScoutsWatching, NewsRecurrence::Standing),
+        (NewsStoryKind::AgentTouting, NewsRecurrence::Standing),
+        (NewsStoryKind::HomecomingLink, NewsRecurrence::Standing),
+        (NewsStoryKind::TalksExpected, NewsRecurrence::Standing),
+        (NewsStoryKind::ToldNotInPlans, NewsRecurrence::Standing),
+        (
+            NewsStoryKind::ContractTalksStalled,
+            NewsRecurrence::Standing,
+        ),
+        // Read from a status that persists for months, or from the
+        // 16-day event window the rumour and verdict desks use on a
+        // 7-day tick. Either way the same fact is re-detected next
+        // Monday, so the back catalogue has to be consulted.
+        (
+            NewsStoryKind::TransferRequestFiled,
+            NewsRecurrence::Standing,
+        ),
+        (NewsStoryKind::BidRejected, NewsRecurrence::Standing),
+        (NewsStoryKind::MoveCollapsed, NewsRecurrence::Standing),
+        // `Trn` sits on the player until the deal completes, the
+        // cooled-interest and loyalty-pledge beats come off the
+        // 16-day feed, and a run-down contract stays run down —
+        // all re-detected every Monday.
+        (NewsStoryKind::TransferAgreed, NewsRecurrence::Standing),
+        (NewsStoryKind::RumourCools, NewsRecurrence::Standing),
+        (NewsStoryKind::CommitsToClub, NewsRecurrence::Standing),
+        (NewsStoryKind::ContractRunningDown, NewsRecurrence::Standing),
+        (NewsStoryKind::AmbitionWarning, NewsRecurrence::Standing),
+        (NewsStoryKind::UnsoldStillHere, NewsRecurrence::Standing),
+        (NewsStoryKind::CareerTwilight, NewsRecurrence::Standing),
+        (NewsStoryKind::LoanFedUp, NewsRecurrence::Standing),
+        (NewsStoryKind::SigningNotWorking, NewsRecurrence::Standing),
+        (NewsStoryKind::SigningComesGood, NewsRecurrence::Standing),
+        (NewsStoryKind::LoanFlop, NewsRecurrence::Standing),
+        (NewsStoryKind::LoanWatchStarter, NewsRecurrence::Standing),
+        (NewsStoryKind::LoanWatchBenched, NewsRecurrence::Standing),
+        (NewsStoryKind::LoanWantsReturn, NewsRecurrence::Standing),
+        (NewsStoryKind::LoanWantsPermanent, NewsRecurrence::Standing),
+        (
+            NewsStoryKind::KeeperLoanWantsPermanent,
+            NewsRecurrence::Standing,
+        ),
+        (NewsStoryKind::LoanRecallTalk, NewsRecurrence::Standing),
+        (NewsStoryKind::LoanSpellEnds, NewsRecurrence::Standing),
+        (NewsStoryKind::LoanStepTooBig, NewsRecurrence::Standing),
+        (NewsStoryKind::ManagerBacksPlayer, NewsRecurrence::Standing),
+        (
+            NewsStoryKind::ManagerCallsOutPlayer,
+            NewsRecurrence::Standing,
+        ),
+        (NewsStoryKind::FansTurnOnTeam, NewsRecurrence::Standing),
+        (NewsStoryKind::FansGetBehind, NewsRecurrence::Standing),
+        (NewsStoryKind::FansAngryAtRumour, NewsRecurrence::Standing),
+        (NewsStoryKind::MediaPressure, NewsRecurrence::Standing),
+        (NewsStoryKind::MediaDarling, NewsRecurrence::Standing),
+        (NewsStoryKind::ManagerPressure, NewsRecurrence::Standing),
+        (NewsStoryKind::BoardBacking, NewsRecurrence::Standing),
+        // An open vacancy and an in-flight approach both persist:
+        // the search runs for weeks and an approach lives for days
+        // across a weekly tick, so both are re-detected on the next
+        // Monday and must consult the back catalogue.
+        (NewsStoryKind::ManagerHunt, NewsRecurrence::Standing),
+        (NewsStoryKind::ManagerTargetLinked, NewsRecurrence::Standing),
+        (NewsStoryKind::ManagerWanted, NewsRecurrence::Standing),
+        // Settling in and eyeing the coaching badges are conditions
+        // rather than days, and both are read from the fortnight
+        // window on a seven-day tick.
+        (NewsStoryKind::SettlingIn, NewsRecurrence::Standing),
+        (NewsStoryKind::CoachingAmbition, NewsRecurrence::Standing),
+        (NewsStoryKind::AcademyPraise, NewsRecurrence::Standing),
+        (NewsStoryKind::MoneyWorries, NewsRecurrence::Standing),
+        // What a balance sheet leaves behind rather than what it
+        // did on a day. All four are true for months at a time, and
+        // a paper that ran the debt figure every Monday would read
+        // like a stuck record about the one subject nobody enjoys.
+        (NewsStoryKind::DebtMountain, NewsRecurrence::Standing),
+        (NewsStoryKind::TransferEmbargo, NewsRecurrence::Standing),
+        (NewsStoryKind::WageBillCrisis, NewsRecurrence::Standing),
+        (
+            NewsStoryKind::MustSellBeforeBuying,
+            NewsRecurrence::Standing,
+        ),
+        // A foreign player's life. Not one of these is a Tuesday:
+        // homesickness, isolation, a dressing room that has not
+        // forgiven where he came from, a senior pro quietly looking
+        // after him — all conditions, all read from the fortnight
+        // window on a seven-day tick, all re-detected next Monday.
+        (NewsStoryKind::HomesickAbroad, NewsRecurrence::Standing),
+        (NewsStoryKind::StrugglingToSettle, NewsRecurrence::Standing),
+        (NewsStoryKind::HomeCalling, NewsRecurrence::Standing),
+        (NewsStoryKind::SettledAtLast, NewsRecurrence::Standing),
+        (NewsStoryKind::ColdShoulder, NewsRecurrence::Standing),
+        (NewsStoryKind::TakenUnderWing, NewsRecurrence::Standing),
+        // …and the same for how he is training, how much he is
+        // playing, what he thinks of his wages, and whether the
+        // division is still big enough for him. Every one is a state
+        // he is in rather than something that happened, so a paper
+        // that ran them weekly would print the same man's grievance
+        // every Monday until it was resolved.
+        (NewsStoryKind::TrainingGroundBuzz, NewsRecurrence::Standing),
+        (NewsStoryKind::TrainingConcerns, NewsRecurrence::Standing),
+        (NewsStoryKind::BenchFrustration, NewsRecurrence::Standing),
+        (NewsStoryKind::WageEnvy, NewsRecurrence::Standing),
+        (NewsStoryKind::OutgrownDivision, NewsRecurrence::Standing),
+        (NewsStoryKind::RelegationNerves, NewsRecurrence::Standing),
+        // Ineligibility lasts as long as the registered list does.
+        (NewsStoryKind::PlayingForContract, NewsRecurrence::Standing),
+        (NewsStoryKind::ContinentalAmbition, NewsRecurrence::Standing),
+        (NewsStoryKind::FamilyUnsettled, NewsRecurrence::Standing),
+        (NewsStoryKind::LanguageLessons, NewsRecurrence::Standing),
+        (
+            NewsStoryKind::VeteranHomecomingWish,
+            NewsRecurrence::Standing,
+        ),
+        (NewsStoryKind::LegendWontLeave, NewsRecurrence::Standing),
+        (NewsStoryKind::RefusesRivalMove, NewsRecurrence::Standing),
+        (NewsStoryKind::SeeksQuieterStage, NewsRecurrence::Standing),
+        (NewsStoryKind::ProtestBrewing, NewsRecurrence::Standing),
+        (NewsStoryKind::PromotionFever, NewsRecurrence::Standing),
+        (NewsStoryKind::RelegationDread, NewsRecurrence::Standing),
+        (
+            NewsStoryKind::HomegrownQuotaOmission,
+            NewsRecurrence::Standing,
+        ),
+        (
+            NewsStoryKind::ForeignQuotaOmission,
+            NewsRecurrence::Standing,
+        ),
+        (NewsStoryKind::SquadKnitsTogether, NewsRecurrence::Standing),
+        (NewsStoryKind::TurnoverToll, NewsRecurrence::Standing),
+        (NewsStoryKind::CliqueConcerns, NewsRecurrence::Standing),
+        (NewsStoryKind::BigMatchTrust, NewsRecurrence::Standing),
+        (NewsStoryKind::ManagerDoubtsLinger, NewsRecurrence::Standing),
+        (NewsStoryKind::FrozenOutOfTheSide, NewsRecurrence::Standing),
+        (NewsStoryKind::FormationRevolution, NewsRecurrence::Standing),
+        (NewsStoryKind::BreakthroughSeason, NewsRecurrence::Standing),
+        (
+            NewsStoryKind::TrainingTransformation,
+            NewsRecurrence::Standing,
+        ),
+        (NewsStoryKind::StalledProspect, NewsRecurrence::Standing),
+        (NewsStoryKind::PowersFading, NewsRecurrence::Standing),
+        (NewsStoryKind::LeftOutOfSquadList, NewsRecurrence::Standing),
+        // Dated facts: a fixture next week, a run that ended on a
+        // Saturday, a bid lodged this week, a window that shut.
+        (NewsStoryKind::RunEnded, NewsRecurrence::Event),
+        (NewsStoryKind::FirstWinInAges, NewsRecurrence::Event),
+        (NewsStoryKind::LateEqualiserConceded, NewsRecurrence::Event),
+        (NewsStoryKind::PointRescued, NewsRecurrence::Event),
+        (NewsStoryKind::HalfwayReport, NewsRecurrence::Event),
+        (NewsStoryKind::FinalStanding, NewsRecurrence::Event),
+        (NewsStoryKind::NextUpDerby, NewsRecurrence::Event),
+        (NewsStoryKind::NextUpSummit, NewsRecurrence::Event),
+        (NewsStoryKind::NextUpSixPointer, NewsRecurrence::Event),
+        (NewsStoryKind::NextUpLeaders, NewsRecurrence::Event),
+        (NewsStoryKind::NextUpCupTie, NewsRecurrence::Event),
+        (NewsStoryKind::NextUpOldBoy, NewsRecurrence::Event),
+        (NewsStoryKind::NextUpHome, NewsRecurrence::Event),
+        (NewsStoryKind::NextUpAway, NewsRecurrence::Event),
+        (NewsStoryKind::PromisedHisChance, NewsRecurrence::Event),
+        (NewsStoryKind::ManagerOnWin, NewsRecurrence::Event),
+        (NewsStoryKind::ManagerOnDraw, NewsRecurrence::Event),
+        (NewsStoryKind::ManagerOnDefeat, NewsRecurrence::Event),
+        (NewsStoryKind::PeckingOrderUp, NewsRecurrence::Event),
+        (NewsStoryKind::PeckingOrderDown, NewsRecurrence::Event),
+        (NewsStoryKind::InternationalExodus, NewsRecurrence::Event),
+        (NewsStoryKind::BidLodged, NewsRecurrence::Event),
+        (NewsStoryKind::LoanApproach, NewsRecurrence::Event),
+        (NewsStoryKind::WindowOpens, NewsRecurrence::Event),
+        (NewsStoryKind::WindowShuts, NewsRecurrence::Event),
+        (NewsStoryKind::FeeWrittenOff, NewsRecurrence::Event),
+        (NewsStoryKind::BoardRaisesItsOffer, NewsRecurrence::Event),
+        // Conditions read off state or a fortnight window: the
+        // table, a negotiation still open, an injury list.
+        (NewsStoryKind::TopOfTheTable, NewsRecurrence::Standing),
+        (NewsStoryKind::EuropeRace, NewsRecurrence::Standing),
+        (NewsStoryKind::MidTableDrift, NewsRecurrence::Standing),
+        (NewsStoryKind::NoRoleInTheShape, NewsRecurrence::Standing),
+        (NewsStoryKind::BigClubAura, NewsRecurrence::Standing),
+        (NewsStoryKind::StuckInTheQueue, NewsRecurrence::Standing),
+        (NewsStoryKind::InjuryCrisis, NewsRecurrence::Standing),
+        (NewsStoryKind::PersonalTermsAgreed, NewsRecurrence::Standing),
+        (NewsStoryKind::TurnsDownMove, NewsRecurrence::Standing),
+        (NewsStoryKind::SteppingStoneTalk, NewsRecurrence::Standing),
+        (NewsStoryKind::FeeAgreed, NewsRecurrence::Standing),
+        (NewsStoryKind::MedicalBooked, NewsRecurrence::Standing),
+        (NewsStoryKind::PricedOut, NewsRecurrence::Standing),
+        (NewsStoryKind::NotForSale, NewsRecurrence::Standing),
+        (NewsStoryKind::TargetSaysNo, NewsRecurrence::Standing),
+        (NewsStoryKind::MedicalFailed, NewsRecurrence::Standing),
+        (NewsStoryKind::DealDiesAtDeadline, NewsRecurrence::Standing),
+    ];
 
     /// True when several stories of this kind can share one edition.
     /// Match reports can (a club plays twice in a week); a paper never
@@ -4082,6 +4228,26 @@ mod tests {
                 stories: Vec::new(),
                 results: Vec::new(),
             }
+        }
+    }
+
+    /// The catalogs are parallel: every kind must have exactly one row in
+    /// each of them, or a story panics at press time instead of printing.
+    #[test]
+    fn every_kind_has_a_full_catalog_row() {
+        assert_eq!(NewsStoryKind::DESKS.len(), NewsStoryKind::ALL.len());
+        assert_eq!(NewsStoryKind::KEY_STEMS.len(), NewsStoryKind::ALL.len());
+        assert_eq!(
+            NewsStoryKind::BASE_PRIORITIES.len(),
+            NewsStoryKind::ALL.len()
+        );
+        assert_eq!(NewsStoryKind::RECURRENCES.len(), NewsStoryKind::ALL.len());
+
+        for kind in NewsStoryKind::ALL {
+            let _ = kind.desk();
+            let _ = kind.key_stem();
+            let _ = kind.base_priority();
+            let _ = kind.recurrence();
         }
     }
 

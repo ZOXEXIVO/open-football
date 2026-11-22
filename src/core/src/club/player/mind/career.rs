@@ -477,9 +477,20 @@ impl CareerMind {
             return;
         }
 
-        // How much he minds is ambition and professionalism together: a
-        // man with neither has stopped noticing, and both is the player
-        // who drives himself.
+        self.pursue_stalled_development(s, organs, today, shortfall);
+    }
+
+    /// How much he minds being stalled is ambition and professionalism
+    /// together; how much time he has left decides how hard he pushes.
+    /// The wants that follow are ordered: improve, then a better teacher,
+    /// and only then somewhere else.
+    fn pursue_stalled_development(
+        &mut self,
+        s: &MindSituation,
+        organs: &mut MindOrgans,
+        today: EpochDay,
+        shortfall: f32,
+    ) {
         let cares = (s.ambition_drive() * 0.6 + s.diligence() * 0.4).clamp(0.0, 1.0);
         // And how much time he has left to do something about it. This
         // is a young player's want above all.
@@ -980,122 +991,141 @@ impl CareerMind {
     /// Called through [`SubMind::weigh`]; kept here so the deliberation
     /// rules sit beside the state they read.
     pub(super) fn weigh_option(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
-        let mut reasons = ReasonSet::new();
-
         match option {
-            MindOption::JoinClub(club_id) => {
-                let club = ActorRef::club(club_id);
+            MindOption::JoinClub(club_id) => self.weigh_join_club(club_id, organs),
+            MindOption::RequestTransfer => self.weigh_request_transfer(organs),
+            MindOption::StayAndFight => self.weigh_stay_and_fight(organs),
+            MindOption::SignContract => self.weigh_sign_contract(organs),
+            MindOption::Retire => self.weigh_retire(organs),
+            _ => ReasonSet::new(),
+        }
+    }
 
-                // The ten-year return, and the whole point of the memory
-                // organ: a player offered his old club is not choosing
-                // between two strangers. What he made of the place lasts
-                // long after the episodes that taught it to him.
-                let broke_through = organs.memory.believes(FactClaim::BrokeThroughHere, club);
-                let won_everything = organs.memory.believes(FactClaim::WonEverythingHere, club);
-                let sold_against_will = organs
-                    .memory
-                    .believes(FactClaim::WasSoldAgainstMyWill, club);
-                let discarded = organs.memory.believes(FactClaim::DiscardedMe, club);
-                let never_played = organs.memory.believes(FactClaim::NeverPlayedHere, club);
+    /// What a club means to him: the ten-year return, and the whole point
+    /// of the memory organ. A player offered his old club is not choosing
+    /// between two strangers. What he made of the place lasts long after
+    /// the episodes that taught it to him.
+    fn weigh_join_club(&self, club_id: u32, organs: &MindOrgans) -> ReasonSet {
+        let mut reasons = ReasonSet::new();
+        let club = ActorRef::club(club_id);
 
-                if broke_through > 0.1 || won_everything > 0.1 {
-                    reasons.push(
-                        GoalKind::PlayForMyBoyhoodClub,
-                        broke_through.max(won_everything),
-                    );
-                }
-                if sold_against_will > 0.1 {
-                    // Not a refusal. A grudge against a club he made his
-                    // name at is an argument he has with himself, and
-                    // plenty of players go back anyway.
-                    reasons.push(GoalKind::LeaveThisClub, -sold_against_will * 0.7);
-                }
-                if discarded > 0.1 || never_played > 0.1 {
-                    reasons.push(
-                        GoalKind::PlayFirstTeamFootball,
-                        -discarded.max(never_played),
-                    );
-                }
+        // The ten-year return, and the whole point of the memory
+        // organ: a player offered his old club is not choosing
+        // between two strangers. What he made of the place lasts
+        // long after the episodes that taught it to him.
+        let broke_through = organs.memory.believes(FactClaim::BrokeThroughHere, club);
+        let won_everything = organs.memory.believes(FactClaim::WonEverythingHere, club);
+        let sold_against_will = organs
+            .memory
+            .believes(FactClaim::WasSoldAgainstMyWill, club);
+        let discarded = organs.memory.believes(FactClaim::DiscardedMe, club);
+        let never_played = organs.memory.believes(FactClaim::NeverPlayedHere, club);
 
-                // And what he currently wants out of where he is.
-                let step_up = organs.goals.pressure_of(GoalKind::StepUpToABiggerClub);
-                let challenge = organs.goals.pressure_of(GoalKind::FindANewChallenge);
-                if step_up > 0.1 {
-                    reasons.push(GoalKind::StepUpToABiggerClub, step_up);
-                }
-                if challenge > 0.1 {
-                    reasons.push(GoalKind::FindANewChallenge, challenge);
-                }
-            }
-
-            MindOption::RequestTransfer => {
-                let wants_out = organs.goals.wants_to_leave();
-                if wants_out > 0.1 {
-                    reasons.push(GoalKind::LeaveThisClub, wants_out);
-                }
-                // Wanting to get better is an argument for moving only
-                // once the two rungs below it have gone unanswered —
-                // which is what having them as separate wants buys.
-                let coach = organs.goals.pressure_of(GoalKind::WorkWithABetterCoach);
-                if coach > 0.5 {
-                    reasons.push(GoalKind::WorkWithABetterCoach, coach * 0.6);
-                }
-            }
-
-            MindOption::StayAndFight => {
-                if self.improvement() > 0.1 {
-                    // Whatever else is wrong, he is getting better here.
-                    reasons.push(GoalKind::KeepImproving, self.improvement());
-                }
-                let stalled = organs.goals.pressure_of(GoalKind::KeepImproving);
-                if stalled > 0.3 {
-                    reasons.push(GoalKind::KeepImproving, -stalled * 0.5);
-                }
-            }
-
-            MindOption::SignContract => {
-                // A man who has decided to go does not sign on. The loan
-                // want is left out on purpose: a club re-signs a boy and
-                // then lends him, and he agrees to both.
-                let wants_out = [
-                    GoalKind::LeaveThisClub,
-                    GoalKind::BeAllowedToLeave,
-                    GoalKind::FindANewChallenge,
-                ]
-                .into_iter()
-                .map(|kind| organs.goals.pressure_of(kind))
-                .fold(0.0f32, f32::max);
-                if wants_out > 0.1 {
-                    reasons.push(GoalKind::LeaveThisClub, -wants_out);
-                }
-                // Reaching higher is a reason not to be tied down, which the
-                // terms can answer: its own line, so the handler can read it.
-                let climbing = organs
-                    .goals
-                    .pressure_of(GoalKind::StepUpToABiggerClub)
-                    .max(self.dream_against_signing());
-                if climbing > 0.1 {
-                    reasons.push(GoalKind::StepUpToABiggerClub, -climbing);
-                }
-                if self.has_arrived() {
-                    reasons.push(GoalKind::StayAtThisClub, Self::ARRIVED_SIGNS);
-                }
-            }
-
-            MindOption::Retire => {
-                let winding_down = organs.goals.pressure_of(GoalKind::RetireOnMyTerms);
-                if winding_down > 0.1 {
-                    reasons.push(GoalKind::RetireOnMyTerms, winding_down);
-                }
-                // A man still winning things does not stop.
-                if self.honours > 0 && !self.is_winding_down() {
-                    reasons.push(GoalKind::WinATrophy, -0.5);
-                }
-            }
-
-            _ => {}
+        if broke_through > 0.1 || won_everything > 0.1 {
+            reasons.push(
+                GoalKind::PlayForMyBoyhoodClub,
+                broke_through.max(won_everything),
+            );
+        }
+        if sold_against_will > 0.1 {
+            // Not a refusal. A grudge against a club he made his
+            // name at is an argument he has with himself, and
+            // plenty of players go back anyway.
+            reasons.push(GoalKind::LeaveThisClub, -sold_against_will * 0.7);
+        }
+        if discarded > 0.1 || never_played > 0.1 {
+            reasons.push(
+                GoalKind::PlayFirstTeamFootball,
+                -discarded.max(never_played),
+            );
         }
 
+        // And what he currently wants out of where he is.
+        let step_up = organs.goals.pressure_of(GoalKind::StepUpToABiggerClub);
+        let challenge = organs.goals.pressure_of(GoalKind::FindANewChallenge);
+        if step_up > 0.1 {
+            reasons.push(GoalKind::StepUpToABiggerClub, step_up);
+        }
+        if challenge > 0.1 {
+            reasons.push(GoalKind::FindANewChallenge, challenge);
+        }
+        reasons
+    }
+
+    fn weigh_request_transfer(&self, organs: &MindOrgans) -> ReasonSet {
+        let mut reasons = ReasonSet::new();
+
+        let wants_out = organs.goals.wants_to_leave();
+        if wants_out > 0.1 {
+            reasons.push(GoalKind::LeaveThisClub, wants_out);
+        }
+        // Wanting to get better is an argument for moving only
+        // once the two rungs below it have gone unanswered —
+        // which is what having them as separate wants buys.
+        let coach = organs.goals.pressure_of(GoalKind::WorkWithABetterCoach);
+        if coach > 0.5 {
+            reasons.push(GoalKind::WorkWithABetterCoach, coach * 0.6);
+        }
+        reasons
+    }
+
+    fn weigh_stay_and_fight(&self, organs: &MindOrgans) -> ReasonSet {
+        let mut reasons = ReasonSet::new();
+
+        if self.improvement() > 0.1 {
+            // Whatever else is wrong, he is getting better here.
+            reasons.push(GoalKind::KeepImproving, self.improvement());
+        }
+        let stalled = organs.goals.pressure_of(GoalKind::KeepImproving);
+        if stalled > 0.3 {
+            reasons.push(GoalKind::KeepImproving, -stalled * 0.5);
+        }
+        reasons
+    }
+
+    fn weigh_sign_contract(&self, organs: &MindOrgans) -> ReasonSet {
+        let mut reasons = ReasonSet::new();
+
+        // A man who has decided to go does not sign on. The loan
+        // want is left out on purpose: a club re-signs a boy and
+        // then lends him, and he agrees to both.
+        let wants_out = [
+            GoalKind::LeaveThisClub,
+            GoalKind::BeAllowedToLeave,
+            GoalKind::FindANewChallenge,
+        ]
+        .into_iter()
+        .map(|kind| organs.goals.pressure_of(kind))
+        .fold(0.0f32, f32::max);
+        if wants_out > 0.1 {
+            reasons.push(GoalKind::LeaveThisClub, -wants_out);
+        }
+        // Reaching higher is a reason not to be tied down, which the
+        // terms can answer: its own line, so the handler can read it.
+        let climbing = organs
+            .goals
+            .pressure_of(GoalKind::StepUpToABiggerClub)
+            .max(self.dream_against_signing());
+        if climbing > 0.1 {
+            reasons.push(GoalKind::StepUpToABiggerClub, -climbing);
+        }
+        if self.has_arrived() {
+            reasons.push(GoalKind::StayAtThisClub, Self::ARRIVED_SIGNS);
+        }
+        reasons
+    }
+
+    fn weigh_retire(&self, organs: &MindOrgans) -> ReasonSet {
+        let mut reasons = ReasonSet::new();
+
+        let winding_down = organs.goals.pressure_of(GoalKind::RetireOnMyTerms);
+        if winding_down > 0.1 {
+            reasons.push(GoalKind::RetireOnMyTerms, winding_down);
+        }
+        // A man still winning things does not stop.
+        if self.honours > 0 && !self.is_winding_down() {
+            reasons.push(GoalKind::WinATrophy, -0.5);
+        }
         reasons
     }
 }

@@ -80,7 +80,7 @@ pub struct TeamSocialSnapshot {
 }
 
 /// Captain mediation inputs collected once per squad. Shared by the
-/// [`crate::club::team::behaviour::behaviour::conflict_escalation`]
+/// [`crate::club::team::behaviour::conflict_escalation`]
 /// pass (which scales per-player `conflict_risk` by the captain's
 /// quality) and the debug snapshot (which exposes the mediation
 /// score). Lives here so the squad-wide read can't drift between

@@ -1,5 +1,5 @@
 use crate::Club;
-use crate::club::classify_distress;
+use crate::club::DistressLevel;
 use crate::club::finance::{RevenueInputs, RevenueModel};
 use crate::context::GlobalContext;
 use chrono::NaiveDate;
@@ -35,12 +35,28 @@ impl CountryEconomy {
 }
 
 impl Club {
-    #[expect(clippy::too_many_lines)]
     pub(in crate::club::process) fn process_monthly_finances(&mut self, ctx: GlobalContext<'_>) {
         let club_name = ctx.club.as_ref().expect("no club found").name;
         let date = ctx.simulation.date.date();
         let economy = CountryEconomy::of(&ctx);
 
+        let reputation_score = self
+            .teams
+            .main()
+            .map(|t| t.reputation.overall_score())
+            .unwrap_or(0.0);
+        let has_main_team = self.teams.main().is_some();
+        self.pay_wages_and_sponsorship(club_name, date);
+
+        self.earn_monthly_revenue(&ctx, &economy, reputation_score, has_main_team);
+
+        let monthly_income = self.finance.balance.income;
+        self.charge_monthly_costs(has_main_team, reputation_score);
+
+        self.service_debt_and_deploy_cash(&ctx, club_name, date, monthly_income);
+    }
+
+    fn pay_wages_and_sponsorship(&mut self, club_name: &str, date: NaiveDate) {
         // 1. Player wages: annual salary / 12. `Team::get_annual_salary`
         // returns *only* player wages (loan-aware: borrowers bill the
         // loan contract, not the parent contract).
@@ -82,7 +98,15 @@ impl Club {
                 .balance
                 .push_income_sponsorship(sponsorship_income);
         }
+    }
 
+    fn earn_monthly_revenue(
+        &mut self,
+        ctx: &GlobalContext<'_>,
+        economy: &CountryEconomy,
+        reputation_score: f32,
+        has_main_team: bool,
+    ) {
         // 4. Broadcast, matchday and commercial income.
         //
         // Every line is continuous in the club's own inputs — see
@@ -90,12 +114,6 @@ impl Club {
         // six-bucket reputation ladder, so a single tier slip cut broadcast
         // income 60% and commercial income 70% overnight while the wage
         // bill, fixed by contracts already signed, didn't move at all.
-        let reputation_score = self
-            .teams
-            .main()
-            .map(|t| t.reputation.overall_score())
-            .unwrap_or(0.0);
-        let has_main_team = self.teams.main().is_some();
 
         if has_main_team {
             let (recent_wins_ratio, league_pos, total_teams) =
@@ -155,7 +173,9 @@ impl Club {
                     .push_income_merchandising(revenue.commercial);
             }
         }
+    }
 
+    fn charge_monthly_costs(&mut self, has_main_team: bool, reputation_score: f32) {
         // 5. Amortization: each outstanding transfer purchase contributes
         // its monthly slice as a P&L expense. Cash already left the
         // balance at the upfront purchase, so this only hits `outcome` and
@@ -184,7 +204,15 @@ impl Club {
         if overhead > 0 {
             self.finance.balance.push_expense_facilities(overhead);
         }
+    }
 
+    fn service_debt_and_deploy_cash(
+        &mut self,
+        ctx: &GlobalContext<'_>,
+        club_name: &str,
+        date: NaiveDate,
+        monthly_income: i64,
+    ) {
         // 8. Debt service and resolution.
         //
         // Interest is charged only on borrowing inside the club's agreed
@@ -204,7 +232,7 @@ impl Club {
             .estimated_annual_income(date)
             .max(monthly_income.max(0).saturating_mul(12));
         let avg_wages = self.finance.trailing_avg_monthly_wages(date);
-        let distress = classify_distress(self.finance.balance.balance, avg_wages);
+        let distress = DistressLevel::classify(self.finance.balance.balance, avg_wages);
         self.finance.distress_level = distress;
 
         let league_tier = ctx

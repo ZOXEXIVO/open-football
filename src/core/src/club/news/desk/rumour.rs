@@ -57,7 +57,6 @@ impl RumourDesk {
     /// Where the player stands with his own club: has he asked to go,
     /// has he been told to go, is he on the list, have talks broken
     /// down. One line, the sharpest version that applies.
-    #[expect(clippy::too_many_lines)]
     fn file_standing_at_club(
         out: &mut Vec<NewsStory>,
         player: &Player,
@@ -66,6 +65,22 @@ impl RumourDesk {
     ) {
         let feed = RecentEvents::within(player, window_days);
         let importance = PlayerStanding::importance(player);
+
+        if Self::file_transfer_standing(out, player, &feed, importance, date) {
+            return;
+        }
+        Self::file_ambition(out, player, &feed, importance, date);
+    }
+
+    /// Whether he has asked to go, been told to go, or is on the list.
+    /// Returns true when one of those has taken the player's line.
+    fn file_transfer_standing(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        feed: &RecentEvents<'_>,
+        importance: i32,
+        date: NaiveDate,
+    ) -> bool {
         let statuses = &player.statuses;
 
         // The request itself is dated by the feed; the `Req` status only
@@ -83,7 +98,7 @@ impl RumourDesk {
                     .about(player.id)
                     .weighted(importance),
             );
-            return;
+            return true;
         }
 
         // The window shut with him still on the list: a club that wants
@@ -96,7 +111,7 @@ impl RumourDesk {
                     .about(player.id)
                     .weighted(importance / 2),
             );
-            return;
+            return true;
         }
 
         // He still wants out, but the asking is no longer the news. The
@@ -107,7 +122,7 @@ impl RumourDesk {
                     .about(player.id)
                     .weighted(importance / 2),
             );
-            return;
+            return true;
         }
 
         if feed.happened(HappinessEventType::ToldNotInPlans) {
@@ -116,7 +131,7 @@ impl RumourDesk {
                     .about(player.id)
                     .weighted(importance),
             );
-            return;
+            return true;
         }
 
         if statuses.has(PlayerStatusType::Lst) {
@@ -130,9 +145,19 @@ impl RumourDesk {
                         .weighted(importance),
                 );
             }
-            return;
+            return true;
         }
+        false
+    }
 
+    /// What he wants from the club, and what the asking has become.
+    fn file_ambition(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        feed: &RecentEvents<'_>,
+        importance: i32,
+        date: NaiveDate,
+    ) {
         // He has not asked to go anywhere, and nobody has told him to —
         // he simply wants more than the club is currently able to put in
         // front of him. The stage before a transfer request, and the one
@@ -263,11 +288,25 @@ impl RumourDesk {
     /// at all. Those fall through to the generic speculation line at the
     /// bottom, which was written for exactly that — his name keeps
     /// coming up, and the paper is not saying whose idea it was.
-    #[expect(clippy::too_many_lines)]
     fn file_interest(out: &mut Vec<NewsStory>, player: &Player, date: NaiveDate, window_days: u16) {
         let feed = RecentEvents::within(player, window_days);
         let importance = PlayerStanding::importance(player);
 
+        if Self::file_live_interest(out, player, &feed, importance, date) {
+            return;
+        }
+        Self::file_cooling_interest(out, player, &feed, importance, date, window_days);
+    }
+
+    /// The named approaches, from a collapsed move down to a homecoming
+    /// link. Returns true when one of them has taken the player's line.
+    fn file_live_interest(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        feed: &RecentEvents<'_>,
+        importance: i32,
+        date: NaiveDate,
+    ) -> bool {
         // The move that did not happen. It outranks every live link on
         // the page: a deal that collapsed at the last stage is the only
         // transfer story with an ending, and the one the player is still
@@ -279,7 +318,7 @@ impl RumourDesk {
                     .against(club)
                     .weighted(importance),
             );
-            return;
+            return true;
         }
 
         // The two rungs where the saga stops being speculation. He has
@@ -294,7 +333,7 @@ impl RumourDesk {
                     .against(club)
                     .weighted(importance),
             );
-            return;
+            return true;
         }
 
         if let Some(club) = feed.suitor(HappinessEventType::RejectedMoveOnPersonalTerms) {
@@ -304,7 +343,7 @@ impl RumourDesk {
                     .against(club)
                     .weighted(importance),
             );
-            return;
+            return true;
         }
 
         // A concrete bid the club turned down.
@@ -319,7 +358,7 @@ impl RumourDesk {
                     .against(club)
                     .weighted(importance + if vetoed { 60 } else { 0 }),
             );
-            return;
+            return true;
         }
 
         if let Some(club) = feed.suitor(HappinessEventType::TransferTalksExpected) {
@@ -329,7 +368,7 @@ impl RumourDesk {
                     .against(club)
                     .weighted(importance),
             );
-            return;
+            return true;
         }
 
         // The neighbours. Always the loudest version of an interest
@@ -341,7 +380,7 @@ impl RumourDesk {
                     .against(club)
                     .weighted(importance),
             );
-            return;
+            return true;
         }
 
         // `TopClubOpportunity` is deliberately not on this list. It
@@ -360,7 +399,7 @@ impl RumourDesk {
                     .against(club)
                     .weighted(importance),
             );
-            return;
+            return true;
         }
 
         // `HomeReturnOpportunity` is off this list for the same reason:
@@ -377,9 +416,21 @@ impl RumourDesk {
                     .against(club)
                     .weighted(importance / 2),
             );
-            return;
+            return true;
         }
+        false
+    }
 
+    /// The anonymous watching briefs, the link that died, and the status
+    /// fallback behind them.
+    fn file_cooling_interest(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        feed: &RecentEvents<'_>,
+        importance: i32,
+        date: NaiveDate,
+        window_days: u16,
+    ) {
         // The agent's briefing names nobody by design — he is touting,
         // not reporting an approach — so this rung reads the beat
         // directly and passes on whatever club the feed happens to hold.

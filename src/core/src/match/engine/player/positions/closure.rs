@@ -1,5 +1,5 @@
 use crate::r#match::{MatchField, MatchPlayer};
-use crate::utils::cpu::{avx2_available, neon_available};
+use crate::utils::cpu::CpuFeatures;
 use std::cmp::Ordering;
 
 const MAX_DISTANCE: f32 = 999.0;
@@ -115,7 +115,7 @@ impl PlayerDistanceClosure {
         // (Apple Silicon), scalar otherwise. All paths produce
         // bit-identical results — `(dx*dx + dy*dy).sqrt()` lane-wise,
         // no FMA, so the rounding sequence matches the scalar loop.
-        if avx2_available() {
+        if CpuFeatures::avx2_available() {
             // Safety: `avx2_available` confirms AVX2 is supported on this
             // host. `xs`/`ys` are [f32; MAX_PLAYERS] so 8-wide loads up
             // to MAX_PLAYERS are in bounds; the kernel never reads/writes
@@ -123,7 +123,7 @@ impl PlayerDistanceClosure {
             unsafe {
                 compute_dist_matrix_avx2(&xs, &ys, n, &mut self.dist_matrix);
             }
-        } else if neon_available() {
+        } else if CpuFeatures::neon_available() {
             // Safety: NEON is mandatory on AArch64. 4-wide loads stay
             // within MAX_PLAYERS for the same reason as the AVX2 path.
             unsafe {
@@ -434,7 +434,7 @@ mod avx_tests {
 
     #[test]
     fn avx2_matches_scalar_bitwise() {
-        if !avx2_available() {
+        if !CpuFeatures::avx2_available() {
             return;
         }
         for &n in &[0usize, 1, 2, 7, 8, 9, 15, 16, 17, 22, 23, MAX_PLAYERS] {
@@ -469,7 +469,7 @@ mod avx_tests {
 
     #[test]
     fn neon_matches_scalar_bitwise() {
-        if !neon_available() {
+        if !CpuFeatures::neon_available() {
             return;
         }
         for &n in &[

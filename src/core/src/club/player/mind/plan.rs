@@ -171,6 +171,154 @@ pub struct CareerPlan {
     pub follows: Option<CareerArc>,
 }
 
+/// Read-once inputs for arc formation.
+struct ArcFormation<'a> {
+    situation: &'a MindSituation,
+    club_id: u32,
+    home_desire: f32,
+    anchors: &'a AnchorView,
+    band_here: Option<f32>,
+    runway: f32,
+    spent: f32,
+}
+
+impl ArcFormation<'_> {
+    /// The club servant, first, because it is the one arc that suppresses
+    /// every other reading of the same facts.
+    fn servant_arc(&self) -> Option<(CareerArc, GoalOrigin, f32)> {
+        let long_server = self.situation.loyalty_drive() >= CareerPlanner::SERVANT_LOYALTY
+            && self.situation.days_at_club >= MindSituation::CLUB_SERVANT_DAYS;
+        if (long_server || self.anchors.belongs_at(self.club_id))
+            && self.band_here.map(|b| b >= 0.8).unwrap_or(false)
+        {
+            return Some((
+                CareerArc::StayAndLead,
+                GoalOrigin::Attachment,
+                0.4 + 0.5 * self.situation.loyalty_drive().max(self.anchors.conviction),
+            ));
+        }
+        None
+    }
+
+    /// The last spell, at home.
+    fn home_arc(&self) -> Option<(CareerArc, GoalOrigin, f32)> {
+        let dreams_of_home = self.anchors.dream == Some(DreamKind::FinishAtHome);
+        if self.situation.is_abroad
+            && (dreams_of_home
+                || (self.spent >= CareerPlanner::HOMEWARD_SPENT
+                    && (self.home_desire >= 0.3 || self.situation.familiar_teammates == 0)))
+        {
+            let pull = if dreams_of_home {
+                self.anchors.conviction
+            } else {
+                self.home_desire
+                    .max(self.spent - CareerPlanner::HOMEWARD_SPENT)
+            };
+            return Some((
+                CareerArc::FinishAtHome,
+                GoalOrigin::Attachment,
+                0.3 + 0.5 * pull,
+            ));
+        }
+        None
+    }
+
+    /// Not playing at a club that has looked at him. A squad nobody has
+    /// ranked is not a queue he is at the back of, so no view is no arc
+    /// rather than the worst reading of one.
+    fn not_playing_arc(&self) -> Option<(CareerArc, GoalOrigin, f32)> {
+        let not_playing = self.situation.has_playing_view()
+            && self.situation.starter_ratio < CareerPlanner::NOT_PLAYING_SHARE;
+        if not_playing
+            && self.situation.has_squad_view()
+            && self.situation.is_settled()
+            && !self.situation.is_on_loan
+        {
+            let conviction =
+                0.35 + 0.40 * self.situation.diligence() + 0.25 * self.situation.blocked_unfairly();
+            // The boy who can see the shirt coming to him waits for it.
+            if self.situation.can_wait_for_the_shirt() {
+                return Some((
+                    CareerArc::BreakThroughHere,
+                    GoalOrigin::SelfDrive,
+                    conviction,
+                ));
+            }
+            // Everybody else it is not coming to, deep in the queue or
+            // second in it behind a man his own age — which is the
+            // archetypal loan and the one the old reading refused.
+            if self.runway >= CareerPlanner::LOAN_RUNWAY {
+                return Some((CareerArc::ProveOnLoan, GoalOrigin::Survival, conviction));
+            }
+        }
+        None
+    }
+
+    /// Out of runway and out of football: he will drop a level to play,
+    /// which is the one move the ambition model could never produce.
+    fn step_down_arc(&self) -> Option<(CareerArc, GoalOrigin, f32)> {
+        if self.runway < CareerPlanner::LOAN_RUNWAY
+            && self.situation.football_drought >= CareerPlanner::DROUGHT_BAR
+        {
+            return Some((
+                CareerArc::StepDownToPlay,
+                GoalOrigin::Survival,
+                0.30 + 0.45 * self.situation.football_drought + 0.25 * self.spent,
+            ));
+        }
+        None
+    }
+
+    /// What he is reaching for, once he has settled. It is the dream that
+    /// says so and not how long he has been here.
+    fn dream_arc(&self) -> Option<(CareerArc, GoalOrigin, f32)> {
+        if self.anchors.dream.is_some() {
+            return CareerPlanner::arc_from_his_dream(self.situation, self.anchors);
+        }
+        None
+    }
+
+    /// Long enough here to have a view of the place, and plainly bigger
+    /// than it.
+    fn level_arc(&self) -> Option<(CareerArc, GoalOrigin, f32)> {
+        if self.situation.days_at_club < CareerPlanner::TENURE_FOR_A_CHOICE {
+            return None;
+        }
+        // A move up is an investment in a career, so it needs one left
+        // to invest in. That is the only thing age says here.
+        if self.situation.outgrown_the_club() >= CareerPlanner::OUTGROWN_BAR
+            && self.situation.ambition_drive() >= CareerPlanner::CLIMBER_AMBITION
+            && self.runway > 0.0
+        {
+            let restlessness = 0.3
+                + 0.4 * self.situation.ambition_drive()
+                + 0.3 * self.situation.outgrown_the_club();
+            return Some((
+                CareerArc::StepUp,
+                GoalOrigin::SelfDrive,
+                // Loyalty is the brake. A man who wants to stay still
+                // feels the ceiling; he simply feels it less, and it
+                // takes him longer to act on it.
+                restlessness
+                    * (1.0 - CareerPlanner::LOYALTY_BRAKE * self.situation.loyalty_drive()),
+            ));
+        }
+        if self.situation.ambition_drive() < CareerPlanner::CONTENT_AMBITION
+            && self
+                .band_here
+                .map(|b| (0.6..=1.2).contains(&b))
+                .unwrap_or(false)
+        {
+            return Some((
+                CareerArc::SettleAtMyLevel,
+                GoalOrigin::Attachment,
+                0.35 + 0.3 * (1.0 - self.situation.ambition_drive()),
+            ));
+        }
+        None
+    }
+}
+
 impl CareerPlan {
     /// How much better a rival arc has to look before a man changes his
     /// mind about his own career. Deliberately wide: a plan that flips
@@ -507,120 +655,23 @@ impl CareerPlanner {
         home_desire: f32,
         anchors: &AnchorView,
     ) -> Option<(CareerArc, GoalOrigin, f32)> {
-        let band_here = situation.band_here();
-        let runway = situation.career_runway();
-        let spent = situation.career_spent();
-
-        // The club servant, first, because it is the one arc that
-        // suppresses every other reading of the same facts.
-        let long_server = situation.loyalty_drive() >= Self::SERVANT_LOYALTY
-            && situation.days_at_club >= MindSituation::CLUB_SERVANT_DAYS;
-        if (long_server || anchors.belongs_at(club_id))
-            && band_here.map(|b| b >= 0.8).unwrap_or(false)
-        {
-            return Some((
-                CareerArc::StayAndLead,
-                GoalOrigin::Attachment,
-                0.4 + 0.5 * situation.loyalty_drive().max(anchors.conviction),
-            ));
-        }
-
-        // The last spell, at home.
-        let dreams_of_home = anchors.dream == Some(DreamKind::FinishAtHome);
-        if situation.is_abroad
-            && (dreams_of_home
-                || (spent >= Self::HOMEWARD_SPENT
-                    && (home_desire >= 0.3 || situation.familiar_teammates == 0)))
-        {
-            let pull = if dreams_of_home {
-                anchors.conviction
-            } else {
-                home_desire.max(spent - Self::HOMEWARD_SPENT)
-            };
-            return Some((
-                CareerArc::FinishAtHome,
-                GoalOrigin::Attachment,
-                0.3 + 0.5 * pull,
-            ));
-        }
-
-        // Not playing at a club that has looked at him. A squad nobody
-        // has ranked is not a queue he is at the back of, so no view is
-        // no arc rather than the worst reading of one.
-        let not_playing =
-            situation.has_playing_view() && situation.starter_ratio < Self::NOT_PLAYING_SHARE;
-        if not_playing
-            && situation.has_squad_view()
-            && situation.is_settled()
-            && !situation.is_on_loan
-        {
-            let conviction =
-                0.35 + 0.40 * situation.diligence() + 0.25 * situation.blocked_unfairly();
-            // The boy who can see the shirt coming to him waits for it.
-            if situation.can_wait_for_the_shirt() {
-                return Some((
-                    CareerArc::BreakThroughHere,
-                    GoalOrigin::SelfDrive,
-                    conviction,
-                ));
-            }
-            // Everybody else it is not coming to, deep in the queue or
-            // second in it behind a man his own age — which is the
-            // archetypal loan and the one the old reading refused.
-            if runway >= Self::LOAN_RUNWAY {
-                return Some((CareerArc::ProveOnLoan, GoalOrigin::Survival, conviction));
-            }
-        }
-
-        // Out of runway and out of football: he will drop a level to
-        // play, which is the one move the ambition model could never
-        // produce.
-        if runway < Self::LOAN_RUNWAY && situation.football_drought >= Self::DROUGHT_BAR {
-            return Some((
-                CareerArc::StepDownToPlay,
-                GoalOrigin::Survival,
-                0.30 + 0.45 * situation.football_drought + 0.25 * spent,
-            ));
-        }
-
-        // What he is reaching for, once he has settled. It is the dream that
-        // says so and not how long he has been here.
-        if anchors.dream.is_some() {
-            return Self::arc_from_his_dream(situation, anchors);
-        }
-
-        // Long enough here to have a view of the place, and plainly
-        // bigger than it.
-        if situation.days_at_club >= Self::TENURE_FOR_A_CHOICE {
-            // A move up is an investment in a career, so it needs one
-            // left to invest in. That is the only thing age says here.
-            if situation.outgrown_the_club() >= Self::OUTGROWN_BAR
-                && situation.ambition_drive() >= Self::CLIMBER_AMBITION
-                && runway > 0.0
-            {
-                let restlessness =
-                    0.3 + 0.4 * situation.ambition_drive() + 0.3 * situation.outgrown_the_club();
-                return Some((
-                    CareerArc::StepUp,
-                    GoalOrigin::SelfDrive,
-                    // Loyalty is the brake. A man who wants to stay still
-                    // feels the ceiling; he simply feels it less, and it
-                    // takes him longer to act on it.
-                    restlessness * (1.0 - Self::LOYALTY_BRAKE * situation.loyalty_drive()),
-                ));
-            }
-            if situation.ambition_drive() < Self::CONTENT_AMBITION
-                && band_here.map(|b| (0.6..=1.2).contains(&b)).unwrap_or(false)
-            {
-                return Some((
-                    CareerArc::SettleAtMyLevel,
-                    GoalOrigin::Attachment,
-                    0.35 + 0.3 * (1.0 - situation.ambition_drive()),
-                ));
-            }
-        }
-
-        None
+        let formation = ArcFormation {
+            situation,
+            club_id,
+            home_desire,
+            anchors,
+            band_here: situation.band_here(),
+            runway: situation.career_runway(),
+            spent: situation.career_spent(),
+        };
+        formation.servant_arc().or_else(|| {
+            formation
+                .home_arc()
+                .or_else(|| formation.not_playing_arc())
+                .or_else(|| formation.step_down_arc())
+                .or_else(|| formation.dream_arc())
+                .or_else(|| formation.level_arc())
+        })
     }
 
     /// A man reaching above where he plays plans to step up, as hard as he
@@ -728,68 +779,18 @@ impl CareerPlanner {
             // He waited for the shirt. Either it came, or the wait is
             // over and the answer is somewhere he plays.
             CareerArc::BreakThroughHere => {
-                if playing {
-                    return None;
-                }
-                Some(
-                    plan.succeed_with(
-                        CareerArc::ProveOnLoan,
-                        today,
-                        Self::review_days_for(CareerArc::ProveOnLoan, situation),
-                        runway,
-                    )
-                    .already_asked(),
-                )
+                Self::review_break_through(plan, situation, today, runway, playing)
             }
             // The loan never happened. He asks again while he is young
             // enough, and accepts a permanent drop when he is not.
             CareerArc::ProveOnLoan => {
-                if plan.attempts + 1 >= CareerPlan::MAX_PROVE_ATTEMPTS && !playing {
-                    return Some(
-                        plan.succeed_with(
-                            CareerArc::StepDownToPlay,
-                            today,
-                            CareerPlan::DEFAULT_REVIEW_DAYS,
-                            runway,
-                        )
-                        .already_asked(),
-                    );
-                }
-                if playing {
-                    return None;
-                }
-                Some(
-                    plan.retry(
-                        today,
-                        Self::review_days_for(CareerArc::ProveOnLoan, situation),
-                    )
-                    .already_asked(),
-                )
+                Self::review_prove_on_loan(plan, situation, today, runway, playing)
             }
             // The look he came home for. He got it, or he did not — and
             // which way he goes then is whether he has outgrown the
             // place or merely been passed over at it.
             CareerArc::ClaimMyPlace => {
-                if playing {
-                    return None;
-                }
-                let arc = if situation.outgrown_the_club() > 0.3 {
-                    CareerArc::StepUp
-                } else {
-                    CareerArc::StepDownToPlay
-                };
-                let mut next = plan
-                    .succeed_with(arc, today, Self::review_days_for(arc, situation), runway)
-                    .already_asked();
-                if arc == CareerArc::StepDownToPlay && plan.loan_band > LevelBand::MIN {
-                    // He will not go below where the loan already put
-                    // him: he played a season at that level and has
-                    // proved he belongs at it. The arc's own floor is a
-                    // table; this is his record.
-                    next.band_floor = plan.loan_band;
-                    next.band_floor_home = plan.loan_band;
-                }
-                Some(next)
+                Self::review_claim_my_place(plan, situation, today, runway, playing)
             }
             // Nobody came. That is an attempt, for the dream's next review
             // to weigh, and he goes again at the next window.
@@ -806,18 +807,107 @@ impl CareerPlanner {
             // These three are their own answer: they resolve when the
             // facts that formed them change, and formation re-runs.
             CareerArc::StepDownToPlay | CareerArc::SettleAtMyLevel | CareerArc::StayAndLead => {
-                if playing {
-                    return None;
-                }
-                Some(plan.retry(today, CareerPlan::DEFAULT_REVIEW_DAYS))
+                Self::review_steady_arc(plan, today, playing)
             }
-            CareerArc::FinishAtHome => {
-                if !situation.is_abroad {
-                    return None;
-                }
-                Some(plan.retry(today, CareerPlan::DEFAULT_REVIEW_DAYS))
-            }
+            CareerArc::FinishAtHome => Self::review_finish_at_home(plan, situation, today),
         }
+    }
+
+    fn review_break_through(
+        plan: &CareerPlan,
+        situation: &MindSituation,
+        today: EpochDay,
+        runway: f32,
+        playing: bool,
+    ) -> Option<CareerPlan> {
+        if playing {
+            return None;
+        }
+        Some(
+            plan.succeed_with(
+                CareerArc::ProveOnLoan,
+                today,
+                Self::review_days_for(CareerArc::ProveOnLoan, situation),
+                runway,
+            )
+            .already_asked(),
+        )
+    }
+
+    fn review_prove_on_loan(
+        plan: &CareerPlan,
+        situation: &MindSituation,
+        today: EpochDay,
+        runway: f32,
+        playing: bool,
+    ) -> Option<CareerPlan> {
+        if plan.attempts + 1 >= CareerPlan::MAX_PROVE_ATTEMPTS && !playing {
+            return Some(
+                plan.succeed_with(
+                    CareerArc::StepDownToPlay,
+                    today,
+                    CareerPlan::DEFAULT_REVIEW_DAYS,
+                    runway,
+                )
+                .already_asked(),
+            );
+        }
+        if playing {
+            return None;
+        }
+        Some(
+            plan.retry(
+                today,
+                Self::review_days_for(CareerArc::ProveOnLoan, situation),
+            )
+            .already_asked(),
+        )
+    }
+
+    fn review_claim_my_place(
+        plan: &CareerPlan,
+        situation: &MindSituation,
+        today: EpochDay,
+        runway: f32,
+        playing: bool,
+    ) -> Option<CareerPlan> {
+        if playing {
+            return None;
+        }
+        let arc = if situation.outgrown_the_club() > 0.3 {
+            CareerArc::StepUp
+        } else {
+            CareerArc::StepDownToPlay
+        };
+        let mut next = plan
+            .succeed_with(arc, today, Self::review_days_for(arc, situation), runway)
+            .already_asked();
+        if arc == CareerArc::StepDownToPlay && plan.loan_band > LevelBand::MIN {
+            // He will not go below where the loan already put him: he
+            // played a season at that level and has proved he belongs at
+            // it. The arc's own floor is a table; this is his record.
+            next.band_floor = plan.loan_band;
+            next.band_floor_home = plan.loan_band;
+        }
+        Some(next)
+    }
+
+    fn review_steady_arc(plan: &CareerPlan, today: EpochDay, playing: bool) -> Option<CareerPlan> {
+        if playing {
+            return None;
+        }
+        Some(plan.retry(today, CareerPlan::DEFAULT_REVIEW_DAYS))
+    }
+
+    fn review_finish_at_home(
+        plan: &CareerPlan,
+        situation: &MindSituation,
+        today: EpochDay,
+    ) -> Option<CareerPlan> {
+        if !situation.is_abroad {
+            return None;
+        }
+        Some(plan.retry(today, CareerPlan::DEFAULT_REVIEW_DAYS))
     }
 
     /// What a finished loan spell turns the plan into.

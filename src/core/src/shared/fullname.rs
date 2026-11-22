@@ -93,32 +93,32 @@ impl FullName {
         }
         name.push_str(last);
 
-        slug_from_display(&name)
+        Self::slug_from_display(&name)
     }
-}
 
-/// Produce a URL-safe slug from an arbitrary display name string.
-/// Shares the exact folding rules used by `FullName::slug` so slugs
-/// computed from a live `Player` always match those built from historical
-/// records that only kept a pre-rendered `player_name`.
-pub fn slug_from_display(display: &str) -> String {
-    let folded = deunicode(display);
-    let mut out = String::with_capacity(folded.len());
-    let mut prev_dash = true;
-    for ch in folded.chars() {
-        let lower = ch.to_ascii_lowercase();
-        if lower.is_ascii_alphanumeric() {
-            out.push(lower);
-            prev_dash = false;
-        } else if !prev_dash {
-            out.push('-');
-            prev_dash = true;
+    /// Produce a URL-safe slug from an arbitrary display name string.
+    /// Shares the exact folding rules used by [`Self::slug`] so slugs
+    /// computed from a live `Player` always match those built from historical
+    /// records that only kept a pre-rendered `player_name`.
+    pub fn slug_from_display(display: &str) -> String {
+        let folded = deunicode(display);
+        let mut out = String::with_capacity(folded.len());
+        let mut prev_dash = true;
+        for ch in folded.chars() {
+            let lower = ch.to_ascii_lowercase();
+            if lower.is_ascii_alphanumeric() {
+                out.push(lower);
+                prev_dash = false;
+            } else if !prev_dash {
+                out.push('-');
+                prev_dash = true;
+            }
         }
+        if out.ends_with('-') {
+            out.pop();
+        }
+        out
     }
-    if out.ends_with('-') {
-        out.pop();
-    }
-    out
 }
 
 impl Display for FullName {

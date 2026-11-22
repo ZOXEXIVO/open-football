@@ -269,7 +269,6 @@ impl Timeline {
     /// not "watched" a gap, it has jumped it.
     const GAP: Color = Color::srgb(0.31, 0.34, 0.39);
 
-    #[expect(clippy::too_many_lines)]
     pub fn spawn(
         mut commands: Commands,
         mut images: ResMut<Assets<Image>>,
@@ -317,398 +316,30 @@ impl Timeline {
                     BorderColor::all(Self::HAIRLINE),
                 ))
                 .with_children(|bar| {
-                    // The one control on the bar that is not optional, and the
-                    // only one with a solid fill behind it — which is the
-                    // whole of how it says so. No gradient, no shadow, no
-                    // rounding to speak of.
-                    bar.spawn((
-                        PlayToggle,
-                        ControlHint("Space: play / pause   |   [ / ]: slower / faster"),
-                        Press::default(),
-                        Node {
-                            width: px(Self::PLAY_WIDTH),
-                            height: px(Self::CHIP_HEIGHT),
-                            align_items: AlignItems::Center,
-                            justify_content: JustifyContent::Center,
-                            flex_shrink: 0.0,
-                            border_radius: BorderRadius::all(px(3)),
-                            ..default()
-                        },
-                        BackgroundColor(Self::GO),
-                    ))
-                    .with_children(|toggle| {
-                        toggle.spawn((
-                            PlayToggleIcon,
-                            ImageNode {
-                                image: play_face,
-                                ..default()
-                            },
-                            Node {
-                                width: px(12),
-                                height: px(12),
-                                ..default()
-                            },
-                        ));
-                    });
-
-                    // The rail is eight pixels tall, which is a fine thing to
-                    // look at and a poor thing to hit. `SeekTrack` — what the
-                    // scrub and the hover both read — is therefore this band
-                    // around it rather than the rail itself. Both span the
-                    // same width, so the fraction across is the same number
-                    // either way and nothing downstream has to know.
-                    bar.spawn((
-                        SeekTrack,
-                        RelativeCursorPosition::default(),
-                        Node {
-                            flex_grow: 1.0,
-                            height: px(Self::TRACK_BAND),
-                            align_items: AlignItems::Center,
-                            ..default()
-                        },
-                    ))
-                    .with_children(|band| {
-                        band.spawn((
-                            Node {
-                                width: percent(100),
-                                height: px(Self::TRACK_HEIGHT),
-                                border_radius: BorderRadius::all(px(Self::TRACK_HEIGHT * 0.5)),
-                                ..default()
-                            },
-                            BackgroundColor(Self::TRACK),
-                        ))
-                        .with_children(|track| {
-                            track.spawn((
-                                SeekFill,
-                                Node {
-                                    position_type: PositionType::Absolute,
-                                    left: px(0),
-                                    top: px(0),
-                                    width: percent(0),
-                                    height: percent(100),
-                                    border_radius: BorderRadius::all(px(Self::TRACK_HEIGHT * 0.5)),
-                                    ..default()
-                                },
-                                BackgroundColor(Self::ACCENT),
-                            ));
-
-                            // Above the fill and below everything else: a gap has
-                            // no progress worth showing through it, but it must
-                            // not bury a goal marker or the knob.
-                            track.spawn((
-                                GapOverlay,
-                                Node {
-                                    position_type: PositionType::Absolute,
-                                    left: px(0),
-                                    top: px(0),
-                                    width: percent(100),
-                                    height: percent(100),
-                                    // The bars inside are plain rectangles; the
-                                    // track is a lozenge, and a gap at either end
-                                    // would otherwise square its cap off.
-                                    overflow: Overflow::clip(),
-                                    border_radius: BorderRadius::all(px(Self::TRACK_HEIGHT * 0.5)),
-                                    ..default()
-                                },
-                            ));
-
-                            // Half-time.
-                            track.spawn((
-                                Node {
-                                    position_type: PositionType::Absolute,
-                                    left: percent(50),
-                                    top: px(-3),
-                                    width: px(2),
-                                    height: px(Self::TRACK_HEIGHT + 6.0),
-                                    ..default()
-                                },
-                                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.55)),
-                            ));
-
-                            // What the recording is FOR, laid out along it: the
-                            // goals, and the two or three moments a side that
-                            // came closest without being one. On a goals-only
-                            // recording these ARE the recording — the grey
-                            // between them is the rest of the match — so the
-                            // marker has to say both when something happened
-                            // and what, or every clip looks alike from here.
-                            //
-                            // Substitutions under the chances, chances under
-                            // the goals: two markers can land close enough to
-                            // overlap, and the order they are spawned in is
-                            // the order they are painted in. A goal is never
-                            // the one that should go under, and a change is
-                            // never the one that should go on top.
-                            if config.match_time_ms > 0.0 {
-                                for change in &config.substitutions {
-                                    Self::marker(
-                                        track,
-                                        (change.time / config.match_time_ms).clamp(0.0, 1.0) as f32,
-                                        config.substitution_belongs_to_home(change),
-                                        (home, home_ink),
-                                        (away, away_ink),
-                                        change_glyph.clone(),
-                                        false,
-                                    );
-                                }
-                                for chance in &config.chances {
-                                    Self::marker(
-                                        track,
-                                        (chance.time / config.match_time_ms).clamp(0.0, 1.0) as f32,
-                                        config.chance_belongs_to_home(chance),
-                                        (home, home_ink),
-                                        (away, away_ink),
-                                        chance_glyph.clone(),
-                                        false,
-                                    );
-                                }
-                                for goal in &config.goals {
-                                    Self::marker(
-                                        track,
-                                        (goal.time / config.match_time_ms).clamp(0.0, 1.0) as f32,
-                                        config.goal_belongs_to_home(goal),
-                                        (home, home_ink),
-                                        (away, away_ink),
-                                        goal_glyph.clone(),
-                                        true,
-                                    );
-                                }
-                            }
-
-                            track.spawn((
-                                SeekKnob,
-                                Node {
-                                    position_type: PositionType::Absolute,
-                                    left: percent(0),
-                                    top: px((Self::TRACK_HEIGHT - Self::KNOB_SIZE) * 0.5),
-                                    margin: UiRect::left(px(-Self::KNOB_SIZE * 0.5)),
-                                    width: px(Self::KNOB_SIZE),
-                                    height: px(Self::KNOB_SIZE),
-                                    border_radius: BorderRadius::all(px(Self::KNOB_SIZE * 0.5)),
-                                    ..default()
-                                },
-                                BackgroundColor(Color::WHITE),
-                                // Lifts the playhead off the rail. Without it the
-                                // knob and the fill it sits at the end of read as
-                                // one shape.
-                                BoxShadow(vec![ShadowStyle {
-                                    color: Color::srgba(0.0, 0.0, 0.0, 0.55),
-                                    x_offset: px(0),
-                                    y_offset: px(1),
-                                    spread_radius: px(0),
-                                    blur_radius: px(4),
-                                }]),
-                            ));
-                        });
-                    });
-
-                    // Playback speed. NOT debug-only: slow motion is what
-                    // a replay is for. The cycle runs 0.25x through 16x
-                    // (see `Playback::SPEEDS`) — the slow half to watch a
-                    // decision actually happen, the fast half to skim.
-                    //
-                    // Sits next to the rail, ahead of the camera control: it
-                    // is part of the transport, and the two of them belong to
-                    // different jobs.
-                    bar.spawn((
-                        SpeedButton,
-                        ControlHint("Click: faster   |   Shift + click: slower   |   [ / ]: slower / faster"),
-                        Chip::default(),
-                        Press::default(),
-                        // Wide enough for the longest label the cycle can
-                        // produce ("0.25x"); 40 px fitted only the
-                        // whole-number speeds it used to carry.
-                        Self::chip(52.0),
-                        BackgroundColor(Self::CHIP),
-                        BorderColor::all(Self::CHIP_EDGE),
-                    ))
-                    .with_child((
-                        SpeedLabel,
-                        Text::new("1x"),
-                        Self::chip_font(),
-                        TextColor(Self::INK),
-                    ));
-
-                    // The stadium. Sits with the transport rather than with
-                    // the camera controls because that is what it belongs to:
-                    // it is the other half of pressing play, and a replay
-                    // that has started making a noise in a background tab is
-                    // the one thing on this bar somebody may need to reach
-                    // without reading it. Upper case for the reason RESET is
-                    // — the bar draws with faces the crate compiles in, and
-                    // eleven-pixel capitals are the more legible of the two.
-                    bar.spawn((
-                        SoundButton,
-                        ControlHint("Toggle stadium sound"),
-                        // Lit from the first frame: the sound is on unless
-                        // somebody turns it off. Nothing is audible until the
-                        // replay is running, so this can never be a page that
-                        // starts shouting on its own — see `sound`.
-                        Chip { armed: true },
-                        Press::default(),
-                        Self::chip(60.0),
-                        BackgroundColor(Self::ARMED),
-                        BorderColor::all(Self::ARMED_EDGE),
-                    ))
-                    .with_child((
-                        Text::new("SOUND"),
-                        Self::chip_font(),
-                        TextColor(Self::INK),
-                        TextLayout {
-                            linebreak: LineBreak::NoWrap,
-                            ..default()
-                        },
-                    ));
-
-                    // Puts the camera back on the gantry. The rig can now be
-                    // flown clear of the ground (`CameraFlight`), and a free
-                    // camera without a way home is a way to lose the match —
-                    // so this is the one camera control that is not a gesture
-                    // over the canvas but a button that is always in view.
-                    //
-                    // Labelled in English rather than through `ViewerLabels`:
-                    // the viewer draws with Bevy's built-in font, which
-                    // carries ASCII and nothing else, so a translated string
-                    // would come out as blank boxes in most of the locales
-                    // that asked for it. Set upper-case, which is both the
-                    // vernacular of the broadcast graphics this bar is
-                    // pretending to be and the more legible of the two at
-                    // eleven pixels.
-                    bar.spawn((
-                        CameraResetButton,
-                        ControlHint("Return to the broadcast camera and follow the ball"),
-                        Chip::default(),
-                        Press::default(),
-                        Self::chip(60.0),
-                        BackgroundColor(Self::CHIP),
-                        BorderColor::all(Self::CHIP_EDGE),
-                    ))
-                    .with_child((
-                        Text::new("TV"),
-                        Self::chip_font(),
-                        TextColor(Self::INK),
-                        TextLayout {
-                            linebreak: LineBreak::NoWrap,
-                            ..default()
-                        },
-                    ));
-
-                    // The engine's own overlay: what every player is doing,
-                    // which is a question about the SIMULATION and means
-                    // nothing to somebody watching a match.
-                    if config.debug {
-                        bar.spawn((
-                            StatesButton,
-                            Chip::default(),
-                            Press::default(),
-                            Self::chip(62.0),
-                            BackgroundColor(Self::CHIP),
-                            BorderColor::all(Self::CHIP_EDGE),
-                        ))
-                        .with_child((
-                            Text::new("STATES"),
-                            Self::chip_font(),
-                            TextColor(Self::INK),
-                            TextLayout {
-                                linebreak: LineBreak::NoWrap,
-                                ..default()
-                            },
-                        ));
-                    }
-
-                    // …and the frame's, which is a question about THIS
-                    // MACHINE and can only be answered on the machine that is
-                    // slow. Hence `?perf=1` and its own gate — see
-                    // [`ViewerConfig::perf`].
-                    if config.instrumented() {
-                        // Camera zoom readout. The chips that used to sit
-                        // in front of it are gone: the wheel does this
-                        // now (`CameraZoom::handle_wheel`), which is where
-                        // a hand already is while watching, and two
-                        // buttons to nudge a lens are a poor substitute
-                        // for turning it. The number stays — it is the
-                        // only feedback that the wheel did anything when
-                        // the shot is of open pitch.
-                        bar.spawn((
-                            ZoomLabel,
-                            Text::new("1.00x"),
-                            TextFont {
-                                font_size: FontSize::Px(11.0),
-                                ..default()
-                            },
-                            TextColor(Self::INK_MUTED),
-                            TextLayout {
-                                linebreak: LineBreak::NoWrap,
-                                ..default()
-                            },
-                            Node {
-                                width: px(52),
-                                flex_shrink: 0.0,
-                                justify_content: JustifyContent::Center,
-                                ..default()
-                            },
-                        ));
-
-                        // What the frame costs, and where. Reads
-                        // `<fps> <frame ms> u<our systems> m<all of Bevy's
-                        // main world> o<render + browser> <drawn>/<meshes>`
-                        // — see `perf`, which explains what each of those
-                        // three points at.
-                        bar.spawn((
-                            CostLabel,
-                            Text::new(""),
-                            TextFont {
-                                font_size: FontSize::Px(11.0),
-                                ..default()
-                            },
-                            TextColor(Self::INK_MUTED),
-                            TextLayout {
-                                linebreak: LineBreak::NoWrap,
-                                ..default()
-                            },
-                            Node {
-                                width: px(216),
-                                flex_shrink: 0.0,
-                                justify_content: JustifyContent::Center,
-                                ..default()
-                            },
-                        ));
-                    }
-
-                    bar.spawn((
-                        ClockLabel,
-                        Text::new(""),
-                        TextFont {
-                            // Chosen once from both half names rather than per
-                            // frame: the text under this label changes every
-                            // tick, and re-picking would rebuild the atlas with
-                            // the seconds.
-                            font: FontSource::Handle(faces.face_for_all([
-                                config.labels.first_half.as_str(),
-                                config.labels.second_half.as_str(),
-                            ])),
-                            font_size: FontSize::Px(13.0),
-                            ..default()
-                        },
-                        TextColor(Self::INK),
-                        // The half label is a translated string, and some
-                        // locales are long — let it run rather than wrap the
-                        // clock onto two lines.
-                        TextLayout {
-                            linebreak: LineBreak::NoWrap,
-                            ..default()
-                        },
-                        Node {
-                            flex_shrink: 0.0,
-                            justify_content: JustifyContent::FlexEnd,
-                            ..default()
-                        },
-                    ));
+                    Self::play_toggle(bar, play_face);
+                    Self::seek_track(
+                        bar,
+                        &config,
+                        (home, away, home_ink, away_ink),
+                        goal_glyph.clone(),
+                        chance_glyph.clone(),
+                        change_glyph.clone(),
+                    );
+                    Self::speed_button(bar);
+                    Self::sound_button(bar);
+                    Self::camera_reset(bar);
+                    Self::states_button(bar, &config);
+                    Self::perf_labels(bar, &config);
+                    Self::clock(bar, &faces, &config);
                 });
             });
 
         commands.insert_resource(icons);
 
+        Self::notices(&mut commands, &config, &faces);
+    }
+
+    fn notices(commands: &mut Commands, config: &ViewerConfig, faces: &Faces) {
         commands.spawn((
             HintLabel,
             Text::new(""),
@@ -782,6 +413,438 @@ impl Timeline {
                 width: percent(100),
                 top: percent(46),
                 justify_content: JustifyContent::Center,
+                ..default()
+            },
+        ));
+    }
+
+    fn play_toggle(bar: &mut RelatedSpawnerCommands<ChildOf>, play_face: Handle<Image>) {
+        // The one control on the bar that is not optional, and the
+        // only one with a solid fill behind it — which is the
+        // whole of how it says so. No gradient, no shadow, no
+        // rounding to speak of.
+        bar.spawn((
+            PlayToggle,
+            ControlHint("Space: play / pause   |   [ / ]: slower / faster"),
+            Press::default(),
+            Node {
+                width: px(Self::PLAY_WIDTH),
+                height: px(Self::CHIP_HEIGHT),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                flex_shrink: 0.0,
+                border_radius: BorderRadius::all(px(3)),
+                ..default()
+            },
+            BackgroundColor(Self::GO),
+        ))
+        .with_children(|toggle| {
+            toggle.spawn((
+                PlayToggleIcon,
+                ImageNode {
+                    image: play_face,
+                    ..default()
+                },
+                Node {
+                    width: px(12),
+                    height: px(12),
+                    ..default()
+                },
+            ));
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn seek_track(
+        bar: &mut RelatedSpawnerCommands<ChildOf>,
+        config: &ViewerConfig,
+        colours: (Color, Color, Color, Color),
+        goal_glyph: Handle<Image>,
+        chance_glyph: Handle<Image>,
+        change_glyph: Handle<Image>,
+    ) {
+        let (home, away, home_ink, away_ink) = colours;
+        // The rail is eight pixels tall, which is a fine thing to
+        // look at and a poor thing to hit. `SeekTrack` — what the
+        // scrub and the hover both read — is therefore this band
+        // around it rather than the rail itself. Both span the
+        // same width, so the fraction across is the same number
+        // either way and nothing downstream has to know.
+        bar.spawn((
+            SeekTrack,
+            RelativeCursorPosition::default(),
+            Node {
+                flex_grow: 1.0,
+                height: px(Self::TRACK_BAND),
+                align_items: AlignItems::Center,
+                ..default()
+            },
+        ))
+        .with_children(|band| {
+            band.spawn((
+                Node {
+                    width: percent(100),
+                    height: px(Self::TRACK_HEIGHT),
+                    border_radius: BorderRadius::all(px(Self::TRACK_HEIGHT * 0.5)),
+                    ..default()
+                },
+                BackgroundColor(Self::TRACK),
+            ))
+            .with_children(|track| {
+                track.spawn((
+                    SeekFill,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(0),
+                        top: px(0),
+                        width: percent(0),
+                        height: percent(100),
+                        border_radius: BorderRadius::all(px(Self::TRACK_HEIGHT * 0.5)),
+                        ..default()
+                    },
+                    BackgroundColor(Self::ACCENT),
+                ));
+
+                // Above the fill and below everything else: a gap has
+                // no progress worth showing through it, but it must
+                // not bury a goal marker or the knob.
+                track.spawn((
+                    GapOverlay,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(0),
+                        top: px(0),
+                        width: percent(100),
+                        height: percent(100),
+                        // The bars inside are plain rectangles; the
+                        // track is a lozenge, and a gap at either end
+                        // would otherwise square its cap off.
+                        overflow: Overflow::clip(),
+                        border_radius: BorderRadius::all(px(Self::TRACK_HEIGHT * 0.5)),
+                        ..default()
+                    },
+                ));
+
+                // Half-time.
+                track.spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: percent(50),
+                        top: px(-3),
+                        width: px(2),
+                        height: px(Self::TRACK_HEIGHT + 6.0),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.55)),
+                ));
+
+                // What the recording is FOR, laid out along it: the
+                // goals, and the two or three moments a side that
+                // came closest without being one. On a goals-only
+                // recording these ARE the recording — the grey
+                // between them is the rest of the match — so the
+                // marker has to say both when something happened
+                // and what, or every clip looks alike from here.
+                //
+                // Substitutions under the chances, chances under
+                // the goals: two markers can land close enough to
+                // overlap, and the order they are spawned in is
+                // the order they are painted in. A goal is never
+                // the one that should go under, and a change is
+                // never the one that should go on top.
+                Self::markers(
+                    track,
+                    config,
+                    (home, away, home_ink, away_ink),
+                    &goal_glyph,
+                    &chance_glyph,
+                    &change_glyph,
+                );
+                track.spawn((
+                    SeekKnob,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: percent(0),
+                        top: px((Self::TRACK_HEIGHT - Self::KNOB_SIZE) * 0.5),
+                        margin: UiRect::left(px(-Self::KNOB_SIZE * 0.5)),
+                        width: px(Self::KNOB_SIZE),
+                        height: px(Self::KNOB_SIZE),
+                        border_radius: BorderRadius::all(px(Self::KNOB_SIZE * 0.5)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::WHITE),
+                    // Lifts the playhead off the rail. Without it the
+                    // knob and the fill it sits at the end of read as
+                    // one shape.
+                    BoxShadow(vec![ShadowStyle {
+                        color: Color::srgba(0.0, 0.0, 0.0, 0.55),
+                        x_offset: px(0),
+                        y_offset: px(1),
+                        spread_radius: px(0),
+                        blur_radius: px(4),
+                    }]),
+                ));
+            });
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn markers(
+        track: &mut RelatedSpawnerCommands<ChildOf>,
+        config: &ViewerConfig,
+        colours: (Color, Color, Color, Color),
+        goal_glyph: &Handle<Image>,
+        chance_glyph: &Handle<Image>,
+        change_glyph: &Handle<Image>,
+    ) {
+        let (home, away, home_ink, away_ink) = colours;
+        if config.match_time_ms > 0.0 {
+            for change in &config.substitutions {
+                Self::marker(
+                    track,
+                    (change.time / config.match_time_ms).clamp(0.0, 1.0) as f32,
+                    config.substitution_belongs_to_home(change),
+                    (home, home_ink),
+                    (away, away_ink),
+                    change_glyph.clone(),
+                    false,
+                );
+            }
+            for chance in &config.chances {
+                Self::marker(
+                    track,
+                    (chance.time / config.match_time_ms).clamp(0.0, 1.0) as f32,
+                    config.chance_belongs_to_home(chance),
+                    (home, home_ink),
+                    (away, away_ink),
+                    chance_glyph.clone(),
+                    false,
+                );
+            }
+            for goal in &config.goals {
+                Self::marker(
+                    track,
+                    (goal.time / config.match_time_ms).clamp(0.0, 1.0) as f32,
+                    config.goal_belongs_to_home(goal),
+                    (home, home_ink),
+                    (away, away_ink),
+                    goal_glyph.clone(),
+                    true,
+                );
+            }
+        }
+    }
+
+    fn speed_button(bar: &mut RelatedSpawnerCommands<ChildOf>) {
+        // Playback speed. NOT debug-only: slow motion is what
+        // a replay is for. The cycle runs 0.25x through 16x
+        // (see `Playback::SPEEDS`) — the slow half to watch a
+        // decision actually happen, the fast half to skim.
+        //
+        // Sits next to the rail, ahead of the camera control: it
+        // is part of the transport, and the two of them belong to
+        // different jobs.
+        bar.spawn((
+            SpeedButton,
+            ControlHint("Click: faster   |   Shift + click: slower   |   [ / ]: slower / faster"),
+            Chip::default(),
+            Press::default(),
+            // Wide enough for the longest label the cycle can
+            // produce ("0.25x"); 40 px fitted only the
+            // whole-number speeds it used to carry.
+            Self::chip(52.0),
+            BackgroundColor(Self::CHIP),
+            BorderColor::all(Self::CHIP_EDGE),
+        ))
+        .with_child((
+            SpeedLabel,
+            Text::new("1x"),
+            Self::chip_font(),
+            TextColor(Self::INK),
+        ));
+    }
+
+    fn sound_button(bar: &mut RelatedSpawnerCommands<ChildOf>) {
+        // The stadium. Sits with the transport rather than with
+        // the camera controls because that is what it belongs to:
+        // it is the other half of pressing play, and a replay
+        // that has started making a noise in a background tab is
+        // the one thing on this bar somebody may need to reach
+        // without reading it. Upper case for the reason RESET is
+        // — the bar draws with faces the crate compiles in, and
+        // eleven-pixel capitals are the more legible of the two.
+        bar.spawn((
+            SoundButton,
+            ControlHint("Toggle stadium sound"),
+            // Lit from the first frame: the sound is on unless
+            // somebody turns it off. Nothing is audible until the
+            // replay is running, so this can never be a page that
+            // starts shouting on its own — see `sound`.
+            Chip { armed: true },
+            Press::default(),
+            Self::chip(60.0),
+            BackgroundColor(Self::ARMED),
+            BorderColor::all(Self::ARMED_EDGE),
+        ))
+        .with_child((
+            Text::new("SOUND"),
+            Self::chip_font(),
+            TextColor(Self::INK),
+            TextLayout {
+                linebreak: LineBreak::NoWrap,
+                ..default()
+            },
+        ));
+    }
+
+    fn camera_reset(bar: &mut RelatedSpawnerCommands<ChildOf>) {
+        // Puts the camera back on the gantry. The rig can now be
+        // flown clear of the ground (`CameraFlight`), and a free
+        // camera without a way home is a way to lose the match —
+        // so this is the one camera control that is not a gesture
+        // over the canvas but a button that is always in view.
+        //
+        // Labelled in English rather than through `ViewerLabels`:
+        // the viewer draws with Bevy's built-in font, which
+        // carries ASCII and nothing else, so a translated string
+        // would come out as blank boxes in most of the locales
+        // that asked for it. Set upper-case, which is both the
+        // vernacular of the broadcast graphics this bar is
+        // pretending to be and the more legible of the two at
+        // eleven pixels.
+        bar.spawn((
+            CameraResetButton,
+            ControlHint("Return to the broadcast camera and follow the ball"),
+            Chip::default(),
+            Press::default(),
+            Self::chip(60.0),
+            BackgroundColor(Self::CHIP),
+            BorderColor::all(Self::CHIP_EDGE),
+        ))
+        .with_child((
+            Text::new("TV"),
+            Self::chip_font(),
+            TextColor(Self::INK),
+            TextLayout {
+                linebreak: LineBreak::NoWrap,
+                ..default()
+            },
+        ));
+    }
+
+    fn states_button(bar: &mut RelatedSpawnerCommands<ChildOf>, config: &ViewerConfig) {
+        // The engine's own overlay: what every player is doing,
+        // which is a question about the SIMULATION and means
+        // nothing to somebody watching a match.
+        if config.debug {
+            bar.spawn((
+                StatesButton,
+                Chip::default(),
+                Press::default(),
+                Self::chip(62.0),
+                BackgroundColor(Self::CHIP),
+                BorderColor::all(Self::CHIP_EDGE),
+            ))
+            .with_child((
+                Text::new("STATES"),
+                Self::chip_font(),
+                TextColor(Self::INK),
+                TextLayout {
+                    linebreak: LineBreak::NoWrap,
+                    ..default()
+                },
+            ));
+        }
+    }
+
+    fn perf_labels(bar: &mut RelatedSpawnerCommands<ChildOf>, config: &ViewerConfig) {
+        // …and the frame's, which is a question about THIS
+        // MACHINE and can only be answered on the machine that is
+        // slow. Hence `?perf=1` and its own gate — see
+        // [`ViewerConfig::perf`].
+        if config.instrumented() {
+            // Camera zoom readout. The chips that used to sit
+            // in front of it are gone: the wheel does this
+            // now (`CameraZoom::handle_wheel`), which is where
+            // a hand already is while watching, and two
+            // buttons to nudge a lens are a poor substitute
+            // for turning it. The number stays — it is the
+            // only feedback that the wheel did anything when
+            // the shot is of open pitch.
+            bar.spawn((
+                ZoomLabel,
+                Text::new("1.00x"),
+                TextFont {
+                    font_size: FontSize::Px(11.0),
+                    ..default()
+                },
+                TextColor(Self::INK_MUTED),
+                TextLayout {
+                    linebreak: LineBreak::NoWrap,
+                    ..default()
+                },
+                Node {
+                    width: px(52),
+                    flex_shrink: 0.0,
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+            ));
+
+            // What the frame costs, and where. Reads
+            // `<fps> <frame ms> u<our systems> m<all of Bevy's
+            // main world> o<render + browser> <drawn>/<meshes>`
+            // — see `perf`, which explains what each of those
+            // three points at.
+            bar.spawn((
+                CostLabel,
+                Text::new(""),
+                TextFont {
+                    font_size: FontSize::Px(11.0),
+                    ..default()
+                },
+                TextColor(Self::INK_MUTED),
+                TextLayout {
+                    linebreak: LineBreak::NoWrap,
+                    ..default()
+                },
+                Node {
+                    width: px(216),
+                    flex_shrink: 0.0,
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+            ));
+        }
+    }
+
+    fn clock(bar: &mut RelatedSpawnerCommands<ChildOf>, faces: &Faces, config: &ViewerConfig) {
+        bar.spawn((
+            ClockLabel,
+            Text::new(""),
+            TextFont {
+                // Chosen once from both half names rather than per
+                // frame: the text under this label changes every
+                // tick, and re-picking would rebuild the atlas with
+                // the seconds.
+                font: FontSource::Handle(faces.face_for_all([
+                    config.labels.first_half.as_str(),
+                    config.labels.second_half.as_str(),
+                ])),
+                font_size: FontSize::Px(13.0),
+                ..default()
+            },
+            TextColor(Self::INK),
+            // The half label is a translated string, and some
+            // locales are long — let it run rather than wrap the
+            // clock onto two lines.
+            TextLayout {
+                linebreak: LineBreak::NoWrap,
+                ..default()
+            },
+            Node {
+                flex_shrink: 0.0,
+                justify_content: JustifyContent::FlexEnd,
                 ..default()
             },
         ));

@@ -6,9 +6,7 @@ use crate::r#match::engine::player::strategies::shared::{
     JADEDNESS_INCREMENT, LOW_CONDITION_THRESHOLD,
 };
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::{
-    ShotDecision, evaluate_forward_shot_decision,
-};
+use crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::ShotDecision;
 use crate::r#match::{StateChangeResult, StateProcessingContext};
 
 pub use read::{ForwardRead, ReadLevel};
@@ -56,7 +54,7 @@ impl ForwardShot {
     /// direct `with_shot_reason` would skip the helper's gates, because
     /// `ForwardShootingState` does not roll again once a reason is set.
     pub fn dispatch(ctx: &StateProcessingContext, tag: &'static str) -> Option<StateChangeResult> {
-        match evaluate_forward_shot_decision(ctx, tag) {
+        match ShotDecision::evaluate(ctx, tag) {
             ShotDecision::Shoot { reason } => Some(
                 StateChangeResult::with_forward_state(ForwardState::Shooting)
                     .with_shot_reason(reason),

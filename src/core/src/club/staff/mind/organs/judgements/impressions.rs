@@ -26,6 +26,15 @@ use crate::{Player, Staff, TeamType};
 use chrono::NaiveDate;
 use rustc_hash::FxHashMap;
 
+/// What the coach observed this week, before it is blended with what he
+/// already believed.
+struct PlayerReadings {
+    quality: f32,
+    readiness: f32,
+    potential: f32,
+    training: f32,
+}
+
 #[derive(Debug, Clone)]
 pub struct CoachDecisionState {
     pub profile: CoachProfile,
@@ -98,7 +107,6 @@ impl CoachDecisionState {
 
     /// Update or create impression. Visibility-based skipping, sticky drift,
     /// overreaction mechanics, trust decay, emotional heat accumulation.
-    #[expect(clippy::too_many_lines)]
     pub fn update_impression(&mut self, player: &Player, date: NaiveDate, team_type: &TeamType) {
         let new_quality = self.perceived_quality(player, date);
         let new_readiness = self.match_readiness(player);
@@ -164,6 +172,63 @@ impl CoachDecisionState {
             impression.bias.anchored = true;
         }
 
+        let heat_delta = Self::observe_match_events(
+            impression,
+            player,
+            regressed_avg,
+            volatility,
+            negativity_bias,
+        );
+        Self::apply_bias_drift(
+            impression,
+            coach_seed,
+            player.id,
+            current_week,
+            judging_accuracy,
+        );
+
+        // Trust ceiling
+        let trust_ceiling = 7.0 - impression.bias.disappointments.min(4) as f32;
+
+        let readings = PlayerReadings {
+            quality: new_quality,
+            readiness: new_readiness,
+            potential: new_potential,
+            training: new_training,
+        };
+        if impression.perceived_quality == 0.0 {
+            impression.perceived_quality = readings.quality;
+            impression.match_readiness = readings.readiness;
+            impression.potential_impression = readings.potential;
+            impression.training_impression = readings.training;
+        } else {
+            Self::blend_observations(
+                impression,
+                readings,
+                trust_in_decisions,
+                confirmation_bias,
+                negativity_bias,
+                visibility,
+            );
+        }
+
+        impression.coach_trust = (impression.coach_trust + 0.1).clamp(0.0, trust_ceiling);
+        impression.weeks_in_squad = impression.weeks_in_squad.saturating_add(1);
+        impression.last_updated = date;
+
+        Self::expire_recent_move(impression, current_week, stubbornness);
+        self.emotional_heat = (self.emotional_heat + heat_delta).clamp(0.0, 1.0);
+    }
+
+    /// Apply the week's results to one player's impression, returning the
+    /// emotional heat the events added.
+    fn observe_match_events(
+        impression: &mut PlayerImpression,
+        player: &Player,
+        regressed_avg: f32,
+        volatility: f32,
+        negativity_bias: f32,
+    ) -> f32 {
         // Event detection with overreaction
         let mut heat_delta: f32 = 0.0;
 
@@ -224,7 +289,18 @@ impl CoachDecisionState {
         impression.prev_red_cards = player.statistics.red_cards;
         impression.prev_goals = player.statistics.goals;
         impression.prev_avg_rating = regressed_avg;
+        heat_delta
+    }
 
+    /// The counters that move on their own every week: overreaction
+    /// cooling, perception drift and bias decay.
+    fn apply_bias_drift(
+        impression: &mut PlayerImpression,
+        coach_seed: u32,
+        player_id: u32,
+        current_week: u32,
+        judging_accuracy: f32,
+    ) {
         // Overreaction timer countdown
         if impression.bias.overreaction_timer > 0 {
             impression.bias.overreaction_timer -= 1;
@@ -237,7 +313,7 @@ impl CoachDecisionState {
 
         // Perception drift
         let drift_noise =
-            PerceptionNoise::raw(coach_seed, player.id, current_week.wrapping_add(0xDFFF))
+            PerceptionNoise::raw(coach_seed, player_id, current_week.wrapping_add(0xDFFF))
                 * 0.12
                 * (1.0 - judging_accuracy);
         impression.bias.perception_drift =
@@ -246,60 +322,57 @@ impl CoachDecisionState {
         // Bias decay
         impression.bias.quality_offset *= 0.98;
         let offset_noise =
-            PerceptionNoise::raw(coach_seed, player.id, current_week.wrapping_add(0xD01F))
+            PerceptionNoise::raw(coach_seed, player_id, current_week.wrapping_add(0xD01F))
                 * 0.05
                 * (1.0 - judging_accuracy);
         impression.bias.quality_offset =
             (impression.bias.quality_offset + offset_noise).clamp(-3.0, 3.0);
 
         impression.bias.sunk_cost *= 0.95;
+    }
 
-        // Trust ceiling
-        let trust_ceiling = 7.0 - impression.bias.disappointments.min(4) as f32;
+    /// Blend the new observations into what the coach already believed.
+    fn blend_observations(
+        impression: &mut PlayerImpression,
+        readings: PlayerReadings,
+        trust_in_decisions: f32,
+        confirmation_bias: f32,
+        negativity_bias: f32,
+        visibility: f32,
+    ) {
+        let base_blend = trust_in_decisions * 0.6;
+        let delta = readings.quality - impression.perceived_quality;
 
-        if impression.perceived_quality == 0.0 {
-            impression.perceived_quality = new_quality;
-            impression.match_readiness = new_readiness;
-            impression.potential_impression = new_potential;
-            impression.training_impression = new_training;
+        let direction_matches =
+            (delta > 0.0) == (impression.perceived_quality >= impression.bias.first_impression);
+        let conf_shift = if direction_matches {
+            -confirmation_bias * 0.15
         } else {
-            let base_blend = trust_in_decisions * 0.6;
-            let delta = new_quality - impression.perceived_quality;
+            confirmation_bias * 0.15
+        };
 
-            let direction_matches =
-                (delta > 0.0) == (impression.perceived_quality >= impression.bias.first_impression);
-            let conf_shift = if direction_matches {
-                -confirmation_bias * 0.15
-            } else {
-                confirmation_bias * 0.15
-            };
+        let neg_shift = if delta < 0.0 {
+            -negativity_bias * 0.1
+        } else {
+            negativity_bias * 0.05
+        };
 
-            let neg_shift = if delta < 0.0 {
-                -negativity_bias * 0.1
-            } else {
-                negativity_bias * 0.05
-            };
+        let vis_dampening = (1.0 - visibility) * 0.2;
 
-            let vis_dampening = (1.0 - visibility) * 0.2;
+        let old_weight = (base_blend + conf_shift + neg_shift + vis_dampening).clamp(0.15, 0.90);
+        let new_weight = 1.0 - old_weight;
 
-            let old_weight =
-                (base_blend + conf_shift + neg_shift + vis_dampening).clamp(0.15, 0.90);
-            let new_weight = 1.0 - old_weight;
+        impression.perceived_quality =
+            impression.perceived_quality * old_weight + readings.quality * new_weight;
+        impression.match_readiness = readings.readiness;
+        impression.potential_impression =
+            impression.potential_impression * old_weight + readings.potential * new_weight;
+        impression.training_impression =
+            impression.training_impression * old_weight + readings.training * new_weight;
+    }
 
-            impression.perceived_quality =
-                impression.perceived_quality * old_weight + new_quality * new_weight;
-            impression.match_readiness = new_readiness;
-            impression.potential_impression =
-                impression.potential_impression * old_weight + new_potential * new_weight;
-            impression.training_impression =
-                impression.training_impression * old_weight + new_training * new_weight;
-        }
-
-        impression.coach_trust = (impression.coach_trust + 0.1).clamp(0.0, trust_ceiling);
-        impression.weeks_in_squad = impression.weeks_in_squad.saturating_add(1);
-        impression.last_updated = date;
-
-        // Decay recent_move after protection window
+    /// Decay a recent move after its protection window.
+    fn expire_recent_move(impression: &mut PlayerImpression, current_week: u32, stubbornness: f32) {
         if let Some(ref mv) = impression.recent_move {
             let weeks_since = current_week.saturating_sub(mv.week);
             let base_protection = (4.0 * stubbornness).max(2.0) as u32;
@@ -309,8 +382,6 @@ impl CoachDecisionState {
                 impression.recent_move = None;
             }
         }
-
-        self.emotional_heat = (self.emotional_heat + heat_delta).clamp(0.0, 1.0);
     }
 
     /// Record a move for inertia tracking

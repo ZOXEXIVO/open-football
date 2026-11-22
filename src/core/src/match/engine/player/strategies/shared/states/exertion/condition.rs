@@ -123,13 +123,29 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
 
     /// Process condition changes based on activity intensity and player attributes
     /// Calculation: 75% velocity-based, 25% intensity-based
-    #[expect(clippy::too_many_lines)]
-    pub fn process(self, ctx: ConditionContext) {
+    pub fn process(self, mut ctx: ConditionContext) {
         // Record the exertion this state declared so the movement
         // integrator can scale speed to match. One signal feeds both
         // fatigue and movement, so the two can never drift apart.
         ctx.player.last_activity_intensity = self.intensity;
 
+        let load = FatigueLoad::of(ctx.player);
+        let velocity_sq = ctx.player.velocity.norm_squared();
+        let condition_change_f = self.condition_change(&mut ctx, &load, velocity_sq);
+
+        Self::apply_condition_change(&mut ctx, condition_change_f, velocity_sq);
+        Self::accrue_jadedness(&mut ctx);
+    }
+
+    /// The tick's metabolic change in condition points: the velocity
+    /// curve, the declared activity intensity, the match-progress ramp
+    /// and the player's own load multipliers, combined.
+    fn condition_change(
+        &self,
+        ctx: &mut ConditionContext,
+        load: &FatigueLoad,
+        velocity_sq: f32,
+    ) -> f32 {
         let FatigueLoad {
             stamina_factor,
             fitness_factor,
@@ -137,11 +153,10 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
             debt_mult,
             jaded_mult,
             ..
-        } = FatigueLoad::of(ctx.player);
+        } = *load;
 
         // Calculate velocity-based fatigue (75% of total effect)
         // Use squared values to avoid sqrt — compare ratio² against threshold²
-        let velocity_sq = ctx.player.velocity.norm_squared();
         let max_speed = ctx.player.max_speed_with_condition_cached();
         let max_speed_sq = max_speed * max_speed;
 
@@ -258,9 +273,15 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
             1.0
         };
 
-        let condition_change_f =
-            combined_fatigue * stamina_factor * fitness_factor * rate_multiplier * load_mult;
+        combined_fatigue * stamina_factor * fitness_factor * rate_multiplier * load_mult
+    }
 
+    /// Bank the tick's change and apply it once it reaches a whole point.
+    fn apply_condition_change(
+        ctx: &mut ConditionContext,
+        condition_change_f: f32,
+        velocity_sq: f32,
+    ) {
         // Accumulate fractional fatigue to avoid float-to-int truncation losing small per-tick values
         ctx.player.fatigue_accumulator += condition_change_f;
 
@@ -288,7 +309,11 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
                 ctx.player.player_attributes.condition
             );
         }
+    }
 
+    /// Long-term tiredness: time spent under the low-condition threshold
+    /// adds jadedness.
+    fn accrue_jadedness(ctx: &mut ConditionContext) {
         // If condition drops very low, slightly increase jadedness (long-term tiredness)
         let spent_interval = ctx.player.player_attributes.condition < T::low_condition_threshold()
             && ctx

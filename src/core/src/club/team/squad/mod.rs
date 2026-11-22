@@ -48,7 +48,7 @@ impl SquadManager {
         // age-eligible destination the listed veteran simply stays on the
         // Main roster while the market works.
         let max_age = teams[reserve_idx].team_type.development_age_cap();
-        let mut demotions = filter_by_age(demotions, &teams[main_idx], max_age, date);
+        let mut demotions = Self::filter_by_age(demotions, &teams[main_idx], max_age, date);
 
         // Guard: never let the first team drop below minimum squad size
         let current_size = teams[main_idx].players.players.len();
@@ -59,8 +59,8 @@ impl SquadManager {
         }
 
         if !demotions.is_empty() {
-            execute_moves(teams, main_idx, reserve_idx, &demotions, date);
-            record_player_decisions(
+            Self::execute_moves(teams, main_idx, reserve_idx, &demotions, date);
+            Self::record_player_decisions(
                 teams,
                 main_idx,
                 reserve_idx,
@@ -69,7 +69,7 @@ impl SquadManager {
                 &coach_name,
                 "dec_administrative_demotion",
             );
-            record_moves(
+            Self::record_moves(
                 coach_state,
                 &demotions,
                 RecentMoveType::DemotedToReserves,
@@ -114,126 +114,128 @@ impl SquadManager {
 
 // ─── Shared helpers ─────────────────────────────────────────────────
 
-pub(crate) fn execute_moves(
-    teams: &mut [Team],
-    from_idx: usize,
-    to_idx: usize,
-    player_ids: &[u32],
-    date: NaiveDate,
-) {
-    if from_idx == to_idx {
-        return;
-    }
-
-    // Capture the two squads' identities once: every moved player closes
-    // their spell on `from` and opens one on `to` in career history. Both
-    // teams keep their own `history_info` (empty league fields are filled
-    // by the web layer at render time, matching `rebalance_squads`).
-    let from_info = teams[from_idx].history_info();
-    let to_info = teams[to_idx].history_info();
-    let from_senior = teams[from_idx].team_type.is_own_team();
-    let to_senior = teams[to_idx].team_type.is_own_team();
-
-    for &player_id in player_ids {
-        // Force-selected players are pinned to their current team — admin
-        // demotion, AI rotation, transfer-listing-driven moves all skip
-        // them. Single point of denial for every caller of this helper.
-        let locked = teams[from_idx]
-            .players
-            .players
-            .iter()
-            .find(|p| p.id == player_id)
-            .map(|p| p.is_force_match_selection)
-            .unwrap_or(false);
-        if locked {
-            continue;
+impl SquadManager {
+    pub(crate) fn execute_moves(
+        teams: &mut [Team],
+        from_idx: usize,
+        to_idx: usize,
+        player_ids: &[u32],
+        date: NaiveDate,
+    ) {
+        if from_idx == to_idx {
+            return;
         }
-        if let Some(mut player) = teams[from_idx].players.take_player(&player_id) {
-            // Internal squad move: migrate any team-level transfer-list entry
-            // (the asking price) to the destination team rather than dropping
-            // it. The player's market status (Lst/Req/Unh) lives on the player
-            // and travels with him automatically; market discovery scans every
-            // team and keys on that status, so an internal Main ↔ Reserve / B
-            // move never removes him from the market. Dropping the entry here
-            // used to desync the asking price from the player's location.
-            if let Some(item) = teams[from_idx].transfer_list.take(player_id) {
-                teams[to_idx].transfer_list.add(item);
+
+        // Capture the two squads' identities once: every moved player closes
+        // their spell on `from` and opens one on `to` in career history. Both
+        // teams keep their own `history_info` (empty league fields are filled
+        // by the web layer at render time, matching `rebalance_squads`).
+        let from_info = teams[from_idx].history_info();
+        let to_info = teams[to_idx].history_info();
+        let from_senior = teams[from_idx].team_type.is_own_team();
+        let to_senior = teams[to_idx].team_type.is_own_team();
+
+        for &player_id in player_ids {
+            // Force-selected players are pinned to their current team — admin
+            // demotion, AI rotation, transfer-listing-driven moves all skip
+            // them. Single point of denial for every caller of this helper.
+            let locked = teams[from_idx]
+                .players
+                .players
+                .iter()
+                .find(|p| p.id == player_id)
+                .map(|p| p.is_force_match_selection)
+                .unwrap_or(false);
+            if locked {
+                continue;
             }
-            // Close the previous spell and open one on the destination so
-            // the player's stats accumulate against the team they actually
-            // play for. Without this, a Main → Second demotion left the
-            // active history entry pointing at Main, and the Second-team
-            // league appearances showed under Main (no Second row at all).
-            player.on_intra_club_move(&from_info, &to_info, from_senior, to_senior, date);
-            teams[to_idx].players.add(player);
+            if let Some(mut player) = teams[from_idx].players.take_player(&player_id) {
+                // Internal squad move: migrate any team-level transfer-list entry
+                // (the asking price) to the destination team rather than dropping
+                // it. The player's market status (Lst/Req/Unh) lives on the player
+                // and travels with him automatically; market discovery scans every
+                // team and keys on that status, so an internal Main ↔ Reserve / B
+                // move never removes him from the market. Dropping the entry here
+                // used to desync the asking price from the player's location.
+                if let Some(item) = teams[from_idx].transfer_list.take(player_id) {
+                    teams[to_idx].transfer_list.add(item);
+                }
+                // Close the previous spell and open one on the destination so
+                // the player's stats accumulate against the team they actually
+                // play for. Without this, a Main → Second demotion left the
+                // active history entry pointing at Main, and the Second-team
+                // league appearances showed under Main (no Second row at all).
+                player.on_intra_club_move(&from_info, &to_info, from_senior, to_senior, date);
+                teams[to_idx].players.add(player);
+            }
         }
     }
-}
 
-fn team_label(team: &Team) -> String {
-    team.name.clone()
-}
+    fn team_label(team: &Team) -> String {
+        team.name.clone()
+    }
 
-pub(crate) fn record_player_decisions(
-    teams: &mut [Team],
-    from_idx: usize,
-    to_idx: usize,
-    player_ids: &[u32],
-    date: NaiveDate,
-    decided_by: &str,
-    reason: &str,
-) {
-    let from_label = team_label(&teams[from_idx]);
-    let to_label = team_label(&teams[to_idx]);
-    let movement = format!("{} → {}", from_label, to_label);
-    for &pid in player_ids {
-        if let Some(player) = teams[to_idx]
-            .players
-            .players
-            .iter_mut()
-            .find(|p| p.id == pid)
-        {
-            player.decision_history.add(
-                date,
-                movement.clone(),
-                reason.to_string(),
-                decided_by.to_string(),
-            );
+    pub(crate) fn record_player_decisions(
+        teams: &mut [Team],
+        from_idx: usize,
+        to_idx: usize,
+        player_ids: &[u32],
+        date: NaiveDate,
+        decided_by: &str,
+        reason: &str,
+    ) {
+        let from_label = Self::team_label(&teams[from_idx]);
+        let to_label = Self::team_label(&teams[to_idx]);
+        let movement = format!("{} → {}", from_label, to_label);
+        for &pid in player_ids {
+            if let Some(player) = teams[to_idx]
+                .players
+                .players
+                .iter_mut()
+                .find(|p| p.id == pid)
+            {
+                player.decision_history.add(
+                    date,
+                    movement.clone(),
+                    reason.to_string(),
+                    decided_by.to_string(),
+                );
+            }
         }
     }
-}
 
-pub(crate) fn filter_by_age(
-    ids: Vec<u32>,
-    team: &Team,
-    max_age: Option<u8>,
-    date: NaiveDate,
-) -> Vec<u32> {
-    match max_age {
-        Some(max) => ids
-            .into_iter()
-            .filter(|&pid| {
-                team.players
-                    .players
-                    .iter()
-                    .find(|p| p.id == pid)
-                    .map(|p| DateUtils::age(p.birth_date, date) <= max)
-                    .unwrap_or(false)
-            })
-            .collect(),
-        None => ids,
+    pub(crate) fn filter_by_age(
+        ids: Vec<u32>,
+        team: &Team,
+        max_age: Option<u8>,
+        date: NaiveDate,
+    ) -> Vec<u32> {
+        match max_age {
+            Some(max) => ids
+                .into_iter()
+                .filter(|&pid| {
+                    team.players
+                        .players
+                        .iter()
+                        .find(|p| p.id == pid)
+                        .map(|p| DateUtils::age(p.birth_date, date) <= max)
+                        .unwrap_or(false)
+                })
+                .collect(),
+            None => ids,
+        }
     }
-}
 
-pub(crate) fn record_moves(
-    coach_state: &mut Option<CoachDecisionState>,
-    ids: &[u32],
-    move_type: RecentMoveType,
-    date: NaiveDate,
-) {
-    if let Some(state) = coach_state {
-        for &id in ids {
-            state.record_move(id, move_type, date);
+    pub(crate) fn record_moves(
+        coach_state: &mut Option<CoachDecisionState>,
+        ids: &[u32],
+        move_type: RecentMoveType,
+        date: NaiveDate,
+    ) {
+        if let Some(state) = coach_state {
+            for &id in ids {
+                state.record_move(id, move_type, date);
+            }
         }
     }
 }
@@ -334,7 +336,7 @@ mod execute_moves_tests {
             ),
         ];
 
-        execute_moves(&mut teams, 0, 1, &[1], d(2025, 9, 15));
+        SquadManager::execute_moves(&mut teams, 0, 1, &[1], d(2025, 9, 15));
 
         // Player physically moved to the Second roster.
         assert!(teams[0].players.players.is_empty());
@@ -433,7 +435,7 @@ mod execute_moves_tests {
         ];
 
         // 0 games for Main, then demoted to the Second team.
-        execute_moves(&mut teams, 0, 1, &[1], d(2025, 9, 15));
+        SquadManager::execute_moves(&mut teams, 0, 1, &[1], d(2025, 9, 15));
 
         // Player logs 7 league games for the Second team.
         teams[1].players.players[0].statistics.played = 7;
@@ -771,7 +773,7 @@ mod execute_moves_tests {
             CurrencyValue::new(1_000_000.0, Currency::Usd),
         ));
 
-        execute_moves(&mut teams, 0, 1, &[1], date);
+        SquadManager::execute_moves(&mut teams, 0, 1, &[1], date);
 
         let moved = &teams[1].players.players[0];
         assert!(

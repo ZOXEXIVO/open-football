@@ -34,58 +34,62 @@ pub struct TeamReportStart {
 /// a cloned world snapshot (so the slow LLM never holds the sim lock), and
 /// returns the job id; the dialog then long-polls `/api/ai/progress` to
 /// render tool calls live and finally the report text.
-pub async fn team_ai_report_action(
-    State(state): State<GameAppData>,
-    Json(body): Json<TeamReportRequest>,
-) -> impl IntoResponse {
-    let i18n = state.i18n.for_lang(&body.lang);
-    let Some(settings) = state.ai.get().await else {
-        return Json(TeamReportStart {
-            job_id: None,
-            error: Some(i18n.t("ai_error_not_configured").to_string()),
-        });
-    };
+pub struct TeamAiReport;
 
-    let data = {
-        let guard = state.data.read().await;
-        match guard.as_ref() {
-            Some(data) => Arc::clone(data),
-            None => {
-                return Json(TeamReportStart {
-                    job_id: None,
-                    error: Some(i18n.t("ai_error_no_data").to_string()),
-                });
+impl TeamAiReport {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Json(body): Json<TeamReportRequest>,
+    ) -> impl IntoResponse {
+        let i18n = state.i18n.for_lang(&body.lang);
+        let Some(settings) = state.ai.get().await else {
+            return Json(TeamReportStart {
+                job_id: None,
+                error: Some(i18n.t("ai_error_not_configured").to_string()),
+            });
+        };
+
+        let data = {
+            let guard = state.data.read().await;
+            match guard.as_ref() {
+                Some(data) => Arc::clone(data),
+                None => {
+                    return Json(TeamReportStart {
+                        job_id: None,
+                        error: Some(i18n.t("ai_error_no_data").to_string()),
+                    });
+                }
             }
-        }
-    };
+        };
 
-    let club_name = data
-        .club(body.club_id)
-        .map(|club| club.name.clone())
-        .unwrap_or_default();
-    let language = SUPPORTED_LANGUAGES
-        .iter()
-        .find(|(code, _, _)| *code == body.lang)
-        .map(|(_, _, name)| *name)
-        .unwrap_or("English");
+        let club_name = data
+            .club(body.club_id)
+            .map(|club| club.name.clone())
+            .unwrap_or_default();
+        let language = SUPPORTED_LANGUAGES
+            .iter()
+            .find(|(code, _, _)| *code == body.lang)
+            .map(|(_, _, name)| *name)
+            .unwrap_or("English");
 
-    let system = format!(
-        "{TEAM_REPORT_PROMPT}\n\n## Response language\nWrite your entire final report in {language}."
-    );
-    let task = format!(
-        "Produce a report on the team belonging to the club with id {} (\"{}\").",
-        body.club_id, club_name
-    );
+        let system = format!(
+            "{TEAM_REPORT_PROMPT}\n\n## Response language\nWrite your entire final report in {language}."
+        );
+        let task = format!(
+            "Produce a report on the team belonging to the club with id {} (\"{}\").",
+            body.club_id, club_name
+        );
 
-    let handle = state.ai_jobs.create();
-    let job_id = handle.id();
-    let agent = AiAgent::new(settings, data);
-    tokio::spawn(async move {
-        agent.run(&system, &task, &handle).await;
-    });
+        let handle = state.ai_jobs.create();
+        let job_id = handle.id();
+        let agent = AiAgent::new(settings, data);
+        tokio::spawn(async move {
+            agent.run(&system, &task, &handle).await;
+        });
 
-    Json(TeamReportStart {
-        job_id: Some(job_id),
-        error: None,
-    })
+        Json(TeamReportStart {
+            job_id: Some(job_id),
+            error: None,
+        })
+    }
 }

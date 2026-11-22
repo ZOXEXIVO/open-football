@@ -297,7 +297,6 @@ impl SquadSelector {
         Self::select_with_tactics_context(team, staff, reserve_players, tactics.borrow(), ctx)
     }
 
-    #[expect(clippy::too_many_lines)]
     pub fn select_with_tactics_context(
         team: &Team,
         staff: &Staff,
@@ -312,6 +311,92 @@ impl SquadSelector {
         // Coach perception profile — read-only lens, derived once.
         let coach_profile = CoachProfile::from_staff(staff);
 
+        let available = Self::available_pool(team, reserve_players, ctx, is_main_team);
+        Self::log_availability(team, &available, reserve_players, ctx);
+
+        // Borrow the richer game model only when the caller actually
+        // populated `ctx.game_model`. Conservative default: leave it
+        // `None` so the new bounded additive terms collapse to zero —
+        // existing callers see the same scoring they always have.
+        // Match-day callers build a fixture-aware model with
+        // `MatchSelectionGameModel::build_for_fixture` and store it on
+        // the context before invoking the selector.
+        let game_model_ref: Option<&MatchSelectionGameModel> = ctx.game_model.as_ref();
+
+        let coach_engine = Self::build_coach_engine(
+            staff,
+            &coach_profile,
+            ctx,
+            &available,
+            game_model_ref,
+            &engine,
+        );
+        let succession_heirs = Self::succession_heirs(&available, staff);
+
+        let scx = competitive::SelectionScoringContext {
+            staff,
+            tactics,
+            engine: &engine,
+            date: ctx.date,
+            is_friendly: ctx.is_friendly,
+            match_importance: ctx.pressure(),
+            stakes: ctx.match_importance,
+            room: ctx.room(),
+            bench_size: ctx.bench_size,
+            coach: Some(&coach_engine),
+            competition: ctx.competition,
+            game_model: game_model_ref,
+            succession_heirs: &succession_heirs,
+            keeper_brief: ctx.keeper_brief,
+        };
+
+        let starting_pool = Self::starting_pool(team, &available, ctx, tactics);
+        let main_squad = scx.select_starting_eleven(team.id, &starting_pool);
+
+        let main_squad_ids: FxHashSet<u32> = main_squad.iter().map(|mp| mp.id).collect();
+        let remaining: Vec<&Player> = available
+            .iter()
+            .filter(|p| !main_squad_ids.contains(&p.id))
+            .copied()
+            .collect();
+
+        let mut substitutes = scx.select_substitutes(team.id, &remaining);
+        Self::force_populate_bench(team, tactics, ctx, &remaining, &mut substitutes);
+
+        debug!(
+            "Final squad: {} starters, {} subs",
+            main_squad.len(),
+            substitutes.len()
+        );
+
+        let omissions = Self::build_omissions(
+            &available,
+            &main_squad,
+            &substitutes,
+            staff,
+            tactics,
+            &engine,
+            ctx,
+            &coach_engine,
+            game_model_ref,
+            &succession_heirs,
+        );
+        let overlooked = Self::overlooked_on_roster(team, &available, &main_squad, &substitutes);
+
+        PlayerSelectionResult {
+            main_squad,
+            substitutes,
+            omissions,
+            overlooked,
+        }
+    }
+
+    fn available_pool<'a>(
+        team: &'a Team,
+        reserve_players: &[&'a Player],
+        ctx: &SelectionContext,
+        is_main_team: bool,
+    ) -> Vec<&'a Player> {
         // Force-selection is a Main-team pin: a flagged player is committed
         // to the senior XI, so non-Main squads must drop them from every
         // entry path — both their own roster (a B-team player flagged for
@@ -355,6 +440,26 @@ impl SquadSelector {
             }
         }
 
+        Self::recover_fallback_keepers(team, ctx, is_main_team, &mut available, &mut available_ids);
+        Self::readmit_withheld(
+            team.players
+                .players()
+                .into_iter()
+                .filter(|p| is_main_team || !p.is_force_match_selection),
+            ctx,
+            &mut available,
+            &mut available_ids,
+        );
+        available
+    }
+
+    fn recover_fallback_keepers<'a>(
+        team: &'a Team,
+        ctx: &SelectionContext,
+        is_main_team: bool,
+        available: &mut Vec<&'a Player>,
+        available_ids: &mut FxHashSet<u32>,
+    ) {
         // Keeper-fallback recovery. If the normal `is_available` filter
         // excluded every goalkeeper on the roster (all injured or on
         // international duty or low-condition), we'd then press an
@@ -366,38 +471,36 @@ impl SquadSelector {
         // them back here, skipping only keepers who physically can't
         // play (actively banned or absent).
         let has_fit_keeper = available.iter().any(|p| p.positions.is_goalkeeper());
-        if !has_fit_keeper {
-            for p in team.players.players().iter().copied() {
-                // Re-admit only keepers who can physically play. The shared
-                // helper skips injured / international-duty keepers and, in a
-                // competitive match, banned ones — a low condition is the only
-                // reason it relaxes. Force-selected players in non-Main squads
-                // stay dropped (the Main-team pin is honoured elsewhere).
-                if !KeeperAvailability::is_fallback_available(p, ctx.is_friendly)
-                    || !Self::eligible_under_rules(p, ctx)
-                {
-                    continue;
-                }
-                if !is_main_team && p.is_force_match_selection {
-                    continue;
-                }
-                if !available_ids.insert(p.id) {
-                    continue;
-                }
-                available.push(p);
-            }
+        if has_fit_keeper {
+            return;
         }
+        for p in team.players.players().iter().copied() {
+            // Re-admit only keepers who can physically play. The shared
+            // helper skips injured / international-duty keepers and, in a
+            // competitive match, banned ones — a low condition is the only
+            // reason it relaxes. Force-selected players in non-Main squads
+            // stay dropped (the Main-team pin is honoured elsewhere).
+            if !KeeperAvailability::is_fallback_available(p, ctx.is_friendly)
+                || !Self::eligible_under_rules(p, ctx)
+            {
+                continue;
+            }
+            if !is_main_team && p.is_force_match_selection {
+                continue;
+            }
+            if !available_ids.insert(p.id) {
+                continue;
+            }
+            available.push(p);
+        }
+    }
 
-        Self::readmit_withheld(
-            team.players
-                .players()
-                .into_iter()
-                .filter(|p| is_main_team || !p.is_force_match_selection),
-            ctx,
-            &mut available,
-            &mut available_ids,
-        );
-
+    fn log_availability(
+        team: &Team,
+        available: &[&Player],
+        reserve_players: &[&Player],
+        ctx: &SelectionContext,
+    ) {
         let outfield_count = available
             .iter()
             .filter(|p| !p.positions.is_goalkeeper())
@@ -444,16 +547,16 @@ impl SquadSelector {
                 DEFAULT_SQUAD_SIZE + ctx.bench_size
             );
         }
+    }
 
-        // Borrow the richer game model only when the caller actually
-        // populated `ctx.game_model`. Conservative default: leave it
-        // `None` so the new bounded additive terms collapse to zero —
-        // existing callers see the same scoring they always have.
-        // Match-day callers build a fixture-aware model with
-        // `MatchSelectionGameModel::build_for_fixture` and store it on
-        // the context before invoking the selector.
-        let game_model_ref: Option<&MatchSelectionGameModel> = ctx.game_model.as_ref();
-
+    fn build_coach_engine<'a>(
+        staff: &'a Staff,
+        coach_profile: &'a CoachProfile,
+        ctx: &SelectionContext,
+        available: &[&Player],
+        game_model_ref: Option<&MatchSelectionGameModel>,
+        engine: &'a ScoringEngine,
+    ) -> CoachDecisionEngine<'a> {
         // Coach decision engine — built once per side, after
         // `available` so the strategy reads real squad-depth and any
         // available cup-context signals (opponent reputation /
@@ -467,7 +570,7 @@ impl SquadSelector {
             .unwrap_or_else(|| StrategyInputsBuilder::strength_ratio(&ctx.competition));
         let squad_depth = StrategyInputsBuilder::squad_depth(available.len(), ctx.bench_size);
         let coach_strategy = StrategyDeriver::derive(&StrategyInputs {
-            profile: &coach_profile,
+            profile: coach_profile,
             philosophy: ctx.philosophy,
             match_importance: ctx.pressure(),
             is_friendly: ctx.is_friendly,
@@ -480,96 +583,76 @@ impl SquadSelector {
             strength_ratio,
             squad_depth,
         });
-        let coach_engine = CoachDecisionEngine::from_staff(staff, &coach_profile, coach_strategy)
-            .with_owning_roster(engine.owning_roster.as_ref().unwrap());
+        CoachDecisionEngine::from_staff(staff, coach_profile, coach_strategy)
+            .with_owning_roster(engine.owning_roster.as_ref().unwrap())
+    }
 
-        let succession_heirs: Vec<u32> = available
+    fn succession_heirs(available: &[&Player], staff: &Staff) -> Vec<u32> {
+        available
             .iter()
             .filter(|p| staff.squad_plan.role_of(p.id) == Some(PlannedRole::SuccessionHeir))
             .map(|p| p.id)
-            .collect();
+            .collect()
+    }
 
-        let scx = competitive::SelectionScoringContext {
-            staff,
-            tactics,
-            engine: &engine,
-            date: ctx.date,
-            is_friendly: ctx.is_friendly,
-            match_importance: ctx.pressure(),
-            stakes: ctx.match_importance,
-            room: ctx.room(),
-            bench_size: ctx.bench_size,
-            coach: Some(&coach_engine),
-            competition: ctx.competition,
-            game_model: game_model_ref,
-            succession_heirs: &succession_heirs,
-            keeper_brief: ctx.keeper_brief,
-        };
-
-        let starting_pool = Self::starting_pool(team, &available, ctx, tactics);
-        let main_squad = scx.select_starting_eleven(team.id, &starting_pool);
-
-        let main_squad_ids: FxHashSet<u32> = main_squad.iter().map(|mp| mp.id).collect();
-        let remaining: Vec<&Player> = available
-            .iter()
-            .filter(|p| !main_squad_ids.contains(&p.id))
-            .copied()
-            .collect();
-
-        let mut substitutes = scx.select_substitutes(team.id, &remaining);
-
-        if substitutes.is_empty() && !remaining.is_empty() {
-            debug!(
-                "Substitute selection produced empty bench with {} remaining players — force-populating",
-                remaining.len()
-            );
-            for player in &remaining {
-                if substitutes.len() >= ctx.bench_size {
-                    break;
-                }
-                let pos = SlotFit::best_tactical_position(player, tactics);
-                substitutes.push(MatchPlayer::from_player(
-                    team.id,
-                    player,
-                    pos,
-                    false,
-                    Some(ctx.date),
-                ));
-            }
+    fn force_populate_bench(
+        team: &Team,
+        tactics: &Tactics,
+        ctx: &SelectionContext,
+        remaining: &[&Player],
+        substitutes: &mut Vec<MatchPlayer>,
+    ) {
+        if !substitutes.is_empty() || remaining.is_empty() {
+            return;
         }
-
         debug!(
-            "Final squad: {} starters, {} subs",
-            main_squad.len(),
-            substitutes.len()
+            "Substitute selection produced empty bench with {} remaining players — force-populating",
+            remaining.len()
         );
-
-        let omissions = omissions::OmissionBuilder {
-            available: &available,
-            main_squad: &main_squad,
-            substitutes: &substitutes,
-            staff,
-            tactics,
-            engine: &engine,
-            date: ctx.date,
-            is_friendly: ctx.is_friendly,
-            match_importance: ctx.pressure(),
-            room: ctx.room(),
-            coach: Some(&coach_engine),
-            competition: ctx.competition,
-            game_model: game_model_ref,
-            succession_heirs: &succession_heirs,
+        for player in remaining {
+            if substitutes.len() >= ctx.bench_size {
+                break;
+            }
+            let pos = SlotFit::best_tactical_position(player, tactics);
+            substitutes.push(MatchPlayer::from_player(
+                team.id,
+                player,
+                pos,
+                false,
+                Some(ctx.date),
+            ));
         }
-        .build();
+    }
 
-        let overlooked = Self::overlooked_on_roster(team, &available, &main_squad, &substitutes);
-
-        PlayerSelectionResult {
+    fn build_omissions<'a>(
+        available: &[&Player],
+        main_squad: &[MatchPlayer],
+        substitutes: &[MatchPlayer],
+        staff: &'a Staff,
+        tactics: &'a Tactics,
+        engine: &'a ScoringEngine,
+        ctx: &SelectionContext,
+        coach_engine: &'a CoachDecisionEngine<'a>,
+        game_model: Option<&'a MatchSelectionGameModel>,
+        succession_heirs: &'a [u32],
+    ) -> Vec<OmittedPlayer> {
+        omissions::OmissionBuilder {
+            available,
             main_squad,
             substitutes,
-            omissions,
-            overlooked,
+            staff,
+            tactics,
+            engine,
+            date: ctx.date,
+            is_friendly: ctx.is_friendly,
+            match_importance: ctx.pressure(),
+            room: ctx.room(),
+            coach: Some(coach_engine),
+            competition: ctx.competition,
+            game_model,
+            succession_heirs,
         }
+        .build()
     }
 
     /// The selecting team's own fit players who were left out altogether.
@@ -620,7 +703,6 @@ impl SquadSelector {
         )
     }
 
-    #[expect(clippy::too_many_lines)]
     pub fn select_for_rotation_with_context(
         team: &Team,
         staff: &Staff,
@@ -630,6 +712,70 @@ impl SquadSelector {
         let tactics = team.tactics();
         let is_main_team = team.team_type == TeamType::Main;
 
+        let (available, guest_ids) =
+            Self::rotation_available_pool(team, reserve_players, ctx, is_main_team);
+
+        // Development selector: season minutes plan + keeper rotation
+        // blocks + stakes slider. The season length prefers the exact
+        // table read supplied by the matchday caller; the fallback is
+        // estimated from the team's own roster (not the merged reserve
+        // pool) so borrowed players' senior appearance counts can't
+        // inflate the season the deficits are measured against.
+        // A side whose coach holds no plan is planned for the day, on the
+        // same chart and shares.
+        let drawn = staff.squad_plan.is_empty().then(|| {
+            let side = team.team_type.development_weight();
+            let mut plan = CoachSquadPlan::new();
+            plan.revise(&PlanReading {
+                climate: ShareClimate {
+                    rotation: CoachProfile::from_staff(staff).rotation_tendency(),
+                    development: side,
+                    side,
+                    ..ShareClimate::ONE_COMPETITION
+                },
+                ..PlanReading::of(&team.players, tactics.borrow(), ctx.date)
+            });
+            plan
+        });
+        let development =
+            Self::rotation_development(team, staff, tactics.borrow(), ctx, &guest_ids, &drawn);
+
+        let main_squad = development.select_starting_eleven(&available);
+
+        let main_squad_ids: FxHashSet<u32> = main_squad.iter().map(|mp| mp.id).collect();
+        let remaining: Vec<&Player> = available
+            .iter()
+            .filter(|p| !main_squad_ids.contains(&p.id))
+            .copied()
+            .collect();
+
+        let mut substitutes = development.select_substitutes(&remaining);
+        Self::force_populate_rotation_bench(
+            team,
+            tactics.borrow(),
+            ctx,
+            &remaining,
+            &mut substitutes,
+        );
+
+        // Rotation matches (friendlies / dev leagues) don't generate
+        // morale-relevant drop events — every player is in line for a
+        // run-out and an omission carries no professional sting.
+        let overlooked = Self::overlooked_on_roster(team, &available, &main_squad, &substitutes);
+        PlayerSelectionResult {
+            main_squad,
+            substitutes,
+            omissions: Vec::new(),
+            overlooked,
+        }
+    }
+
+    fn rotation_available_pool<'a>(
+        team: &'a Team,
+        reserve_players: &[&'a Player],
+        ctx: &SelectionContext,
+        is_main_team: bool,
+    ) -> (Vec<&'a Player>, Vec<u32>) {
         let team_player_count = team.players.players().len();
         let estimated = team_player_count + reserve_players.len();
         let mut available: Vec<&Player> = Vec::with_capacity(estimated);
@@ -674,53 +820,16 @@ impl SquadSelector {
             }
         }
 
-        if available.len() < DEFAULT_SQUAD_SIZE + ctx.bench_size {
-            let needed = (DEFAULT_SQUAD_SIZE + ctx.bench_size) - available.len();
-            let mut supplements: Vec<&Player> = reserve_players
-                .iter()
-                .filter(|&&rp| {
-                    if !is_main_team && rp.is_force_match_selection {
-                        return false;
-                    }
-                    if registration_cap.is_some_and(|cap| rp.age(ctx.date) > cap) {
-                        return false;
-                    }
-                    PlayerAvailability::is_available(rp, ctx.is_friendly)
-                        && Self::eligible_under_rules(rp, ctx)
-                        && !available_ids.contains(&rp.id)
-                })
-                .copied()
-                .collect();
-
-            supplements.sort_by(|a, b| {
-                b.player_attributes
-                    .days_since_last_match
-                    .cmp(&a.player_attributes.days_since_last_match)
-            });
-
-            // Shortfall fill-ins hold guest standing too: they are not part
-            // of this team's season plan, and their empty appearance ledgers
-            // would otherwise read as season-scale deficits that start them
-            // over the roster's own players. As guests they complete the
-            // squad when there are holes but never displace an own player
-            // who is on or behind his plan.
-            for rp in supplements.into_iter().take(needed) {
-                if available_ids.insert(rp.id) {
-                    available.push(rp);
-                    guest_ids.push(rp.id);
-                }
-            }
-
-            if available.len() < DEFAULT_SQUAD_SIZE {
-                debug!(
-                    "Rotation selection for team {}: only {} available after borrowing ({} reserves offered)",
-                    team.name,
-                    available.len(),
-                    reserve_players.len()
-                );
-            }
-        }
-
+        Self::supplement_rotation_pool(
+            team,
+            reserve_players,
+            ctx,
+            is_main_team,
+            registration_cap,
+            &mut available,
+            &mut available_ids,
+            &mut guest_ids,
+        );
         Self::readmit_withheld(
             team.players
                 .players()
@@ -730,32 +839,79 @@ impl SquadSelector {
             &mut available,
             &mut available_ids,
         );
+        (available, guest_ids)
+    }
 
-        // Development selector: season minutes plan + keeper rotation
-        // blocks + stakes slider. The season length prefers the exact
-        // table read supplied by the matchday caller; the fallback is
-        // estimated from the team's own roster (not the merged reserve
-        // pool) so borrowed players' senior appearance counts can't
-        // inflate the season the deficits are measured against.
-        // A side whose coach holds no plan is planned for the day, on the
-        // same chart and shares.
-        let drawn = staff.squad_plan.is_empty().then(|| {
-            let side = team.team_type.development_weight();
-            let mut plan = CoachSquadPlan::new();
-            plan.revise(&PlanReading {
-                climate: ShareClimate {
-                    rotation: CoachProfile::from_staff(staff).rotation_tendency(),
-                    development: side,
-                    side,
-                    ..ShareClimate::ONE_COMPETITION
-                },
-                ..PlanReading::of(&team.players, tactics.borrow(), ctx.date)
-            });
-            plan
+    fn supplement_rotation_pool<'a>(
+        team: &Team,
+        reserve_players: &[&'a Player],
+        ctx: &SelectionContext,
+        is_main_team: bool,
+        registration_cap: Option<u8>,
+        available: &mut Vec<&'a Player>,
+        available_ids: &mut FxHashSet<u32>,
+        guest_ids: &mut Vec<u32>,
+    ) {
+        if available.len() >= DEFAULT_SQUAD_SIZE + ctx.bench_size {
+            return;
+        }
+        let needed = (DEFAULT_SQUAD_SIZE + ctx.bench_size) - available.len();
+        let mut supplements: Vec<&Player> = reserve_players
+            .iter()
+            .filter(|&&rp| {
+                if !is_main_team && rp.is_force_match_selection {
+                    return false;
+                }
+                if registration_cap.is_some_and(|cap| rp.age(ctx.date) > cap) {
+                    return false;
+                }
+                PlayerAvailability::is_available(rp, ctx.is_friendly)
+                    && Self::eligible_under_rules(rp, ctx)
+                    && !available_ids.contains(&rp.id)
+            })
+            .copied()
+            .collect();
+
+        supplements.sort_by(|a, b| {
+            b.player_attributes
+                .days_since_last_match
+                .cmp(&a.player_attributes.days_since_last_match)
         });
-        let development = DevelopmentSelection {
+
+        // Shortfall fill-ins hold guest standing too: they are not part
+        // of this team's season plan, and their empty appearance ledgers
+        // would otherwise read as season-scale deficits that start them
+        // over the roster's own players. As guests they complete the
+        // squad when there are holes but never displace an own player
+        // who is on or behind his plan.
+        for rp in supplements.into_iter().take(needed) {
+            if available_ids.insert(rp.id) {
+                available.push(rp);
+                guest_ids.push(rp.id);
+            }
+        }
+
+        if available.len() < DEFAULT_SQUAD_SIZE {
+            debug!(
+                "Rotation selection for team {}: only {} available after borrowing ({} reserves offered)",
+                team.name,
+                available.len(),
+                reserve_players.len()
+            );
+        }
+    }
+
+    fn rotation_development<'a>(
+        team: &'a Team,
+        staff: &'a Staff,
+        tactics: &'a Tactics,
+        ctx: &SelectionContext,
+        guest_ids: &'a [u32],
+        drawn: &'a Option<CoachSquadPlan>,
+    ) -> DevelopmentSelection<'a> {
+        DevelopmentSelection {
             team_id: team.id,
-            tactics: tactics.borrow(),
+            tactics,
             date: ctx.date,
             team_type: team.team_type,
             stakes: DevelopmentStakes::from_context(ctx.pressure(), ctx.is_friendly),
@@ -763,51 +919,38 @@ impl SquadSelector {
                 MatchInvolvement::team_matches_estimate(&team.players.players())
             }),
             coach: CoachProfile::from_staff(staff),
-            guest_ids: &guest_ids,
+            guest_ids,
             plan: drawn.as_ref().unwrap_or(&staff.squad_plan),
             bench_size: ctx.bench_size,
-        };
-
-        let main_squad = development.select_starting_eleven(&available);
-
-        let main_squad_ids: FxHashSet<u32> = main_squad.iter().map(|mp| mp.id).collect();
-        let remaining: Vec<&Player> = available
-            .iter()
-            .filter(|p| !main_squad_ids.contains(&p.id))
-            .copied()
-            .collect();
-
-        let mut substitutes = development.select_substitutes(&remaining);
-
-        if substitutes.is_empty() && !remaining.is_empty() {
-            debug!(
-                "Rotation substitute selection produced empty bench with {} remaining — force-populating",
-                remaining.len()
-            );
-            for player in &remaining {
-                if substitutes.len() >= ctx.bench_size {
-                    break;
-                }
-                let pos = SlotFit::best_tactical_position(player, tactics.borrow());
-                substitutes.push(MatchPlayer::from_player(
-                    team.id,
-                    player,
-                    pos,
-                    false,
-                    Some(ctx.date),
-                ));
-            }
         }
+    }
 
-        // Rotation matches (friendlies / dev leagues) don't generate
-        // morale-relevant drop events — every player is in line for a
-        // run-out and an omission carries no professional sting.
-        let overlooked = Self::overlooked_on_roster(team, &available, &main_squad, &substitutes);
-        PlayerSelectionResult {
-            main_squad,
-            substitutes,
-            omissions: Vec::new(),
-            overlooked,
+    fn force_populate_rotation_bench(
+        team: &Team,
+        tactics: &Tactics,
+        ctx: &SelectionContext,
+        remaining: &[&Player],
+        substitutes: &mut Vec<MatchPlayer>,
+    ) {
+        if !substitutes.is_empty() || remaining.is_empty() {
+            return;
+        }
+        debug!(
+            "Rotation substitute selection produced empty bench with {} remaining — force-populating",
+            remaining.len()
+        );
+        for player in remaining {
+            if substitutes.len() >= ctx.bench_size {
+                break;
+            }
+            let pos = SlotFit::best_tactical_position(player, tactics);
+            substitutes.push(MatchPlayer::from_player(
+                team.id,
+                player,
+                pos,
+                false,
+                Some(ctx.date),
+            ));
         }
     }
 

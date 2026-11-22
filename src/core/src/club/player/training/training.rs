@@ -46,6 +46,31 @@ impl Default for PlayerTraining {
     }
 }
 
+/// The component scores behind one training outcome, on the 1..20 scale.
+struct OutcomeScores {
+    raw_score: f32,
+    baseline_score: f32,
+    effort_score: f32,
+    session_fit_score: f32,
+    physical_state_score: f32,
+    coach_fit_score: f32,
+    tactical_relevance_score: f32,
+    psychological_score: f32,
+    randomness_score: f32,
+}
+
+/// Threshold facts the evidence assembly reads without recomputing.
+struct OutcomeEvidenceContext {
+    positive: bool,
+    age: u8,
+    professionalism: f32,
+    delta: f32,
+    baseline_score: f32,
+    in_recovery: bool,
+    has_recent_criticism: bool,
+    has_transfer_speculation: bool,
+}
+
 impl PlayerTraining {
     pub fn new() -> Self {
         PlayerTraining {
@@ -71,7 +96,6 @@ impl PlayerTraining {
         NEUTRAL_FORM + nudge
     }
 
-    #[expect(clippy::too_many_lines)]
     pub fn train(
         player: &Player,
         coach: &Staff,
@@ -122,367 +146,36 @@ impl PlayerTraining {
         //   * Pressing / Transition / MatchPrep → high readiness gain
         //   * Recovery / RestDay / Video → restore condition, ~zero sharpness
         //   * Rehab / LightRecovery → small readiness rebuild
-        match session.session_type {
-            TrainingType::Endurance => {
-                effects.work.practise(SkillKey::Stamina, 0.05);
-                effects.work.practise(SkillKey::NaturalFitness, 0.03);
-                effects.fatigue_change = 100.0 * intensity_multiplier; // Real cost — endurance is hard
-                effects.injury_risk = 0.002 * intensity_multiplier;
-                effects.physical_load_units = 30.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.20;
-                effects.readiness_change = 0.4;
-            }
-            TrainingType::Strength => {
-                effects.work.practise(SkillKey::Strength, 0.04);
-                effects.work.practise(SkillKey::Jumping, 0.02);
-                effects.fatigue_change = 100.0 * intensity_multiplier;
-                effects.injury_risk = 0.003 * intensity_multiplier;
-                effects.physical_load_units = 22.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.15;
-                effects.readiness_change = 0.3;
-            }
-            TrainingType::Speed => {
-                effects.work.practise(SkillKey::Pace, 0.03);
-                effects.work.practise(SkillKey::Acceleration, 0.03);
-                effects.work.practise(SkillKey::Agility, 0.03);
-                effects.fatigue_change = 150.0 * intensity_multiplier;
-                effects.injury_risk = 0.004 * intensity_multiplier;
-                effects.physical_load_units = 32.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.55;
-                effects.readiness_change = 0.5;
-            }
-            TrainingType::BallControl => {
-                effects.work.practise(SkillKey::FirstTouch, 0.05);
-                effects.work.practise(SkillKey::Technique, 0.04);
-                effects.work.practise(SkillKey::Dribbling, 0.03);
-                effects.work.practise(SkillKey::Flair, 0.01);
-                effects.fatigue_change = 15.0 * intensity_multiplier;
-                effects.injury_risk = 0.001 * intensity_multiplier;
-                effects.physical_load_units = 12.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.10;
-                effects.readiness_change = 0.4;
-            }
-            TrainingType::Passing => {
-                effects.work.practise(SkillKey::Passing, 0.06);
-                effects.work.practise(SkillKey::Vision, 0.02);
-                effects.fatigue_change = 10.0 * intensity_multiplier;
-                effects.injury_risk = 0.001 * intensity_multiplier;
-                effects.physical_load_units = 10.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.05;
-                effects.readiness_change = 0.4;
-            }
-            TrainingType::Shooting => {
-                effects.work.practise(SkillKey::Finishing, 0.05);
-                effects.work.practise(SkillKey::OffTheBall, 0.02);
-                effects.work.practise(SkillKey::Technique, 0.02);
-                effects.work.practise(SkillKey::LongShots, 0.02);
-                effects.work.practise(SkillKey::Decisions, 0.01);
-                effects.work.practise(SkillKey::Composure, 0.01);
-                effects.fatigue_change = 50.0 * intensity_multiplier;
-                effects.injury_risk = 0.002 * intensity_multiplier;
-                effects.physical_load_units = 16.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.20;
-                effects.readiness_change = 0.5;
-            }
-            TrainingType::Positioning => {
-                effects.work.practise(SkillKey::Positioning, 0.06);
-                effects.work.practise(SkillKey::Concentration, 0.03);
-                effects.work.practise(SkillKey::Decisions, 0.02);
-                effects.work.practise(SkillKey::Anticipation, 0.02);
-                // Tactical walkthrough — slight net recovery, real
-                // sharpness gain (you're rehearsing match shape).
-                effects.fatigue_change = -30.0 * intensity_multiplier;
-                effects.injury_risk = 0.0005 * intensity_multiplier;
-                effects.physical_load_units = 4.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.0;
-                effects.readiness_change = 0.4;
-            }
-            TrainingType::TeamShape => {
-                effects.work.practise(SkillKey::Teamwork, 0.05);
-                effects.work.practise(SkillKey::Positioning, 0.04);
-                effects.work.practise(SkillKey::WorkRate, 0.02);
-                effects.fatigue_change = 30.0 * intensity_multiplier;
-                effects.injury_risk = 0.001 * intensity_multiplier;
-                effects.physical_load_units = 14.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.10;
-                effects.readiness_change = 0.6;
-            }
-            TrainingType::Recovery => {
-                effects.fatigue_change = -800.0; // Strong recovery — main condition restoration
-                effects.injury_risk = -0.002;
-                effects.physical_load_units = 0.0;
-                effects.high_intensity_share = 0.0;
-                effects.readiness_change = 0.1;
-            }
-            TrainingType::VideoAnalysis => {
-                effects.work.practise(SkillKey::Decisions, 0.03);
-                effects.work.practise(SkillKey::Positioning, 0.02);
-                effects.work.practise(SkillKey::Vision, 0.02);
-                effects.fatigue_change = -120.0; // Sat in a meeting room — body recovers a touch
-                effects.injury_risk = 0.0;
-                effects.physical_load_units = 0.0;
-                effects.high_intensity_share = 0.0;
-                effects.readiness_change = 0.1; // Tactical sharpness, not match sharpness
-            }
-            TrainingType::RestDay => {
-                effects.fatigue_change = -600.0;
-                effects.injury_risk = -0.003;
-                effects.physical_load_units = 0.0;
-                effects.high_intensity_share = 0.0;
-                effects.readiness_change = 0.0;
-            }
-            TrainingType::LightRecovery => {
-                effects.fatigue_change = -500.0;
-                effects.injury_risk = -0.001;
-                effects.physical_load_units = 2.0;
-                effects.high_intensity_share = 0.0;
-                effects.readiness_change = 0.2;
-            }
-            TrainingType::Rehabilitation => {
-                effects.fatigue_change = -300.0;
-                effects.injury_risk = -0.002;
-                effects.physical_load_units = 4.0;
-                effects.high_intensity_share = 0.0;
-                effects.readiness_change = 0.3;
-            }
-            TrainingType::PressingDrills => {
-                effects.work.practise(SkillKey::WorkRate, 0.04);
-                effects.work.practise(SkillKey::Teamwork, 0.03);
-                effects.fatigue_change = 180.0 * intensity_multiplier;
-                effects.injury_risk = 0.004 * intensity_multiplier;
-                effects.physical_load_units = 38.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.50;
-                effects.readiness_change = 1.0;
-            }
-            TrainingType::TransitionPlay => {
-                effects.work.practise(SkillKey::Passing, 0.03);
-                effects.work.practise(SkillKey::Decisions, 0.03);
-                effects.work.practise(SkillKey::OffTheBall, 0.02);
-                effects.fatigue_change = 160.0 * intensity_multiplier;
-                effects.injury_risk = 0.003 * intensity_multiplier;
-                effects.physical_load_units = 34.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.45;
-                effects.readiness_change = 1.0;
-            }
-            TrainingType::MatchPreparation => {
-                effects.work.practise(SkillKey::Concentration, 0.03);
-                effects.work.practise(SkillKey::Positioning, 0.02);
-                effects.work.practise(SkillKey::Composure, 0.015);
-                effects.work.practise(SkillKey::Finishing, 0.01);
-                effects.work.practise(SkillKey::FirstTouch, 0.01);
-                effects.fatigue_change = 30.0 * intensity_multiplier;
-                effects.injury_risk = 0.0015 * intensity_multiplier;
-                effects.physical_load_units = 18.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.20;
-                effects.readiness_change = 1.2; // Top-up sharpness without burning condition
-            }
-            TrainingType::SetPieces => {
-                effects.work.practise(SkillKey::Crossing, 0.03);
-                effects.work.practise(SkillKey::Heading, 0.02);
-                effects.work.practise(SkillKey::Corners, 0.025);
-                effects.work.practise(SkillKey::FreeKicks, 0.025);
-                effects.fatigue_change = 20.0 * intensity_multiplier;
-                effects.injury_risk = 0.0008 * intensity_multiplier;
-                effects.physical_load_units = 8.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.10;
-                effects.readiness_change = 0.4;
-            }
-            TrainingType::OpponentSpecific => {
-                effects.work.practise(SkillKey::Decisions, 0.02);
-                effects.work.practise(SkillKey::Vision, 0.02);
-                effects.fatigue_change = 20.0 * intensity_multiplier;
-                effects.injury_risk = 0.001 * intensity_multiplier;
-                effects.physical_load_units = 10.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.10;
-                effects.readiness_change = 0.6;
-            }
-            TrainingType::Agility => {
-                effects.work.practise(SkillKey::Agility, 0.04);
-                effects.work.practise(SkillKey::Balance, 0.03);
-                effects.fatigue_change = 80.0 * intensity_multiplier;
-                effects.injury_risk = 0.003 * intensity_multiplier;
-                effects.physical_load_units = 24.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.40;
-                effects.readiness_change = 0.4;
-            }
-            TrainingType::Crossing => {
-                effects.work.practise(SkillKey::Crossing, 0.05);
-                effects.work.practise(SkillKey::Technique, 0.02);
-                effects.fatigue_change = 30.0 * intensity_multiplier;
-                effects.injury_risk = 0.001 * intensity_multiplier;
-                effects.physical_load_units = 14.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.15;
-                effects.readiness_change = 0.4;
-            }
-            TrainingType::SetPiecesDefensive => {
-                effects.work.practise(SkillKey::Positioning, 0.03);
-                effects.work.practise(SkillKey::Marking, 0.03);
-                effects.work.practise(SkillKey::Heading, 0.02);
-                effects.work.practise(SkillKey::Bravery, 0.01);
-                effects.fatigue_change = 20.0 * intensity_multiplier;
-                effects.injury_risk = 0.0008 * intensity_multiplier;
-                effects.physical_load_units = 8.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.10;
-                effects.readiness_change = 0.4;
-            }
-            TrainingType::Defending => {
-                effects.work.practise(SkillKey::Tackling, 0.05);
-                effects.work.practise(SkillKey::Marking, 0.05);
-                effects.work.practise(SkillKey::Heading, 0.03);
-                effects.work.practise(SkillKey::Positioning, 0.03);
-                effects.work.practise(SkillKey::Bravery, 0.01);
-                effects.fatigue_change = 60.0 * intensity_multiplier;
-                effects.injury_risk = 0.002 * intensity_multiplier;
-                effects.physical_load_units = 18.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.25;
-                effects.readiness_change = 0.5;
-            }
-            TrainingType::DecisionMaking => {
-                effects.work.practise(SkillKey::Decisions, 0.05);
-                effects.work.practise(SkillKey::Vision, 0.02);
-                effects.work.practise(SkillKey::Anticipation, 0.02);
-                effects.fatigue_change = -60.0;
-                effects.injury_risk = 0.0;
-                effects.physical_load_units = 0.0;
-                effects.high_intensity_share = 0.0;
-                effects.readiness_change = 0.2;
-            }
-            TrainingType::GoalkeeperTraining => {
-                for (key, reps) in [
-                    (SkillKey::GkHandling, 0.04),
-                    (SkillKey::GkReflexes, 0.04),
-                    (SkillKey::GkOneOnOnes, 0.025),
-                    (SkillKey::GkAerialReach, 0.02),
-                    (SkillKey::GkCommandOfArea, 0.02),
-                    (SkillKey::GkKicking, 0.02),
-                    (SkillKey::GkRushingOut, 0.015),
-                    (SkillKey::GkCommunication, 0.01),
-                    (SkillKey::GkPunching, 0.01),
-                    (SkillKey::GkThrowing, 0.01),
-                ] {
-                    effects.work.practise(key, reps);
-                }
-                effects.fatigue_change = 60.0 * intensity_multiplier;
-                effects.injury_risk = 0.002 * intensity_multiplier;
-                effects.physical_load_units = 20.0 * intensity_multiplier;
-                effects.high_intensity_share = 0.30;
-                effects.readiness_change = 0.8;
-            }
-        }
-
-        // ===== INDIVIDUAL TRAINING PLAN =====
-        // Focused extra reps layered on top of the group session, so a
-        // coach-assigned plan (training_direction) actually moves the
-        // targeted skill. Recovery-family days carry no extra reps.
-        let is_recovery_family = matches!(
-            session.session_type,
-            TrainingType::Recovery
-                | TrainingType::LightRecovery
-                | TrainingType::Rehabilitation
-                | TrainingType::RestDay
-                | TrainingType::VideoAnalysis
+        Self::apply_physical_session(
+            &mut effects,
+            session.session_type.clone(),
+            intensity_multiplier,
         );
-        if !is_recovery_family && let Some(plan) = &player.individual_training {
-            let focus_reps = 0.02 * plan.intensity_modifier.clamp(0.5, 1.5);
-            for focus in &plan.focus_areas {
-                match focus {
-                    TrainingFocus::SpecificSkill(skill) => {
-                        let key = match skill {
-                            SkillType::FreeKicks => SkillKey::FreeKicks,
-                            SkillType::Penalties => SkillKey::PenaltyTaking,
-                            SkillType::LongShots => SkillKey::LongShots,
-                            SkillType::Heading => SkillKey::Heading,
-                            SkillType::Tackling => SkillKey::Tackling,
-                            SkillType::Crossing => SkillKey::Crossing,
-                            SkillType::Dribbling => SkillKey::Dribbling,
-                        };
-                        effects.work.practise(key, focus_reps);
-                    }
-                    TrainingFocus::FitnessBuilding => {
-                        effects.work.practise(SkillKey::Stamina, focus_reps * 0.6);
-                        effects
-                            .work
-                            .practise(SkillKey::NaturalFitness, focus_reps * 0.4);
-                    }
-                    TrainingFocus::MentalDevelopment => {
-                        effects.work.practise(SkillKey::Composure, focus_reps * 0.5);
-                        effects.work.practise(SkillKey::Decisions, focus_reps * 0.5);
-                    }
-                    // Weak-foot work, position retraining, and injury
-                    // recovery move foot levels / position levels /
-                    // rehab state, not skills.
-                    TrainingFocus::WeakFootImprovement
-                    | TrainingFocus::PositionRetraining(_)
-                    | TrainingFocus::InjuryRecovery => {}
-                }
-            }
-        }
+        Self::apply_technical_session(
+            &mut effects,
+            session.session_type.clone(),
+            intensity_multiplier,
+        );
+        Self::apply_tactical_session(
+            &mut effects,
+            session.session_type.clone(),
+            intensity_multiplier,
+        );
+        Self::apply_recovery_session(&mut effects, session.session_type.clone());
 
-        // ===== DURATION SCALING =====
-        // A 90-minute pressing drill costs nearly twice what a 45-minute
-        // pressing drill costs. The previous model ignored
-        // `duration_minutes` entirely, which made "intensity" the only
-        // load knob and meant a 30-minute light recovery session and a
-        // 90-minute light recovery session cost the same condition.
-        // Reference point: 60 minutes = neutral (mult 1.0). Readiness
-        // scales sub-linearly (sqrt) — a half-length session still gets
-        // most of the sharpness benefit. Injury risk scales linearly
-        // because the chance of pulling something climbs with exposure
-        // time, not effort.
-        let duration_mult = (session.duration_minutes as f32 / 60.0).clamp(0.35, 1.50);
-        effects.fatigue_change *= duration_mult;
-        effects.physical_load_units *= duration_mult;
-        effects.readiness_change *= duration_mult.sqrt();
-        effects.injury_risk *= duration_mult;
+        Self::apply_individual_plan(player, session, &mut effects);
 
-        // ===== DOSE =====
-        // Repetitions rise with intensity and duration, less than in
-        // proportion — a light drill still teaches, and a double-length
-        // session doesn't teach double. The body costs above scale
-        // linearly: the price is paid in full even where learning saturates.
-        let dose_intensity = match session.intensity {
-            TrainingIntensity::VeryLight => 0.60,
-            TrainingIntensity::Light => 0.80,
-            TrainingIntensity::Moderate => 1.0,
-            TrainingIntensity::High => 1.15,
-            TrainingIntensity::VeryHigh => 1.25,
-        };
-        effects
-            .work
-            .scale_reps(dose_intensity * duration_mult.sqrt());
+        Self::apply_duration(session, &mut effects);
 
-        // ===== FACILITY QUALITY EFFECTS =====
-        // Training facilities are part of a session's quality.
-        // Poor (0.05) → 0.55x gains, Average (0.35) → 0.85x, Good (0.55) → 1.0x,
-        // Excellent (0.75) → 1.15x, Best (1.0) → 1.30x
-        let facility_modifier = 0.50 + facility_quality * 0.80; // Range: 0.54 to 1.30
+        Self::apply_dose(session, &mut effects);
 
-        // Better facilities reduce injury risk (better medical, better surfaces)
-        // Poor → 1.4x injury, Average → 1.1x, Good → 1.0x, Excellent → 0.85x, Best → 0.70x
-        let facility_injury_mod = 1.4 - facility_quality * 0.70; // Range: 1.4 to 0.70
-
-        // Better facilities improve recovery (better recovery rooms, pools, medical staff)
-        // Only applies to recovery sessions (negative fatigue_change)
-        let facility_recovery_mod = 0.70 + facility_quality * 0.60; // Range: 0.73 to 1.30
-
-        effects
-            .work
-            .scale_quality(coach_quality * facility_modifier * coach_bond);
-
-        // Apply facility modifier to injury risk
-        effects.injury_risk *= facility_injury_mod;
-
-        // Apply facility modifier to recovery (only when recovering, not when fatiguing)
-        if effects.fatigue_change < 0.0 {
-            effects.fatigue_change *= facility_recovery_mod; // More negative = faster recovery
-        }
-
-        // Apply player condition modifiers
-        let condition_factor = player.player_attributes.condition_percentage() as f32 / 100.0;
-        if condition_factor < 0.7 {
-            effects.injury_risk *= 1.5; // Higher injury risk when tired
-            effects.fatigue_change *= 1.2; // Get tired faster when already fatigued
-        }
+        Self::apply_facility_and_condition(
+            player,
+            coach_quality,
+            coach_bond,
+            facility_quality,
+            &mut effects,
+        );
 
         // ───── Realistic session outcome model ─────────────────────
         // Compute the breakdown of effort / focus / physical / coach /
@@ -532,12 +225,425 @@ impl PlayerTraining {
         result
     }
 
+    fn apply_individual_plan(
+        player: &Player,
+        session: &TrainingSession,
+        effects: &mut TrainingEffects,
+    ) {
+        // ===== INDIVIDUAL TRAINING PLAN =====
+        // Focused extra reps layered on top of the group session, so a
+        // coach-assigned plan (training_direction) actually moves the
+        // targeted skill. Recovery-family days carry no extra reps.
+        let is_recovery_family = matches!(
+            session.session_type,
+            TrainingType::Recovery
+                | TrainingType::LightRecovery
+                | TrainingType::Rehabilitation
+                | TrainingType::RestDay
+                | TrainingType::VideoAnalysis
+        );
+        if !is_recovery_family && let Some(plan) = &player.individual_training {
+            let focus_reps = 0.02 * plan.intensity_modifier.clamp(0.5, 1.5);
+            for focus in &plan.focus_areas {
+                match focus {
+                    TrainingFocus::SpecificSkill(skill) => {
+                        let key = match skill {
+                            SkillType::FreeKicks => SkillKey::FreeKicks,
+                            SkillType::Penalties => SkillKey::PenaltyTaking,
+                            SkillType::LongShots => SkillKey::LongShots,
+                            SkillType::Heading => SkillKey::Heading,
+                            SkillType::Tackling => SkillKey::Tackling,
+                            SkillType::Crossing => SkillKey::Crossing,
+                            SkillType::Dribbling => SkillKey::Dribbling,
+                        };
+                        effects.work.practise(key, focus_reps);
+                    }
+                    TrainingFocus::FitnessBuilding => {
+                        effects.work.practise(SkillKey::Stamina, focus_reps * 0.6);
+                        effects
+                            .work
+                            .practise(SkillKey::NaturalFitness, focus_reps * 0.4);
+                    }
+                    TrainingFocus::MentalDevelopment => {
+                        effects.work.practise(SkillKey::Composure, focus_reps * 0.5);
+                        effects.work.practise(SkillKey::Decisions, focus_reps * 0.5);
+                    }
+                    // Weak-foot work, position retraining, and injury
+                    // recovery move foot levels / position levels /
+                    // rehab state, not skills.
+                    TrainingFocus::WeakFootImprovement
+                    | TrainingFocus::PositionRetraining(_)
+                    | TrainingFocus::InjuryRecovery => {}
+                }
+            }
+        }
+    }
+
+    fn apply_duration(session: &TrainingSession, effects: &mut TrainingEffects) {
+        // ===== DURATION SCALING =====
+        // A 90-minute pressing drill costs nearly twice what a 45-minute
+        // pressing drill costs. The previous model ignored
+        // `duration_minutes` entirely, which made "intensity" the only
+        // load knob and meant a 30-minute light recovery session and a
+        // 90-minute light recovery session cost the same condition.
+        // Reference point: 60 minutes = neutral (mult 1.0). Readiness
+        // scales sub-linearly (sqrt) — a half-length session still gets
+        // most of the sharpness benefit. Injury risk scales linearly
+        // because the chance of pulling something climbs with exposure
+        // time, not effort.
+        let duration_mult = (session.duration_minutes as f32 / 60.0).clamp(0.35, 1.50);
+        effects.fatigue_change *= duration_mult;
+        effects.physical_load_units *= duration_mult;
+        effects.readiness_change *= duration_mult.sqrt();
+        effects.injury_risk *= duration_mult;
+    }
+
+    fn apply_dose(session: &TrainingSession, effects: &mut TrainingEffects) {
+        // ===== DOSE =====
+        // Repetitions rise with intensity and duration, less than in
+        // proportion — a light drill still teaches, and a double-length
+        // session doesn't teach double. The body costs above scale
+        // linearly: the price is paid in full even where learning saturates.
+        let duration_mult = (session.duration_minutes as f32 / 60.0).clamp(0.35, 1.50);
+        let dose_intensity = match session.intensity {
+            TrainingIntensity::VeryLight => 0.60,
+            TrainingIntensity::Light => 0.80,
+            TrainingIntensity::Moderate => 1.0,
+            TrainingIntensity::High => 1.15,
+            TrainingIntensity::VeryHigh => 1.25,
+        };
+        effects
+            .work
+            .scale_reps(dose_intensity * duration_mult.sqrt());
+    }
+
+    fn apply_facility_and_condition(
+        player: &Player,
+        coach_quality: f32,
+        coach_bond: f32,
+        facility_quality: f32,
+        effects: &mut TrainingEffects,
+    ) {
+        // ===== FACILITY QUALITY EFFECTS =====
+        // Training facilities are part of a session's quality.
+        // Poor (0.05) → 0.55x gains, Average (0.35) → 0.85x, Good (0.55) → 1.0x,
+        // Excellent (0.75) → 1.15x, Best (1.0) → 1.30x
+        let facility_modifier = 0.50 + facility_quality * 0.80; // Range: 0.54 to 1.30
+
+        // Better facilities reduce injury risk (better medical, better surfaces)
+        // Poor → 1.4x injury, Average → 1.1x, Good → 1.0x, Excellent → 0.85x, Best → 0.70x
+        let facility_injury_mod = 1.4 - facility_quality * 0.70; // Range: 1.4 to 0.70
+
+        // Better facilities improve recovery (better recovery rooms, pools, medical staff)
+        // Only applies to recovery sessions (negative fatigue_change)
+        let facility_recovery_mod = 0.70 + facility_quality * 0.60; // Range: 0.73 to 1.30
+
+        effects
+            .work
+            .scale_quality(coach_quality * facility_modifier * coach_bond);
+
+        // Apply facility modifier to injury risk
+        effects.injury_risk *= facility_injury_mod;
+
+        // Apply facility modifier to recovery (only when recovering, not when fatiguing)
+        if effects.fatigue_change < 0.0 {
+            effects.fatigue_change *= facility_recovery_mod; // More negative = faster recovery
+        }
+
+        // Apply player condition modifiers
+        let condition_factor = player.player_attributes.condition_percentage() as f32 / 100.0;
+        if condition_factor < 0.7 {
+            effects.injury_risk *= 1.5; // Higher injury risk when tired
+            effects.fatigue_change *= 1.2; // Get tired faster when already fatigued
+        }
+    }
+
+    fn apply_physical_session(
+        effects: &mut TrainingEffects,
+        session_type: TrainingType,
+        intensity_multiplier: f32,
+    ) {
+        match session_type {
+            TrainingType::Endurance => {
+                effects.work.practise(SkillKey::Stamina, 0.05);
+                effects.work.practise(SkillKey::NaturalFitness, 0.03);
+                effects.fatigue_change = 100.0 * intensity_multiplier; // Real cost — endurance is hard
+                effects.injury_risk = 0.002 * intensity_multiplier;
+                effects.physical_load_units = 30.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.20;
+                effects.readiness_change = 0.4;
+            }
+            TrainingType::Strength => {
+                effects.work.practise(SkillKey::Strength, 0.04);
+                effects.work.practise(SkillKey::Jumping, 0.02);
+                effects.fatigue_change = 100.0 * intensity_multiplier;
+                effects.injury_risk = 0.003 * intensity_multiplier;
+                effects.physical_load_units = 22.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.15;
+                effects.readiness_change = 0.3;
+            }
+            TrainingType::Speed => {
+                effects.work.practise(SkillKey::Pace, 0.03);
+                effects.work.practise(SkillKey::Acceleration, 0.03);
+                effects.work.practise(SkillKey::Agility, 0.03);
+                effects.fatigue_change = 150.0 * intensity_multiplier;
+                effects.injury_risk = 0.004 * intensity_multiplier;
+                effects.physical_load_units = 32.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.55;
+                effects.readiness_change = 0.5;
+            }
+            TrainingType::PressingDrills => {
+                effects.work.practise(SkillKey::WorkRate, 0.04);
+                effects.work.practise(SkillKey::Teamwork, 0.03);
+                effects.fatigue_change = 180.0 * intensity_multiplier;
+                effects.injury_risk = 0.004 * intensity_multiplier;
+                effects.physical_load_units = 38.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.50;
+                effects.readiness_change = 1.0;
+            }
+            TrainingType::TransitionPlay => {
+                effects.work.practise(SkillKey::Passing, 0.03);
+                effects.work.practise(SkillKey::Decisions, 0.03);
+                effects.work.practise(SkillKey::OffTheBall, 0.02);
+                effects.fatigue_change = 160.0 * intensity_multiplier;
+                effects.injury_risk = 0.003 * intensity_multiplier;
+                effects.physical_load_units = 34.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.45;
+                effects.readiness_change = 1.0;
+            }
+            TrainingType::Agility => {
+                effects.work.practise(SkillKey::Agility, 0.04);
+                effects.work.practise(SkillKey::Balance, 0.03);
+                effects.fatigue_change = 80.0 * intensity_multiplier;
+                effects.injury_risk = 0.003 * intensity_multiplier;
+                effects.physical_load_units = 24.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.40;
+                effects.readiness_change = 0.4;
+            }
+            TrainingType::Defending => {
+                effects.work.practise(SkillKey::Tackling, 0.05);
+                effects.work.practise(SkillKey::Marking, 0.05);
+                effects.work.practise(SkillKey::Heading, 0.03);
+                effects.work.practise(SkillKey::Positioning, 0.03);
+                effects.work.practise(SkillKey::Bravery, 0.01);
+                effects.fatigue_change = 60.0 * intensity_multiplier;
+                effects.injury_risk = 0.002 * intensity_multiplier;
+                effects.physical_load_units = 18.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.25;
+                effects.readiness_change = 0.5;
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_technical_session(
+        effects: &mut TrainingEffects,
+        session_type: TrainingType,
+        intensity_multiplier: f32,
+    ) {
+        match session_type {
+            TrainingType::BallControl => {
+                effects.work.practise(SkillKey::FirstTouch, 0.05);
+                effects.work.practise(SkillKey::Technique, 0.04);
+                effects.work.practise(SkillKey::Dribbling, 0.03);
+                effects.work.practise(SkillKey::Flair, 0.01);
+                effects.fatigue_change = 15.0 * intensity_multiplier;
+                effects.injury_risk = 0.001 * intensity_multiplier;
+                effects.physical_load_units = 12.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.10;
+                effects.readiness_change = 0.4;
+            }
+            TrainingType::Passing => {
+                effects.work.practise(SkillKey::Passing, 0.06);
+                effects.work.practise(SkillKey::Vision, 0.02);
+                effects.fatigue_change = 10.0 * intensity_multiplier;
+                effects.injury_risk = 0.001 * intensity_multiplier;
+                effects.physical_load_units = 10.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.05;
+                effects.readiness_change = 0.4;
+            }
+            TrainingType::Shooting => {
+                effects.work.practise(SkillKey::Finishing, 0.05);
+                effects.work.practise(SkillKey::OffTheBall, 0.02);
+                effects.work.practise(SkillKey::Technique, 0.02);
+                effects.work.practise(SkillKey::LongShots, 0.02);
+                effects.work.practise(SkillKey::Decisions, 0.01);
+                effects.work.practise(SkillKey::Composure, 0.01);
+                effects.fatigue_change = 50.0 * intensity_multiplier;
+                effects.injury_risk = 0.002 * intensity_multiplier;
+                effects.physical_load_units = 16.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.20;
+                effects.readiness_change = 0.5;
+            }
+            TrainingType::SetPieces => {
+                effects.work.practise(SkillKey::Crossing, 0.03);
+                effects.work.practise(SkillKey::Heading, 0.02);
+                effects.work.practise(SkillKey::Corners, 0.025);
+                effects.work.practise(SkillKey::FreeKicks, 0.025);
+                effects.fatigue_change = 20.0 * intensity_multiplier;
+                effects.injury_risk = 0.0008 * intensity_multiplier;
+                effects.physical_load_units = 8.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.10;
+                effects.readiness_change = 0.4;
+            }
+            TrainingType::Crossing => {
+                effects.work.practise(SkillKey::Crossing, 0.05);
+                effects.work.practise(SkillKey::Technique, 0.02);
+                effects.fatigue_change = 30.0 * intensity_multiplier;
+                effects.injury_risk = 0.001 * intensity_multiplier;
+                effects.physical_load_units = 14.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.15;
+                effects.readiness_change = 0.4;
+            }
+            TrainingType::SetPiecesDefensive => {
+                effects.work.practise(SkillKey::Positioning, 0.03);
+                effects.work.practise(SkillKey::Marking, 0.03);
+                effects.work.practise(SkillKey::Heading, 0.02);
+                effects.work.practise(SkillKey::Bravery, 0.01);
+                effects.fatigue_change = 20.0 * intensity_multiplier;
+                effects.injury_risk = 0.0008 * intensity_multiplier;
+                effects.physical_load_units = 8.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.10;
+                effects.readiness_change = 0.4;
+            }
+            TrainingType::GoalkeeperTraining => {
+                for (key, reps) in [
+                    (SkillKey::GkHandling, 0.04),
+                    (SkillKey::GkReflexes, 0.04),
+                    (SkillKey::GkOneOnOnes, 0.025),
+                    (SkillKey::GkAerialReach, 0.02),
+                    (SkillKey::GkCommandOfArea, 0.02),
+                    (SkillKey::GkKicking, 0.02),
+                    (SkillKey::GkRushingOut, 0.015),
+                    (SkillKey::GkCommunication, 0.01),
+                    (SkillKey::GkPunching, 0.01),
+                    (SkillKey::GkThrowing, 0.01),
+                ] {
+                    effects.work.practise(key, reps);
+                }
+                effects.fatigue_change = 60.0 * intensity_multiplier;
+                effects.injury_risk = 0.002 * intensity_multiplier;
+                effects.physical_load_units = 20.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.30;
+                effects.readiness_change = 0.8;
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_tactical_session(
+        effects: &mut TrainingEffects,
+        session_type: TrainingType,
+        intensity_multiplier: f32,
+    ) {
+        match session_type {
+            TrainingType::Positioning => {
+                effects.work.practise(SkillKey::Positioning, 0.06);
+                effects.work.practise(SkillKey::Concentration, 0.03);
+                effects.work.practise(SkillKey::Decisions, 0.02);
+                effects.work.practise(SkillKey::Anticipation, 0.02);
+                // Tactical walkthrough — slight net recovery, real
+                // sharpness gain (you're rehearsing match shape).
+                effects.fatigue_change = -30.0 * intensity_multiplier;
+                effects.injury_risk = 0.0005 * intensity_multiplier;
+                effects.physical_load_units = 4.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.0;
+                effects.readiness_change = 0.4;
+            }
+            TrainingType::TeamShape => {
+                effects.work.practise(SkillKey::Teamwork, 0.05);
+                effects.work.practise(SkillKey::Positioning, 0.04);
+                effects.work.practise(SkillKey::WorkRate, 0.02);
+                effects.fatigue_change = 30.0 * intensity_multiplier;
+                effects.injury_risk = 0.001 * intensity_multiplier;
+                effects.physical_load_units = 14.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.10;
+                effects.readiness_change = 0.6;
+            }
+            TrainingType::VideoAnalysis => {
+                effects.work.practise(SkillKey::Decisions, 0.03);
+                effects.work.practise(SkillKey::Positioning, 0.02);
+                effects.work.practise(SkillKey::Vision, 0.02);
+                effects.fatigue_change = -120.0; // Sat in a meeting room — body recovers a touch
+                effects.injury_risk = 0.0;
+                effects.physical_load_units = 0.0;
+                effects.high_intensity_share = 0.0;
+                effects.readiness_change = 0.1; // Tactical sharpness, not match sharpness
+            }
+            TrainingType::MatchPreparation => {
+                effects.work.practise(SkillKey::Concentration, 0.03);
+                effects.work.practise(SkillKey::Positioning, 0.02);
+                effects.work.practise(SkillKey::Composure, 0.015);
+                effects.work.practise(SkillKey::Finishing, 0.01);
+                effects.work.practise(SkillKey::FirstTouch, 0.01);
+                effects.fatigue_change = 30.0 * intensity_multiplier;
+                effects.injury_risk = 0.0015 * intensity_multiplier;
+                effects.physical_load_units = 18.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.20;
+                effects.readiness_change = 1.2; // Top-up sharpness without burning condition
+            }
+            TrainingType::OpponentSpecific => {
+                effects.work.practise(SkillKey::Decisions, 0.02);
+                effects.work.practise(SkillKey::Vision, 0.02);
+                effects.fatigue_change = 20.0 * intensity_multiplier;
+                effects.injury_risk = 0.001 * intensity_multiplier;
+                effects.physical_load_units = 10.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.10;
+                effects.readiness_change = 0.6;
+            }
+            TrainingType::DecisionMaking => {
+                effects.work.practise(SkillKey::Decisions, 0.05);
+                effects.work.practise(SkillKey::Vision, 0.02);
+                effects.work.practise(SkillKey::Anticipation, 0.02);
+                effects.fatigue_change = -60.0;
+                effects.injury_risk = 0.0;
+                effects.physical_load_units = 0.0;
+                effects.high_intensity_share = 0.0;
+                effects.readiness_change = 0.2;
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_recovery_session(effects: &mut TrainingEffects, session_type: TrainingType) {
+        match session_type {
+            TrainingType::Recovery => {
+                effects.fatigue_change = -800.0; // Strong recovery — main condition restoration
+                effects.injury_risk = -0.002;
+                effects.physical_load_units = 0.0;
+                effects.high_intensity_share = 0.0;
+                effects.readiness_change = 0.1;
+            }
+            TrainingType::RestDay => {
+                effects.fatigue_change = -600.0;
+                effects.injury_risk = -0.003;
+                effects.physical_load_units = 0.0;
+                effects.high_intensity_share = 0.0;
+                effects.readiness_change = 0.0;
+            }
+            TrainingType::LightRecovery => {
+                effects.fatigue_change = -500.0;
+                effects.injury_risk = -0.001;
+                effects.physical_load_units = 2.0;
+                effects.high_intensity_share = 0.0;
+                effects.readiness_change = 0.2;
+            }
+            TrainingType::Rehabilitation => {
+                effects.fatigue_change = -300.0;
+                effects.injury_risk = -0.002;
+                effects.physical_load_units = 4.0;
+                effects.high_intensity_share = 0.0;
+                effects.readiness_change = 0.3;
+            }
+            _ => {}
+        }
+    }
+
     /// Build the per-session outcome breakdown used for both the visible
     /// `session_performance` and the explanation context attached to any
     /// emitted GoodTraining / PoorTraining event. All sub-scores live on
     /// a 1.0..20.0 scale so the renderer can talk about them in the same
     /// units.
-    #[expect(clippy::too_many_lines)]
     fn compute_outcome(
         player: &Player,
         _coach: &Staff,
@@ -550,6 +656,107 @@ impl PlayerTraining {
         player_receptiveness: f32,
         effects: &TrainingEffects,
     ) -> TrainingOutcomeBreakdown {
+        let scores = Self::outcome_scores(
+            player,
+            session,
+            date,
+            facility_quality,
+            base_coach_quality,
+            coach_specialization_norm,
+            rapport_norm,
+            player_receptiveness,
+        );
+        let raw = scores.raw_score;
+        let baseline_score = scores.baseline_score;
+        let delta = raw - baseline_score;
+        let positive = raw >= baseline_score;
+        let age = DateUtils::age(player.birth_date, date.date());
+        let professionalism = player.attributes.professionalism.clamp(0.0, 20.0);
+
+        let primary_reason = Self::pick_reason(ReasonInputs {
+            positive,
+            session_performance: raw,
+            delta,
+            effort_score: scores.effort_score,
+            physical_state_score: scores.physical_state_score,
+            in_recovery: player.player_attributes.is_in_recovery(),
+            condition_pct: player.player_attributes.condition_percentage(),
+            fatigue_change: effects.fatigue_change,
+            recovery_debt: player.load.recovery_debt,
+            workload_spike: player.load.is_workload_spike(),
+            has_recent_criticism: Self::has_recent_criticism(player),
+            has_transfer_speculation: Self::has_transfer_speculation(player),
+            psychological_score: scores.psychological_score,
+            professionalism,
+            age,
+            leadership: player.skills.mental.leadership,
+            session_type: session.session_type.clone(),
+        });
+        let evidence = Self::outcome_evidence(
+            player,
+            &scores,
+            effects,
+            &OutcomeEvidenceContext {
+                positive,
+                age,
+                professionalism,
+                delta,
+                baseline_score,
+                in_recovery: player.player_attributes.is_in_recovery(),
+                has_recent_criticism: Self::has_recent_criticism(player),
+                has_transfer_speculation: Self::has_transfer_speculation(player),
+            },
+        );
+
+        TrainingOutcomeBreakdown {
+            raw_score: raw,
+            baseline_score,
+            delta_from_baseline: delta,
+            effort_score: scores.effort_score,
+            focus_score: scores.session_fit_score,
+            physical_state_score: scores.physical_state_score,
+            coach_fit_score: scores.coach_fit_score,
+            tactical_fit_score: scores.tactical_relevance_score,
+            psychological_score: scores.psychological_score,
+            randomness_score: scores.randomness_score,
+            primary_reason,
+            evidence,
+        }
+    }
+
+    fn has_recent_criticism(player: &Player) -> bool {
+        player.happiness.recent_events.iter().any(|e| {
+            e.days_ago <= 14
+                && (e.event_type == HappinessEventType::ManagerCriticism
+                    || e.event_type == HappinessEventType::ManagerDiscipline
+                    || e.event_type == HappinessEventType::MatchDropped)
+        })
+    }
+
+    fn has_transfer_speculation(player: &Player) -> bool {
+        player.happiness.recent_events.iter().any(|e| {
+            e.days_ago <= 21
+                && matches!(
+                    e.event_type,
+                    HappinessEventType::TransferRumour
+                        | HappinessEventType::AgentStirsInterest
+                        | HappinessEventType::TransferSpeculationDistracts
+                        | HappinessEventType::WantedByBiggerClub
+                        | HappinessEventType::InterestFromBiggerClub
+                )
+        })
+    }
+
+    fn outcome_scores(
+        player: &Player,
+        session: &TrainingSession,
+        date: NaiveDateTime,
+        facility_quality: f32,
+        base_coach_quality: f32,
+        coach_specialization_norm: f32,
+        rapport_norm: f32,
+        player_receptiveness: f32,
+    ) -> OutcomeScores {
         let pa = &player.attributes;
         let sk = &player.skills;
         let cond_pct = player.player_attributes.condition_percentage() as f32;
@@ -595,16 +802,9 @@ impl PlayerTraining {
                 + facility_fit_norm * 0.15)
                 .clamp(0.0, 1.0);
 
-        // ── Session fit (skill match) ────────────────────────────
         let session_fit_score = Self::session_fit_score(player, session);
-
-        // ── Tactical / session relevance fit ─────────────────────
-        // Strikers don't get full value from extended set-piece work
-        // for opposite specialists, etc. Use receptiveness as a soft
-        // proxy when no stronger tactical signal exists.
         let tactical_relevance_score = (player_receptiveness * 12.5).clamp(2.0, 18.0);
 
-        // ── Deterministic noise ──────────────────────────────────
         let consistency = pa.consistency.clamp(0.0, 20.0);
         let professionalism = pa.professionalism.clamp(0.0, 20.0);
         let morale = player.happiness.morale.clamp(-100.0, 100.0);
@@ -617,7 +817,6 @@ impl PlayerTraining {
             morale,
         );
 
-        // ── Compose ───────────────────────────────────────────────
         let mut raw = 0.28 * effort_score
             + 0.22 * physical_state_score
             + 0.18 * coach_fit_score
@@ -635,69 +834,50 @@ impl PlayerTraining {
         } else {
             player.training.training_performance.clamp(1.0, 20.0)
         };
-        let delta = raw - baseline_score;
 
-        // ── Pick reason + evidence ────────────────────────────────
-        let cond_pct_u = cond_pct as u32;
-        let in_recovery = player.player_attributes.is_in_recovery();
-        let has_recent_criticism = player.happiness.recent_events.iter().any(|e| {
-            e.days_ago <= 14
-                && (e.event_type == HappinessEventType::ManagerCriticism
-                    || e.event_type == HappinessEventType::ManagerDiscipline
-                    || e.event_type == HappinessEventType::MatchDropped)
-        });
-        let has_transfer_speculation = player.happiness.recent_events.iter().any(|e| {
-            e.days_ago <= 21
-                && matches!(
-                    e.event_type,
-                    HappinessEventType::TransferRumour
-                        | HappinessEventType::AgentStirsInterest
-                        | HappinessEventType::TransferSpeculationDistracts
-                        | HappinessEventType::WantedByBiggerClub
-                        | HappinessEventType::InterestFromBiggerClub
-                )
-        });
-        let age = DateUtils::age(player.birth_date, date.date());
-        let workload_spike = player.load.is_workload_spike();
-        let recovery_debt = player.load.recovery_debt;
-        let leadership = sk.mental.leadership;
-        let work_rate = sk.mental.work_rate;
-        let determination = sk.mental.determination;
-
-        let positive = raw >= baseline_score;
-        let primary_reason = Self::pick_reason(ReasonInputs {
-            positive,
-            session_performance: raw,
-            delta,
+        OutcomeScores {
+            raw_score: raw,
+            baseline_score,
             effort_score,
+            session_fit_score,
             physical_state_score,
-            in_recovery,
-            condition_pct: cond_pct_u,
-            fatigue_change: effects.fatigue_change,
-            recovery_debt,
-            workload_spike,
-            has_recent_criticism,
-            has_transfer_speculation,
+            coach_fit_score,
+            tactical_relevance_score,
             psychological_score,
-            professionalism,
-            age,
-            leadership,
-            session_type: session.session_type.clone(),
-        });
+            randomness_score,
+        }
+    }
 
+    fn outcome_evidence(
+        player: &Player,
+        scores: &OutcomeScores,
+        effects: &TrainingEffects,
+        ctx: &OutcomeEvidenceContext,
+    ) -> Vec<TrainingEventEvidence> {
         let mut evidence: Vec<TrainingEventEvidence> = Vec::new();
         let push = |ev: TrainingEventEvidence, list: &mut Vec<TrainingEventEvidence>| {
             if !list.contains(&ev) {
                 list.push(ev);
             }
         };
+        let raw = scores.raw_score;
+        let cond_pct_u = player.player_attributes.condition_percentage();
+        let recovery_debt = player.load.recovery_debt;
+        let workload_spike = player.load.is_workload_spike();
+        let leadership = player.skills.mental.leadership;
+        let work_rate = player.skills.mental.work_rate;
+        let determination = player.skills.mental.determination;
+        let morale = player.happiness.morale.clamp(-100.0, 100.0);
+        let age = ctx.age;
+        let professionalism = ctx.professionalism;
+
         if raw >= 14.0 {
             push(TrainingEventEvidence::HighSessionPerformance, &mut evidence);
         }
         if raw <= 6.0 {
             push(TrainingEventEvidence::LowSessionPerformance, &mut evidence);
         }
-        if effort_score <= 7.0 {
+        if scores.effort_score <= 7.0 {
             push(TrainingEventEvidence::LowEffort, &mut evidence);
         }
         if work_rate >= 14.0 {
@@ -722,17 +902,17 @@ impl PlayerTraining {
         {
             push(TrainingEventEvidence::FatigueLimited, &mut evidence);
         }
-        if in_recovery {
+        if ctx.in_recovery {
             push(TrainingEventEvidence::InRecoveryPhase, &mut evidence);
             push(TrainingEventEvidence::RecoveryLimited, &mut evidence);
         }
         if morale < 35.0 {
             push(TrainingEventEvidence::LowMorale, &mut evidence);
         }
-        if has_recent_criticism {
+        if ctx.has_recent_criticism {
             push(TrainingEventEvidence::RecentlyDropped, &mut evidence);
         }
-        if has_transfer_speculation {
+        if ctx.has_transfer_speculation {
             push(TrainingEventEvidence::TransferSpeculation, &mut evidence);
             push(TrainingEventEvidence::TransferDistraction, &mut evidence);
         }
@@ -748,42 +928,28 @@ impl PlayerTraining {
         if age >= 30 && leadership >= 14.0 {
             push(TrainingEventEvidence::VeteranLeader, &mut evidence);
         }
-        if coach_fit_score <= 6.0 {
+        if scores.coach_fit_score <= 6.0 {
             push(TrainingEventEvidence::CoachMismatch, &mut evidence);
         }
-        if session_fit_score <= 6.0 {
+        if scores.session_fit_score <= 6.0 {
             push(TrainingEventEvidence::TacticalMismatch, &mut evidence);
         }
-        if !positive && baseline_score >= 13.5 && delta <= -2.0 {
+        if !ctx.positive && ctx.baseline_score >= 13.5 && ctx.delta <= -2.0 {
             push(
                 TrainingEventEvidence::StrongBaselineButOffDay,
                 &mut evidence,
             );
         }
-        if positive && age <= 21 && raw >= 13.5 && delta >= 2.0 {
+        if ctx.positive && age <= 21 && raw >= 13.5 && ctx.delta >= 2.0 {
             push(
                 TrainingEventEvidence::YoungPlayerBreakthrough,
                 &mut evidence,
             );
         }
-        if positive && age >= 30 && leadership >= 14.0 && raw >= 13.0 {
+        if ctx.positive && age >= 30 && leadership >= 14.0 && raw >= 13.0 {
             push(TrainingEventEvidence::VeteranSetStandard, &mut evidence);
         }
-
-        TrainingOutcomeBreakdown {
-            raw_score: raw,
-            baseline_score,
-            delta_from_baseline: delta,
-            effort_score,
-            focus_score: session_fit_score,
-            physical_state_score,
-            coach_fit_score,
-            tactical_fit_score: tactical_relevance_score,
-            psychological_score,
-            randomness_score,
-            primary_reason,
-            evidence,
-        }
+        evidence
     }
 
     /// Skill-match score for the session type. Maps to 1..20 to mirror

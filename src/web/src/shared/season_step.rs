@@ -76,9 +76,12 @@ mod tests {
 
     #[test]
     fn the_stepper_lands_on_the_season_under_way() {
-        let step =
-            SeasonStep::resolve([crossing(2024), crossing(2026), crossing(2026)], None, Some(2026))
-                .unwrap();
+        let step = SeasonStep::resolve(
+            [crossing(2024), crossing(2026), crossing(2026)],
+            None,
+            Some(2026),
+        )
+        .unwrap();
         assert_eq!(step.selected, 2026);
         assert_eq!(step.label, "2026/27");
         assert_eq!(step.previous, Some(2024));
@@ -87,8 +90,7 @@ mod tests {
 
     #[test]
     fn the_season_under_way_wins_over_a_later_one_with_fixtures() {
-        let step =
-            SeasonStep::resolve([crossing(2026), crossing(2027)], None, Some(2026)).unwrap();
+        let step = SeasonStep::resolve([crossing(2026), crossing(2027)], None, Some(2026)).unwrap();
         assert_eq!(step.selected, 2026);
         assert_eq!(step.next, Some(2027));
     }

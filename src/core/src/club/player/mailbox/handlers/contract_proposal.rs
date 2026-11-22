@@ -1,9 +1,7 @@
 use crate::club::mind::verdict::{MindOption, ReasonSet};
 use crate::club::player::agent::PlayerAgent;
 use crate::club::player::behaviour_config::HappinessConfig;
-use crate::club::player::calculators::{
-    ContractValuation, ValuationContext, expected_annual_value, package_inputs_from_proposal,
-};
+use crate::club::player::calculators::{ContractValuation, PackageInputs, ValuationContext};
 /// Written into `decision_history.decision` whenever the player turns
 /// down a proposal. The ContractRenewalManager reads this back to tell
 /// "still waiting" from "already said no", applies a longer cooldown,
@@ -19,113 +17,15 @@ use crate::utils::FormattingUtils;
 use crate::{
     ContractEventContext, ContractEventEvidence, ContractEventKind, HappinessEventCause,
     HappinessEventContext, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
-    PersonBehaviourState, Player, PlayerContractProposal, PlayerResult, PlayerSquadStatus,
-    PlayerStatusType,
+    PersonBehaviourState, Player, PlayerClubContract, PlayerContractProposal, PlayerResult,
+    PlayerSquadStatus, PlayerStatusType,
 };
 use chrono::NaiveDate;
 
 pub struct ProcessContractHandler;
 
-fn log_rejection(player: &mut Player, proposal: &PlayerContractProposal, now: NaiveDate) {
-    let movement = format!(
-        "{}y · ${}/y",
-        proposal.years,
-        FormattingUtils::format_money(proposal.salary as f64)
-    );
-    player.decision_history.add(
-        now,
-        movement,
-        RENEWAL_REJECTED_LABEL.to_string(),
-        String::new(),
-    );
-}
-
-/// Capture the player's stated terms after a rejection so the next offer
-/// can converge. The club reads `player.pending_contract_ask` when building
-/// the next proposal; without this the negotiation is blind on the club
-/// side. Reason drives which lever the next offer should pull — wage,
-/// length, role, or release clause.
-fn record_counter_offer(
-    player: &mut Player,
-    proposal: &PlayerContractProposal,
-    now: NaiveDate,
-    min_years: u8,
-    reason: RejectionReason,
-) {
-    let current_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0);
-    let agent = PlayerAgent::for_player(player);
-
-    let salary_anchor = proposal.salary.max(current_salary);
-    // Greedy agents push the next ask up sharply — but only when money was
-    // actually the sticking point. A rejection over length, role, or a
-    // missing clause must not ratchet the wage ask above an offer the
-    // player never complained about, or the club chases a moving target
-    // it was never asked to hit.
-    let greed_multiplier = match reason {
-        RejectionReason::LowSalary | RejectionReason::NoSweetener => 1.0 + agent.greed * 0.25,
-        _ => 1.0,
-    };
-    let desired_salary = ((salary_anchor as f32) * greed_multiplier) as u32;
-    let desired_years = proposal.years.max(min_years);
-
-    let demanded_status = match reason {
-        RejectionReason::StatusBelowExpectation => Some(promote_status(
-            player
-                .contract
-                .as_ref()
-                .map(|c| c.squad_status.clone())
-                .unwrap_or(PlayerSquadStatus::FirstTeamRegular),
-        )),
-        _ => None,
-    };
-
-    let demanded_release_clause = match reason {
-        RejectionReason::AmbitionMismatch | RejectionReason::NoReleaseClause => {
-            // Sized off ability and reputation — see build_sweeteners' base.
-            let ability = player.player_attributes.current_ability as u32;
-            let rep = player.player_attributes.current_reputation as u32;
-            Some(ability * ability * 4_000 + rep * 8_000)
-        }
-        _ => None,
-    };
-
-    let demanded_signing_bonus = match reason {
-        RejectionReason::NoSweetener | RejectionReason::LowSalary => {
-            Some(((desired_salary as f32) * 0.30) as u32)
-        }
-        _ => None,
-    };
-
-    player.pending_contract_ask = Some(PlayerContractAsk {
-        desired_salary,
-        desired_years,
-        recorded_on: now,
-        demanded_status,
-        demanded_release_clause,
-        demanded_signing_bonus,
-        rejection_reason: Some(reason),
-    });
-}
-
-fn promote_status(status: PlayerSquadStatus) -> PlayerSquadStatus {
-    use PlayerSquadStatus::*;
-    match status {
-        NotNeeded | MainBackupPlayer => FirstTeamSquadRotation,
-        FirstTeamSquadRotation => FirstTeamRegular,
-        FirstTeamRegular => KeyPlayer,
-        DecentYoungster => HotProspectForTheFuture,
-        other => other,
-    }
-}
-
-fn accept_and_clear(player: &mut Player, proposal: PlayerContractProposal, now: NaiveDate) {
-    // A renewal closes the loop the offered / rejected rows opened — the
-    // player putting pen to a fresh deal at his current club is a
-    // first-class decision the register should show alongside them. Read
-    // the incumbent contract BEFORE the handler installs the new one; a
-    // free-agent first signing (no current contract) is narrated by the
-    // signing path, not here.
-    if player.contract.is_some() {
+impl ProcessContractHandler {
+    fn log_rejection(player: &mut Player, proposal: &PlayerContractProposal, now: NaiveDate) {
         let movement = format!(
             "{}y · ${}/y",
             proposal.years,
@@ -134,23 +34,120 @@ fn accept_and_clear(player: &mut Player, proposal: PlayerContractProposal, now: 
         player.decision_history.add(
             now,
             movement,
-            "dec_contract_renewal_signed".to_string(),
+            RENEWAL_REJECTED_LABEL.to_string(),
             String::new(),
         );
     }
-    AcceptContractHandler::process(player, proposal, now);
-    player.pending_contract_ask = None;
-}
 
-/// Total annual package value used in acceptance scoring. Delegates to
-/// the shared `expected_annual_value` helper so happiness, acceptance,
-/// and renewal-tuning all evaluate the same package shape consistently.
-fn package_value(proposal: &PlayerContractProposal, player: &Player) -> u32 {
-    let inputs = package_inputs_from_proposal(proposal, player);
-    expected_annual_value(&inputs)
-}
+    /// Capture the player's stated terms after a rejection so the next offer
+    /// can converge. The club reads `player.pending_contract_ask` when building
+    /// the next proposal; without this the negotiation is blind on the club
+    /// side. Reason drives which lever the next offer should pull — wage,
+    /// length, role, or release clause.
+    fn record_counter_offer(
+        player: &mut Player,
+        proposal: &PlayerContractProposal,
+        now: NaiveDate,
+        min_years: u8,
+        reason: RejectionReason,
+    ) {
+        let current_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0);
+        let agent = PlayerAgent::for_player(player);
 
-impl ProcessContractHandler {
+        let salary_anchor = proposal.salary.max(current_salary);
+        // Greedy agents push the next ask up sharply — but only when money was
+        // actually the sticking point. A rejection over length, role, or a
+        // missing clause must not ratchet the wage ask above an offer the
+        // player never complained about, or the club chases a moving target
+        // it was never asked to hit.
+        let greed_multiplier = match reason {
+            RejectionReason::LowSalary | RejectionReason::NoSweetener => 1.0 + agent.greed * 0.25,
+            _ => 1.0,
+        };
+        let desired_salary = ((salary_anchor as f32) * greed_multiplier) as u32;
+        let desired_years = proposal.years.max(min_years);
+
+        let demanded_status = match reason {
+            RejectionReason::StatusBelowExpectation => Some(Self::promote_status(
+                player
+                    .contract
+                    .as_ref()
+                    .map(|c| c.squad_status.clone())
+                    .unwrap_or(PlayerSquadStatus::FirstTeamRegular),
+            )),
+            _ => None,
+        };
+
+        let demanded_release_clause = match reason {
+            RejectionReason::AmbitionMismatch | RejectionReason::NoReleaseClause => {
+                // Sized off ability and reputation — see build_sweeteners' base.
+                let ability = player.player_attributes.current_ability as u32;
+                let rep = player.player_attributes.current_reputation as u32;
+                Some(ability * ability * 4_000 + rep * 8_000)
+            }
+            _ => None,
+        };
+
+        let demanded_signing_bonus = match reason {
+            RejectionReason::NoSweetener | RejectionReason::LowSalary => {
+                Some(((desired_salary as f32) * 0.30) as u32)
+            }
+            _ => None,
+        };
+
+        player.pending_contract_ask = Some(PlayerContractAsk {
+            desired_salary,
+            desired_years,
+            recorded_on: now,
+            demanded_status,
+            demanded_release_clause,
+            demanded_signing_bonus,
+            rejection_reason: Some(reason),
+        });
+    }
+
+    fn promote_status(status: PlayerSquadStatus) -> PlayerSquadStatus {
+        use PlayerSquadStatus::*;
+        match status {
+            NotNeeded | MainBackupPlayer => FirstTeamSquadRotation,
+            FirstTeamSquadRotation => FirstTeamRegular,
+            FirstTeamRegular => KeyPlayer,
+            DecentYoungster => HotProspectForTheFuture,
+            other => other,
+        }
+    }
+
+    fn accept_and_clear(player: &mut Player, proposal: PlayerContractProposal, now: NaiveDate) {
+        // A renewal closes the loop the offered / rejected rows opened — the
+        // player putting pen to a fresh deal at his current club is a
+        // first-class decision the register should show alongside them. Read
+        // the incumbent contract BEFORE the handler installs the new one; a
+        // free-agent first signing (no current contract) is narrated by the
+        // signing path, not here.
+        if player.contract.is_some() {
+            let movement = format!(
+                "{}y · ${}/y",
+                proposal.years,
+                FormattingUtils::format_money(proposal.salary as f64)
+            );
+            player.decision_history.add(
+                now,
+                movement,
+                "dec_contract_renewal_signed".to_string(),
+                String::new(),
+            );
+        }
+        AcceptContractHandler::process(player, proposal, now);
+        player.pending_contract_ask = None;
+    }
+
+    /// Total annual package value used in acceptance scoring. Delegates to
+    /// the shared `expected_annual_value` helper so happiness, acceptance,
+    /// and renewal-tuning all evaluate the same package shape consistently.
+    fn package_value(proposal: &PlayerContractProposal, player: &Player) -> u32 {
+        PackageInputs::from_proposal(proposal, player).expected_annual_value()
+    }
+
     /// Expected annual value of a proposal's full package — base wage plus
     /// the amortized value of signing / loyalty bonuses, performance fees,
     /// and clauses. This is the same figure [`Self::process`] weighs as
@@ -159,74 +156,85 @@ impl ProcessContractHandler {
     /// (a base wage below the player's ask can still clear acceptance once
     /// the package sweeteners are counted).
     pub fn expected_package_value(proposal: &PlayerContractProposal, player: &Player) -> u32 {
-        package_value(proposal, player)
+        Self::package_value(proposal, player)
     }
 
-    #[expect(clippy::too_many_lines)]
     pub fn process(
         player: &mut Player,
         proposal: PlayerContractProposal,
         now: NaiveDate,
         result: &mut PlayerResult,
     ) {
-        // A listing withdraws any renewal offer still sitting in the
-        // mailbox. The renewal manager never offers to a listed player,
-        // but both passes can run on the same day — the offer lands
-        // first, the board lists the player, and the acceptance a day
-        // later produced the contradictory "listed on the 1st, extended
-        // on the 2nd" paperwork. Renewals only: a free agent (no
-        // contract) is a signing, not a renewal, and carries no listing.
-        if player.contract.is_some()
+        if Self::withdrawn_listing(player) {
+            return;
+        }
+
+        let min_acceptable_years = Self::player_minimum_years(player, now);
+        if let Some(reason) = Self::initial_rejection(player, &proposal, min_acceptable_years) {
+            Self::reject(
+                player,
+                &proposal,
+                now,
+                result,
+                min_acceptable_years,
+                reason,
+                false,
+            );
+            return;
+        }
+
+        match player.contract.clone() {
+            Some(contract) => {
+                Self::process_renewal(
+                    player,
+                    proposal,
+                    now,
+                    result,
+                    min_acceptable_years,
+                    &contract,
+                );
+            }
+            None => Self::process_free_agent(player, proposal, now, result, min_acceptable_years),
+        }
+    }
+
+    /// A listing withdraws any renewal offer still sitting in the mailbox.
+    /// The renewal manager never offers to a listed player, but both passes
+    /// can run on the same day — the offer lands first, the board lists the
+    /// player, and the acceptance a day later produced the contradictory
+    /// "listed on the 1st, extended on the 2nd" paperwork. Renewals only: a
+    /// free agent (no contract) is a signing, not a renewal, and carries no
+    /// listing.
+    fn withdrawn_listing(player: &Player) -> bool {
+        player.contract.is_some()
             && (player.statuses.has(PlayerStatusType::Lst)
                 || player
                     .contract
                     .as_ref()
                     .map(|c| c.is_transfer_listed)
                     .unwrap_or(false))
-        {
-            return;
-        }
+    }
 
-        let min_acceptable_years = Self::player_minimum_years(player, now);
+    /// The gates that run before either contract path is evaluated: length,
+    /// a demotion, and the player's own mind.
+    fn initial_rejection(
+        player: &Player,
+        proposal: &PlayerContractProposal,
+        min_acceptable_years: u8,
+    ) -> Option<RejectionReason> {
         if proposal.years < min_acceptable_years {
-            result.contract.contract_rejected = true;
-            record_counter_offer(
-                player,
-                &proposal,
-                now,
-                min_acceptable_years,
-                RejectionReason::ShortContract,
-            );
-            Self::emit_rejected_contract_offer(player, &proposal, RejectionReason::ShortContract);
-            log_rejection(player, &proposal, now);
-            return;
+            return Some(RejectionReason::ShortContract);
         }
 
-        let agent = PlayerAgent::for_player(player);
-
-        // Status promise check: if the player wanted a clearer role
-        // upgrade and the proposal demotes them, reject before salary maths.
+        // Status promise check: if the player wanted a clearer role upgrade
+        // and the proposal demotes them, reject before salary maths.
         if let (Some(promised), Some(current)) = (
             proposal.squad_status_promise.clone(),
             player.contract.as_ref().map(|c| c.squad_status.clone()),
         ) && promised.seniority_rank() < current.seniority_rank()
             && player.attributes.ambition >= 12.0
         {
-            result.contract.contract_rejected = true;
-            record_counter_offer(
-                player,
-                &proposal,
-                now,
-                min_acceptable_years,
-                RejectionReason::StatusBelowExpectation,
-            );
-            Self::emit_rejected_contract_offer(
-                player,
-                &proposal,
-                RejectionReason::StatusBelowExpectation,
-            );
-            log_rejection(player, &proposal, now);
-            return;
+            return Some(RejectionReason::StatusBelowExpectation);
         }
 
         // The mind's own verdict on putting pen to paper. A man who has
@@ -248,375 +256,451 @@ impl ProcessContractHandler {
                 verdict
             };
             if answered.net() <= MIND_REFUSAL_BAR {
-                let reason = Self::refusal_reason(&answered);
-                result.contract.contract_rejected = true;
-                record_counter_offer(player, &proposal, now, min_acceptable_years, reason);
-                Self::emit_rejected_contract_offer(player, &proposal, reason);
-                log_rejection(player, &proposal, now);
-                return;
+                return Some(Self::refusal_reason(&answered));
             }
         }
 
-        match &player.contract {
-            Some(player_contract) => {
-                let current_salary = player_contract.salary.max(1);
-                let sweetener_total = proposal.signing_bonus + proposal.loyalty_bonus;
-                let sweetener_ratio = sweetener_total as f32 / current_salary as f32;
-                let has_clause = proposal.release_clause.is_some()
-                    || proposal.relegation_release.is_some()
-                    || proposal.non_promotion_release.is_some();
+        None
+    }
 
-                let pkg_value = package_value(&proposal, player);
-                let pkg_ratio = pkg_value as f32 / current_salary as f32;
-
-                // Compare the package against what the player thinks they
-                // are actually worth. Prefer the offer-time valuation
-                // stamped by the renewal AI (real club/league reputation,
-                // status, leverage); fall back to a freshly-computed
-                // valuation with neutral reputation only when the offer
-                // came from a legacy code path that didn't supply context.
-                let age = DateUtils::age(player.birth_date, now);
-                let market_interest = player.statuses.has(PlayerStatusType::Wnt)
-                    || player.statuses.has(PlayerStatusType::Enq)
-                    || player.statuses.has(PlayerStatusType::Bid);
-                let months_remaining =
-                    ((player_contract.expiration - now).num_days() / 30).max(0) as i32;
-                let valuation = match (
-                    proposal.valuation_expected_wage,
-                    proposal.valuation_min_acceptable,
-                ) {
-                    (Some(expected), Some(min_acc)) => {
-                        // Offer carried explicit valuation — use it.
-                        ContractValuation {
-                            expected_wage: expected,
-                            min_acceptable: min_acc,
-                            // Recompute remaining fields from the offer-time
-                            // reputation so leverage / status_premium stay
-                            // consistent with the offer's framing.
-                            max_acceptable: ((expected as f32) * 1.30) as u32,
-                            leverage: 0.3,
-                            status_premium: 1.0,
-                        }
-                    }
-                    _ => {
-                        let valuation_ctx = ValuationContext {
-                            age,
-                            club_reputation_score: proposal
-                                .valuation_club_reputation
-                                .unwrap_or(0.5),
-                            league_reputation: proposal
-                                .valuation_league_reputation
-                                .unwrap_or(5_000),
-                            squad_status: proposal
-                                .squad_status_promise
-                                .clone()
-                                .unwrap_or(player_contract.squad_status.clone()),
-                            current_salary: player_contract.salary,
-                            months_remaining,
-                            has_market_interest: market_interest,
-                        };
-                        ContractValuation::evaluate(player, &valuation_ctx)
-                    }
-                };
-
-                // Loyal veterans and players with strong release clauses /
-                // signing bonuses tolerate a 15% underpay vs market.
-                let loyalty = player.attributes.loyalty;
-                let tolerance = if loyalty >= 16.0 {
-                    0.85
-                } else if has_clause || sweetener_ratio >= 0.3 {
-                    0.90
-                } else {
-                    0.95
-                };
-                let market_floor = (valuation.expected_wage as f32 * tolerance) as u32;
-                let badly_underpaid = pkg_value < market_floor;
-
-                // Absolute walk-away floor. Below `min_acceptable` the player
-                // refuses no matter how the offer is framed — a +20% raise on
-                // a deeply underpaid deal is still a deeply underpaid deal.
-                // Without this, the relative-raise gates below let a
-                // budget-capped panic offer lock a star at a fraction of his
-                // market value, and the salary-happiness model immediately
-                // re-detected the gap on a contract he just signed.
-                if pkg_value < valuation.min_acceptable {
-                    result.contract.contract_rejected = true;
-                    record_counter_offer(
-                        player,
-                        &proposal,
-                        now,
-                        min_acceptable_years,
-                        RejectionReason::LowSalary,
-                    );
-                    Self::emit_rejected_contract_offer(
-                        player,
-                        &proposal,
-                        RejectionReason::LowSalary,
-                    );
-                    log_rejection(player, &proposal, now);
-                    return;
-                }
-
-                if proposal.salary > player_contract.salary {
-                    let raise_ratio = proposal.salary as f32 / current_salary as f32;
-                    let agent_delta =
-                        agent.renewal_delta_with(raise_ratio, sweetener_ratio, has_clause);
-                    if agent_delta < -4.0 && raise_ratio < 1.15 && sweetener_ratio < 0.20 {
-                        result.contract.contract_rejected = true;
-                        record_counter_offer(
-                            player,
-                            &proposal,
-                            now,
-                            min_acceptable_years,
-                            RejectionReason::LowSalary,
-                        );
-                        Self::emit_rejected_contract_offer(
-                            player,
-                            &proposal,
-                            RejectionReason::LowSalary,
-                        );
-                        log_rejection(player, &proposal, now);
-                        return;
-                    }
-                    // Even with a token raise, if the package still leaves
-                    // the player meaningfully below market they push back.
-                    if badly_underpaid && raise_ratio < 1.20 && sweetener_ratio < 0.25 {
-                        result.contract.contract_rejected = true;
-                        record_counter_offer(
-                            player,
-                            &proposal,
-                            now,
-                            min_acceptable_years,
-                            RejectionReason::LowSalary,
-                        );
-                        Self::emit_rejected_contract_offer(
-                            player,
-                            &proposal,
-                            RejectionReason::LowSalary,
-                        );
-                        log_rejection(player, &proposal, now);
-                        return;
-                    }
-                    let raise_ratio_now = proposal.salary as f32 / current_salary.max(1) as f32;
-                    let proposal_years = proposal.years;
-                    accept_and_clear(player, proposal, now);
-                    let mut cctx = ContractEventContext::new(ContractEventKind::Renewed)
-                        .with_wage_vs_previous(raise_ratio_now)
-                        .with_years_remaining(proposal_years);
-                    if raise_ratio_now >= 1.20 {
-                        cctx = cctx.with_evidence(ContractEventEvidence::SquadStatusUpgrade);
-                    }
-                    if player.attributes.loyalty >= 15.0 {
-                        cctx = cctx.with_evidence(ContractEventEvidence::HighLoyalty);
-                    }
-                    let happiness_ctx = HappinessEventContext::new(
-                        HappinessEventCause::Other,
-                        HappinessEventSeverity::Moderate,
-                        HappinessEventScope::Boardroom,
-                    )
-                    .with_contract_context(cctx);
-                    let mag = HappinessConfig::default()
-                        .catalog
-                        .magnitude(HappinessEventType::ContractRenewal);
-                    player.happiness.add_event_with_context(
-                        HappinessEventType::ContractRenewal,
-                        mag,
-                        None,
-                        happiness_ctx,
-                    );
-                    player.happiness.factors.salary_satisfaction = 0.0;
-                    player.happiness.last_salary_negotiation = Some(now);
-                } else if proposal.salary >= player_contract.salary {
-                    let loyalty = player.attributes.loyalty;
-                    let morale = player.happiness.morale;
-                    let negotiation = proposal.negotiation_skill as f32;
-
-                    let accept_score = loyalty
-                        + (morale / 10.0)
-                        + negotiation
-                        + agent.renewal_delta_with(1.0, sweetener_ratio, has_clause);
-                    if accept_score >= 20.0 || pkg_ratio >= 1.10 {
-                        let proposal_years = proposal.years;
-                        accept_and_clear(player, proposal, now);
-                        let cctx = ContractEventContext::new(ContractEventKind::OfferReceived)
-                            .with_wage_vs_previous(1.0)
-                            .with_years_remaining(proposal_years);
-                        let happiness_ctx = HappinessEventContext::new(
-                            HappinessEventCause::Other,
-                            HappinessEventSeverity::Minor,
-                            HappinessEventScope::Boardroom,
-                        )
-                        .with_contract_context(cctx);
-                        player.happiness.add_event_with_context(
-                            HappinessEventType::ContractOffer,
-                            2.0,
-                            None,
-                            happiness_ctx,
-                        );
-                    } else {
-                        result.contract.contract_rejected = true;
-                        let reason = if !has_clause && player.attributes.ambition >= 14.0 {
-                            RejectionReason::NoReleaseClause
-                        } else if sweetener_ratio < 0.05 {
-                            RejectionReason::NoSweetener
-                        } else {
-                            RejectionReason::LowSalary
-                        };
-                        record_counter_offer(player, &proposal, now, min_acceptable_years, reason);
-                        if reason == RejectionReason::NoReleaseClause {
-                            let demanded = player
-                                .pending_contract_ask
-                                .as_ref()
-                                .and_then(|a| a.demanded_release_clause)
-                                .map(|v| v as u64);
-                            Self::maybe_emit_release_clause_demanded(player, now, demanded);
-                        }
-                        Self::emit_rejected_contract_offer(player, &proposal, reason);
-                        log_rejection(player, &proposal, now);
-                    }
-                } else {
-                    let loyalty = player.attributes.loyalty;
-                    let negotiation = proposal.negotiation_skill as f32;
-                    let salary_ratio = proposal.salary as f32 / current_salary as f32;
-                    // Sweeteners + bonuses + clauses make a pay-cut palatable: if
-                    // the total package matches current salary, relax the gates.
-                    let effective_ratio = pkg_ratio;
-                    let eligible = if effective_ratio >= 0.98 {
-                        loyalty >= 10.0 && negotiation >= 10.0
-                    } else {
-                        salary_ratio >= 0.85 && loyalty >= 15.0 && negotiation >= 15.0
-                    };
-                    if eligible {
-                        let pay_cut_ratio = proposal.salary as f32 / current_salary.max(1) as f32;
-                        let proposal_years = proposal.years;
-                        accept_and_clear(player, proposal, now);
-                        let mut cctx =
-                            ContractEventContext::new(ContractEventKind::LoyaltyDiscountAccepted)
-                                .with_wage_vs_previous(pay_cut_ratio)
-                                .with_years_remaining(proposal_years);
-                        if player.attributes.loyalty >= 15.0 {
-                            cctx = cctx.with_evidence(ContractEventEvidence::HighLoyalty);
-                        }
-                        let happiness_ctx = HappinessEventContext::new(
-                            HappinessEventCause::Other,
-                            HappinessEventSeverity::Minor,
-                            HappinessEventScope::Boardroom,
-                        )
-                        .with_contract_context(cctx);
-                        player.happiness.add_event_with_context(
-                            HappinessEventType::ContractOffer,
-                            1.0,
-                            None,
-                            happiness_ctx,
-                        );
-                    } else {
-                        result.contract.contract_rejected = true;
-                        record_counter_offer(
-                            player,
-                            &proposal,
-                            now,
-                            min_acceptable_years,
-                            RejectionReason::LowSalary,
-                        );
-                        Self::emit_rejected_contract_offer(
-                            player,
-                            &proposal,
-                            RejectionReason::LowSalary,
-                        );
-                        log_rejection(player, &proposal, now);
-                    }
-                }
-            }
-            None => {
-                // Free agent — uses the unified valuation to gate acceptance.
-                // Honor the offer-time context when the proposing club
-                // stamped it: a fourth-tier club's offer must be judged
-                // against fourth-tier expectations, not a hardcoded mid-tier
-                // league — and an elite club shouldn't get a mid-tier
-                // discount either.
-                let age = DateUtils::age(player.birth_date, now);
-                let valuation = match (
-                    proposal.valuation_expected_wage,
-                    proposal.valuation_min_acceptable,
-                ) {
-                    (Some(expected), Some(min_acc)) => ContractValuation {
-                        expected_wage: expected,
-                        min_acceptable: min_acc,
-                        max_acceptable: ((expected as f32) * 1.30) as u32,
-                        leverage: 0.3,
-                        status_premium: 1.0,
-                    },
-                    _ => {
-                        let ctx = ValuationContext {
-                            age,
-                            club_reputation_score: proposal
-                                .valuation_club_reputation
-                                .unwrap_or(0.5),
-                            league_reputation: proposal
-                                .valuation_league_reputation
-                                .unwrap_or(5_000),
-                            squad_status: proposal
-                                .squad_status_promise
-                                .clone()
-                                .unwrap_or(PlayerSquadStatus::FirstTeamRegular),
-                            current_salary: 0,
-                            months_remaining: 0,
-                            has_market_interest: player.statuses.has(PlayerStatusType::Wnt)
-                                || player.statuses.has(PlayerStatusType::Enq)
-                                || player.statuses.has(PlayerStatusType::Bid),
-                        };
-                        ContractValuation::evaluate(player, &ctx)
-                    }
-                };
-
-                let meets_floor = proposal.salary >= valuation.min_acceptable;
-
-                // A difficult character holds out for his full price unless a
-                // skilled negotiator manages him — but he is not frozen out of
-                // the market entirely: money he can't argue with still signs.
-                let behaviour_pass = match player.behaviour.state {
-                    PersonBehaviourState::Poor => {
-                        proposal.negotiation_skill >= 12
-                            || proposal.salary >= valuation.expected_wage
-                    }
-                    PersonBehaviourState::Normal => proposal.negotiation_skill >= 8,
-                    PersonBehaviourState::Good => true,
-                };
-
-                // "Sign, but leave me a door." A player being drawn toward
-                // a bigger competition will not put his name to a long deal
-                // that locks him in with no exit — he wants the clause that
-                // lets a top-five club come for him, and holding out for it
-                // is how these negotiations really go. Without this the
-                // ambition had no lever at renewal time at all: the club
-                // simply re-signed him and the itch went on being ignored.
-                //
-                // Only when the pull is strong AND the offer is genuinely
-                // binding: a short deal is its own exit, and a clause the
-                // club already offered needs no fight.
-                const CLAUSE_DEMAND_PULL: f32 = 0.40;
-                const BINDING_YEARS: u8 = 3;
-                let wants_an_exit = player.big_stage_inclination >= CLAUSE_DEMAND_PULL
-                    && proposal.release_clause.is_none()
-                    && proposal.years >= BINDING_YEARS;
-
-                if meets_floor && behaviour_pass && !wants_an_exit {
-                    accept_and_clear(player, proposal, now);
-                } else {
-                    result.contract.contract_rejected = true;
-                    let reason = if !meets_floor {
-                        RejectionReason::LowSalary
-                    } else if wants_an_exit {
-                        RejectionReason::NoReleaseClause
-                    } else {
-                        RejectionReason::AmbitionMismatch
-                    };
-                    record_counter_offer(player, &proposal, now, min_acceptable_years, reason);
-                    Self::emit_rejected_contract_offer(player, &proposal, reason);
-                    log_rejection(player, &proposal, now);
-                }
-            }
+    /// Shared rejection path. `demand_clause` keeps the same-salary
+    /// rejection's extra visible demand in its original position after the
+    /// counter-offer is recorded.
+    fn reject(
+        player: &mut Player,
+        proposal: &PlayerContractProposal,
+        now: NaiveDate,
+        result: &mut PlayerResult,
+        min_acceptable_years: u8,
+        reason: RejectionReason,
+        demand_clause: bool,
+    ) {
+        result.contract.contract_rejected = true;
+        Self::record_counter_offer(player, proposal, now, min_acceptable_years, reason);
+        if demand_clause && reason == RejectionReason::NoReleaseClause {
+            let demanded = player
+                .pending_contract_ask
+                .as_ref()
+                .and_then(|a| a.demanded_release_clause)
+                .map(|v| v as u64);
+            Self::maybe_emit_release_clause_demanded(player, now, demanded);
         }
+        Self::emit_rejected_contract_offer(player, proposal, reason);
+        Self::log_rejection(player, proposal, now);
+    }
+
+    fn process_renewal(
+        player: &mut Player,
+        proposal: PlayerContractProposal,
+        now: NaiveDate,
+        result: &mut PlayerResult,
+        min_acceptable_years: u8,
+        contract: &PlayerClubContract,
+    ) {
+        let current_salary = contract.salary.max(1);
+        let sweetener_total = proposal.signing_bonus + proposal.loyalty_bonus;
+        let sweetener_ratio = sweetener_total as f32 / current_salary as f32;
+        let has_clause = proposal.release_clause.is_some()
+            || proposal.relegation_release.is_some()
+            || proposal.non_promotion_release.is_some();
+        let pkg_value = Self::package_value(&proposal, player);
+        let pkg_ratio = pkg_value as f32 / current_salary as f32;
+        let valuation = Self::renewal_valuation(player, &proposal, now, contract);
+
+        // Loyal veterans and players with strong release clauses / signing
+        // bonuses tolerate a 15% underpay vs market.
+        let loyalty = player.attributes.loyalty;
+        let tolerance = if loyalty >= 16.0 {
+            0.85
+        } else if has_clause || sweetener_ratio >= 0.3 {
+            0.90
+        } else {
+            0.95
+        };
+        let market_floor = (valuation.expected_wage as f32 * tolerance) as u32;
+        let badly_underpaid = pkg_value < market_floor;
+
+        // Absolute walk-away floor. Below `min_acceptable` the player refuses
+        // no matter how the offer is framed — a +20% raise on a deeply
+        // underpaid deal is still a deeply underpaid deal. Without this, the
+        // relative-raise gates below let a budget-capped panic offer lock a
+        // star at a fraction of his market value, and the salary-happiness
+        // model immediately re-detected the gap on a contract he just signed.
+        if pkg_value < valuation.min_acceptable {
+            Self::reject(
+                player,
+                &proposal,
+                now,
+                result,
+                min_acceptable_years,
+                RejectionReason::LowSalary,
+                false,
+            );
+            return;
+        }
+
+        let agent = PlayerAgent::for_player(player);
+        if proposal.salary > contract.salary {
+            Self::accept_raise(
+                player,
+                proposal,
+                now,
+                result,
+                min_acceptable_years,
+                current_salary,
+                sweetener_ratio,
+                has_clause,
+                badly_underpaid,
+                &agent,
+            );
+        } else if proposal.salary >= contract.salary {
+            Self::accept_or_reject_same_salary(
+                player,
+                proposal,
+                now,
+                result,
+                min_acceptable_years,
+                sweetener_ratio,
+                has_clause,
+                pkg_ratio,
+                &agent,
+            );
+        } else {
+            Self::accept_or_reject_pay_cut(
+                player,
+                proposal,
+                now,
+                result,
+                min_acceptable_years,
+                current_salary,
+                pkg_ratio,
+            );
+        }
+    }
+
+    fn renewal_valuation(
+        player: &Player,
+        proposal: &PlayerContractProposal,
+        now: NaiveDate,
+        contract: &PlayerClubContract,
+    ) -> ContractValuation {
+        // Prefer the offer-time valuation stamped by the renewal AI (real
+        // club/league reputation, status, leverage); fall back to a freshly
+        // computed valuation with neutral reputation only when the offer came
+        // from a legacy code path that didn't supply context.
+        let age = DateUtils::age(player.birth_date, now);
+        let market_interest = player.statuses.has(PlayerStatusType::Wnt)
+            || player.statuses.has(PlayerStatusType::Enq)
+            || player.statuses.has(PlayerStatusType::Bid);
+        let months_remaining = ((contract.expiration - now).num_days() / 30).max(0) as i32;
+        if let (Some(expected), Some(min_acc)) = (
+            proposal.valuation_expected_wage,
+            proposal.valuation_min_acceptable,
+        ) {
+            // Offer carried explicit valuation — use it.
+            return ContractValuation {
+                expected_wage: expected,
+                min_acceptable: min_acc,
+                // Recompute remaining fields from the offer-time reputation
+                // so leverage / status_premium stay consistent with the
+                // offer's framing.
+                max_acceptable: ((expected as f32) * 1.30) as u32,
+                leverage: 0.3,
+                status_premium: 1.0,
+            };
+        }
+
+        let valuation_ctx = ValuationContext {
+            age,
+            club_reputation_score: proposal.valuation_club_reputation.unwrap_or(0.5),
+            league_reputation: proposal.valuation_league_reputation.unwrap_or(5_000),
+            squad_status: proposal
+                .squad_status_promise
+                .clone()
+                .unwrap_or(contract.squad_status.clone()),
+            current_salary: contract.salary,
+            months_remaining,
+            has_market_interest: market_interest,
+        };
+        ContractValuation::evaluate(player, &valuation_ctx)
+    }
+
+    fn accept_raise(
+        player: &mut Player,
+        proposal: PlayerContractProposal,
+        now: NaiveDate,
+        result: &mut PlayerResult,
+        min_acceptable_years: u8,
+        current_salary: u32,
+        sweetener_ratio: f32,
+        has_clause: bool,
+        badly_underpaid: bool,
+        agent: &PlayerAgent,
+    ) {
+        let raise_ratio = proposal.salary as f32 / current_salary as f32;
+        let agent_delta = agent.renewal_delta_with(raise_ratio, sweetener_ratio, has_clause);
+        if agent_delta < -4.0 && raise_ratio < 1.15 && sweetener_ratio < 0.20 {
+            Self::reject(
+                player,
+                &proposal,
+                now,
+                result,
+                min_acceptable_years,
+                RejectionReason::LowSalary,
+                false,
+            );
+            return;
+        }
+        if badly_underpaid && raise_ratio < 1.20 && sweetener_ratio < 0.25 {
+            Self::reject(
+                player,
+                &proposal,
+                now,
+                result,
+                min_acceptable_years,
+                RejectionReason::LowSalary,
+                false,
+            );
+            return;
+        }
+
+        let raise_ratio_now = proposal.salary as f32 / current_salary.max(1) as f32;
+        let proposal_years = proposal.years;
+        Self::accept_and_clear(player, proposal, now);
+        let mut cctx = ContractEventContext::new(ContractEventKind::Renewed)
+            .with_wage_vs_previous(raise_ratio_now)
+            .with_years_remaining(proposal_years);
+        if raise_ratio_now >= 1.20 {
+            cctx = cctx.with_evidence(ContractEventEvidence::SquadStatusUpgrade);
+        }
+        if player.attributes.loyalty >= 15.0 {
+            cctx = cctx.with_evidence(ContractEventEvidence::HighLoyalty);
+        }
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::Boardroom,
+        )
+        .with_contract_context(cctx);
+        let mag = HappinessConfig::default()
+            .catalog
+            .magnitude(HappinessEventType::ContractRenewal);
+        player.happiness.add_event_with_context(
+            HappinessEventType::ContractRenewal,
+            mag,
+            None,
+            happiness_ctx,
+        );
+        player.happiness.factors.salary_satisfaction = 0.0;
+        player.happiness.last_salary_negotiation = Some(now);
+    }
+
+    fn accept_or_reject_same_salary(
+        player: &mut Player,
+        proposal: PlayerContractProposal,
+        now: NaiveDate,
+        result: &mut PlayerResult,
+        min_acceptable_years: u8,
+        sweetener_ratio: f32,
+        has_clause: bool,
+        pkg_ratio: f32,
+        agent: &PlayerAgent,
+    ) {
+        let loyalty = player.attributes.loyalty;
+        let morale = player.happiness.morale;
+        let negotiation = proposal.negotiation_skill as f32;
+        let accept_score = loyalty
+            + (morale / 10.0)
+            + negotiation
+            + agent.renewal_delta_with(1.0, sweetener_ratio, has_clause);
+        if accept_score >= 20.0 || pkg_ratio >= 1.10 {
+            let proposal_years = proposal.years;
+            Self::accept_and_clear(player, proposal, now);
+            let cctx = ContractEventContext::new(ContractEventKind::OfferReceived)
+                .with_wage_vs_previous(1.0)
+                .with_years_remaining(proposal_years);
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::Minor,
+                HappinessEventScope::Boardroom,
+            )
+            .with_contract_context(cctx);
+            player.happiness.add_event_with_context(
+                HappinessEventType::ContractOffer,
+                2.0,
+                None,
+                happiness_ctx,
+            );
+            return;
+        }
+
+        let reason = if !has_clause && player.attributes.ambition >= 14.0 {
+            RejectionReason::NoReleaseClause
+        } else if sweetener_ratio < 0.05 {
+            RejectionReason::NoSweetener
+        } else {
+            RejectionReason::LowSalary
+        };
+        Self::reject(
+            player,
+            &proposal,
+            now,
+            result,
+            min_acceptable_years,
+            reason,
+            true,
+        );
+    }
+
+    fn accept_or_reject_pay_cut(
+        player: &mut Player,
+        proposal: PlayerContractProposal,
+        now: NaiveDate,
+        result: &mut PlayerResult,
+        min_acceptable_years: u8,
+        current_salary: u32,
+        pkg_ratio: f32,
+    ) {
+        let loyalty = player.attributes.loyalty;
+        let negotiation = proposal.negotiation_skill as f32;
+        let salary_ratio = proposal.salary as f32 / current_salary as f32;
+        // Sweeteners + bonuses + clauses make a pay-cut palatable: if the
+        // total package matches current salary, relax the gates.
+        let effective_ratio = pkg_ratio;
+        let eligible = if effective_ratio >= 0.98 {
+            loyalty >= 10.0 && negotiation >= 10.0
+        } else {
+            salary_ratio >= 0.85 && loyalty >= 15.0 && negotiation >= 15.0
+        };
+        if !eligible {
+            Self::reject(
+                player,
+                &proposal,
+                now,
+                result,
+                min_acceptable_years,
+                RejectionReason::LowSalary,
+                false,
+            );
+            return;
+        }
+
+        let pay_cut_ratio = proposal.salary as f32 / current_salary.max(1) as f32;
+        let proposal_years = proposal.years;
+        Self::accept_and_clear(player, proposal, now);
+        let mut cctx = ContractEventContext::new(ContractEventKind::LoyaltyDiscountAccepted)
+            .with_wage_vs_previous(pay_cut_ratio)
+            .with_years_remaining(proposal_years);
+        if player.attributes.loyalty >= 15.0 {
+            cctx = cctx.with_evidence(ContractEventEvidence::HighLoyalty);
+        }
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::Minor,
+            HappinessEventScope::Boardroom,
+        )
+        .with_contract_context(cctx);
+        player.happiness.add_event_with_context(
+            HappinessEventType::ContractOffer,
+            1.0,
+            None,
+            happiness_ctx,
+        );
+    }
+
+    fn process_free_agent(
+        player: &mut Player,
+        proposal: PlayerContractProposal,
+        now: NaiveDate,
+        result: &mut PlayerResult,
+        min_acceptable_years: u8,
+    ) {
+        // Free agent — uses the unified valuation to gate acceptance. Honor
+        // the offer-time context when the proposing club stamped it: a
+        // fourth-tier club's offer must be judged against fourth-tier
+        // expectations, not a hardcoded mid-tier league — and an elite club
+        // shouldn't get a mid-tier discount either.
+        let age = DateUtils::age(player.birth_date, now);
+        let valuation = match (
+            proposal.valuation_expected_wage,
+            proposal.valuation_min_acceptable,
+        ) {
+            (Some(expected), Some(min_acc)) => ContractValuation {
+                expected_wage: expected,
+                min_acceptable: min_acc,
+                max_acceptable: ((expected as f32) * 1.30) as u32,
+                leverage: 0.3,
+                status_premium: 1.0,
+            },
+            _ => {
+                let ctx = ValuationContext {
+                    age,
+                    club_reputation_score: proposal.valuation_club_reputation.unwrap_or(0.5),
+                    league_reputation: proposal.valuation_league_reputation.unwrap_or(5_000),
+                    squad_status: proposal
+                        .squad_status_promise
+                        .clone()
+                        .unwrap_or(PlayerSquadStatus::FirstTeamRegular),
+                    current_salary: 0,
+                    months_remaining: 0,
+                    has_market_interest: player.statuses.has(PlayerStatusType::Wnt)
+                        || player.statuses.has(PlayerStatusType::Enq)
+                        || player.statuses.has(PlayerStatusType::Bid),
+                };
+                ContractValuation::evaluate(player, &ctx)
+            }
+        };
+
+        let meets_floor = proposal.salary >= valuation.min_acceptable;
+
+        // A difficult character holds out for his full price unless a
+        // skilled negotiator manages him — but he is not frozen out of the
+        // market entirely: money he can't argue with still signs.
+        let behaviour_pass = match player.behaviour.state {
+            PersonBehaviourState::Poor => {
+                proposal.negotiation_skill >= 12 || proposal.salary >= valuation.expected_wage
+            }
+            PersonBehaviourState::Normal => proposal.negotiation_skill >= 8,
+            PersonBehaviourState::Good => true,
+        };
+
+        // "Sign, but leave me a door." A player being drawn toward a bigger
+        // competition will not put his name to a long deal that locks him in
+        // with no exit — he wants the clause that lets a top-five club come
+        // for him, and holding out for it is how these negotiations really
+        // go. Without this the ambition had no lever at renewal time at all:
+        // the club simply re-signed him and the itch went on being ignored.
+        //
+        // Only when the pull is strong AND the offer is genuinely binding: a
+        // short deal is its own exit, and a clause the club already offered
+        // needs no fight.
+        const CLAUSE_DEMAND_PULL: f32 = 0.40;
+        const BINDING_YEARS: u8 = 3;
+        let wants_an_exit = player.big_stage_inclination >= CLAUSE_DEMAND_PULL
+            && proposal.release_clause.is_none()
+            && proposal.years >= BINDING_YEARS;
+
+        if meets_floor && behaviour_pass && !wants_an_exit {
+            Self::accept_and_clear(player, proposal, now);
+            return;
+        }
+
+        let reason = if !meets_floor {
+            RejectionReason::LowSalary
+        } else if wants_an_exit {
+            RejectionReason::NoReleaseClause
+        } else {
+            RejectionReason::AmbitionMismatch
+        };
+        Self::reject(
+            player,
+            &proposal,
+            now,
+            result,
+            min_acceptable_years,
+            reason,
+            false,
+        );
     }
 
     /// What a refusal that came from the mind is about: the loudest

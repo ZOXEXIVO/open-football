@@ -1,7 +1,7 @@
 use crate::generators::StaffGenerator;
 use core::transfers::ScoutingRegion;
 use core::utils::IntegerUtils;
-use core::{Staff, StaffPosition, TeamType};
+use core::{RegionFamiliarity, Staff, StaffKnowledge, StaffPosition, TeamType};
 
 use super::DatabaseGenerator;
 
@@ -190,32 +190,9 @@ impl DatabaseGenerator {
         seed: &ScoutMarketSeed<'_>,
         team_reputation: u16,
     ) {
-        use core::RegionFamiliarity;
-
         let club_region = seed.club_region();
-
-        let specialist_chance = if team_reputation >= 7000 {
-            40
-        } else if team_reputation >= 5000 {
-            25
-        } else if team_reputation >= 3000 {
-            10
-        } else {
-            0
-        };
-
-        // How many foreign markets this club's network covers. A giant runs
-        // a department that watches half a dozen; a minnow watches its own
-        // division and maybe a neighbour.
-        let foreign_count = if team_reputation >= 7000 {
-            6
-        } else if team_reputation >= 5000 {
-            4
-        } else if team_reputation >= 3000 {
-            2
-        } else {
-            1
-        };
+        let specialist_chance = Self::scout_specialist_chance(team_reputation);
+        let foreign_count = Self::scout_foreign_market_count(team_reputation);
 
         let knowledge = &mut staff.staff_attributes.knowledge;
         // Home market first: he lives there.
@@ -231,26 +208,77 @@ impl DatabaseGenerator {
             // so the club still has reach, but seed no foreign COUNTRY — a
             // network with no named market is reach without depth, which is
             // exactly what "we have no idea where this league shops" means.
-            let corridors = club_region.transfer_corridors();
-            let total: u32 = corridors.iter().map(|(_, w)| *w as u32).sum();
-            if total > 0 {
-                for _ in 0..foreign_count {
-                    let roll = IntegerUtils::random(0, total as i32) as u32;
-                    let mut acc = 0u32;
-                    for (region, weight) in corridors {
-                        acc += *weight as u32;
-                        if roll < acc {
-                            if !knowledge.known_regions.contains(region) {
-                                knowledge.known_regions.push(*region);
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
+            Self::seed_region_corridors(knowledge, seed, foreign_count);
             return;
         }
 
+        let sampled = Self::sample_scout_markets(seed, foreign_count);
+
+        // The specialist's region familiarity mirrors his seeded market, so
+        // the report-accuracy model reads the same career the country list
+        // describes rather than a second, independently-sampled one.
+        if let Some(region) = Self::seed_sampled_markets(knowledge, seed, &sampled, is_specialist) {
+            knowledge.region_familiarity = vec![RegionFamiliarity {
+                region,
+                level: 40,
+                days_scouted: 400,
+            }];
+        }
+    }
+
+    fn scout_specialist_chance(team_reputation: u16) -> i32 {
+        if team_reputation >= 7000 {
+            40
+        } else if team_reputation >= 5000 {
+            25
+        } else if team_reputation >= 3000 {
+            10
+        } else {
+            0
+        }
+    }
+
+    /// How many foreign markets this club's network covers. A giant runs a
+    /// department that watches half a dozen; a minnow watches its own
+    /// division and maybe a neighbour.
+    fn scout_foreign_market_count(team_reputation: u16) -> usize {
+        if team_reputation >= 7000 {
+            6
+        } else if team_reputation >= 5000 {
+            4
+        } else if team_reputation >= 3000 {
+            2
+        } else {
+            1
+        }
+    }
+
+    fn seed_region_corridors(
+        knowledge: &mut StaffKnowledge,
+        seed: &ScoutMarketSeed<'_>,
+        foreign_count: usize,
+    ) {
+        let corridors = seed.club_region().transfer_corridors();
+        let total: u32 = corridors.iter().map(|(_, w)| *w as u32).sum();
+        if total == 0 {
+            return;
+        }
+        for _ in 0..foreign_count {
+            let roll = IntegerUtils::random(0, total as i32) as u32;
+            let mut acc = 0u32;
+            for (region, weight) in corridors {
+                acc += *weight as u32;
+                if roll < acc {
+                    if !knowledge.known_regions.contains(region) {
+                        knowledge.known_regions.push(*region);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    fn sample_scout_markets(seed: &ScoutMarketSeed<'_>, foreign_count: usize) -> Vec<u32> {
         let mut sampled: Vec<u32> = Vec::with_capacity(foreign_count);
         for _ in 0..foreign_count {
             let Some(country) = Self::pick_weighted_country(seed.import_priors, &sampled) else {
@@ -258,7 +286,18 @@ impl DatabaseGenerator {
             };
             sampled.push(country);
         }
+        sampled
+    }
 
+    /// Seed every sampled market into the scout's knowledge. Returns the
+    /// region of the specialist's first market, which is the one he was
+    /// hired for and arrives already knowing.
+    fn seed_sampled_markets(
+        knowledge: &mut StaffKnowledge,
+        seed: &ScoutMarketSeed<'_>,
+        sampled: &[u32],
+        is_specialist: bool,
+    ) -> Option<ScoutingRegion> {
         let mut specialist_region = None;
         for (index, source_country) in sampled.iter().enumerate() {
             // The specialist's first market is the one he was hired for, and
@@ -279,17 +318,7 @@ impl DatabaseGenerator {
                 }
             }
         }
-
-        // The specialist's region familiarity mirrors his seeded market, so
-        // the report-accuracy model reads the same career the country list
-        // describes rather than a second, independently-sampled one.
-        if let Some(region) = specialist_region {
-            knowledge.region_familiarity = vec![RegionFamiliarity {
-                region,
-                level: 40,
-                days_scouted: 400,
-            }];
-        }
+        specialist_region
     }
 
     /// Weighted draw from the country's import priors, skipping markets

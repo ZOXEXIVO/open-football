@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
-use super::clock::process_cpu_nanos;
-use super::sampler;
+use super::clock::ProcessClock;
+use super::sampler::PerformanceSampler;
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static INITIALISED: OnceLock<()> = OnceLock::new();
@@ -95,11 +95,6 @@ struct MeasuredRegion {
     allocations: Option<AllocationCount>,
 }
 
-fn regions() -> &'static Mutex<Vec<MeasuredRegion>> {
-    static REGIONS: OnceLock<Mutex<Vec<MeasuredRegion>>> = OnceLock::new();
-    REGIONS.get_or_init(|| Mutex::new(Vec::new()))
-}
-
 /// Namespace for the world-tick profiler. Unit struct so the whole API hangs
 /// off one type rather than loose module functions.
 pub struct PerformanceProfiler;
@@ -112,7 +107,7 @@ impl PerformanceProfiler {
         INITIALISED.get_or_init(|| {
             if std::env::var_os("OF_PERFORMANCE").is_some() {
                 ENABLED.store(true, Ordering::Relaxed);
-                sampler::spawn();
+                PerformanceSampler::spawn();
             }
         });
     }
@@ -165,9 +160,9 @@ impl PerformanceProfiler {
         PhaseScope {
             name,
             depth,
-            start_ns: if on { sampler::now_ns() } else { 0 },
+            start_ns: if on { PerformanceSampler::now_ns() } else { 0 },
             wall0: on.then(Instant::now),
-            cpu0: if on { process_cpu_nanos() } else { 0 },
+            cpu0: if on { ProcessClock::cpu_nanos() } else { 0 },
             allocations: probe
                 .filter(|_| on)
                 .map(|p| AllocationMark::open(p.process)),
@@ -223,7 +218,9 @@ impl PerformanceProfiler {
         label: Option<&str>,
         allocations: Option<AllocationCount>,
     ) {
-        let mut regions = regions().lock().expect("performance regions poisoned");
+        let mut regions = Self::regions()
+            .lock()
+            .expect("performance regions poisoned");
         // Linear scan: the region set is a few dozen entries and insertion
         // order is the report order, which a map would lose.
         if let Some(row) = regions.iter_mut().find(|r| r.name == name) {
@@ -258,7 +255,9 @@ impl PerformanceProfiler {
         if !Self::enabled() {
             return;
         }
-        let mut regions = regions().lock().expect("performance regions poisoned");
+        let mut regions = Self::regions()
+            .lock()
+            .expect("performance regions poisoned");
         if regions.is_empty() {
             return;
         }
@@ -272,7 +271,7 @@ impl PerformanceProfiler {
             label,
             top_wall as f64 / 1e9,
             top_cpu as f64 / 1e9,
-            ratio(top_cpu, top_wall),
+            Self::ratio(top_cpu, top_wall),
         );
         let counted = regions.iter().any(|r| r.allocations.is_some());
         if counted {
@@ -310,9 +309,9 @@ impl PerformanceProfiler {
             let wall_ms = row.wall_ns as f64 / 1e6;
             let cores = if row.is_stage {
                 // Load-balance ceiling: total thread-time over the straggler.
-                ratio(row.wall_ns, row.max_ns)
+                Self::ratio(row.wall_ns, row.max_ns)
             } else {
-                ratio(row.cpu_ns, row.wall_ns)
+                Self::ratio(row.cpu_ns, row.wall_ns)
             };
             let indent = "  ".repeat(row.depth as usize);
             let heap = match (counted, row.allocations) {
@@ -329,7 +328,7 @@ impl PerformanceProfiler {
                 "{:<34} {:>10.1} {:>6.1}% {:>11.1} {:>7.2} {:>9.1} {:>7}{}  {}",
                 format!("{indent}{}", row.name),
                 wall_ms,
-                ratio(row.wall_ns, top_wall) * 100.0,
+                Self::ratio(row.wall_ns, top_wall) * 100.0,
                 row.cpu_ns as f64 / 1e6,
                 cores,
                 row.max_ns as f64 / 1e6,
@@ -356,17 +355,22 @@ impl PerformanceProfiler {
         );
         regions.clear();
         drop(regions);
-        sampler::report();
+        PerformanceSampler::report();
     }
-}
 
-/// `numerator / denominator`, or zero when the denominator is.
-#[inline]
-fn ratio(numerator: u64, denominator: u64) -> f64 {
-    if denominator == 0 {
-        0.0
-    } else {
-        numerator as f64 / denominator as f64
+    fn regions() -> &'static Mutex<Vec<MeasuredRegion>> {
+        static REGIONS: OnceLock<Mutex<Vec<MeasuredRegion>>> = OnceLock::new();
+        REGIONS.get_or_init(|| Mutex::new(Vec::new()))
+    }
+
+    /// `numerator / denominator`, or zero when the denominator is.
+    #[inline]
+    fn ratio(numerator: u64, denominator: u64) -> f64 {
+        if denominator == 0 {
+            0.0
+        } else {
+            numerator as f64 / denominator as f64
+        }
     }
 }
 
@@ -391,10 +395,10 @@ impl Drop for PhaseScope {
             return;
         };
         let wall = wall0.elapsed().as_nanos() as u64;
-        let cpu = process_cpu_nanos().saturating_sub(self.cpu0);
+        let cpu = ProcessClock::cpu_nanos().saturating_sub(self.cpu0);
         let allocations = self.allocations.map(AllocationMark::close);
         PerformanceProfiler::record(self.name, self.depth, wall, cpu, false, None, allocations);
-        sampler::push_window(self.name, self.start_ns, self.start_ns + wall);
+        PerformanceSampler::push_window(self.name, self.start_ns, self.start_ns + wall);
     }
 }
 
@@ -495,7 +499,7 @@ mod tests {
     }
 
     fn recorded(name: &str) -> Option<Option<AllocationCount>> {
-        regions()
+        PerformanceProfiler::regions()
             .lock()
             .unwrap()
             .iter()

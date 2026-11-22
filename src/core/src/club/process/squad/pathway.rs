@@ -439,6 +439,20 @@ impl LoanReturnVerdict {
     }
 }
 
+struct PathwayContext<'a> {
+    club_id: u32,
+    is_youth_squad: bool,
+    anchor: &'a ClubLevelAnchor,
+    bar: &'a PromotionBar,
+    philosophy: ClubPhilosophy,
+    board: &'a crate::club::board::ClubBoard,
+    pressure: &'a LedgerPressure,
+    league_rep: u16,
+    club_rep: u16,
+    not_lent: &'a FxHashSet<u32>,
+    kept_in_side: &'a FxHashSet<u32>,
+}
+
 impl Club {
     /// Re-derive what the club is for. The board writes its brief on the
     /// first tick and rewrites it at every takeover, so the philosophy is
@@ -466,7 +480,6 @@ impl Club {
 
     /// The monthly look at every contracted player: is he still on the
     /// pathway the club put him on, and what is the next rung?
-    #[expect(clippy::too_many_lines)]
     pub(in crate::club::process) fn review_pathways(&mut self, date: NaiveDate) {
         let Some(main_idx) = self.teams.main_index() else {
             return;
@@ -492,9 +505,30 @@ impl Club {
             .map(|p| p.id)
             .collect();
 
+        let kept_in_side: FxHashSet<u32> = self
+            .teams
+            .iter()
+            .flat_map(|team| team.players.iter())
+            .filter(|p| self.transfer_plan.keeps_in_the_side(p, date))
+            .map(|p| p.id)
+            .collect();
+
         for team_idx in 0..self.teams.teams.len() {
             let is_youth_squad = self.teams.teams[team_idx].team_type.is_youth();
             let ranks = Self::group_standing(&self.teams.teams[team_idx]);
+            let context = PathwayContext {
+                club_id,
+                is_youth_squad,
+                anchor: &anchor,
+                bar: &bar,
+                philosophy,
+                board: &board,
+                pressure: &pressure,
+                league_rep,
+                club_rep,
+                not_lent: &not_lent,
+                kept_in_side: &kept_in_side,
+            };
             for player in self.teams.teams[team_idx].players.players.iter_mut() {
                 if player.contract.is_none() || player.is_on_loan() {
                     continue;
@@ -508,102 +542,8 @@ impl Club {
                         (ahead, *best)
                     })
                     .unwrap_or((0, 0));
-                let signals = PathwayReview::signals(player, date, &anchor, &bar, rank, best);
-
-                let Some(plan) = player.plan.as_ref() else {
-                    let role = Self::role_for_existing(&signals);
-                    let stage = PathwayReview::opening_stage(&signals, is_youth_squad);
-                    let mut fresh = player.default_plan(role, stage, date);
-                    // How many spells this club has actually sent him on,
-                    // off the ledger. The serial-loanee flag is a boolean
-                    // about a career and was standing in for a count, so
-                    // every backfilled player read as nought or two.
-                    fresh.loans_used = player.statistics_history.loan_spells_at_current_club();
-                    player.assign_pathway(club_id, fresh, date);
-                    continue;
-                };
-                if !plan.review_due(date) {
-                    continue;
-                }
-                let next = PathwayReview::next_stage(
-                    plan.stage,
-                    &signals,
-                    plan,
-                    &philosophy,
-                    is_youth_squad,
-                    player
-                        .mind
-                        .career
-                        .plan_view(MindClock::day(date))
-                        .loan_push(),
-                    date,
-                );
-                let from = plan.stage;
-                // The board kept him off a listing nobody answered because it
-                // plays him; while it does, his pathway here is not over.
-                let next = if next == PathwayStage::MoveOn
-                    && self.transfer_plan.keeps_in_the_side(player, date)
-                {
-                    from
-                } else {
-                    next
-                };
-                // Finishing with a man is a decision about money as much as
-                // about football, and the money is the board's. A player
-                // the market will not pay his own book for is lent out
-                // while the book runs down, or kept — never written off by
-                // a monthly sweep. Nothing here is special-cased on how he
-                // arrived: a free signing carries no book and resolves to
-                // `Sell` exactly as before.
-                let next = if next == PathwayStage::MoveOn {
-                    match board.exit_route(
-                        player.book_value(date),
-                        PlayerValuationCalculator::calculate_value(
-                            player, date, league_rep, club_rep,
-                        )
-                        .amount,
-                        plan.loans_used < PathwayReview::MAX_LOANS
-                            && signals.runway >= PathwayReview::EXIT_LOAN_RUNWAY,
-                        &pressure,
-                    ) {
-                        ReservationVerdict::Sell => PathwayStage::MoveOn,
-                        ReservationVerdict::Loan => PathwayStage::LoanOut,
-                        ReservationVerdict::Hold => from,
-                    }
-                } else {
-                    next
-                };
-                let next = if next == PathwayStage::LoanOut && not_lent.contains(&player.id) {
-                    PathwayReview::standing_stage(&signals)
-                } else {
-                    next
-                };
-                let review_days = if next == from {
-                    PlayerPlan::REVIEW_DAYS
-                } else {
-                    PlayerPlan::SHORT_REVIEW_DAYS
-                };
-                if let Some(plan) = player.plan.as_mut() {
-                    plan.move_to(next, date, review_days);
-                }
-                if next != from {
-                    player.on_pathway_stage_changed(club_id, Some(from), next, date);
-                    // …and `MoveOn` is a decision with a market
-                    // consequence, exactly as it is on the return path.
-                    // Without this the monthly pass produced a stage that
-                    // nothing downstream acted on.
-                    if next == PathwayStage::MoveOn {
-                        player.on_listed_by_club("dec_reason_pathway_exhausted", date);
-                        if let Some(plan) = player.plan.as_mut() {
-                            plan.asking_multiple = Some(PathwayReview::MOVE_ON_MULTIPLE);
-                        }
-                    }
-                }
-                // A staged loan is only an intention until the market can
-                // see it. The monthly pass produced the stage and nothing
-                // put the man on the loan list.
-                if next == PathwayStage::LoanOut {
-                    staged_loans.push((player.id, PathwayReview::exit_loan_reason(&signals)));
+                if let Some(purpose) = player.review_pathway(&context, date, rank, best) {
+                    staged_loans.push((player.id, purpose));
                 }
             }
         }
@@ -611,7 +551,113 @@ impl Club {
             self.on_pathway_loan_staged(player_id, purpose, date);
         }
     }
+}
 
+impl Player {
+    fn review_pathway(
+        &mut self,
+        ctx: &PathwayContext<'_>,
+        date: NaiveDate,
+        rank: u8,
+        best: u8,
+    ) -> Option<LoanOutReason> {
+        let signals = PathwayReview::signals(self, date, ctx.anchor, ctx.bar, rank, best);
+
+        let Some(plan) = self.plan.as_ref() else {
+            let role = Club::role_for_existing(&signals);
+            let stage = PathwayReview::opening_stage(&signals, ctx.is_youth_squad);
+            let mut fresh = self.default_plan(role, stage, date);
+            // How many spells this club has actually sent him on, off the
+            // ledger. The serial-loanee flag is a boolean about a career and
+            // was standing in for a count, so every backfilled player read as
+            // nought or two.
+            fresh.loans_used = self.statistics_history.loan_spells_at_current_club();
+            self.assign_pathway(ctx.club_id, fresh, date);
+            return None;
+        };
+        if !plan.review_due(date) {
+            return None;
+        }
+        let next = PathwayReview::next_stage(
+            plan.stage,
+            &signals,
+            plan,
+            &ctx.philosophy,
+            ctx.is_youth_squad,
+            self.mind.career.plan_view(MindClock::day(date)).loan_push(),
+            date,
+        );
+        let from = plan.stage;
+        // The board kept him off a listing nobody answered because it plays
+        // him; while it does, his pathway here is not over.
+        let next = if next == PathwayStage::MoveOn && ctx.kept_in_side.contains(&self.id) {
+            from
+        } else {
+            next
+        };
+        // Finishing with a man is a decision about money as much as about
+        // football, and the money is the board's. A player the market will not
+        // pay his own book for is lent out while the book runs down, or kept —
+        // never written off by a monthly sweep. Nothing here is special-cased
+        // on how he arrived: a free signing carries no book and resolves to
+        // `Sell` exactly as before.
+        let next = if next == PathwayStage::MoveOn {
+            match ctx.board.exit_route(
+                self.book_value(date),
+                PlayerValuationCalculator::calculate_value(
+                    self,
+                    date,
+                    ctx.league_rep,
+                    ctx.club_rep,
+                )
+                .amount,
+                plan.loans_used < PathwayReview::MAX_LOANS
+                    && signals.runway >= PathwayReview::EXIT_LOAN_RUNWAY,
+                ctx.pressure,
+            ) {
+                ReservationVerdict::Sell => PathwayStage::MoveOn,
+                ReservationVerdict::Loan => PathwayStage::LoanOut,
+                ReservationVerdict::Hold => from,
+            }
+        } else {
+            next
+        };
+        let next = if next == PathwayStage::LoanOut && ctx.not_lent.contains(&self.id) {
+            PathwayReview::standing_stage(&signals)
+        } else {
+            next
+        };
+        let review_days = if next == from {
+            PlayerPlan::REVIEW_DAYS
+        } else {
+            PlayerPlan::SHORT_REVIEW_DAYS
+        };
+        if let Some(plan) = self.plan.as_mut() {
+            plan.move_to(next, date, review_days);
+        }
+        if next != from {
+            self.on_pathway_stage_changed(ctx.club_id, Some(from), next, date);
+            // …and `MoveOn` is a decision with a market consequence, exactly
+            // as it is on the return path. Without this the monthly pass
+            // produced a stage that nothing downstream acted on.
+            if next == PathwayStage::MoveOn {
+                self.on_listed_by_club("dec_reason_pathway_exhausted", date);
+                if let Some(plan) = self.plan.as_mut() {
+                    plan.asking_multiple = Some(PathwayReview::MOVE_ON_MULTIPLE);
+                }
+            }
+        }
+        // A staged loan is only an intention until the market can see it. The
+        // monthly pass produced the stage and nothing put the man on the loan
+        // list.
+        if next == PathwayStage::LoanOut {
+            return Some(PathwayReview::exit_loan_reason(&signals));
+        }
+        None
+    }
+}
+
+impl Club {
     /// A loan has ended and the player is back. The parent reads the
     /// spell and says what he is now, rather than letting a blanket move
     /// to the reserves make that decision for it.

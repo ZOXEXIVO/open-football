@@ -1,16 +1,14 @@
 pub mod routes;
 
-use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::shared::slug::{PlayerPage, resolve_player_page};
 use crate::leagues::address::LeagueAddress;
-use crate::player::events::PlayerEventsCounter;
-use crate::player::newspaper::PlayerNewsCounter;
-use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
+use crate::player::{PlayerPageChrome, PlayerPageColors};
+use crate::shared::slug::{PlayerPage, PlayerSlug};
+use crate::views::{MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
-use core::{PlayerAwardsCount, PlayerStatusType, SimulatorData};
+use core::{PlayerAwardsCount, SimulatorData};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -145,157 +143,119 @@ pub struct PlayerAwardsTemplate {
     pub league_blocks: Vec<LeagueBlock>,
 }
 
-#[expect(clippy::too_many_lines)]
-pub async fn player_awards_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<PlayerAwardsRequest>,
-) -> ApiResult<Response> {
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let guard = state.data.read().await;
+pub struct PlayerAwardsPage;
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+impl PlayerAwardsPage {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<PlayerAwardsRequest>,
+    ) -> ApiResult<Response> {
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let guard = state.data.read().await;
 
-    let (player, team_opt, canonical) = match resolve_player_page(
-        simulator_data,
-        &route_params.player_slug,
-        &route_params.lang,
-        "/awards",
-    )? {
-        PlayerPage::Found {
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+
+        let (player, team_opt, canonical) = match PlayerSlug::resolve_page(
+            simulator_data,
+            &route_params.player_slug,
+            &route_params.lang,
+            "/awards",
+        )? {
+            PlayerPage::Found {
+                player,
+                team,
+                canonical_slug,
+            } => (player, team, canonical_slug),
+            PlayerPage::Redirect(r) => return Ok(r),
+        };
+
+        let counts = &player.awards_count;
+        let summary = SummaryBlock::build(counts, &i18n);
+        let now = simulator_data.date.date();
+        let (chart_month_bars, chart_month_max) = MonthBar::chart(&counts.timeline, now, &i18n);
+        let has_chart = !chart_month_bars.is_empty();
+        let league_blocks = LeagueBlock::blocks(counts, simulator_data, &i18n);
+        let chrome = PlayerPageChrome::build(
+            simulator_data,
+            i18n,
             player,
-            team,
-            canonical_slug,
-        } => (player, team, canonical_slug),
-        PlayerPage::Redirect(r) => return Ok(r),
-    };
+            team_opt,
+            &route_params.lang,
+            &canonical,
+            "awards",
+            PlayerPageColors::Grey,
+        )?;
 
-    let (neighbor_teams, country_leagues) = if let Some(team) = team_opt {
-        get_neighbor_teams(team.club_id, simulator_data, &i18n)?
-    } else {
-        (Vec::new(), Vec::new())
-    };
-    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-
-    let title = format!(
-        "{} {}",
-        player.full_name.display_first_name(),
-        player.full_name.display_last_name()
-    );
-
-    let counts = &player.awards_count;
-    let summary = build_summary(counts, &i18n);
-    let now = simulator_data.date.date();
-    let (chart_month_bars, chart_month_max) = build_month_bars_all(&counts.timeline, now, &i18n);
-    let has_chart = !chart_month_bars.is_empty();
-    let league_blocks = build_league_blocks(counts, simulator_data, &i18n);
-
-    Ok(PlayerAwardsTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        title,
-        sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
-        sub_title_suffix: String::new(),
-        sub_title: team_opt.map(|t| t.name.clone()).unwrap_or_else(|| {
-            if player.is_retired() {
-                i18n.t("retired").to_string()
-            } else {
-                i18n.t("free_agent").to_string()
-            }
-        }),
-        sub_title_link: team_opt
-            .map(|t| format!("/{}/teams/{}", route_params.lang, t.slug))
-            .unwrap_or_default(),
-        sub_title_flag: None,
-        header_color: team_opt
-            .and_then(|t| {
-                simulator_data
-                    .club(t.club_id)
-                    .map(|c| c.colors.background.clone())
-            })
-            .unwrap_or_else(|| "#808080".to_string()),
-        foreground_color: team_opt
-            .and_then(|t| {
-                simulator_data
-                    .club(t.club_id)
-                    .map(|c| c.colors.foreground.clone())
-            })
-            .unwrap_or_else(|| "#ffffff".to_string()),
-        menu_sections: if let Some(team) = team_opt {
-            let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-            let current_path = format!("/{}/teams/{}", route_params.lang, team.slug);
-            let mp = views::MenuParams {
-                i18n: &i18n,
-                lang: &route_params.lang,
-                current_path: &current_path,
-                country_name: cn,
-                country_slug: cs,
-            };
-            views::team_menu(&mp, &neighbor_refs, &league_refs)
-        } else {
-            Vec::new()
-        },
-        i18n,
-        lang: route_params.lang.clone(),
-        active_tab: "awards",
-        player_id: player.id,
-        player_slug: canonical,
-        club_id: team_opt.map(|t| t.club_id).unwrap_or(0),
-        is_on_loan: player.is_on_loan(),
-        is_injured: player.player_attributes.is_injured,
-        is_unhappy: player.statuses.get().contains(&PlayerStatusType::Unh),
-        is_force_match_selection: player.is_force_match_selection,
-        is_on_watchlist: simulator_data.watchlist.contains(&player.id),
-        events_count: PlayerEventsCounter::count(player),
-        interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
-        awards_count: counts.total(),
-        news_count: PlayerNewsCounter::count(simulator_data, player),
-        summary,
-        chart_month_bars,
-        chart_month_max,
-        has_chart,
-        league_blocks,
+        Ok(PlayerAwardsTemplate {
+            css_version: chrome.css_version,
+            computer_name: chrome.computer_name,
+            cpu_brand: chrome.cpu_brand,
+            cores_count: chrome.cores_count,
+            title: chrome.title,
+            sub_title_prefix: chrome.sub_title_prefix,
+            sub_title_suffix: chrome.sub_title_suffix,
+            sub_title: chrome.sub_title,
+            sub_title_link: chrome.sub_title_link,
+            sub_title_flag: chrome.sub_title_flag,
+            header_color: chrome.header_color,
+            foreground_color: chrome.foreground_color,
+            menu_sections: chrome.menu_sections,
+            i18n: chrome.i18n,
+            lang: chrome.lang,
+            active_tab: chrome.active_tab,
+            player_id: chrome.player_id,
+            player_slug: chrome.player_slug,
+            club_id: chrome.club_id,
+            is_on_loan: chrome.is_on_loan,
+            is_injured: chrome.is_injured,
+            is_unhappy: chrome.is_unhappy,
+            is_force_match_selection: chrome.is_force_match_selection,
+            is_on_watchlist: chrome.is_on_watchlist,
+            events_count: chrome.events_count,
+            interested_clubs_count: chrome.interested_clubs_count,
+            awards_count: chrome.awards_count,
+            news_count: chrome.news_count,
+            summary,
+            chart_month_bars,
+            chart_month_max,
+            has_chart,
+            league_blocks,
+        }
+        .into_response())
     }
-    .into_response())
 }
 
-fn build_summary(counts: &PlayerAwardsCount, i18n: &I18n) -> SummaryBlock {
-    let totals = LeagueAwardTotals::from_lifetime(counts);
-    let AwardCardGroups {
-        weekly,
-        monthly,
-        season,
-        silverware,
-        global,
-    } = build_cards(&totals, i18n);
-    let sum = |cards: &[AwardCard]| -> u32 { cards.iter().map(|c| c.count as u32).sum() };
-    let weekly_total = sum(&weekly);
-    let monthly_total = sum(&monthly);
-    // Silverware totals fold into the season tile on the summary hero —
-    // a trophy medal is a season-scoped honour. The per-league block
-    // below still renders silverware in its own group.
-    let season_total = sum(&season) + sum(&silverware);
-    let global_total = sum(&global);
-    SummaryBlock {
-        has_weekly: weekly_total > 0,
-        has_monthly: monthly_total > 0,
-        has_season: season_total > 0,
-        has_global: global_total > 0,
-        weekly_total,
-        monthly_total,
-        season_total,
-        global_total,
-        total: totals.total(),
+impl SummaryBlock {
+    fn build(counts: &PlayerAwardsCount, i18n: &I18n) -> SummaryBlock {
+        let totals = LeagueAwardTotals::from_lifetime(counts);
+        let AwardCardGroups {
+            weekly,
+            monthly,
+            season,
+            silverware,
+            global,
+        } = AwardCardGroups::build(&totals, i18n);
+        let sum = |cards: &[AwardCard]| -> u32 { cards.iter().map(|c| c.count as u32).sum() };
+        let weekly_total = sum(&weekly);
+        let monthly_total = sum(&monthly);
+        // Silverware totals fold into the season tile on the summary hero —
+        // a trophy medal is a season-scoped honour. The per-league block
+        // below still renders silverware in its own group.
+        let season_total = sum(&season) + sum(&silverware);
+        let global_total = sum(&global);
+        SummaryBlock {
+            has_weekly: weekly_total > 0,
+            has_monthly: monthly_total > 0,
+            has_season: season_total > 0,
+            has_global: global_total > 0,
+            weekly_total,
+            monthly_total,
+            season_total,
+            global_total,
+            total: totals.total(),
+        }
     }
 }
 
@@ -398,196 +358,242 @@ impl LeagueAwardTotals {
     }
 }
 
-#[expect(clippy::too_many_lines)]
-fn build_cards(totals: &LeagueAwardTotals, i18n: &I18n) -> AwardCardGroups {
-    let card = |title_key: &str, count: u16, tone: &'static str, icon: &'static str| AwardCard {
-        title: i18n.t(title_key).to_string(),
-        count,
-        tone,
-        icon,
-    };
+impl AwardCardGroups {
+    fn build(totals: &LeagueAwardTotals, i18n: &I18n) -> AwardCardGroups {
+        Self {
+            weekly: Self::weekly(totals, i18n),
+            monthly: Self::monthly(totals, i18n),
+            season: Self::season(totals, i18n),
+            silverware: Self::silverware(totals, i18n),
+            global: Self::global(totals, i18n),
+        }
+    }
+
+    fn card(
+        i18n: &I18n,
+        title_key: &str,
+        count: u16,
+        tone: &'static str,
+        icon: &'static str,
+    ) -> AwardCard {
+        AwardCard {
+            title: i18n.t(title_key).to_string(),
+            count,
+            tone,
+            icon,
+        }
+    }
 
     // Icon mapping uses Font Awesome glyphs already in the page's icon
     // pack. Team awards take group icons; senior individual awards take
     // a trophy/star/medal; young variants overlay a graduate / seedling.
-    let weekly = vec![
-        card(
-            "team_of_the_week",
-            totals.team_of_the_week,
-            "weekly",
-            "fa-people-group",
-        ),
-        card(
-            "young_team_of_the_week",
-            totals.young_team_of_the_week,
-            "weekly young",
-            "fa-user-graduate",
-        ),
-        card(
-            "player_of_the_week",
-            totals.player_of_the_week,
-            "weekly",
-            "fa-star",
-        ),
-        card(
-            "young_player_of_the_week",
-            totals.young_player_of_the_week,
-            "weekly young",
-            "fa-seedling",
-        ),
-    ];
+    fn weekly(totals: &LeagueAwardTotals, i18n: &I18n) -> Vec<AwardCard> {
+        vec![
+            Self::card(
+                i18n,
+                "team_of_the_week",
+                totals.team_of_the_week,
+                "weekly",
+                "fa-people-group",
+            ),
+            Self::card(
+                i18n,
+                "young_team_of_the_week",
+                totals.young_team_of_the_week,
+                "weekly young",
+                "fa-user-graduate",
+            ),
+            Self::card(
+                i18n,
+                "player_of_the_week",
+                totals.player_of_the_week,
+                "weekly",
+                "fa-star",
+            ),
+            Self::card(
+                i18n,
+                "young_player_of_the_week",
+                totals.young_player_of_the_week,
+                "weekly young",
+                "fa-seedling",
+            ),
+        ]
+    }
 
-    let monthly = vec![
-        card(
-            "team_of_the_month",
-            totals.team_of_the_month,
-            "monthly",
-            "fa-people-group",
-        ),
-        card(
-            "young_team_of_the_month",
-            totals.young_team_of_the_month,
-            "monthly young",
-            "fa-user-graduate",
-        ),
-        card(
-            "player_of_the_month",
-            totals.player_of_the_month,
-            "monthly",
-            "fa-medal",
-        ),
-        card(
-            "young_player_of_the_month",
-            totals.young_player_of_the_month,
-            "monthly young",
-            "fa-award",
-        ),
-    ];
+    fn monthly(totals: &LeagueAwardTotals, i18n: &I18n) -> Vec<AwardCard> {
+        vec![
+            Self::card(
+                i18n,
+                "team_of_the_month",
+                totals.team_of_the_month,
+                "monthly",
+                "fa-people-group",
+            ),
+            Self::card(
+                i18n,
+                "young_team_of_the_month",
+                totals.young_team_of_the_month,
+                "monthly young",
+                "fa-user-graduate",
+            ),
+            Self::card(
+                i18n,
+                "player_of_the_month",
+                totals.player_of_the_month,
+                "monthly",
+                "fa-medal",
+            ),
+            Self::card(
+                i18n,
+                "young_player_of_the_month",
+                totals.young_player_of_the_month,
+                "monthly young",
+                "fa-award",
+            ),
+        ]
+    }
 
-    let season = vec![
-        card(
-            "team_of_the_season",
-            totals.team_of_the_season,
-            "season",
-            "fa-trophy",
-        ),
-        card(
-            "team_of_the_year",
-            totals.team_of_the_year,
-            "season",
-            "fa-trophy",
-        ),
-        card(
-            "player_of_the_season",
-            totals.player_of_the_season,
-            "season",
-            "fa-crown",
-        ),
-        card(
-            "young_player_of_the_season",
-            totals.young_player_of_the_season,
-            "season young",
-            "fa-crown",
-        ),
-        card(
-            "top_scorer",
-            totals.league_top_scorer,
-            "season",
-            "fa-futbol",
-        ),
-        card(
-            "top_assists",
-            totals.league_top_assists,
-            "season",
-            "fa-handshake",
-        ),
-        card(
-            "golden_glove",
-            totals.league_golden_glove,
-            "season",
-            "fa-hand-back-fist",
-        ),
-    ];
+    fn season(totals: &LeagueAwardTotals, i18n: &I18n) -> Vec<AwardCard> {
+        vec![
+            Self::card(
+                i18n,
+                "team_of_the_season",
+                totals.team_of_the_season,
+                "season",
+                "fa-trophy",
+            ),
+            Self::card(
+                i18n,
+                "team_of_the_year",
+                totals.team_of_the_year,
+                "season",
+                "fa-trophy",
+            ),
+            Self::card(
+                i18n,
+                "player_of_the_season",
+                totals.player_of_the_season,
+                "season",
+                "fa-crown",
+            ),
+            Self::card(
+                i18n,
+                "young_player_of_the_season",
+                totals.young_player_of_the_season,
+                "season young",
+                "fa-crown",
+            ),
+            Self::card(
+                i18n,
+                "top_scorer",
+                totals.league_top_scorer,
+                "season",
+                "fa-futbol",
+            ),
+            Self::card(
+                i18n,
+                "top_assists",
+                totals.league_top_assists,
+                "season",
+                "fa-handshake",
+            ),
+            Self::card(
+                i18n,
+                "golden_glove",
+                totals.league_golden_glove,
+                "season",
+                "fa-hand-back-fist",
+            ),
+        ]
+    }
 
     // Silverware — team-level trophy medals. Distinct from individual
     // season awards (top scorer / POS / etc.) so the page can render
     // them under their own header with a trophy tint.
-    let silverware = vec![card(
-        "domestic_cup_winner",
-        totals.domestic_cup_winner,
-        "silverware",
-        "fa-trophy",
-    )];
+    fn silverware(totals: &LeagueAwardTotals, i18n: &I18n) -> Vec<AwardCard> {
+        vec![Self::card(
+            i18n,
+            "domestic_cup_winner",
+            totals.domestic_cup_winner,
+            "silverware",
+            "fa-trophy",
+        )]
+    }
 
-    let global = vec![
-        card(
-            "continental_player_of_the_year",
-            totals.continental_player_of_year,
-            "global",
-            "fa-globe-europe",
-        ),
-        card(
-            "world_player_of_the_year",
-            totals.world_player_of_year,
-            "global",
-            "fa-earth-americas",
-        ),
-    ];
-
-    AwardCardGroups {
-        weekly,
-        monthly,
-        season,
-        silverware,
-        global,
+    fn global(totals: &LeagueAwardTotals, i18n: &I18n) -> Vec<AwardCard> {
+        vec![
+            Self::card(
+                i18n,
+                "continental_player_of_the_year",
+                totals.continental_player_of_year,
+                "global",
+                "fa-globe-europe",
+            ),
+            Self::card(
+                i18n,
+                "world_player_of_the_year",
+                totals.world_player_of_year,
+                "global",
+                "fa-earth-americas",
+            ),
+        ]
     }
 }
 
-/// Group the lifetime timeline into per-league blocks, sorted by
-/// most-recent-award-date desc. The leading block (current league)
-/// also carries the past-12-months chart; trailing blocks render
-/// counts only. The `None` bucket — Continental / World POY — only
-/// appears when the player has won one of those.
-fn build_league_blocks(
-    counts: &PlayerAwardsCount,
-    data: &SimulatorData,
-    i18n: &I18n,
-) -> Vec<LeagueBlock> {
-    use std::collections::HashMap;
+impl LeagueBlock {
+    /// Group the lifetime timeline into per-league blocks, sorted by
+    /// most-recent-award-date desc. The leading block (current league)
+    /// also carries the past-12-months chart; trailing blocks render
+    /// counts only. The `None` bucket — Continental / World POY — only
+    /// appears when the player has won one of those.
+    fn blocks(counts: &PlayerAwardsCount, data: &SimulatorData, i18n: &I18n) -> Vec<LeagueBlock> {
+        use std::collections::HashMap;
 
-    let mut totals_by_league: HashMap<Option<u32>, LeagueAwardTotals> = HashMap::new();
-    let mut latest_by_league: HashMap<Option<u32>, chrono::NaiveDate> = HashMap::new();
-    for entry in &counts.timeline {
-        let key = entry.league_id;
-        totals_by_league.entry(key).or_default().add(entry.kind);
-        latest_by_league
-            .entry(key)
-            .and_modify(|d| {
-                if entry.date > *d {
-                    *d = entry.date;
-                }
-            })
-            .or_insert(entry.date);
+        let mut totals_by_league: HashMap<Option<u32>, LeagueAwardTotals> = HashMap::new();
+        let mut latest_by_league: HashMap<Option<u32>, chrono::NaiveDate> = HashMap::new();
+        for entry in &counts.timeline {
+            let key = entry.league_id;
+            totals_by_league.entry(key).or_default().add(entry.kind);
+            latest_by_league
+                .entry(key)
+                .and_modify(|d| {
+                    if entry.date > *d {
+                        *d = entry.date;
+                    }
+                })
+                .or_insert(entry.date);
+        }
+
+        // Convert into Vec and sort newest-first by latest award date.
+        let mut keys: Vec<Option<u32>> = totals_by_league.keys().copied().collect();
+        keys.sort_by(|a, b| {
+            let da = latest_by_league.get(a).copied();
+            let db = latest_by_league.get(b).copied();
+            db.cmp(&da)
+        });
+
+        let mut blocks: Vec<LeagueBlock> = Vec::with_capacity(keys.len());
+        for league_id in keys.iter() {
+            let totals = totals_by_league.get(league_id).expect("populated above");
+            blocks.push(Self::block(*league_id, totals, data, i18n));
+        }
+
+        blocks
     }
 
-    // Convert into Vec and sort newest-first by latest award date.
-    let mut keys: Vec<Option<u32>> = totals_by_league.keys().copied().collect();
-    keys.sort_by(|a, b| {
-        let da = latest_by_league.get(a).copied();
-        let db = latest_by_league.get(b).copied();
-        db.cmp(&da)
-    });
-
-    let mut blocks: Vec<LeagueBlock> = Vec::with_capacity(keys.len());
-    for league_id in keys.iter() {
-        let totals = totals_by_league.get(league_id).expect("populated above");
+    fn block(
+        league_id: Option<u32>,
+        totals: &LeagueAwardTotals,
+        data: &SimulatorData,
+        i18n: &I18n,
+    ) -> LeagueBlock {
         let AwardCardGroups {
             weekly,
             monthly,
             season,
             silverware,
             global,
-        } = build_cards(totals, i18n);
+        } = AwardCardGroups::build(totals, i18n);
         let has_weekly = weekly.iter().any(|c| c.count > 0);
         let has_monthly = monthly.iter().any(|c| c.count > 0);
         let has_season = season.iter().any(|c| c.count > 0);
@@ -599,53 +605,17 @@ fn build_league_blocks(
         // domestic cup (which lives outside the league collection), so
         // `is_cup` reflects whichever side resolved the id.
         let (league_name, league_slug, is_cup, country_code, country_name, country_slug) =
-            match league_id {
-                Some(id) => {
-                    let league = data.league(*id);
-                    let (name, slug, is_cup_flag, country_id) = league
-                        .map(|l| (l.name.clone(), l.slug.clone(), l.is_cup, Some(l.country_id)))
-                        .unwrap_or_else(|| {
-                            (
-                                i18n.t("awards_unknown_league").to_string(),
-                                String::new(),
-                                false,
-                                None,
-                            )
-                        });
-                    let country = country_id.and_then(|cid| data.country(cid));
-                    let (code, cname, cslug) = country
-                        .map(|c| (c.code.clone(), c.name.clone(), c.slug.clone()))
-                        .unwrap_or_default();
-                    (name, slug, is_cup_flag, code, cname, cslug)
-                }
-                None => (
-                    i18n.t("awards_section_global").to_string(),
-                    String::new(),
-                    false,
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                ),
-            };
+            Self::identity(league_id, data, i18n);
 
         // Domestic cups don't have an awards subpage — link to the
         // bracket route instead. Leagues keep their existing awards
         // tab. Global bucket (empty slug) renders without a link.
-        let awards_url = if league_slug.is_empty() {
-            String::new()
-        } else if is_cup {
-            format!("/cups/{}", league_slug)
-        } else {
-            format!(
-                "{}/awards",
-                LeagueAddress::new(&country_slug, &league_slug).path()
-            )
-        };
+        let awards_url = Self::awards_url(&league_slug, is_cup, &country_slug);
 
-        blocks.push(LeagueBlock {
+        LeagueBlock {
             league_name,
             league_slug,
-            league_id: *league_id,
+            league_id,
             is_cup,
             awards_url,
             country_code,
@@ -662,129 +632,146 @@ fn build_league_blocks(
             has_silverware,
             has_global,
             total: totals.total(),
-        });
-    }
-
-    blocks
-}
-
-/// Career-wide chart data — bucket the lifetime timeline by calendar
-/// month for the past 12 months relative to `now`, aggregating every
-/// league. Always returns exactly 12 bars (current month last) so the
-/// chart's x-axis is stable when the player went quiet. Returns an
-/// empty vec only when the player has zero awards total (chart panel
-/// is then hidden).
-fn build_month_bars_all(
-    timeline: &[core::AwardTimelineEntry],
-    now: chrono::NaiveDate,
-    i18n: &I18n,
-) -> (Vec<MonthBar>, u16) {
-    use chrono::Datelike;
-
-    let mut keys: Vec<(i32, u32)> = Vec::with_capacity(12);
-    let mut year = now.year();
-    let mut month = now.month() as i32;
-    for _ in 0..12 {
-        keys.push((year, month as u32));
-        month -= 1;
-        if month == 0 {
-            month = 12;
-            year -= 1;
         }
     }
-    keys.reverse();
 
-    use std::collections::HashMap;
-    let mut counts_by_key: HashMap<(i32, u32), u16> = HashMap::new();
-    let mut any = false;
-    for entry in timeline {
-        any = true;
-        let key = (entry.date.year(), entry.date.month());
-        let slot = counts_by_key.entry(key).or_insert(0);
-        *slot = slot.saturating_add(1);
-    }
-    if !any {
-        return (Vec::new(), 0);
-    }
-
-    let month_short = |m: u32| -> String {
-        let key = match m {
-            1 => "month_jan",
-            2 => "month_feb",
-            3 => "month_mar",
-            4 => "month_apr",
-            5 => "month_may",
-            6 => "month_jun",
-            7 => "month_jul",
-            8 => "month_aug",
-            9 => "month_sep",
-            10 => "month_oct",
-            11 => "month_nov",
-            12 => "month_dec",
-            _ => "",
-        };
-        i18n.t(key).to_string()
-    };
-
-    let bars_data: Vec<(String, i32, u16)> = keys
-        .iter()
-        .map(|key| {
-            let count = counts_by_key.get(key).copied().unwrap_or(0);
-            (month_short(key.1), key.0, count)
-        })
-        .collect();
-
-    let max_count = bars_data.iter().map(|(_, _, c)| *c).max().unwrap_or(0);
-
-    let bars = bars_data
-        .into_iter()
-        .map(|(month, year, count)| {
-            let height_pct = if max_count == 0 {
-                0
-            } else {
-                ((count as u32 * 100) / max_count as u32).min(100)
-            };
-            MonthBar {
-                month,
-                year: year.to_string(),
-                count,
-                height_pct,
+    fn identity(
+        league_id: Option<u32>,
+        data: &SimulatorData,
+        i18n: &I18n,
+    ) -> (String, String, bool, String, String, String) {
+        match league_id {
+            Some(id) => {
+                let league = data.league(id);
+                let (name, slug, is_cup_flag, country_id) = league
+                    .map(|l| (l.name.clone(), l.slug.clone(), l.is_cup, Some(l.country_id)))
+                    .unwrap_or_else(|| {
+                        (
+                            i18n.t("awards_unknown_league").to_string(),
+                            String::new(),
+                            false,
+                            None,
+                        )
+                    });
+                let country = country_id.and_then(|cid| data.country(cid));
+                let (code, cname, cslug) = country
+                    .map(|c| (c.code.clone(), c.name.clone(), c.slug.clone()))
+                    .unwrap_or_default();
+                (name, slug, is_cup_flag, code, cname, cslug)
             }
-        })
-        .collect();
+            None => (
+                i18n.t("awards_section_global").to_string(),
+                String::new(),
+                false,
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+        }
+    }
 
-    (bars, max_count)
+    fn awards_url(league_slug: &str, is_cup: bool, country_slug: &str) -> String {
+        if league_slug.is_empty() {
+            String::new()
+        } else if is_cup {
+            format!("/cups/{}", league_slug)
+        } else {
+            format!(
+                "{}/awards",
+                LeagueAddress::new(country_slug, league_slug).path()
+            )
+        }
+    }
 }
 
-fn get_neighbor_teams(
-    club_id: u32,
-    data: &SimulatorData,
-    i18n: &I18n,
-) -> Result<NeighborMenus, ApiError> {
-    let club = data
-        .club(club_id)
-        .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
-    let teams = views::neighbor_teams(club, i18n);
-    let mut country_leagues: Vec<(u32, String, String)> = data
-        .country_by_club(club_id)
-        .map(|country| {
-            country
-                .leagues
-                .leagues
-                .iter()
-                .filter(|l| !l.friendly)
-                .map(|l| (l.id, l.name.clone(), l.slug.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
-    country_leagues.sort_by_key(|(id, _, _)| *id);
-    Ok((
-        teams,
-        country_leagues
+impl MonthBar {
+    /// Career-wide chart data — bucket the lifetime timeline by calendar
+    /// month for the past 12 months relative to `now`, aggregating every
+    /// league. Always returns exactly 12 bars (current month last) so the
+    /// chart's x-axis is stable when the player went quiet. Returns an
+    /// empty vec only when the player has zero awards total (chart panel
+    /// is then hidden).
+    fn chart(
+        timeline: &[core::AwardTimelineEntry],
+        now: chrono::NaiveDate,
+        i18n: &I18n,
+    ) -> (Vec<MonthBar>, u16) {
+        use chrono::Datelike;
+
+        let mut keys: Vec<(i32, u32)> = Vec::with_capacity(12);
+        let mut year = now.year();
+        let mut month = now.month() as i32;
+        for _ in 0..12 {
+            keys.push((year, month as u32));
+            month -= 1;
+            if month == 0 {
+                month = 12;
+                year -= 1;
+            }
+        }
+        keys.reverse();
+
+        use std::collections::HashMap;
+        let mut counts_by_key: HashMap<(i32, u32), u16> = HashMap::new();
+        let mut any = false;
+        for entry in timeline {
+            any = true;
+            let key = (entry.date.year(), entry.date.month());
+            let slot = counts_by_key.entry(key).or_insert(0);
+            *slot = slot.saturating_add(1);
+        }
+        if !any {
+            return (Vec::new(), 0);
+        }
+
+        let month_short = |m: u32| -> String {
+            let key = match m {
+                1 => "month_jan",
+                2 => "month_feb",
+                3 => "month_mar",
+                4 => "month_apr",
+                5 => "month_may",
+                6 => "month_jun",
+                7 => "month_jul",
+                8 => "month_aug",
+                9 => "month_sep",
+                10 => "month_oct",
+                11 => "month_nov",
+                12 => "month_dec",
+                _ => "",
+            };
+            i18n.t(key).to_string()
+        };
+
+        let bars_data: Vec<(String, i32, u16)> = keys
+            .iter()
+            .map(|key| {
+                let count = counts_by_key.get(key).copied().unwrap_or(0);
+                (month_short(key.1), key.0, count)
+            })
+            .collect();
+
+        let max_count = bars_data.iter().map(|(_, _, c)| *c).max().unwrap_or(0);
+
+        let bars = bars_data
             .into_iter()
-            .map(|(_, name, slug)| (name, slug))
-            .collect(),
-    ))
+            .map(|(month, year, count)| {
+                let height_pct = if max_count == 0 {
+                    0
+                } else {
+                    ((count as u32 * 100) / max_count as u32).min(100)
+                };
+                MonthBar {
+                    month,
+                    year: year.to_string(),
+                    count,
+                    height_pct,
+                }
+            })
+            .collect();
+
+        (bars, max_count)
+    }
 }
 
 #[cfg(test)]

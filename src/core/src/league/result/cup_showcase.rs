@@ -273,6 +273,23 @@ impl ShowcaseAssessment {
             }
         }
     }
+
+    /// Scout-facing ability and potential for a standout cup performance.
+    fn assess(player: &crate::Player, match_rating: f32, age: u8, now: NaiveDate) -> (u8, u8) {
+        let skill_ability = player
+            .skills
+            .calculate_ability_for_position(player.position()) as i32;
+        let assessed_ability =
+            (skill_ability + Self::rating_ability_bonus(match_rating)).clamp(1, 200) as u8;
+        // Scouts in the stands can't see biological PA — the
+        // assessment anchors on the observable ceiling (visible
+        // ability + age/mentals projection) instead.
+        let observable_ceiling = PotentialEstimator::observable_ceiling(player, now) as i32;
+        let assessed_potential = (observable_ceiling.max(assessed_ability as i32)
+            + Self::youth_potential_bonus(age))
+        .clamp(1, 200) as u8;
+        (assessed_ability, assessed_potential)
+    }
 }
 
 // ============================================================
@@ -445,23 +462,95 @@ struct MemoryAction {
     memory: KnownPlayerMemory,
 }
 
-impl LeagueResult {
-    /// Convert a finished domestic-cup match into breakout scouting
-    /// interest. Caller gates this to domestic cups (`is_cup &&
-    /// !is_friendly` and not a continental competition); friendlies and
-    /// continental cups never reach here.
-    #[allow(clippy::too_many_arguments)]
-    #[expect(clippy::too_many_lines)]
-    pub(super) fn record_domestic_cup_showcase_scouting<D: LeagueProcessAccess>(
+/// Match-level facts of a qualifying underdog tie, resolved before the
+/// read pass.
+struct ShowcaseSetup {
+    weaker_team_id: u32,
+    weaker_result: WeakerResult,
+    clean_sheet: bool,
+    underdog: f32,
+    weaker_club_id: u32,
+    opponent_club_id: u32,
+    country_id: u32,
+    appeared: Vec<u32>,
+}
+
+impl ShowcaseSetup {
+    fn resolve<D: LeagueProcessAccess>(
         details: &MatchResultRaw,
-        data: &mut D,
-        now: NaiveDate,
+        data: &D,
         home_team_id: u32,
         away_team_id: u32,
         home_goals: u8,
         away_goals: u8,
-        best_player_id: Option<u32>,
-    ) {
+    ) -> Option<Self> {
+        let underdog =
+            UnderdogSide::resolve(data, home_team_id, away_team_id, home_goals, away_goals)?;
+
+        let weaker_result = if underdog.weaker_goals > underdog.opponent_goals {
+            WeakerResult::Win
+        } else if underdog.weaker_goals == underdog.opponent_goals {
+            WeakerResult::Draw
+        } else if underdog.opponent_goals - underdog.weaker_goals == 1 {
+            WeakerResult::NarrowLoss
+        } else {
+            WeakerResult::HeavyLoss
+        };
+        let clean_sheet = underdog.opponent_goals == 0;
+
+        // The weaker side's match squad — only its players can be heroes.
+        let weaker_side: &FieldSquad =
+            if details.left_team_players.team_id == underdog.weaker_team_id {
+                &details.left_team_players
+            } else if details.right_team_players.team_id == underdog.weaker_team_id {
+                &details.right_team_players
+            } else {
+                return None;
+            };
+        let appeared: Vec<u32> = weaker_side
+            .main
+            .iter()
+            .copied()
+            .chain(weaker_side.substitutes_used.iter().copied())
+            .collect();
+        if appeared.is_empty() {
+            return None;
+        }
+
+        let weaker_club_id = data.team(underdog.weaker_team_id).map(|t| t.club_id)?;
+        let opponent_club_id = data.team(underdog.opponent_team_id).map(|t| t.club_id)?;
+        let country_id = data.country_by_club(weaker_club_id).map(|c| c.id)?;
+
+        Some(ShowcaseSetup {
+            weaker_team_id: underdog.weaker_team_id,
+            weaker_result,
+            clean_sheet,
+            underdog: underdog.bonus,
+            weaker_club_id,
+            opponent_club_id,
+            country_id,
+            appeared,
+        })
+    }
+}
+
+/// The weaker side of a qualifying reputation mismatch.
+struct UnderdogSide {
+    weaker_team_id: u32,
+    weaker_goals: u8,
+    opponent_team_id: u32,
+    opponent_goals: u8,
+    bonus: f32,
+}
+
+impl UnderdogSide {
+    fn resolve<D: LeagueProcessAccess>(
+        data: &D,
+        home_team_id: u32,
+        away_team_id: u32,
+        home_goals: u8,
+        away_goals: u8,
+    ) -> Option<Self> {
         // ── Reputation gap: only a clear underdog tie qualifies ───────
         let home_rep = data
             .team(home_team_id)
@@ -472,7 +561,7 @@ impl LeagueResult {
             .map(|t| t.reputation.market_value_score() as f32)
             .unwrap_or(0.0);
         if home_rep <= 0.0 || away_rep <= 0.0 {
-            return;
+            return None;
         }
 
         let (
@@ -502,324 +591,451 @@ impl LeagueResult {
             )
         };
 
-        if Showcase::band_for_ratio(weaker_rep / opponent_rep).is_none() {
+        Showcase::band_for_ratio(weaker_rep / opponent_rep)?;
+        Some(UnderdogSide {
+            weaker_team_id,
+            weaker_goals,
+            opponent_team_id,
+            opponent_goals,
+            bonus: Showcase::underdog_bonus(weaker_rep, opponent_rep),
+        })
+    }
+}
+
+/// One candidate recipient club, reduced to the facts the selection needs.
+struct ClubFacts {
+    club_id: u32,
+    rep: f32,
+    scout_id: Option<u32>,
+    need_groups: Vec<PlayerFieldPositionGroup>,
+}
+
+impl LeagueResult {
+    /// Convert a finished domestic-cup match into breakout scouting
+    /// interest. Caller gates this to domestic cups (`is_cup &&
+    /// !is_friendly` and not a continental competition); friendlies and
+    /// continental cups never reach here.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn record_domestic_cup_showcase_scouting<D: LeagueProcessAccess>(
+        details: &MatchResultRaw,
+        data: &mut D,
+        now: NaiveDate,
+        home_team_id: u32,
+        away_team_id: u32,
+        home_goals: u8,
+        away_goals: u8,
+        best_player_id: Option<u32>,
+    ) {
+        let Some(setup) = ShowcaseSetup::resolve(
+            details,
+            data,
+            home_team_id,
+            away_team_id,
+            home_goals,
+            away_goals,
+        ) else {
             return;
-        }
-        let underdog = Showcase::underdog_bonus(weaker_rep, opponent_rep);
-
-        let weaker_result = if weaker_goals > opponent_goals {
-            WeakerResult::Win
-        } else if weaker_goals == opponent_goals {
-            WeakerResult::Draw
-        } else if opponent_goals - weaker_goals == 1 {
-            WeakerResult::NarrowLoss
-        } else {
-            WeakerResult::HeavyLoss
-        };
-        let clean_sheet = opponent_goals == 0;
-
-        // The weaker side's match squad — only its players can be heroes.
-        let weaker_side: &FieldSquad = if details.left_team_players.team_id == weaker_team_id {
-            &details.left_team_players
-        } else if details.right_team_players.team_id == weaker_team_id {
-            &details.right_team_players
-        } else {
-            return;
-        };
-        let appeared: Vec<u32> = weaker_side
-            .main
-            .iter()
-            .copied()
-            .chain(weaker_side.substitutes_used.iter().copied())
-            .collect();
-        if appeared.is_empty() {
-            return;
-        }
-
-        let weaker_club_id = match data.team(weaker_team_id).map(|t| t.club_id) {
-            Some(id) => id,
-            None => return,
-        };
-        let opponent_club_id = match data.team(opponent_team_id).map(|t| t.club_id) {
-            Some(id) => id,
-            None => return,
-        };
-        let country_id = match data.country_by_club(weaker_club_id).map(|c| c.id) {
-            Some(id) => id,
-            None => return,
         };
 
+        let (monitor_actions, memory_actions) =
+            Self::collect_showcase_actions(details, data, now, &setup, best_player_id);
+        Self::apply_showcase_actions(monitor_actions, memory_actions, data, now);
+    }
+
+    /// Read pass: one shared borrow of the country resolves candidates,
+    /// recipient facts, and the probability rolls.
+    fn collect_showcase_actions<D: LeagueProcessAccess>(
+        details: &MatchResultRaw,
+        data: &D,
+        now: NaiveDate,
+        setup: &ShowcaseSetup,
+        best_player_id: Option<u32>,
+    ) -> (Vec<MonitorAction>, Vec<MemoryAction>) {
         let mut monitor_actions: Vec<MonitorAction> = Vec::new();
         let mut memory_actions: Vec<MemoryAction> = Vec::new();
 
-        // ── Read pass: one shared borrow of the country resolves
-        //    candidates, recipient facts, and the probability rolls.
-        {
-            let country = match data.country(country_id) {
-                Some(c) => c,
-                None => return,
-            };
-            let price_level = country.settings.pricing.price_level;
-            let weaker_club = match country.clubs.iter().find(|c| c.id == weaker_club_id) {
-                Some(c) => c,
-                None => return,
-            };
-            let (seller_league_rep, seller_club_rep) =
-                PlayerValuationCalculator::seller_context(country, weaker_club);
-            let weaker_ctx = SummaryClubContext::of(country, weaker_club, now, false);
-            let mut suitors: FxHashMap<u32, Suitor<'_>> = FxHashMap::default();
-            let weaker_team = match weaker_club
-                .teams
-                .teams
-                .iter()
-                .find(|t| t.id == weaker_team_id)
-            {
-                Some(t) => t,
-                None => return,
-            };
+        let Some(country) = data.country(setup.country_id) else {
+            return (monitor_actions, memory_actions);
+        };
+        let price_level = country.settings.pricing.price_level;
+        let Some(weaker_club) = country.clubs.iter().find(|c| c.id == setup.weaker_club_id) else {
+            return (monitor_actions, memory_actions);
+        };
+        let (seller_league_rep, seller_club_rep) =
+            PlayerValuationCalculator::seller_context(country, weaker_club);
+        let weaker_ctx = SummaryClubContext::of(country, weaker_club, now, false);
+        let mut suitors: FxHashMap<u32, Suitor<'_>> = FxHashMap::default();
+        let Some(weaker_team) = weaker_club
+            .teams
+            .teams
+            .iter()
+            .find(|t| t.id == setup.weaker_team_id)
+        else {
+            return (monitor_actions, memory_actions);
+        };
 
-            // Recipient-club facts, computed once and shared across candidates.
-            struct ClubFacts {
-                club_id: u32,
-                rep: f32,
-                scout_id: Option<u32>,
-                need_groups: Vec<PlayerFieldPositionGroup>,
-            }
-            let mut club_facts: Vec<ClubFacts> = Vec::new();
-            for club in &country.clubs {
-                if club.id == weaker_club_id {
-                    continue; // a club doesn't "discover" its own player
-                }
-                let rep = club
-                    .teams
-                    .main()
-                    .map(|t| t.reputation.market_value_score() as f32)
-                    .unwrap_or(0.0);
-                club_facts.push(ClubFacts {
-                    club_id: club.id,
-                    rep,
-                    scout_id: ClubScoutingFacts::best_scout_id(club),
-                    need_groups: ClubScoutingFacts::active_need_groups(club),
-                });
-            }
+        // Recipient-club facts, computed once and shared across candidates.
+        let club_facts = Self::showcase_club_facts(country, setup.weaker_club_id);
 
-            // Build the candidate set from the weaker side's performers.
-            let mut candidates: Vec<ShowcaseCandidate> = Vec::new();
-            for pid in &appeared {
-                let stats = match details.player_stats.get(pid) {
-                    Some(s) => s,
-                    None => continue,
-                };
-                if stats.match_rating < MIN_SHOWCASE_RATING {
-                    continue;
-                }
-                let player = match weaker_team.players.players.iter().find(|p| p.id == *pid) {
-                    Some(p) => p,
-                    None => continue,
-                };
-                let position = player.position();
-                let position_group = position.position_group();
-                let age = player.age(now);
+        // Build the candidate set from the weaker side's performers.
+        let mut candidates = Self::showcase_candidates(
+            country,
+            weaker_club,
+            weaker_team,
+            &weaker_ctx,
+            setup,
+            details,
+            now,
+            best_player_id,
+            price_level,
+            seller_league_rep,
+            seller_club_rep,
+        );
 
-                let defensive_clean_sheet = clean_sheet
-                    && matches!(
-                        position_group,
-                        PlayerFieldPositionGroup::Defender | PlayerFieldPositionGroup::Goalkeeper
-                    );
-                let line = ShowcaseStatLine {
-                    match_rating: stats.match_rating,
-                    goals: stats.goals,
-                    assists: stats.assists,
-                    minutes_played: stats.minutes_played,
-                    age,
-                    defensive_clean_sheet,
-                    is_motm: best_player_id == Some(*pid),
-                    red_card: stats.red_cards > 0,
-                    own_goal_or_error: stats.own_goals > 0 || stats.errors_leading_to_goal > 0,
-                    weaker_result,
-                };
-                let score = Showcase::score(&line, underdog);
-                let tier = match Showcase::tier(score) {
-                    Some(t) => t,
-                    None => continue,
-                };
+        // Strongest showcases first, then cap per match.
+        candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
+        candidates.truncate(MAX_CANDIDATES_PER_MATCH);
 
-                let skill_ability = player.skills.calculate_ability_for_position(position) as i32;
-                let assessed_ability = (skill_ability
-                    + ShowcaseAssessment::rating_ability_bonus(stats.match_rating))
-                .clamp(1, 200) as u8;
-                // Scouts in the stands can't see biological PA — the
-                // assessment anchors on the observable ceiling (visible
-                // ability + age/mentals projection) instead.
-                let observable_ceiling = PotentialEstimator::observable_ceiling(player, now) as i32;
-                let assessed_potential = (observable_ceiling.max(assessed_ability as i32)
-                    + ShowcaseAssessment::youth_potential_bonus(age))
-                .clamp(1, 200) as u8;
-
-                let estimated_value = PlayerValuationCalculator::calculate_value_with_price_level(
-                    player,
-                    now,
-                    price_level,
-                    seller_league_rep,
-                    seller_club_rep,
-                )
-                .amount;
-
-                let contract_months = player
-                    .contract
-                    .as_ref()
-                    .map(|c| {
-                        ((c.expiration - now).num_days().max(0) / 30).min(i16::MAX as i64) as i16
-                    })
-                    .unwrap_or(0);
-
-                candidates.push(ShowcaseCandidate {
-                    player_id: *pid,
-                    position,
-                    position_group,
-                    age,
-                    score,
-                    tier,
-                    assessed_ability,
-                    assessed_potential,
-                    estimated_value,
-                    is_injured: player.player_attributes.is_injured,
-                    determination: player.skills.mental.determination,
-                    contract_months,
-                    world_reputation: player.player_attributes.world_reputation,
-                    is_famous: player.player_attributes.world_reputation >= FAME_DISCOVERY_CEILING,
-                    summary: PlayerSummaryBuilder::build(
-                        country,
-                        weaker_club,
-                        &weaker_ctx,
-                        weaker_team,
-                        player,
-                        now,
-                    ),
-                });
-            }
-
-            // Strongest showcases first, then cap per match.
-            candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
-            candidates.truncate(MAX_CANDIDATES_PER_MATCH);
-
-            for cand in &candidates {
-                // Order recipients: opponent, then matching-need clubs by
-                // reputation, then the remaining top-reputation clubs.
-                let mut ordered: Vec<&ClubFacts> = Vec::new();
-                if let Some(opp) = club_facts.iter().find(|cf| cf.club_id == opponent_club_id) {
-                    ordered.push(opp);
-                }
-                let mut need: Vec<&ClubFacts> = club_facts
-                    .iter()
-                    .filter(|cf| {
-                        cf.club_id != opponent_club_id
-                            && cf.need_groups.contains(&cand.position_group)
-                    })
-                    .collect();
-                need.sort_by(|a, b| b.rep.partial_cmp(&a.rep).unwrap_or(Ordering::Equal));
-                ordered.extend(need);
-                let mut rest: Vec<&ClubFacts> = club_facts
-                    .iter()
-                    .filter(|cf| {
-                        cf.club_id != opponent_club_id
-                            && !cf.need_groups.contains(&cand.position_group)
-                    })
-                    .collect();
-                rest.sort_by(|a, b| b.rep.partial_cmp(&a.rep).unwrap_or(Ordering::Equal));
-                rest.truncate(TOP_REP_POOL);
-                ordered.extend(rest);
-
-                let recipient_rows: Vec<RecipientClub> = ordered
-                    .iter()
-                    .map(|cf| {
-                        let already_monitors = country
-                            .clubs
-                            .iter()
-                            .find(|c| c.id == cf.club_id)
-                            .map(|c| {
-                                !c.transfer_plan
-                                    .monitorings_for_player(cand.player_id)
-                                    .is_empty()
-                            })
-                            .unwrap_or(false);
-                        RecipientClub {
-                            is_opponent: cf.club_id == opponent_club_id,
-                            has_need: cf.need_groups.contains(&cand.position_group),
-                            already_monitors,
-                        }
-                    })
-                    .collect();
-
-                let mut roll = |p: f32| (IntegerUtils::random(0, 10_000) as f32 / 10_000.0) < p;
-                let acted = RecipientSelection::select(
-                    cand.score,
-                    underdog,
-                    cand.age,
-                    cand.is_famous,
-                    &recipient_rows,
-                    &mut roll,
-                );
-
-                for idx in acted {
-                    let cf = ordered[idx];
-                    let Some(recipient) = country.clubs.iter().find(|c| c.id == cf.club_id) else {
-                        continue;
-                    };
-                    let suitor = suitors
-                        .entry(cf.club_id)
-                        .or_insert_with(|| Suitor::of(country, recipient, now));
-                    // A showcase opens a file only where the gate lets the
-                    // club watch him. One country, so no geography to price.
-                    let assessment = TransferMovePlausibility::read(
-                        suitor,
-                        &cand.summary,
-                        MoveTerms::purchase(true),
-                        &MarketMap::default(),
-                    );
-                    if !assessment.reaches(PursuitAction::KeepFile.needs()) {
-                        continue;
-                    }
-                    match cf.scout_id {
-                        Some(scout_id) => monitor_actions.push(MonitorAction {
-                            club_id: cf.club_id,
-                            scout_id,
-                            player_id: cand.player_id,
-                            tier: cand.tier,
-                            assessed_ability: cand.assessed_ability,
-                            assessed_potential: cand.assessed_potential,
-                            estimated_value: cand.estimated_value,
-                            is_injured: cand.is_injured,
-                            determination: cand.determination,
-                            age: cand.age,
-                            contract_months: cand.contract_months,
-                            world_reputation: cand.world_reputation,
-                            reading: FileReading::of(&assessment, now),
-                        }),
-                        None => memory_actions.push(MemoryAction {
-                            club_id: cf.club_id,
-                            memory: KnownPlayerMemory {
-                                player_id: cand.player_id,
-                                last_known_club_id: weaker_club_id,
-                                last_known_country_id: country_id,
-                                position: cand.position,
-                                position_group: cand.position_group,
-                                age: cand.age,
-                                assessed_ability: cand.assessed_ability,
-                                assessed_potential: cand.assessed_potential,
-                                confidence: ShowcaseAssessment::tier_initial_confidence(cand.tier),
-                                estimated_fee: cand.estimated_value,
-                                last_seen: now,
-                                official_appearances_seen: 1,
-                                friendly_appearances_seen: 0,
-                            },
-                        }),
-                    }
-                }
-            }
+        for candidate in &candidates {
+            Self::select_showcase_recipients(
+                country,
+                &club_facts,
+                candidate,
+                setup,
+                now,
+                &mut suitors,
+                &mut monitor_actions,
+                &mut memory_actions,
+            );
         }
 
-        // ── Write pass: apply monitoring rows and known-player memories.
+        (monitor_actions, memory_actions)
+    }
+
+    /// Recipient-club facts, computed once and shared across candidates.
+    fn showcase_club_facts(country: &crate::Country, weaker_club_id: u32) -> Vec<ClubFacts> {
+        let mut club_facts: Vec<ClubFacts> = Vec::new();
+        for club in &country.clubs {
+            if club.id == weaker_club_id {
+                continue; // a club doesn't "discover" its own player
+            }
+            let rep = club
+                .teams
+                .main()
+                .map(|t| t.reputation.market_value_score() as f32)
+                .unwrap_or(0.0);
+            club_facts.push(ClubFacts {
+                club_id: club.id,
+                rep,
+                scout_id: ClubScoutingFacts::best_scout_id(club),
+                need_groups: ClubScoutingFacts::active_need_groups(club),
+            });
+        }
+        club_facts
+    }
+
+    /// Build the candidate set from the weaker side's performers.
+    #[allow(clippy::too_many_arguments)]
+    fn showcase_candidates(
+        country: &crate::Country,
+        weaker_club: &Club,
+        weaker_team: &crate::Team,
+        weaker_ctx: &SummaryClubContext,
+        setup: &ShowcaseSetup,
+        details: &MatchResultRaw,
+        now: NaiveDate,
+        best_player_id: Option<u32>,
+        price_level: f32,
+        seller_league_rep: u16,
+        seller_club_rep: u16,
+    ) -> Vec<ShowcaseCandidate> {
+        let mut candidates: Vec<ShowcaseCandidate> = Vec::new();
+        for pid in &setup.appeared {
+            if let Some(candidate) = Self::showcase_candidate(
+                country,
+                weaker_club,
+                weaker_team,
+                weaker_ctx,
+                setup,
+                details,
+                now,
+                best_player_id,
+                price_level,
+                seller_league_rep,
+                seller_club_rep,
+                *pid,
+            ) {
+                candidates.push(candidate);
+            }
+        }
+        candidates
+    }
+
+    /// One candidate's showcase case, or `None` when his performance or
+    /// profile doesn't clear the trigger.
+    #[allow(clippy::too_many_arguments)]
+    fn showcase_candidate(
+        country: &crate::Country,
+        weaker_club: &Club,
+        weaker_team: &crate::Team,
+        weaker_ctx: &SummaryClubContext,
+        setup: &ShowcaseSetup,
+        details: &MatchResultRaw,
+        now: NaiveDate,
+        best_player_id: Option<u32>,
+        price_level: f32,
+        seller_league_rep: u16,
+        seller_club_rep: u16,
+        pid: u32,
+    ) -> Option<ShowcaseCandidate> {
+        let stats = details.player_stats.get(&pid)?;
+        if stats.match_rating < MIN_SHOWCASE_RATING {
+            return None;
+        }
+        let player = weaker_team.players.players.iter().find(|p| p.id == pid)?;
+        let position = player.position();
+        let position_group = position.position_group();
+        let age = player.age(now);
+
+        let defensive_clean_sheet = setup.clean_sheet
+            && matches!(
+                position_group,
+                PlayerFieldPositionGroup::Defender | PlayerFieldPositionGroup::Goalkeeper
+            );
+        let line = ShowcaseStatLine {
+            match_rating: stats.match_rating,
+            goals: stats.goals,
+            assists: stats.assists,
+            minutes_played: stats.minutes_played,
+            age,
+            defensive_clean_sheet,
+            is_motm: best_player_id == Some(pid),
+            red_card: stats.red_cards > 0,
+            own_goal_or_error: stats.own_goals > 0 || stats.errors_leading_to_goal > 0,
+            weaker_result: setup.weaker_result,
+        };
+        let score = Showcase::score(&line, setup.underdog);
+        let tier = Showcase::tier(score)?;
+
+        let (assessed_ability, assessed_potential) =
+            ShowcaseAssessment::assess(player, stats.match_rating, age, now);
+
+        let estimated_value = PlayerValuationCalculator::calculate_value_with_price_level(
+            player,
+            now,
+            price_level,
+            seller_league_rep,
+            seller_club_rep,
+        )
+        .amount;
+
+        let contract_months = player
+            .contract
+            .as_ref()
+            .map(|c| ((c.expiration - now).num_days().max(0) / 30).min(i16::MAX as i64) as i16)
+            .unwrap_or(0);
+
+        Some(ShowcaseCandidate {
+            player_id: pid,
+            position,
+            position_group,
+            age,
+            score,
+            tier,
+            assessed_ability,
+            assessed_potential,
+            estimated_value,
+            is_injured: player.player_attributes.is_injured,
+            determination: player.skills.mental.determination,
+            contract_months,
+            world_reputation: player.player_attributes.world_reputation,
+            is_famous: player.player_attributes.world_reputation >= FAME_DISCOVERY_CEILING,
+            summary: PlayerSummaryBuilder::build(
+                country,
+                weaker_club,
+                weaker_ctx,
+                weaker_team,
+                player,
+                now,
+            ),
+        })
+    }
+
+    /// Order recipient clubs for one candidate and record who acts.
+    fn select_showcase_recipients<'c>(
+        country: &'c crate::Country,
+        club_facts: &[ClubFacts],
+        candidate: &ShowcaseCandidate,
+        setup: &ShowcaseSetup,
+        now: NaiveDate,
+        suitors: &mut FxHashMap<u32, Suitor<'c>>,
+        monitor_actions: &mut Vec<MonitorAction>,
+        memory_actions: &mut Vec<MemoryAction>,
+    ) {
+        let ordered = Self::ordered_showcase_recipients(club_facts, candidate, setup);
+        let recipient_rows = Self::showcase_recipient_rows(country, &ordered, candidate, setup);
+
+        let mut roll = |p: f32| (IntegerUtils::random(0, 10_000) as f32 / 10_000.0) < p;
+        let acted = RecipientSelection::select(
+            candidate.score,
+            setup.underdog,
+            candidate.age,
+            candidate.is_famous,
+            &recipient_rows,
+            &mut roll,
+        );
+
+        for idx in acted {
+            Self::record_showcase_action(
+                country,
+                ordered[idx],
+                candidate,
+                setup,
+                now,
+                suitors,
+                monitor_actions,
+                memory_actions,
+            );
+        }
+    }
+
+    /// Order recipients: opponent, then matching-need clubs by reputation,
+    /// then the remaining top-reputation clubs.
+    fn ordered_showcase_recipients<'a>(
+        club_facts: &'a [ClubFacts],
+        candidate: &ShowcaseCandidate,
+        setup: &ShowcaseSetup,
+    ) -> Vec<&'a ClubFacts> {
+        let mut ordered: Vec<&ClubFacts> = Vec::new();
+        if let Some(opp) = club_facts
+            .iter()
+            .find(|cf| cf.club_id == setup.opponent_club_id)
+        {
+            ordered.push(opp);
+        }
+        let mut need: Vec<&ClubFacts> = club_facts
+            .iter()
+            .filter(|cf| {
+                cf.club_id != setup.opponent_club_id
+                    && cf.need_groups.contains(&candidate.position_group)
+            })
+            .collect();
+        need.sort_by(|a, b| b.rep.partial_cmp(&a.rep).unwrap_or(Ordering::Equal));
+        ordered.extend(need);
+        let mut rest: Vec<&ClubFacts> = club_facts
+            .iter()
+            .filter(|cf| {
+                cf.club_id != setup.opponent_club_id
+                    && !cf.need_groups.contains(&candidate.position_group)
+            })
+            .collect();
+        rest.sort_by(|a, b| b.rep.partial_cmp(&a.rep).unwrap_or(Ordering::Equal));
+        rest.truncate(TOP_REP_POOL);
+        ordered.extend(rest);
+        ordered
+    }
+
+    fn showcase_recipient_rows(
+        country: &crate::Country,
+        ordered: &[&ClubFacts],
+        candidate: &ShowcaseCandidate,
+        setup: &ShowcaseSetup,
+    ) -> Vec<RecipientClub> {
+        ordered
+            .iter()
+            .map(|cf| {
+                let already_monitors = country
+                    .clubs
+                    .iter()
+                    .find(|c| c.id == cf.club_id)
+                    .map(|c| {
+                        !c.transfer_plan
+                            .monitorings_for_player(candidate.player_id)
+                            .is_empty()
+                    })
+                    .unwrap_or(false);
+                RecipientClub {
+                    is_opponent: cf.club_id == setup.opponent_club_id,
+                    has_need: cf.need_groups.contains(&candidate.position_group),
+                    already_monitors,
+                }
+            })
+            .collect()
+    }
+
+    /// Record one recipient club's monitoring row or known-player memory.
+    #[allow(clippy::too_many_arguments)]
+    fn record_showcase_action<'c>(
+        country: &'c crate::Country,
+        cf: &ClubFacts,
+        candidate: &ShowcaseCandidate,
+        setup: &ShowcaseSetup,
+        now: NaiveDate,
+        suitors: &mut FxHashMap<u32, Suitor<'c>>,
+        monitor_actions: &mut Vec<MonitorAction>,
+        memory_actions: &mut Vec<MemoryAction>,
+    ) {
+        let Some(recipient) = country.clubs.iter().find(|c| c.id == cf.club_id) else {
+            return;
+        };
+        let suitor = suitors
+            .entry(cf.club_id)
+            .or_insert_with(|| Suitor::of(country, recipient, now));
+        // A showcase opens a file only where the gate lets the
+        // club watch him. One country, so no geography to price.
+        let assessment = TransferMovePlausibility::read(
+            suitor,
+            &candidate.summary,
+            MoveTerms::purchase(true),
+            &MarketMap::default(),
+        );
+        if !assessment.reaches(PursuitAction::KeepFile.needs()) {
+            return;
+        }
+        match cf.scout_id {
+            Some(scout_id) => monitor_actions.push(MonitorAction {
+                club_id: cf.club_id,
+                scout_id,
+                player_id: candidate.player_id,
+                tier: candidate.tier,
+                assessed_ability: candidate.assessed_ability,
+                assessed_potential: candidate.assessed_potential,
+                estimated_value: candidate.estimated_value,
+                is_injured: candidate.is_injured,
+                determination: candidate.determination,
+                age: candidate.age,
+                contract_months: candidate.contract_months,
+                world_reputation: candidate.world_reputation,
+                reading: FileReading::of(&assessment, now),
+            }),
+            None => memory_actions.push(MemoryAction {
+                club_id: cf.club_id,
+                memory: KnownPlayerMemory {
+                    player_id: candidate.player_id,
+                    last_known_club_id: setup.weaker_club_id,
+                    last_known_country_id: setup.country_id,
+                    position: candidate.position,
+                    position_group: candidate.position_group,
+                    age: candidate.age,
+                    assessed_ability: candidate.assessed_ability,
+                    assessed_potential: candidate.assessed_potential,
+                    confidence: ShowcaseAssessment::tier_initial_confidence(candidate.tier),
+                    estimated_fee: candidate.estimated_value,
+                    last_seen: now,
+                    official_appearances_seen: 1,
+                    friendly_appearances_seen: 0,
+                },
+            }),
+        }
+    }
+
+    /// Write pass: apply monitoring rows and known-player memories.
+    fn apply_showcase_actions<D: LeagueProcessAccess>(
+        monitor_actions: Vec<MonitorAction>,
+        memory_actions: Vec<MemoryAction>,
+        data: &mut D,
+        now: NaiveDate,
+    ) {
         let config = ScoutingConfig::default();
         for action in monitor_actions {
             if let Some(club) = data.club_mut(action.club_id) {

@@ -375,6 +375,181 @@ impl<'a> TopBoard<'a> {
     }
 }
 
+/// One club's board-building context for a single weekly pass: where its
+/// scouts reach, what its own judgement says, and the gate every name is read
+/// against.
+struct SlotBoard<'a> {
+    country: &'a Country,
+    club: &'a Club,
+    pool: &'a WatchPool<'a>,
+    market_map: &'a MarketMap,
+    date: NaiveDate,
+    suitor: &'a Suitor<'a>,
+    kindest: &'a ClubOpinion,
+    reach: ReachMask,
+    judging: u8,
+    home_language_mask: u64,
+}
+
+impl<'a> SlotBoard<'a> {
+    /// Fill one shirt's bounded board and append the names it keeps to the
+    /// club's entry list.
+    fn fill(&self, slot: &BriefSlot, entries: &mut Vec<(WatchlistEntry, FileReading)>) {
+        let envelope_ceiling = MarketKnowledge::envelope_ceiling(slot);
+        // A shirt with no envelope is filled on loan or on a free.
+        let terms = if envelope_ceiling > 0.0 {
+            MoveTerms::purchase(true)
+        } else {
+            MoveTerms::loan(true)
+        };
+        // A bounded top-`WATCH_PER_ROLE` board rather than a sorted
+        // list of everyone who survived the gates. The pool is the
+        // world; sorting it per slot per club every Monday is the
+        // difference between a weekly pass and a weekly stall, and the
+        // board only ever keeps eight names anyway.
+        let Some(weakest) = MarketKnowledge::weakest_over_bar(self.kindest, slot) else {
+            return;
+        };
+        let mut board = TopBoard::new(MarketKnowledge::WATCH_PER_ROLE);
+        let pool = self.pool;
+        for candidate in pool.walk(slot.group, self.reach, weakest) {
+            self.consider(slot, terms, candidate, &mut board);
+        }
+
+        for (candidate, score, believed, reading) in board.into_sorted() {
+            let s = candidate.summary;
+            if entries.iter().any(|(e, _)| e.player_id == s.player_id) {
+                continue;
+            }
+            if TransferTrace::is(s.player_id) {
+                TransferTrace::line(
+                    s.player_id,
+                    "watchlist",
+                    format!(
+                        "club={} ({}) slot={:?} tier={:?} score={:.1} envelope={:.0} \
+                         availability={:?}",
+                        self.club.name,
+                        self.club.id,
+                        slot.position,
+                        slot.tier,
+                        score,
+                        slot.envelope,
+                        candidate.availability,
+                    ),
+                );
+            }
+            entries.push((
+                WatchlistEntry {
+                    player_id: s.player_id,
+                    club_id: s.club_id,
+                    country_id: s.country_id,
+                    position: s.position,
+                    position_group: slot.group,
+                    age: s.age,
+                    believed_ability: believed.round().clamp(1.0, 200.0) as u8,
+                    estimated_value: s.estimated_value,
+                    score,
+                    availability: candidate.availability,
+                    slot_position: slot.position,
+                    slot_tier: slot.tier,
+                    last_refreshed: self.date,
+                    is_loan: terms.is_loan,
+                },
+                reading,
+            ));
+        }
+    }
+
+    /// Whether one name clears the cheap gates and earns a place on the
+    /// shirt's board.
+    fn consider(
+        &self,
+        slot: &BriefSlot,
+        terms: MoveTerms,
+        candidate: &'a WatchCandidate<'a>,
+        board: &mut TopBoard<'a>,
+    ) {
+        let envelope_ceiling = MarketKnowledge::envelope_ceiling(slot);
+        if candidate.age < slot.age_band.0 || candidate.age > slot.age_band.1 {
+            return;
+        }
+        if candidate.club_id == self.club.id || self.club.is_rival(candidate.club_id) {
+            return;
+        }
+        // The envelope is a real constraint on a WATCHLIST, not just
+        // on a bid: a department does not keep files on players its
+        // owner will never fund. A shirt with none watches the free
+        // and loan end of the market: men their clubs would lend, and
+        // men whose deals are running out.
+        if terms.is_loan {
+            if !MarketKnowledge::comes_without_a_fee(
+                candidate.is_loan_listed,
+                candidate.availability,
+            ) {
+                return;
+            }
+        } else if candidate.estimated_value > envelope_ceiling {
+            return;
+        }
+        // ── Belief ──
+        // The club's own read of him, then everything a scout can
+        // see that is not his ability: how far he stands above his
+        // own league, what his club thinks of him, whether anyone
+        // could actually get him, and whether he could be spoken to
+        // in the dressing room.
+        let opinion = ClubOpinion::of(self.club.id, candidate.player_id, self.judging);
+        let believed = opinion.believed_ability(candidate.skill_ability);
+        let gain = believed - slot.incumbent_level as f32;
+        if gain < slot.min_gain as f32 {
+            return;
+        }
+        // His record is read only for a name whose best case — the
+        // shirt itself, the club's own tongue — would take a place.
+        let best =
+            MarketKnowledge::board_score(gain, candidate, 1.0, MarketKnowledge::BEST_LANGUAGE);
+        if !board.admits(best, candidate.player_id) {
+            return;
+        }
+        let s = candidate.summary;
+        // His level and his wage against the club: two compares on
+        // readings he carries.
+        if !MarketKnowledge::fits(self.suitor, s, terms) {
+            return;
+        }
+
+        // Fit at the actual shirt, not merely somewhere in the
+        // group: a winger who nominally covers centre-forward is not
+        // the centre-forward the brief asked for, and must not
+        // outrank one who is.
+        let role_fit = if s.coverage.covers(slot.position) {
+            1.0
+        } else {
+            0.6
+        };
+        let language = if s.country_id != self.country.id {
+            s.language_profile.affinity_for(self.home_language_mask) - 0.5
+        } else {
+            0.25
+        };
+        let score = MarketKnowledge::board_score(gain, candidate, role_fit, language);
+        // The full read — market reach included — only for a name
+        // about to take a place.
+        if !board.admits(score, candidate.player_id) {
+            return;
+        }
+        let assessment = TransferMovePlausibility::read(self.suitor, s, terms, self.market_map);
+        if !assessment.reaches(PursuitAction::KeepFile.needs()) {
+            return;
+        }
+        board.offer(
+            candidate,
+            score,
+            believed,
+            FileReading::of(&assessment, self.date),
+        );
+    }
+}
+
 /// Builds and refreshes every club's standing list of names.
 pub struct MarketKnowledge;
 
@@ -591,7 +766,6 @@ impl MarketKnowledge {
     /// Monday. A bucket is left at the first name even the department's
     /// kindest misreading would not lift over the shirt's bar; every name
     /// after him is weaker.
-    #[expect(clippy::too_many_lines)]
     fn for_club(
         country: &Country,
         club: &Club,
@@ -627,144 +801,22 @@ impl MarketKnowledge {
         let home_language_mask = Language::country_language_mask(&country.code);
         let suitor = Suitor::of(country, club, date);
         let kindest = ClubOpinion::kindest(judging);
+        let board = SlotBoard {
+            country,
+            club,
+            pool,
+            market_map,
+            date,
+            suitor: &suitor,
+            kindest: &kindest,
+            reach,
+            judging,
+            home_language_mask,
+        };
 
         let mut entries: Vec<(WatchlistEntry, FileReading)> = Vec::new();
         for slot in brief.slots.iter().chain(&brief.behind) {
-            let envelope_ceiling = Self::envelope_ceiling(slot);
-            // A shirt with no envelope is filled on loan or on a free.
-            let terms = if envelope_ceiling > 0.0 {
-                MoveTerms::purchase(true)
-            } else {
-                MoveTerms::loan(true)
-            };
-            // A bounded top-`WATCH_PER_ROLE` board rather than a sorted
-            // list of everyone who survived the gates. The pool is the
-            // world; sorting it per slot per club every Monday is the
-            // difference between a weekly pass and a weekly stall, and the
-            // board only ever keeps eight names anyway.
-            let Some(weakest) = Self::weakest_over_bar(&kindest, slot) else {
-                continue;
-            };
-            let mut board = TopBoard::new(Self::WATCH_PER_ROLE);
-            for candidate in pool.walk(slot.group, reach, weakest) {
-                if candidate.age < slot.age_band.0 || candidate.age > slot.age_band.1 {
-                    continue;
-                }
-                if candidate.club_id == club.id || club.is_rival(candidate.club_id) {
-                    continue;
-                }
-                // The envelope is a real constraint on a WATCHLIST, not just
-                // on a bid: a department does not keep files on players its
-                // owner will never fund. A shirt with none watches the free
-                // and loan end of the market: men their clubs would lend, and
-                // men whose deals are running out.
-                if terms.is_loan {
-                    if !Self::comes_without_a_fee(candidate.is_loan_listed, candidate.availability)
-                    {
-                        continue;
-                    }
-                } else if candidate.estimated_value > envelope_ceiling {
-                    continue;
-                }
-                // ── Belief ──
-                // The club's own read of him, then everything a scout can
-                // see that is not his ability: how far he stands above his
-                // own league, what his club thinks of him, whether anyone
-                // could actually get him, and whether he could be spoken to
-                // in the dressing room.
-                let opinion = ClubOpinion::of(club.id, candidate.player_id, judging);
-                let believed = opinion.believed_ability(candidate.skill_ability);
-                let gain = believed - slot.incumbent_level as f32;
-                if gain < slot.min_gain as f32 {
-                    continue;
-                }
-                // His record is read only for a name whose best case — the
-                // shirt itself, the club's own tongue — would take a place.
-                let best = Self::board_score(gain, candidate, 1.0, Self::BEST_LANGUAGE);
-                if !board.admits(best, candidate.player_id) {
-                    continue;
-                }
-                let s = candidate.summary;
-                // His level and his wage against the club: two compares on
-                // readings he carries.
-                if !Self::fits(&suitor, s, terms) {
-                    continue;
-                }
-
-                // Fit at the actual shirt, not merely somewhere in the
-                // group: a winger who nominally covers centre-forward is not
-                // the centre-forward the brief asked for, and must not
-                // outrank one who is.
-                let role_fit = if s.coverage.covers(slot.position) {
-                    1.0
-                } else {
-                    0.6
-                };
-                let language = if s.country_id != country.id {
-                    s.language_profile.affinity_for(home_language_mask) - 0.5
-                } else {
-                    0.25
-                };
-                let score = Self::board_score(gain, candidate, role_fit, language);
-                // The full read — market reach included — only for a name
-                // about to take a place.
-                if !board.admits(score, candidate.player_id) {
-                    continue;
-                }
-                let assessment = TransferMovePlausibility::read(&suitor, s, terms, market_map);
-                if !assessment.reaches(PursuitAction::KeepFile.needs()) {
-                    continue;
-                }
-                board.offer(
-                    candidate,
-                    score,
-                    believed,
-                    FileReading::of(&assessment, date),
-                );
-            }
-
-            for (candidate, score, believed, reading) in board.into_sorted() {
-                let s = candidate.summary;
-                if entries.iter().any(|(e, _)| e.player_id == s.player_id) {
-                    continue;
-                }
-                if TransferTrace::is(s.player_id) {
-                    TransferTrace::line(
-                        s.player_id,
-                        "watchlist",
-                        format!(
-                            "club={} ({}) slot={:?} tier={:?} score={:.1} envelope={:.0} \
-                             availability={:?}",
-                            club.name,
-                            club.id,
-                            slot.position,
-                            slot.tier,
-                            score,
-                            slot.envelope,
-                            candidate.availability,
-                        ),
-                    );
-                }
-                entries.push((
-                    WatchlistEntry {
-                        player_id: s.player_id,
-                        club_id: s.club_id,
-                        country_id: s.country_id,
-                        position: s.position,
-                        position_group: slot.group,
-                        age: s.age,
-                        believed_ability: believed.round().clamp(1.0, 200.0) as u8,
-                        estimated_value: s.estimated_value,
-                        score,
-                        availability: candidate.availability,
-                        slot_position: slot.position,
-                        slot_tier: slot.tier,
-                        last_refreshed: date,
-                        is_loan: terms.is_loan,
-                    },
-                    reading,
-                ));
-            }
+            board.fill(slot, &mut entries);
         }
         entries
     }

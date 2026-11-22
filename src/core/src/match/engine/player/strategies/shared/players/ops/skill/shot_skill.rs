@@ -120,37 +120,29 @@ impl HeaderStrike {
     }
 }
 
-#[inline]
-fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    if (edge0 - edge1).abs() < f32::EPSILON {
-        return if x < edge0 { 0.0 } else { 1.0 };
-    }
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
+#[derive(Debug, Clone, Copy)]
+struct ShotSkillReads {
+    finishing01: f32,
+    technique01: f32,
+    first_touch01: f32,
+    long_shots01: f32,
+    composure01: f32,
+    decisions01: f32,
+    concentration01: f32,
+    balance01: f32,
+    agility01: f32,
+    strength01: f32,
+    stamina01: f32,
+    nat_fit01: f32,
 }
 
-#[inline]
-fn norm01(v: f32) -> f32 {
-    (v / 20.0).clamp(0.0, 1.0)
-}
-
-#[inline]
-fn pow_curve(skill01: f32, exp: f32) -> f32 {
-    skill01.clamp(0.0, 1.0).powf(exp)
-}
-
-impl ShotSkillProfile {
-    /// Build the profile for `player` at the moment described by `inputs`.
-    /// All technical / mental / physical skills are routed through
-    /// `effective_skill` so fatigue is already applied before the curve.
-    #[expect(clippy::too_many_lines)]
-    pub fn from_player(player: &MatchPlayer, inputs: &ShotSkillInputs) -> Self {
+impl ShotSkillReads {
+    fn of(player: &MatchPlayer, inputs: &ShotSkillInputs) -> Self {
         let tech = EffActionContext::technical(inputs.minute);
         let mental = EffActionContext::mental(inputs.minute);
         let expl = EffActionContext::explosive(inputs.minute);
         let s = &player.skills;
 
-        // Effective skill reads (1..20).
         let finishing_eff = effective_skill(player, s.technical.finishing, tech);
         let technique_eff = effective_skill(player, s.technical.technique, tech);
         let first_touch_eff = effective_skill(player, s.technical.first_touch, tech);
@@ -158,83 +150,118 @@ impl ShotSkillProfile {
         let composure_eff = effective_skill(player, s.mental.composure, mental);
         let decisions_eff = effective_skill(player, s.mental.decisions, mental);
         let concentration_eff = effective_skill(player, s.mental.concentration, mental);
-        let anticipation_eff = effective_skill(player, s.mental.anticipation, mental);
         let balance_eff = effective_skill(player, s.physical.balance, tech);
         let agility_eff = effective_skill(player, s.physical.agility, expl);
         let strength_eff = effective_skill(player, s.physical.strength, expl);
+        let stamina_eff = effective_skill(player, s.physical.stamina, expl);
+        let nat_fit_eff = effective_skill(player, s.physical.natural_fitness, expl);
 
-        // Normalised skill bands. The curves below are convex,
-        // `poor_penalty` and `elite_lift` are smoothsteps on absolute
-        // pivots (0.45/0.15 and 0.70/0.95), and `POPULATION_EXECUTION`
-        // compares the result against one division's measured mean — all
-        // of which is why the squads are measured against the standard of
-        // the match at kickoff (`MatchStandard::measure`).
-        let finishing01 = norm01(finishing_eff);
-        let technique01 = norm01(technique_eff);
-        let first_touch01 = norm01(first_touch_eff);
-        let long_shots01 = norm01(long_shots_eff);
-        let composure01 = norm01(composure_eff);
-        let decisions01 = norm01(decisions_eff);
-        let concentration01 = norm01(concentration_eff);
-        let _anticipation01 = norm01(anticipation_eff);
-        let balance01 = norm01(balance_eff);
-        let agility01 = norm01(agility_eff);
-        let strength01 = norm01(strength_eff);
+        Self {
+            finishing01: ShotSkillProfile::norm01(finishing_eff),
+            technique01: ShotSkillProfile::norm01(technique_eff),
+            first_touch01: ShotSkillProfile::norm01(first_touch_eff),
+            long_shots01: ShotSkillProfile::norm01(long_shots_eff),
+            composure01: ShotSkillProfile::norm01(composure_eff),
+            decisions01: ShotSkillProfile::norm01(decisions_eff),
+            concentration01: ShotSkillProfile::norm01(concentration_eff),
+            balance01: ShotSkillProfile::norm01(balance_eff),
+            agility01: ShotSkillProfile::norm01(agility_eff),
+            strength01: ShotSkillProfile::norm01(strength_eff),
+            stamina01: ShotSkillProfile::norm01(stamina_eff),
+            nat_fit01: ShotSkillProfile::norm01(nat_fit_eff),
+        }
+    }
 
-        // Headline penalties / lifts. The "headline" skill for a shooter is
-        // finishing — the smoothstep around it controls the heavy-handed
-        // poor-finisher penalty applied by every downstream consumer.
-        let poor_penalty = smoothstep(0.45, 0.15, finishing01);
-        let elite_lift = smoothstep(0.70, 0.95, finishing01);
-        let technique_curve = pow_curve(technique01, 1.65);
+    fn selection(&self) -> f32 {
+        // Selection — should we be shooting at all? Composure +
+        // decisions + finishing + long_shots + concentration. Composure
+        // and decisions are the dominant signals; finishing matters less
+        // than for execution because we're scoring choice, not strike.
+        let selection_skill = (ShotSkillProfile::pow_curve(self.composure01, 1.30) * 0.32
+            + ShotSkillProfile::pow_curve(self.decisions01, 1.30) * 0.28
+            + ShotSkillProfile::pow_curve(self.finishing01, 1.45) * 0.18
+            + ShotSkillProfile::pow_curve(self.long_shots01, 1.45) * 0.10
+            + ShotSkillProfile::pow_curve(self.concentration01, 1.20) * 0.07
+            + ShotSkillProfile::pow_curve(self.technique01, 1.20) * 0.05)
+            .clamp(0.0, 1.0);
 
-        // Conditioning: harsher fatigue for low-skill players & late games.
-        let cond = inputs.condition_pct.clamp(0.0, 1.0);
-        let stamina01 = norm01(s.physical.stamina);
-        let nat_fit01 = norm01(s.physical.natural_fitness);
-        let fitness = stamina01 * 0.55 + nat_fit01 * 0.45;
-        let fatigue_penalty = (1.0 - cond).max(0.0).powf(1.35);
-        let fitness_recovery = 1.0 - fatigue_penalty * (0.18 + fitness * 0.22);
-        let low_skill_fatigue = 1.0 - fatigue_penalty * poor_penalty * 0.30;
-        let late_pressure = if inputs.minute >= 70 {
-            1.0 - ((inputs.minute as f32 - 70.0) / 50.0).clamp(0.0, 1.0) * poor_penalty * 0.12
+        selection_skill
+    }
+
+    fn body_control(&self, is_sprinting_or_recent_sprint: bool) -> f32 {
+        // Body control — sprinters with poor balance/agility/first_touch
+        // lose body control. After a recent sprint apply ~25% penalty
+        // scaled by how poor the underlying balance is.
+        let raw_body = (ShotSkillProfile::pow_curve(self.balance01, 1.25) * 0.30
+            + ShotSkillProfile::pow_curve(self.agility01, 1.25) * 0.22
+            + ShotSkillProfile::pow_curve(self.first_touch01, 1.30) * 0.22
+            + ShotSkillProfile::pow_curve(self.composure01, 1.30) * 0.16
+            + ShotSkillProfile::pow_curve(self.strength01, 1.10) * 0.10)
+            .clamp(0.0, 1.0);
+        let sprint_factor = if is_sprinting_or_recent_sprint {
+            (1.0 - (1.0 - raw_body) * 0.35).clamp(0.55, 1.0)
         } else {
             1.0
         };
-        let shooting_condition_mult =
-            (fitness_recovery * low_skill_fatigue * late_pressure).clamp(0.48, 1.03);
-        let low_condition_penalty = (1.0 - shooting_condition_mult).max(0.0).clamp(0.0, 0.55);
+        let body_control = (raw_body * sprint_factor).clamp(0.0, 1.0);
+        body_control
+    }
 
-        // Per-distance execution composite — finishing-led for close,
-        // long-shots/technique-led at distance. A dead ball overrides the
-        // distance bands entirely below: it is struck from a standing
-        // start against a set defence, so distance is not what decides it.
+    fn placement(&self, shot_type: ShotType, header: bool, execution_skill: f32) -> f32 {
+        // Placement — finishing + decisions + technique drive how well
+        // the player can pick a corner. On a dead ball, picking the
+        // corner IS the skill being tested and it is the specialist
+        // attribute that names it, so the same override applies. A header
+        // goes the same way: a man cannot pick a corner with his head any
+        // better than he can direct the ball at all, and steering it down
+        // and across the keeper IS heading ability.
+        let placement_skill = match shot_type {
+            _ if shot_type.is_dead_ball() || header => execution_skill,
+            _ => (ShotSkillProfile::pow_curve(self.finishing01, 1.65) * 0.45
+                + ShotSkillProfile::pow_curve(self.decisions01, 1.40) * 0.25
+                + ShotSkillProfile::pow_curve(self.technique01, 1.40) * 0.20
+                + ShotSkillProfile::pow_curve(self.composure01, 1.30) * 0.10)
+                .clamp(0.0, 1.0),
+        };
+        placement_skill
+    }
+
+    fn power(&self) -> f32 {
+        // Power — strength + technique + finishing + long_shots.
+        let power_skill = (ShotSkillProfile::pow_curve(self.strength01, 1.15) * 0.32
+            + ShotSkillProfile::pow_curve(self.technique01, 1.30) * 0.28
+            + ShotSkillProfile::pow_curve(self.finishing01, 1.30) * 0.22
+            + ShotSkillProfile::pow_curve(self.long_shots01, 1.40) * 0.18)
+            .clamp(0.0, 1.0);
+        power_skill
+    }
+
+    fn execution(&self, player: &MatchPlayer, inputs: &ShotSkillInputs) -> f32 {
         let open_play_execution = if inputs.distance <= 30.0 {
-            (pow_curve(finishing01, 1.65) * 0.42
-                + pow_curve(composure01, 1.45) * 0.22
-                + pow_curve(first_touch01, 1.45) * 0.13
-                + pow_curve(technique01, 1.45) * 0.10
-                + pow_curve(decisions01, 1.35) * 0.08
-                + pow_curve(balance01, 1.25) * 0.05)
+            (ShotSkillProfile::pow_curve(self.finishing01, 1.65) * 0.42
+                + ShotSkillProfile::pow_curve(self.composure01, 1.45) * 0.22
+                + ShotSkillProfile::pow_curve(self.first_touch01, 1.45) * 0.13
+                + ShotSkillProfile::pow_curve(self.technique01, 1.45) * 0.10
+                + ShotSkillProfile::pow_curve(self.decisions01, 1.35) * 0.08
+                + ShotSkillProfile::pow_curve(self.balance01, 1.25) * 0.05)
                 .clamp(0.0, 1.0)
         } else if inputs.distance <= 80.0 {
-            (pow_curve(finishing01, 1.65) * 0.30
-                + pow_curve(technique01, 1.55) * 0.22
-                + pow_curve(long_shots01, 1.65) * 0.18
-                + pow_curve(composure01, 1.45) * 0.14
-                + pow_curve(decisions01, 1.35) * 0.10
-                + pow_curve(balance01, 1.25) * 0.06)
+            (ShotSkillProfile::pow_curve(self.finishing01, 1.65) * 0.30
+                + ShotSkillProfile::pow_curve(self.technique01, 1.55) * 0.22
+                + ShotSkillProfile::pow_curve(self.long_shots01, 1.65) * 0.18
+                + ShotSkillProfile::pow_curve(self.composure01, 1.45) * 0.14
+                + ShotSkillProfile::pow_curve(self.decisions01, 1.35) * 0.10
+                + ShotSkillProfile::pow_curve(self.balance01, 1.25) * 0.06)
                 .clamp(0.0, 1.0)
         } else {
-            (pow_curve(long_shots01, 1.75) * 0.38
-                + pow_curve(technique01, 1.60) * 0.24
-                + pow_curve(composure01, 1.45) * 0.13
-                + pow_curve(decisions01, 1.40) * 0.11
-                + pow_curve(strength01, 1.25) * 0.07
-                + pow_curve(balance01, 1.25) * 0.07)
+            (ShotSkillProfile::pow_curve(self.long_shots01, 1.75) * 0.38
+                + ShotSkillProfile::pow_curve(self.technique01, 1.60) * 0.24
+                + ShotSkillProfile::pow_curve(self.composure01, 1.45) * 0.13
+                + ShotSkillProfile::pow_curve(self.decisions01, 1.40) * 0.11
+                + ShotSkillProfile::pow_curve(self.strength01, 1.25) * 0.07
+                + ShotSkillProfile::pow_curve(self.balance01, 1.25) * 0.07)
                 .clamp(0.0, 1.0)
         };
-
         // Per-action override. `penalty_execution` is deliberately linear
         // (a penalty is a technically trivial kick, so the skill response
         // is close to linear and composure carries a quarter of it);
@@ -248,7 +275,7 @@ impl ShotSkillProfile {
         let header = HeaderStrike::armed() && inputs.shot_type.is_header();
         let header_execution = || {
             let skill01 = sc::header_finish(player, inputs.minute);
-            pow_curve(skill01, 1.45)
+            ShotSkillProfile::pow_curve(skill01, 1.45)
         };
         let execution_skill = match inputs.shot_type {
             ShotType::Penalty => sc::penalty_execution(player, inputs.minute),
@@ -256,65 +283,15 @@ impl ShotSkillProfile {
             _ if header => header_execution(),
             _ => open_play_execution,
         };
+        execution_skill
+    }
 
-        // Selection — should we be shooting at all? Composure +
-        // decisions + finishing + long_shots + concentration. Composure
-        // and decisions are the dominant signals; finishing matters less
-        // than for execution because we're scoring choice, not strike.
-        let selection_skill = (pow_curve(composure01, 1.30) * 0.32
-            + pow_curve(decisions01, 1.30) * 0.28
-            + pow_curve(finishing01, 1.45) * 0.18
-            + pow_curve(long_shots01, 1.45) * 0.10
-            + pow_curve(concentration01, 1.20) * 0.07
-            + pow_curve(technique01, 1.20) * 0.05)
-            .clamp(0.0, 1.0);
-
-        let composure_skill = pow_curve(composure01, 1.45);
-
-        // Body control — sprinters with poor balance/agility/first_touch
-        // lose body control. After a recent sprint apply ~25% penalty
-        // scaled by how poor the underlying balance is.
-        let raw_body = (pow_curve(balance01, 1.25) * 0.30
-            + pow_curve(agility01, 1.25) * 0.22
-            + pow_curve(first_touch01, 1.30) * 0.22
-            + pow_curve(composure01, 1.30) * 0.16
-            + pow_curve(strength01, 1.10) * 0.10)
-            .clamp(0.0, 1.0);
-        let sprint_factor = if inputs.is_sprinting_or_recent_sprint {
-            (1.0 - (1.0 - raw_body) * 0.35).clamp(0.55, 1.0)
-        } else {
-            1.0
-        };
-        let body_control = (raw_body * sprint_factor).clamp(0.0, 1.0);
-
-        // Placement — finishing + decisions + technique drive how well
-        // the player can pick a corner. On a dead ball, picking the
-        // corner IS the skill being tested and it is the specialist
-        // attribute that names it, so the same override applies. A header
-        // goes the same way: a man cannot pick a corner with his head any
-        // better than he can direct the ball at all, and steering it down
-        // and across the keeper IS heading ability.
-        let placement_skill = match inputs.shot_type {
-            _ if inputs.shot_type.is_dead_ball() || header => execution_skill,
-            _ => (pow_curve(finishing01, 1.65) * 0.45
-                + pow_curve(decisions01, 1.40) * 0.25
-                + pow_curve(technique01, 1.40) * 0.20
-                + pow_curve(composure01, 1.30) * 0.10)
-                .clamp(0.0, 1.0),
-        };
-
-        // Power — strength + technique + finishing + long_shots.
-        let power_skill = (pow_curve(strength01, 1.15) * 0.32
-            + pow_curve(technique01, 1.30) * 0.28
-            + pow_curve(finishing01, 1.30) * 0.22
-            + pow_curve(long_shots01, 1.40) * 0.18)
-            .clamp(0.0, 1.0);
-
-        // Pressure penalty (0..~1) used by xG & error scaling.
-        let pressure_penalty = (inputs.pressure_count_5u as f32 * 0.20
-            + inputs.pressure_count_10u as f32 * 0.07)
-            .clamp(0.0, 1.0);
-
+    fn multipliers(
+        &self,
+        execution_skill: f32,
+        poor_penalty: f32,
+        elite_lift: f32,
+    ) -> (f32, f32, f32) {
         // Multipliers consumed downstream. The execution-driven curve
         // shapes how much skill influences shot xG. Earlier 0.35-anchor
         // (with a steep 1.20 exponent) left avg players (exec~0.34)
@@ -338,7 +315,20 @@ impl ShotSkillProfile {
         // of the 0.44 goals/app the FM season fixtures assume.
         let random_error_scale =
             (0.98 - execution_skill * 0.85 + poor_penalty * 0.15).clamp(0.26, 1.30);
+        (
+            shot_quality_multiplier,
+            on_target_skill_multiplier,
+            random_error_scale,
+        )
+    }
 
+    fn miskick(
+        &self,
+        inputs: &ShotSkillInputs,
+        poor_penalty: f32,
+        technique_curve: f32,
+        low_condition_penalty: f32,
+    ) -> f32 {
         // Miskick: dominated by poor_penalty + low technique. Pressure /
         // condition push it up further. Exponent 2.2 → 1.6 because the
         // earlier curve made weak-technique miskicks balloon disproportionately
@@ -352,6 +342,76 @@ impl ShotSkillProfile {
             + inputs.pressure_count_5u as f32 * 0.025
             + low_condition_penalty * 0.05)
             .clamp(0.0, 0.55);
+        miskick_probability
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ShotConditioning {
+    shooting_condition_mult: f32,
+    low_condition_penalty: f32,
+}
+
+impl ShotConditioning {
+    fn of(inputs: &ShotSkillInputs, reads: &ShotSkillReads, poor_penalty: f32) -> Self {
+        // Conditioning: harsher fatigue for low-skill players & late games.
+        let cond = inputs.condition_pct.clamp(0.0, 1.0);
+        let stamina01 = reads.stamina01;
+        let nat_fit01 = reads.nat_fit01;
+        let fitness = stamina01 * 0.55 + nat_fit01 * 0.45;
+        let fatigue_penalty = (1.0 - cond).max(0.0).powf(1.35);
+        let fitness_recovery = 1.0 - fatigue_penalty * (0.18 + fitness * 0.22);
+        let low_skill_fatigue = 1.0 - fatigue_penalty * poor_penalty * 0.30;
+        let late_pressure = if inputs.minute >= 70 {
+            1.0 - ((inputs.minute as f32 - 70.0) / 50.0).clamp(0.0, 1.0) * poor_penalty * 0.12
+        } else {
+            1.0
+        };
+        let shooting_condition_mult =
+            (fitness_recovery * low_skill_fatigue * late_pressure).clamp(0.48, 1.03);
+        let low_condition_penalty = (1.0 - shooting_condition_mult).max(0.0).clamp(0.0, 0.55);
+
+        ShotConditioning {
+            shooting_condition_mult,
+            low_condition_penalty,
+        }
+    }
+}
+
+impl ShotSkillProfile {
+    /// Build the profile for `player` at the moment described by `inputs`.
+    /// All technical / mental / physical skills are routed through
+    /// `effective_skill` so fatigue is already applied before the curve.
+    pub fn from_player(player: &MatchPlayer, inputs: &ShotSkillInputs) -> Self {
+        let reads = ShotSkillReads::of(player, inputs);
+
+        // Headline penalties / lifts. The "headline" skill for a shooter is
+        // finishing — the smoothstep around it controls the heavy-handed
+        // poor-finisher penalty applied by every downstream consumer.
+        let poor_penalty = Self::smoothstep(0.45, 0.15, reads.finishing01);
+        let elite_lift = Self::smoothstep(0.70, 0.95, reads.finishing01);
+        let technique_curve = Self::pow_curve(reads.technique01, 1.65);
+
+        let conditioning = ShotConditioning::of(inputs, &reads, poor_penalty);
+        let low_condition_penalty = conditioning.low_condition_penalty;
+
+        let header = HeaderStrike::armed() && inputs.shot_type.is_header();
+        let execution_skill = reads.execution(player, inputs);
+        let selection_skill = reads.selection();
+        let composure_skill = Self::pow_curve(reads.composure01, 1.45);
+        let body_control = reads.body_control(inputs.is_sprinting_or_recent_sprint);
+        let placement_skill = reads.placement(inputs.shot_type, header, execution_skill);
+        let power_skill = reads.power();
+
+        // Pressure penalty (0..~1) used by xG & error scaling.
+        let pressure_penalty = (inputs.pressure_count_5u as f32 * 0.20
+            + inputs.pressure_count_10u as f32 * 0.07)
+            .clamp(0.0, 1.0);
+
+        let (shot_quality_multiplier, on_target_skill_multiplier, random_error_scale) =
+            reads.multipliers(execution_skill, poor_penalty, elite_lift);
+        let miskick_probability =
+            reads.miskick(inputs, poor_penalty, technique_curve, low_condition_penalty);
 
         ShotSkillProfile {
             selection_skill,
@@ -367,7 +427,7 @@ impl ShotSkillProfile {
             poor_penalty,
             elite_lift,
             technique_curve,
-            shooting_condition_mult,
+            shooting_condition_mult: conditioning.shooting_condition_mult,
             low_condition_penalty,
             pressure_penalty,
             contact_drag: if header {
@@ -377,6 +437,25 @@ impl ShotSkillProfile {
             },
             shot_type: inputs.shot_type,
         }
+    }
+
+    #[inline]
+    fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+        if (edge0 - edge1).abs() < f32::EPSILON {
+            return if x < edge0 { 0.0 } else { 1.0 };
+        }
+        let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    #[inline]
+    fn norm01(v: f32) -> f32 {
+        (v / 20.0).clamp(0.0, 1.0)
+    }
+
+    #[inline]
+    fn pow_curve(skill01: f32, exp: f32) -> f32 {
+        skill01.clamp(0.0, 1.0).powf(exp)
     }
 
     /// Pre-shot expected goals using this profile. Mirrors the formula

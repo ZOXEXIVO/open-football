@@ -145,7 +145,6 @@ impl TeamSheet {
     }
 
     /// One club's sheet: its name, its eleven, and its bench under a rule.
-    #[expect(clippy::too_many_lines)]
     fn side(
         body: &mut RelatedSpawnerCommands<ChildOf>,
         faces: &Faces,
@@ -191,42 +190,7 @@ impl TeamSheet {
             }]),
         ))
         .with_children(|column| {
-            column
-                .spawn((
-                    Node {
-                        width: percent(100),
-                        height: px(58),
-                        flex_shrink: 0.0,
-                        align_items: AlignItems::Center,
-                        padding: UiRect::axes(px(18), px(8)),
-                        margin: UiRect::bottom(px(8)),
-                        overflow: Overflow::clip(),
-                        border: UiRect::bottom(px(2)),
-                        ..default()
-                    },
-                    BackgroundColor(shirt),
-                    BorderColor::all(ink.with_alpha(0.25)),
-                ))
-                .with_children(|header| {
-                    header.spawn((
-                        Text::new(club.clone()),
-                        TextFont {
-                            font: FontSource::Handle(faces.face_for(&club)),
-                            font_size: FontSize::Px(Self::CLUB),
-                            ..default()
-                        },
-                        TextColor(ink),
-                        TextLayout {
-                            linebreak: LineBreak::NoWrap,
-                            ..default()
-                        },
-                        Node {
-                            width: percent(100),
-                            min_width: px(0),
-                            ..default()
-                        },
-                    ));
-                });
+            Self::header(column, faces, &club, shirt, ink);
 
             for player in named.iter().filter(|player| player.starting) {
                 Self::man(column, faces, player, false);
@@ -241,49 +205,103 @@ impl TeamSheet {
             if subs.is_empty() {
                 return;
             }
-            column
-                .spawn((
-                    Node {
-                        width: percent(100),
-                        height: px(28),
-                        flex_shrink: 0.0,
-                        align_items: AlignItems::Center,
-                        padding: UiRect::horizontal(px(18)),
-                        margin: UiRect::top(px(4)),
-                        border: UiRect::top(px(1)),
-                        ..default()
-                    },
-                    BorderColor::all(Self::RULE),
-                    BackgroundColor(Self::BENCH),
-                ))
-                .with_children(|heading| {
-                    heading.spawn((
-                        Text::new(bench.to_string()),
-                        TextFont {
-                            font: FontSource::Handle(faces.face_for(bench)),
-                            font_size: FontSize::Px(Self::LABEL),
-                            ..default()
-                        },
-                        TextColor(Self::MUTED),
-                    ));
-                });
-            column
-                .spawn((
-                    Node {
-                        width: percent(100),
-                        display: Display::Grid,
-                        grid_template_columns: RepeatedGridTrack::flex(2, 1.0),
-                        padding: UiRect::horizontal(px(6)),
-                        ..default()
-                    },
-                    BackgroundColor(Self::BENCH),
-                ))
-                .with_children(|bench| {
-                    for player in subs {
-                        Self::man(bench, faces, player, true);
-                    }
-                });
+            Self::bench(column, faces, bench, &subs);
         });
+    }
+
+    fn header(
+        column: &mut RelatedSpawnerCommands<ChildOf>,
+        faces: &Faces,
+        club: &str,
+        shirt: Color,
+        ink: Color,
+    ) {
+        column
+            .spawn((
+                Node {
+                    width: percent(100),
+                    height: px(58),
+                    flex_shrink: 0.0,
+                    align_items: AlignItems::Center,
+                    padding: UiRect::axes(px(18), px(8)),
+                    margin: UiRect::bottom(px(8)),
+                    overflow: Overflow::clip(),
+                    border: UiRect::bottom(px(2)),
+                    ..default()
+                },
+                BackgroundColor(shirt),
+                BorderColor::all(ink.with_alpha(0.25)),
+            ))
+            .with_children(|header| {
+                header.spawn((
+                    Text::new(club.to_string()),
+                    TextFont {
+                        font: FontSource::Handle(faces.face_for(club)),
+                        font_size: FontSize::Px(Self::CLUB),
+                        ..default()
+                    },
+                    TextColor(ink),
+                    TextLayout {
+                        linebreak: LineBreak::NoWrap,
+                        ..default()
+                    },
+                    Node {
+                        width: percent(100),
+                        min_width: px(0),
+                        ..default()
+                    },
+                ));
+            });
+    }
+
+    fn bench(
+        column: &mut RelatedSpawnerCommands<ChildOf>,
+        faces: &Faces,
+        label: &str,
+        players: &[&&PlayerInfo],
+    ) {
+        column
+            .spawn((
+                Node {
+                    width: percent(100),
+                    height: px(28),
+                    flex_shrink: 0.0,
+                    align_items: AlignItems::Center,
+                    padding: UiRect::horizontal(px(18)),
+                    margin: UiRect::top(px(4)),
+                    border: UiRect::top(px(1)),
+                    ..default()
+                },
+                BorderColor::all(Self::RULE),
+                BackgroundColor(Self::BENCH),
+            ))
+            .with_children(|heading| {
+                heading.spawn((
+                    Text::new(label.to_string()),
+                    TextFont {
+                        font: FontSource::Handle(faces.face_for(label)),
+                        font_size: FontSize::Px(Self::LABEL),
+                        ..default()
+                    },
+                    TextColor(Self::MUTED),
+                ));
+            });
+        column
+            .spawn((
+                Node {
+                    width: percent(100),
+                    display: Display::Grid,
+                    grid_template_columns: RepeatedGridTrack::flex(2, 1.0),
+                    padding: UiRect::horizontal(px(6)),
+                    ..default()
+                },
+                BackgroundColor(Self::BENCH),
+            ))
+            .with_children(|bench| {
+                for player in players {
+                    Self::man(bench, faces, player, true);
+                }
+            });
     }
 
     /// One man: a number beside a small first name and a prominent surname.

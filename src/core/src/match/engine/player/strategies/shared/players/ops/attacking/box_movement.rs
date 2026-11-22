@@ -64,6 +64,7 @@
 //! lives here and the states ask for a velocity.
 
 use crate::r#match::passing::CrossModel;
+use crate::r#match::player::strategies::players::ops::effective_skill::ActionContext;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::shared::players::ops::marker_evasion::MarkerEvasion;
 use crate::r#match::{
@@ -521,11 +522,9 @@ impl BoxMovement {
         }
 
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
-        let movement = sc::n(sc::eff(
-            ctx.player,
-            sc::EffActionContext::mental(minute),
-            |p| p.skills.mental.off_the_ball,
-        ));
+        let movement = sc::n(sc::eff(ctx.player, ActionContext::mental(minute), |p| {
+            p.skills.mental.off_the_ball
+        }));
         let amplitude = (Self::WORK_BASE + Self::WORK_SKILL * movement) * fade;
 
         // Each occupant gets his own phase, or the four of them shuffle

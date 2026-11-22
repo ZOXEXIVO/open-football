@@ -5,9 +5,9 @@ use crate::loaders::{
     CountryLoader, OdbAttrs, OdbHistoryItem, OdbPlayer, OdbPlayerAttrs, OdbPosition,
 };
 use chrono::{Datelike, NaiveDate, Utc};
+use core::PlayerIdSequence;
 use core::club::player::maturation::{MaturationGroup, SkillMaturation};
 use core::league::Season;
-use core::next_player_id;
 use core::shared::FullName;
 use core::utils::IntegerUtils;
 use core::{
@@ -73,11 +73,6 @@ const SKILL_COUNT: usize = 37;
 
 // ── Helper functions ────────────────────────────────────────────────────
 
-#[inline]
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
-}
-
 /// Per-skill hard ceiling for ODB hydration. Recorded CA is authoritative —
 /// a real 17-year-old phenom keeps their real level — so unlike procedural
 /// generation the age cap does not bound individual skills here.
@@ -112,13 +107,18 @@ impl AgeCurve {
         if age < peak_start {
             let ramp_start = peak_start.saturating_sub(6) as f32;
             let t = ((age_f - ramp_start) / (peak_start as f32 - ramp_start)).clamp(0.0, 1.0);
-            lerp(0.92, 1.0, t)
+            Self::lerp(0.92, 1.0, t)
         } else if age <= peak_end {
             1.03
         } else {
             let t = ((age_f - peak_end as f32) / (40.0 - peak_end as f32)).clamp(0.0, 1.0);
-            lerp(1.03, 0.92, t)
+            Self::lerp(1.03, 0.92, t)
         }
+    }
+
+    #[inline]
+    fn lerp(a: f32, b: f32, t: f32) -> f32 {
+        a + (b - a) * t
     }
 
     /// Young players cannot reach elite skill levels regardless of talent.
@@ -178,148 +178,155 @@ impl SkillGroup {
 pub struct RoleArchetype;
 
 impl RoleArchetype {
-    #[expect(clippy::too_many_lines)]
     pub fn apply(weights: &mut [f32; SKILL_COUNT], position: &PositionType, roll: f32) {
         match position {
-            PositionType::Goalkeeper => {
-                if roll < 0.35 {
-                    // Shot Stopper
-                    weights[SK_AGILITY] += 0.3;
-                    weights[SK_ANTICIPATION] += 0.2;
-                    weights[SK_CONCENTRATION] += 0.2;
-                } else if roll < 0.60 {
-                    // Sweeper Keeper
-                    weights[SK_PACE] += 0.4;
-                    weights[SK_PASSING] += 0.4;
-                    weights[SK_FIRST_TOUCH] += 0.3;
-                    weights[SK_BRAVERY] += 0.2;
-                } else if roll < 0.85 {
-                    // Commanding
-                    weights[SK_JUMPING] += 0.3;
-                    weights[SK_STRENGTH] += 0.3;
-                    weights[SK_LEADERSHIP] += 0.3;
-                    weights[SK_BRAVERY] += 0.2;
-                } else {
-                    weights[SK_POSITIONING] += 0.1;
-                    weights[SK_CONCENTRATION] += 0.1;
-                }
-            }
-            PositionType::Defender => {
-                if roll < 0.25 {
-                    // Ball-Playing
-                    weights[SK_PASSING] += 0.4;
-                    weights[SK_FIRST_TOUCH] += 0.3;
-                    weights[SK_COMPOSURE] += 0.3;
-                    weights[SK_TECHNIQUE] += 0.2;
-                    weights[SK_AGGRESSION] -= 0.2;
-                    weights[SK_HEADING] -= 0.1;
-                } else if roll < 0.50 {
-                    // Stopper
-                    weights[SK_AGGRESSION] += 0.3;
-                    weights[SK_HEADING] += 0.3;
-                    weights[SK_STRENGTH] += 0.3;
-                    weights[SK_BRAVERY] += 0.2;
-                    weights[SK_PASSING] -= 0.2;
-                    weights[SK_TECHNIQUE] -= 0.2;
-                } else if roll < 0.75 {
-                    // Athletic
-                    weights[SK_PACE] += 0.4;
-                    weights[SK_ACCELERATION] += 0.3;
-                    weights[SK_AGILITY] += 0.2;
-                    weights[SK_STAMINA] += 0.2;
-                    weights[SK_STRENGTH] -= 0.2;
-                    weights[SK_HEADING] -= 0.1;
-                } else {
-                    // No-Nonsense
-                    weights[SK_MARKING] += 0.3;
-                    weights[SK_TACKLING] += 0.2;
-                    weights[SK_POSITIONING] += 0.2;
-                    weights[SK_DRIBBLING] -= 0.3;
-                    weights[SK_FLAIR] -= 0.3;
-                }
-            }
-            PositionType::Midfielder => {
-                if roll < 0.20 {
-                    // Playmaker
-                    weights[SK_VISION] += 0.4;
-                    weights[SK_PASSING] += 0.3;
-                    weights[SK_TECHNIQUE] += 0.3;
-                    weights[SK_COMPOSURE] += 0.3;
-                    weights[SK_TACKLING] -= 0.3;
-                    weights[SK_STRENGTH] -= 0.2;
-                } else if roll < 0.40 {
-                    // Box-to-Box
-                    weights[SK_STAMINA] += 0.4;
-                    weights[SK_WORK_RATE] += 0.3;
-                    weights[SK_TACKLING] += 0.3;
-                    weights[SK_STRENGTH] += 0.2;
-                    weights[SK_FLAIR] -= 0.2;
-                } else if roll < 0.60 {
-                    // Ball Winner
-                    weights[SK_TACKLING] += 0.5;
-                    weights[SK_MARKING] += 0.4;
-                    weights[SK_AGGRESSION] += 0.3;
-                    weights[SK_STRENGTH] += 0.3;
-                    weights[SK_TECHNIQUE] -= 0.3;
-                    weights[SK_VISION] -= 0.3;
-                } else if roll < 0.80 {
-                    // Winger
-                    weights[SK_PACE] += 0.5;
-                    weights[SK_CROSSING] += 0.5;
-                    weights[SK_DRIBBLING] += 0.4;
-                    weights[SK_ACCELERATION] += 0.3;
-                    weights[SK_TACKLING] -= 0.3;
-                    weights[SK_HEADING] -= 0.3;
-                } else {
-                    // Mezzala
-                    weights[SK_DRIBBLING] += 0.4;
-                    weights[SK_OFF_THE_BALL] += 0.3;
-                    weights[SK_TECHNIQUE] += 0.3;
-                    weights[SK_ACCELERATION] += 0.2;
-                    weights[SK_MARKING] -= 0.2;
-                }
-            }
-            PositionType::Striker => {
-                if roll < 0.25 {
-                    // Poacher
-                    weights[SK_FINISHING] += 0.4;
-                    weights[SK_OFF_THE_BALL] += 0.4;
-                    weights[SK_ANTICIPATION] += 0.3;
-                    weights[SK_COMPOSURE] += 0.3;
-                    weights[SK_DRIBBLING] -= 0.3;
-                    weights[SK_PASSING] -= 0.3;
-                } else if roll < 0.45 {
-                    // Target Man
-                    weights[SK_HEADING] += 0.5;
-                    weights[SK_STRENGTH] += 0.5;
-                    weights[SK_FIRST_TOUCH] += 0.3;
-                    weights[SK_BRAVERY] += 0.3;
-                    weights[SK_PACE] -= 0.4;
-                    weights[SK_ACCELERATION] -= 0.3;
-                } else if roll < 0.65 {
-                    // Speed Merchant
-                    weights[SK_PACE] += 0.5;
-                    weights[SK_ACCELERATION] += 0.4;
-                    weights[SK_DRIBBLING] += 0.3;
-                    weights[SK_AGILITY] += 0.2;
-                    weights[SK_HEADING] -= 0.3;
-                    weights[SK_STRENGTH] -= 0.3;
-                } else if roll < 0.85 {
-                    // Complete Forward
-                    weights[SK_TECHNIQUE] += 0.2;
-                    weights[SK_PASSING] += 0.2;
-                    weights[SK_VISION] += 0.2;
-                    weights[SK_DECISIONS] += 0.2;
-                } else {
-                    // Deep-Lying Forward
-                    weights[SK_FIRST_TOUCH] += 0.4;
-                    weights[SK_PASSING] += 0.4;
-                    weights[SK_VISION] += 0.4;
-                    weights[SK_TECHNIQUE] += 0.3;
-                    weights[SK_HEADING] -= 0.3;
-                    weights[SK_OFF_THE_BALL] -= 0.2;
-                }
-            }
+            PositionType::Goalkeeper => Self::goalkeeper(weights, roll),
+            PositionType::Defender => Self::defender(weights, roll),
+            PositionType::Midfielder => Self::midfielder(weights, roll),
+            PositionType::Striker => Self::striker(weights, roll),
+        }
+    }
+
+    fn goalkeeper(weights: &mut [f32; SKILL_COUNT], roll: f32) {
+        if roll < 0.35 {
+            // Shot Stopper
+            weights[SK_AGILITY] += 0.3;
+            weights[SK_ANTICIPATION] += 0.2;
+            weights[SK_CONCENTRATION] += 0.2;
+        } else if roll < 0.60 {
+            // Sweeper Keeper
+            weights[SK_PACE] += 0.4;
+            weights[SK_PASSING] += 0.4;
+            weights[SK_FIRST_TOUCH] += 0.3;
+            weights[SK_BRAVERY] += 0.2;
+        } else if roll < 0.85 {
+            // Commanding
+            weights[SK_JUMPING] += 0.3;
+            weights[SK_STRENGTH] += 0.3;
+            weights[SK_LEADERSHIP] += 0.3;
+            weights[SK_BRAVERY] += 0.2;
+        } else {
+            weights[SK_POSITIONING] += 0.1;
+            weights[SK_CONCENTRATION] += 0.1;
+        }
+    }
+
+    fn defender(weights: &mut [f32; SKILL_COUNT], roll: f32) {
+        if roll < 0.25 {
+            // Ball-Playing
+            weights[SK_PASSING] += 0.4;
+            weights[SK_FIRST_TOUCH] += 0.3;
+            weights[SK_COMPOSURE] += 0.3;
+            weights[SK_TECHNIQUE] += 0.2;
+            weights[SK_AGGRESSION] -= 0.2;
+            weights[SK_HEADING] -= 0.1;
+        } else if roll < 0.50 {
+            // Stopper
+            weights[SK_AGGRESSION] += 0.3;
+            weights[SK_HEADING] += 0.3;
+            weights[SK_STRENGTH] += 0.3;
+            weights[SK_BRAVERY] += 0.2;
+            weights[SK_PASSING] -= 0.2;
+            weights[SK_TECHNIQUE] -= 0.2;
+        } else if roll < 0.75 {
+            // Athletic
+            weights[SK_PACE] += 0.4;
+            weights[SK_ACCELERATION] += 0.3;
+            weights[SK_AGILITY] += 0.2;
+            weights[SK_STAMINA] += 0.2;
+            weights[SK_STRENGTH] -= 0.2;
+            weights[SK_HEADING] -= 0.1;
+        } else {
+            // No-Nonsense
+            weights[SK_MARKING] += 0.3;
+            weights[SK_TACKLING] += 0.2;
+            weights[SK_POSITIONING] += 0.2;
+            weights[SK_DRIBBLING] -= 0.3;
+            weights[SK_FLAIR] -= 0.3;
+        }
+    }
+
+    fn midfielder(weights: &mut [f32; SKILL_COUNT], roll: f32) {
+        if roll < 0.20 {
+            // Playmaker
+            weights[SK_VISION] += 0.4;
+            weights[SK_PASSING] += 0.3;
+            weights[SK_TECHNIQUE] += 0.3;
+            weights[SK_COMPOSURE] += 0.3;
+            weights[SK_TACKLING] -= 0.3;
+            weights[SK_STRENGTH] -= 0.2;
+        } else if roll < 0.40 {
+            // Box-to-Box
+            weights[SK_STAMINA] += 0.4;
+            weights[SK_WORK_RATE] += 0.3;
+            weights[SK_TACKLING] += 0.3;
+            weights[SK_STRENGTH] += 0.2;
+            weights[SK_FLAIR] -= 0.2;
+        } else if roll < 0.60 {
+            // Ball Winner
+            weights[SK_TACKLING] += 0.5;
+            weights[SK_MARKING] += 0.4;
+            weights[SK_AGGRESSION] += 0.3;
+            weights[SK_STRENGTH] += 0.3;
+            weights[SK_TECHNIQUE] -= 0.3;
+            weights[SK_VISION] -= 0.3;
+        } else if roll < 0.80 {
+            // Winger
+            weights[SK_PACE] += 0.5;
+            weights[SK_CROSSING] += 0.5;
+            weights[SK_DRIBBLING] += 0.4;
+            weights[SK_ACCELERATION] += 0.3;
+            weights[SK_TACKLING] -= 0.3;
+            weights[SK_HEADING] -= 0.3;
+        } else {
+            // Mezzala
+            weights[SK_DRIBBLING] += 0.4;
+            weights[SK_OFF_THE_BALL] += 0.3;
+            weights[SK_TECHNIQUE] += 0.3;
+            weights[SK_ACCELERATION] += 0.2;
+            weights[SK_MARKING] -= 0.2;
+        }
+    }
+
+    fn striker(weights: &mut [f32; SKILL_COUNT], roll: f32) {
+        if roll < 0.25 {
+            // Poacher
+            weights[SK_FINISHING] += 0.4;
+            weights[SK_OFF_THE_BALL] += 0.4;
+            weights[SK_ANTICIPATION] += 0.3;
+            weights[SK_COMPOSURE] += 0.3;
+            weights[SK_DRIBBLING] -= 0.3;
+            weights[SK_PASSING] -= 0.3;
+        } else if roll < 0.45 {
+            // Target Man
+            weights[SK_HEADING] += 0.5;
+            weights[SK_STRENGTH] += 0.5;
+            weights[SK_FIRST_TOUCH] += 0.3;
+            weights[SK_BRAVERY] += 0.3;
+            weights[SK_PACE] -= 0.4;
+            weights[SK_ACCELERATION] -= 0.3;
+        } else if roll < 0.65 {
+            // Speed Merchant
+            weights[SK_PACE] += 0.5;
+            weights[SK_ACCELERATION] += 0.4;
+            weights[SK_DRIBBLING] += 0.3;
+            weights[SK_AGILITY] += 0.2;
+            weights[SK_HEADING] -= 0.3;
+            weights[SK_STRENGTH] -= 0.3;
+        } else if roll < 0.85 {
+            // Complete Forward
+            weights[SK_TECHNIQUE] += 0.2;
+            weights[SK_PASSING] += 0.2;
+            weights[SK_VISION] += 0.2;
+            weights[SK_DECISIONS] += 0.2;
+        } else {
+            // Deep-Lying Forward
+            weights[SK_FIRST_TOUCH] += 0.4;
+            weights[SK_PASSING] += 0.4;
+            weights[SK_VISION] += 0.4;
+            weights[SK_TECHNIQUE] += 0.3;
+            weights[SK_HEADING] -= 0.3;
+            weights[SK_OFF_THE_BALL] -= 0.2;
         }
     }
 }
@@ -487,6 +494,219 @@ impl PlayerGenerator {
     }
 }
 
+/// The birth date drawn for a generated player, plus the completed age the
+/// rest of the pipeline reads. Owns the age-table draw so the generator body
+/// stays a sequence of named steps.
+struct PlayerBirth {
+    year: u32,
+    month: u32,
+    day: u32,
+    age: u32,
+}
+
+impl PlayerBirth {
+    fn draw(
+        now: &chrono::DateTime<Utc>,
+        bucket: PositionType,
+        role: SquadRole,
+        min_age: i32,
+        max_age: i32,
+        ages: &RoleAgeTable,
+        rng: &mut HydrationRng,
+    ) -> Self {
+        let keeper = matches!(bucket, PositionType::Goalkeeper);
+        let year = (now.year() - ages.draw(keeper, role, min_age, max_age, rng)) as u32;
+        // Months run 1..=12: random() is [min, max).
+        let month = IntegerUtils::random(1, 13) as u32;
+        let day = IntegerUtils::random(1, 29) as u32;
+        let age = (now.year() as u32).saturating_sub(year);
+        Self {
+            year,
+            month,
+            day,
+            age,
+        }
+    }
+}
+
+/// The ability target, exact position, and position list chosen before skill
+/// generation. Kept together so the generator does not thread four related
+/// values through every step.
+struct AbilityProfile {
+    primary: PlayerPositionType,
+    positions: PlayerPositions,
+    target_ca: u8,
+    potential_ability: u8,
+}
+
+/// Goalkeeper archetype weights. Roll bands match the outfield archetype
+/// roll so a keeper and an outfielder generated from the same roll share the
+/// same "profile family" without a second draw.
+struct GoalkeeperArchetype;
+
+impl GoalkeeperArchetype {
+    /// Weights: 1.0 = average, >1.0 = boosted, <1.0 = reduced.
+    fn weights(roll: f32) -> [f32; 13] {
+        if roll < 0.35 {
+            // Shot Stopper — elite reflexes, handling, positioning
+            [
+                0.9, // aerial_reach
+                0.9, // command_of_area
+                0.8, // communication
+                0.4, // eccentricity
+                0.6, // first_touch
+                1.6, // handling
+                0.7, // kicking
+                1.3, // one_on_ones
+                0.6, // passing
+                1.1, // punching
+                1.7, // reflexes
+                0.8, // rushing_out
+                0.7, // throwing
+            ]
+        } else if roll < 0.60 {
+            // Sweeper Keeper — distribution, rushing out, brave
+            [
+                0.8, // aerial_reach
+                1.0, // command_of_area
+                1.0, // communication
+                1.2, // eccentricity
+                1.5, // first_touch
+                1.1, // handling
+                1.3, // kicking
+                1.2, // one_on_ones
+                1.4, // passing
+                0.7, // punching
+                1.1, // reflexes
+                1.5, // rushing_out
+                1.2, // throwing
+            ]
+        } else if roll < 0.85 {
+            // Commanding — aerial dominance, communication, set-piece defense
+            [
+                1.6, // aerial_reach
+                1.5, // command_of_area
+                1.4, // communication
+                0.5, // eccentricity
+                0.7, // first_touch
+                1.2, // handling
+                0.9, // kicking
+                1.0, // one_on_ones
+                0.7, // passing
+                1.3, // punching
+                1.1, // reflexes
+                0.9, // rushing_out
+                0.8, // throwing
+            ]
+        } else {
+            // All-Rounder — balanced
+            [
+                1.0, 1.0, 1.0, 0.7, 1.0, 1.2, 1.0, 1.1, 0.9, 0.9, 1.2, 1.0, 0.9,
+            ]
+        }
+    }
+}
+
+/// Per-group age means, spreads, and noise scales for one generated skill
+/// array. Keeps the age-curve arithmetic out of the generation pipeline body.
+struct SkillAgeProfile {
+    ca_skill_target: f32,
+    technical_mean: f32,
+    mental_mean: f32,
+    physical_mean: f32,
+    technical_noise: f32,
+    mental_noise: f32,
+    physical_noise: f32,
+    spread: f32,
+}
+
+impl SkillAgeProfile {
+    fn for_age(target_ca: u8, age: u32, rep_factor: f32) -> Self {
+        // Target CA drives current skill level; `skill_cap` is the hard
+        // per-skill ceiling (age-based for procedural players, open for
+        // authoritative ODB records). PA deliberately does NOT cap
+        // individual skills — PA bounds the *weighted average*, and capping
+        // every attribute at the PA-implied level flattened real players
+        // whose PA sits near CA into spread-less profiles with no standout
+        // skills. Elite pace next to mediocre finishing is normal football.
+        let ca_skill_target = PlayerSkills::ability_skill_level(target_ca);
+
+        // Per-group age ratios still vary (mentality lags physicals etc.),
+        // but they now scale the *target CA* baseline rather than PA.
+        let tech_age_ratio = match age {
+            0..=17 => 0.78,
+            18..=19 => 0.85,
+            20..=22 => 0.92,
+            23..=26 => 0.97,
+            27..=29 => 1.0,
+            30..=32 => 0.97,
+            _ => 0.93,
+        };
+        let mental_age_ratio = match age {
+            0..=17 => 0.60,
+            18..=19 => 0.68,
+            20..=22 => 0.78,
+            23..=26 => 0.88,
+            27..=29 => 0.96,
+            30..=32 => 1.0,
+            _ => 1.0,
+        };
+        let physical_age_ratio = match age {
+            0..=17 => 0.72,
+            18..=19 => 0.82,
+            20..=22 => 0.90,
+            23..=26 => 0.97,
+            27..=29 => 1.0,
+            30..=32 => 0.93,
+            _ => 0.82,
+        };
+
+        let base_noise = 1.4 + rep_factor * 0.8;
+        let technical_noise = if age <= 18 {
+            base_noise + 1.5
+        } else {
+            base_noise + 0.4
+        };
+
+        Self {
+            ca_skill_target,
+            technical_mean: ca_skill_target * tech_age_ratio,
+            mental_mean: ca_skill_target * mental_age_ratio,
+            physical_mean: ca_skill_target * physical_age_ratio,
+            technical_noise,
+            mental_noise: base_noise * 0.5,
+            physical_noise: base_noise * 1.3,
+            // Spread is set so high-weight attributes lift well above the
+            // mean and low-weight attributes drop well below it.
+            spread: (ca_skill_target * 0.45).max(2.5),
+        }
+    }
+
+    fn roll(
+        &self,
+        age: u32,
+        weights: &[f32; SKILL_COUNT],
+        rng: &mut HydrationRng,
+    ) -> [f32; SKILL_COUNT] {
+        let mut skills = [0.0f32; SKILL_COUNT];
+        for i in 0..SKILL_COUNT {
+            if i == SK_MATCH_READINESS {
+                continue;
+            }
+            let (group_mean, noise) = match SkillGroup::from_index(i) {
+                SkillGroup::Technical => (self.technical_mean, self.technical_noise),
+                SkillGroup::Mental => (self.mental_mean, self.mental_noise),
+                SkillGroup::Physical => (self.physical_mean, self.physical_noise),
+                SkillGroup::MatchReadiness => continue,
+            };
+            let pos_mean = group_mean + (weights[i] - 1.0) * self.spread;
+            let base = pos_mean + rng.normal() * noise;
+            skills[i] = (base * AgeCurve::peak_modifier(i, age)).clamp(1.0, 20.0);
+        }
+        skills
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub enum PositionType {
     Goalkeeper,
@@ -598,7 +818,7 @@ impl PhysicalProfile {
     /// Country-level height offset (cm). Northern Europe trends taller,
     /// East Asia / Latin America trend shorter. Match arms are lowercase
     /// because `CountryLoader::code_for_id` always returns lowercase
-    /// (matching the loader's data and `country_skill_bias`).
+    /// (matching the loader's data and `CountrySkillBias`).
     fn country_height_offset(country_id: u32) -> i32 {
         let code = CountryLoader::code_for_id(country_id);
         match code.as_str() {
@@ -803,7 +1023,6 @@ impl PlayerGenerator {
     ///      by how far that position's families have matured at his age.
     ///   6. Skills generated to target CA via per-exact-position weights and
     ///      rescaled until `calculate_ability_for_position` lands on target.
-    #[expect(clippy::too_many_lines)]
     pub fn generate(
         &self,
         country_id: u32,
@@ -824,45 +1043,104 @@ impl PlayerGenerator {
         let rep_factor =
             AbilityTarget::rep_blend(team_reputation, league_reputation, country_reputation);
 
-        let keeper = matches!(bucket, PositionType::Goalkeeper);
-        let year = (now.year() - ages.draw(keeper, role, min_age, max_age, &mut rng)) as u32;
-        // Months run 1..=12: random() is [min, max).
-        let month = IntegerUtils::random(1, 13) as u32;
-        let day = IntegerUtils::random(1, 29) as u32;
-        let age = (now.year() as u32).saturating_sub(year);
+        let birth = PlayerBirth::draw(&now, bucket, role, min_age, max_age, ages, &mut rng);
+        let full_name = self.generate_full_name();
 
-        let first_name = self.generate_first_name();
-        let last_name = self.generate_last_name();
-        let full_name = match self.generate_nickname() {
-            Some(nickname) => FullName::with_nickname(first_name, last_name, nickname),
-            None => FullName::new(first_name, last_name),
-        };
-
-        // CA before PA: target CA is the anchor of skill generation.
-        let ability = AbilityTarget::for_role(rep_factor, age, role, &mut rng);
-
-        // Pick the exact playing position before generating skills so the
-        // attribute distribution matches the role (DC vs WBL vs AMC etc.).
         // Picker is context-aware: PA, team_type, and squad_role bias the
         // distribution toward modern/specialist roles for top-tier squads
         // and toward traditional roles for lower tiers.
-        let primary_position =
-            Self::pick_exact_position(bucket, ability.potential, team_type, role);
-        let ability = ability.matured_for(primary_position, age);
-        let target_ca = ability.current;
-        let potential_ability = ability.potential;
-        let positions = Self::generate_positions_from_primary(primary_position, potential_ability);
+        let profile =
+            Self::ability_profile(rep_factor, birth.age, role, bucket, team_type, &mut rng);
 
         let country_code = CountryLoader::code_for_id(country_id);
+        let skills = Self::build_skills(
+            profile.primary,
+            birth.age,
+            rep_factor,
+            profile.target_ca,
+            continent_id,
+            &country_code,
+            &mut rng,
+        );
+
+        let is_youth = matches!(
+            team_type,
+            TeamType::U18 | TeamType::U19 | TeamType::U20 | TeamType::U21 | TeamType::U23
+        );
+
+        let player_attributes = Self::generate_player_attributes(
+            rep_factor,
+            birth.age,
+            profile.potential_ability,
+            &skills,
+            profile.primary,
+            country_id,
+            &mut rng,
+        );
+
+        let contract =
+            Self::generate_contract(&now, birth.age, rep_factor, is_youth, &player_attributes);
+        let native_languages = Self::native_languages(country_id);
+
+        Player::builder()
+            .id(PlayerIdSequence::next())
+            .full_name(full_name)
+            .birth_date(NaiveDate::from_ymd_opt(birth.year as i32, birth.month, birth.day).unwrap())
+            .country_id(country_id)
+            .skills(skills)
+            .attributes(Self::generate_person_attributes(&mut rng))
+            .player_attributes(player_attributes)
+            .contract(Some(contract))
+            .positions(profile.positions)
+            .languages(native_languages)
+            .generated(true)
+            .made_senior_debut(Player::presumed_already_debuted(birth.age, false))
+            .build()
+            .expect("Failed to build Player")
+    }
+
+    fn ability_profile(
+        rep_factor: f32,
+        age: u32,
+        role: SquadRole,
+        bucket: PositionType,
+        team_type: TeamType,
+        rng: &mut HydrationRng,
+    ) -> AbilityProfile {
+        // CA before PA: target CA is the anchor of skill generation.
+        let ability = AbilityTarget::for_role(rep_factor, age, role, rng);
+
+        // Pick the exact playing position before generating skills so the
+        // attribute distribution matches the role (DC vs WBL vs AMC etc.).
+        let primary = Self::pick_exact_position(bucket, ability.potential, team_type, role);
+        let ability = ability.matured_for(primary, age);
+        let positions = Self::generate_positions_from_primary(primary, ability.potential);
+        AbilityProfile {
+            primary,
+            positions,
+            target_ca: ability.current,
+            potential_ability: ability.potential,
+        }
+    }
+
+    fn build_skills(
+        primary_position: PlayerPositionType,
+        age: u32,
+        rep_factor: f32,
+        target_ca: u8,
+        continent_id: u32,
+        country_code: &str,
+        rng: &mut HydrationRng,
+    ) -> PlayerSkills {
         let mut skills = Self::generate_skills(
             primary_position,
             age,
             rep_factor,
             target_ca,
             continent_id,
-            &country_code,
+            country_code,
             AgeCurve::skill_cap(age),
-            &mut rng,
+            rng,
         );
         SkillRescaler::to_target_ca(&mut skills, primary_position, target_ca);
         // Convergence contract:
@@ -873,23 +1151,26 @@ impl PlayerGenerator {
         //     a CA-130 inflation of it. This is enforced post-rescale via
         //     `clamp_to_cap`. Tests assert both halves of the contract.
         SkillRescaler::clamp_to_cap(&mut skills, AgeCurve::skill_cap(age));
-        skills.physical.match_readiness = FitnessState::match_readiness(age, &mut rng);
+        skills.physical.match_readiness = FitnessState::match_readiness(age, rng);
+        skills
+    }
 
-        let is_youth = matches!(
-            team_type,
-            TeamType::U18 | TeamType::U19 | TeamType::U20 | TeamType::U21 | TeamType::U23
-        );
+    fn generate_full_name(&self) -> FullName {
+        let first_name = self.generate_first_name();
+        let last_name = self.generate_last_name();
+        match self.generate_nickname() {
+            Some(nickname) => FullName::with_nickname(first_name, last_name, nickname),
+            None => FullName::new(first_name, last_name),
+        }
+    }
 
-        let player_attributes = Self::generate_player_attributes(
-            rep_factor,
-            age,
-            potential_ability,
-            &skills,
-            primary_position,
-            country_id,
-            &mut rng,
-        );
-
+    fn generate_contract(
+        now: &chrono::DateTime<Utc>,
+        age: u32,
+        rep_factor: f32,
+        is_youth: bool,
+        attributes: &PlayerAttributes,
+    ) -> PlayerClubContract {
         // Salary: exponential curve based on reputation and ability.
         // Salaries in USD/year (annual). Massive gaps between tiers:
         //   rep_factor ~0.05 (amateur)     →    1K -    3K
@@ -907,7 +1188,7 @@ impl PlayerGenerator {
         // Ability factor: salary scales with current ability (quadratic)
         // CA 200 → 1.0, CA 100 → 0.25, CA 50 → 0.0625
         // Keeps low-ability players from earning elite wages at big clubs
-        let ca_normalized = player_attributes.current_ability as f64 / 200.0;
+        let ca_normalized = attributes.current_ability as f64 / 200.0;
         let ability_salary_factor = (ca_normalized * ca_normalized).clamp(0.05, 1.0);
 
         // Age factor: peak earners 25-30, young players earn less
@@ -932,50 +1213,34 @@ impl PlayerGenerator {
             * age_salary_factor
             * ability_salary_factor) as u32;
         let salary = if is_youth {
-            Self::youth_salary(player_attributes.current_ability)
+            Self::youth_salary(attributes.current_ability)
         } else {
-            base_salary.max(Self::reserve_salary(player_attributes.current_ability))
+            base_salary.max(Self::reserve_salary(attributes.current_ability))
         };
         let contract_years = Self::generate_contract_years(
             age,
-            player_attributes.current_ability,
-            player_attributes.current_reputation,
+            attributes.current_ability,
+            attributes.current_reputation,
         );
         let expiration = NaiveDate::from_ymd_opt(now.year() + contract_years, 3, 14).unwrap();
 
-        let contract = if is_youth {
+        if is_youth {
             PlayerClubContract::new_youth(salary, expiration)
         } else {
             PlayerClubContract::new(salary, expiration)
-        };
+        }
+    }
 
-        let native_languages: Vec<core::PlayerLanguage> =
-            core::Language::from_country_code(&CountryLoader::code_for_id(country_id))
-                .iter()
-                .copied()
-                .map(core::PlayerLanguage::native)
-                .collect();
-
-        Player::builder()
-            .id(next_player_id())
-            .full_name(full_name)
-            .birth_date(NaiveDate::from_ymd_opt(year as i32, month, day).unwrap())
-            .country_id(country_id)
-            .skills(skills)
-            .attributes(Self::generate_person_attributes(&mut rng))
-            .player_attributes(player_attributes)
-            .contract(Some(contract))
-            .positions(positions)
-            .languages(native_languages)
-            .generated(true)
-            .made_senior_debut(Player::presumed_already_debuted(age, false))
-            .build()
-            .expect("Failed to build Player")
+    fn native_languages(country_id: u32) -> Vec<core::PlayerLanguage> {
+        core::Language::from_country_code(&CountryLoader::code_for_id(country_id))
+            .iter()
+            .copied()
+            .map(core::PlayerLanguage::native)
+            .collect()
     }
 
     // ── Skill generation pipeline ───────────────────────────────────────
 
-    #[expect(clippy::too_many_lines)]
     fn generate_skills(
         primary_position: PlayerPositionType,
         age: u32,
@@ -986,115 +1251,78 @@ impl PlayerGenerator {
         skill_cap: f32,
         rng: &mut HydrationRng,
     ) -> PlayerSkills {
-        // Target CA drives current skill level; `skill_cap` is the hard
-        // per-skill ceiling (age-based for procedural players, open for
-        // authoritative ODB records). PA deliberately does NOT cap
-        // individual skills — PA bounds the *weighted average*, and capping
-        // every attribute at the PA-implied level flattened real players
-        // whose PA sits near CA into spread-less profiles with no standout
-        // skills. Elite pace next to mediocre finishing is normal football.
-        let ca_skill_target = PlayerSkills::ability_skill_level(target_ca);
-
-        // Per-group age ratios still vary (mentality lags physicals etc.),
-        // but they now scale the *target CA* baseline rather than PA.
-        let tech_age_ratio = match age {
-            0..=17 => 0.78,
-            18..=19 => 0.85,
-            20..=22 => 0.92,
-            23..=26 => 0.97,
-            27..=29 => 1.0,
-            30..=32 => 0.97,
-            _ => 0.93,
-        };
-        let mental_age_ratio = match age {
-            0..=17 => 0.60,
-            18..=19 => 0.68,
-            20..=22 => 0.78,
-            23..=26 => 0.88,
-            27..=29 => 0.96,
-            30..=32 => 1.0,
-            _ => 1.0,
-        };
-        let physical_age_ratio = match age {
-            0..=17 => 0.72,
-            18..=19 => 0.82,
-            20..=22 => 0.90,
-            23..=26 => 0.97,
-            27..=29 => 1.0,
-            30..=32 => 0.93,
-            _ => 0.82,
-        };
-
-        let tech_mean = ca_skill_target * tech_age_ratio;
-        let mental_mean = ca_skill_target * mental_age_ratio;
-        let phys_mean = ca_skill_target * physical_age_ratio;
-
-        // Spread is set so high-weight attributes lift well above the mean
-        // and low-weight attributes drop well below it.
-        let spread = (ca_skill_target * 0.45).max(2.5);
+        let profile = SkillAgeProfile::for_age(target_ca, age, rep_factor);
 
         let bucket = PositionType::from_player_position(primary_position);
         let mut pos_w = PositionWeights::for_position(primary_position);
         let archetype_roll = rng.f32();
         RoleArchetype::apply(&mut pos_w, &bucket, archetype_roll);
 
-        let base_noise = 1.4 + rep_factor * 0.8;
-        let tech_noise = if age <= 18 {
-            base_noise + 1.5
-        } else {
-            base_noise + 0.4
-        };
-        let mental_noise = base_noise * 0.5;
-        let phys_noise = base_noise * 1.3;
+        let mut skills = profile.roll(age, &pos_w, rng);
+        Self::apply_skill_cohesion(&mut skills);
+        Self::apply_skill_bias(&mut skills, continent_id, country_code);
+        Self::apply_skill_floors(&mut skills, &pos_w, &profile, skill_cap, rng);
 
-        let mut skills = [0.0f32; SKILL_COUNT];
-        for i in 0..SKILL_COUNT {
-            if i == SK_MATCH_READINESS {
-                continue;
-            }
-            let (group_mean, noise) = match SkillGroup::from_index(i) {
-                SkillGroup::Technical => (tech_mean, tech_noise),
-                SkillGroup::Mental => (mental_mean, mental_noise),
-                SkillGroup::Physical => (phys_mean, phys_noise),
-                SkillGroup::MatchReadiness => continue,
-            };
-            let pos_mean = group_mean + (pos_w[i] - 1.0) * spread;
-            let base = pos_mean + rng.normal() * noise;
-            skills[i] = (base * AgeCurve::peak_modifier(i, age)).clamp(1.0, 20.0);
+        // match_readiness lives on Physical but is a state, not a skill —
+        // initialised separately by `generate_player_attributes`.
+        skills[SK_MATCH_READINESS] = 0.0;
+
+        for v in skills.iter_mut() {
+            *v = v.clamp(0.0, 20.0);
         }
 
-        // Mental cohesion: mentality is largely unified — strong-willed
-        // players are strong-willed across the board, not just one slot.
-        let m_avg: f32 = skills[14..28].iter().sum::<f32>() / 14.0;
+        let mut result = SkillsArray::into_skills(&skills);
+        if matches!(primary_position, PlayerPositionType::Goalkeeper) {
+            result.goalkeeping =
+                Self::generate_gk_skills(profile.ca_skill_target, age, archetype_roll, rng);
+        }
+        result
+    }
+
+    /// Mental and physical cohesion: a strong-willed player is strong-willed
+    /// across the board, and physicals hang together lightly enough to keep
+    /// individuality.
+    fn apply_skill_cohesion(skills: &mut [f32; SKILL_COUNT]) {
+        let mental_average: f32 = skills[14..28].iter().sum::<f32>() / 14.0;
         for skill in &mut skills[14..28] {
-            *skill = *skill * 0.70 + m_avg * 0.30;
+            *skill = *skill * 0.70 + mental_average * 0.30;
         }
 
-        // Physical cohesion: lighter pull, keeps individuality.
-        let p_avg: f32 = skills[28..36].iter().sum::<f32>() / 8.0;
+        let physical_average: f32 = skills[28..36].iter().sum::<f32>() / 8.0;
         for skill in &mut skills[28..36] {
-            *skill = *skill * 0.85 + p_avg * 0.15;
+            *skill = *skill * 0.85 + physical_average * 0.15;
         }
+    }
 
-        // Affinities + country bias before the age cap, so the cap is final.
-        SkillAffinities::apply(&mut skills);
-        let bias = super::country_bias::country_skill_bias(continent_id, country_code);
+    /// Affinities plus country bias, applied before the age cap so the cap is
+    /// final.
+    fn apply_skill_bias(skills: &mut [f32; SKILL_COUNT], continent_id: u32, country_code: &str) {
+        SkillAffinities::apply(skills);
+        let bias = super::country_bias::CountrySkillBias::for_country(continent_id, country_code);
         for i in 0..SKILL_COUNT {
             if i == SK_MATCH_READINESS {
                 continue;
             }
             skills[i] += bias[i];
         }
+    }
 
-        // Floors & caps. Skills can't exceed the caller's per-skill ceiling
-        // and can't fall below role-aware floors. The cap always wins: a
-        // low-cap player's floor is squeezed downward so it never exceeds
-        // the cap (otherwise `clamp(min>max)` panics).
-        let key_floor = (ca_skill_target * 0.40).clamp(1.0, 9.0);
-        let universal_floor = (2.0 + ca_skill_target * 0.18).clamp(4.0, 6.0);
-        let physical_floor_base = (3.0 + ca_skill_target * 0.32).clamp(6.0, 9.0);
-        let trained_floor = (ca_skill_target * 0.32 + 3.0).clamp(6.0, 9.0);
-        let footballer_tech_floor = (ca_skill_target * 0.28 + 2.0).clamp(4.0, 9.0);
+    /// Floors & caps. Skills can't exceed the caller's per-skill ceiling and
+    /// can't fall below role-aware floors. The cap always wins: a low-cap
+    /// player's floor is squeezed downward so it never exceeds the cap
+    /// (otherwise `clamp(min>max)` panics).
+    fn apply_skill_floors(
+        skills: &mut [f32; SKILL_COUNT],
+        weights: &[f32; SKILL_COUNT],
+        profile: &SkillAgeProfile,
+        skill_cap: f32,
+        rng: &mut HydrationRng,
+    ) {
+        let key_floor = (profile.ca_skill_target * 0.40).clamp(1.0, 9.0);
+        let universal_floor = (2.0 + profile.ca_skill_target * 0.18).clamp(4.0, 6.0);
+        let physical_floor_base = (3.0 + profile.ca_skill_target * 0.32).clamp(6.0, 9.0);
+        let trained_floor = (profile.ca_skill_target * 0.32 + 3.0).clamp(6.0, 9.0);
+        let footballer_tech_floor = (profile.ca_skill_target * 0.28 + 2.0).clamp(4.0, 9.0);
         let cap = skill_cap.clamp(1.5, 20.0);
         let safe_floor = |f: f32| f.min(cap).max(1.0);
 
@@ -1102,7 +1330,7 @@ impl PlayerGenerator {
             if i == SK_MATCH_READINESS {
                 continue;
             }
-            if pos_w[i] >= 1.2 {
+            if weights[i] >= 1.2 {
                 skills[i] = skills[i].max(safe_floor(key_floor));
             }
             match SkillGroup::from_index(i) {
@@ -1111,7 +1339,7 @@ impl PlayerGenerator {
                     let floor = safe_floor((physical_floor_base + jitter).max(4.0));
                     skills[i] = skills[i].clamp(floor, cap);
                 }
-                SkillGroup::Technical if pos_w[i] >= 0.8 => {
+                SkillGroup::Technical if weights[i] >= 0.8 => {
                     let jitter = (rng.normal() * 1.3).clamp(-2.0, 2.0);
                     let floor = safe_floor((trained_floor + jitter).max(4.0));
                     skills[i] = skills[i].clamp(floor, cap);
@@ -1127,20 +1355,6 @@ impl PlayerGenerator {
                 SkillGroup::MatchReadiness => {}
             }
         }
-        // match_readiness lives on Physical but is a state, not a skill —
-        // initialised separately by `generate_player_attributes`.
-        skills[SK_MATCH_READINESS] = 0.0;
-
-        for v in skills.iter_mut() {
-            *v = v.clamp(0.0, 20.0);
-        }
-
-        let mut result = SkillsArray::into_skills(&skills);
-        if matches!(primary_position, PlayerPositionType::Goalkeeper) {
-            result.goalkeeping =
-                Self::generate_gk_skills(ca_skill_target, age, archetype_roll, rng);
-        }
-        result
     }
 
     /// The goalkeeping family's maturity at the middle of his age year — the
@@ -1168,83 +1382,12 @@ impl PlayerGenerator {
         let gk_mean = ca_skill_target * Self::goalkeeping_maturity(age);
         let spread = (ca_skill_target * 0.45).max(2.0);
         let noise = 1.5;
-
-        // GK role archetype — creates variety between keepers
-        // Weights: 1.0 = average, >1.0 = boosted, <1.0 = reduced
-        let (_archetype_name, w) = if roll < 0.35 {
-            // Shot Stopper — elite reflexes, handling, positioning
-            (
-                "shot_stopper",
-                [
-                    0.9, // aerial_reach
-                    0.9, // command_of_area
-                    0.8, // communication
-                    0.4, // eccentricity
-                    0.6, // first_touch
-                    1.6, // handling
-                    0.7, // kicking
-                    1.3, // one_on_ones
-                    0.6, // passing
-                    1.1, // punching
-                    1.7, // reflexes
-                    0.8, // rushing_out
-                    0.7, // throwing
-                ],
-            )
-        } else if roll < 0.60 {
-            // Sweeper Keeper — distribution, rushing out, brave
-            (
-                "sweeper_keeper",
-                [
-                    0.8, // aerial_reach
-                    1.0, // command_of_area
-                    1.0, // communication
-                    1.2, // eccentricity
-                    1.5, // first_touch
-                    1.1, // handling
-                    1.3, // kicking
-                    1.2, // one_on_ones
-                    1.4, // passing
-                    0.7, // punching
-                    1.1, // reflexes
-                    1.5, // rushing_out
-                    1.2, // throwing
-                ],
-            )
-        } else if roll < 0.85 {
-            // Commanding — aerial dominance, communication, set-piece defense
-            (
-                "commanding",
-                [
-                    1.6, // aerial_reach
-                    1.5, // command_of_area
-                    1.4, // communication
-                    0.5, // eccentricity
-                    0.7, // first_touch
-                    1.2, // handling
-                    0.9, // kicking
-                    1.0, // one_on_ones
-                    0.7, // passing
-                    1.3, // punching
-                    1.1, // reflexes
-                    0.9, // rushing_out
-                    0.8, // throwing
-                ],
-            )
-        } else {
-            // All-Rounder — balanced
-            (
-                "all_rounder",
-                [
-                    1.0, 1.0, 1.0, 0.7, 1.0, 1.2, 1.0, 1.1, 0.9, 0.9, 1.2, 1.0, 0.9,
-                ],
-            )
-        };
+        let weights = GoalkeeperArchetype::weights(roll);
 
         // Generate each GK skill
         let mut gk_skills = [0.0f32; 13];
         for i in 0..13 {
-            let pos_mean = gk_mean + (w[i] - 1.0) * spread;
+            let pos_mean = gk_mean + (weights[i] - 1.0) * spread;
             let raw = pos_mean + rng.normal() * noise;
             gk_skills[i] = raw.clamp(1.0, 20.0);
         }
@@ -1655,7 +1798,6 @@ impl PlayerGenerator {
     // uniformly rescaled so the position-weighted CA matches the record.
     // All randomness is seeded from the record id: same record, same player,
     // every save.
-    #[expect(clippy::too_many_lines)]
     pub fn generate_from_odb(
         record: &OdbPlayer,
         continent_id: u32,
@@ -1663,7 +1805,7 @@ impl PlayerGenerator {
         data: &DatabaseEntity,
     ) -> Player {
         let now = Utc::now().date_naive();
-        let age = age_in_years(record.birth_date, now);
+        let age = record.age_in_years(now);
 
         // Every random draw in hydration comes from an id-seeded stream, so
         // the same database record produces the same player in every new
@@ -1679,17 +1821,13 @@ impl PlayerGenerator {
         }
         let record_ca = record.current_ability.min(200);
 
-        let positions = positions_from_odb(record.id, &record.positions);
+        let positions = OdbPositionCode::positions(record.id, &record.positions);
         let primary = positions
             .positions
             .first()
             .map(|p| p.position)
             .unwrap_or(PlayerPositionType::MidfielderCenter);
 
-        // Drive the skill generator off the recorded CA so the spread is
-        // appropriate; the recorded value is authoritative, so no age cap
-        // bounds individual skills (ODB_SKILL_CAP).
-        let rep_factor = (record_ca as f32 / 200.0).clamp(0.05, 1.0);
         // Negative PA records carry an FM-style scouting band; roll the
         // concrete value once so skills and attributes agree on the same PA,
         // and never let it land below the recorded CA.
@@ -1698,6 +1836,71 @@ impl PlayerGenerator {
         let mut potential_rng = HydrationRng::from_seed(record.id as u64 ^ 0x504F_5445_4E54_4941);
         let potential_ability =
             PotentialAbility::resolve(record.potential_ability, &mut potential_rng).max(record_ca);
+
+        let skills = Self::hydrate_skills(
+            record,
+            age,
+            primary,
+            record_ca,
+            potential_ability,
+            continent_id,
+            country_code,
+            &mut rng,
+        );
+        let full_name = record.full_name();
+        let (foots, preferred_foot) = Self::hydrate_foots(record);
+
+        let contracts = ContractHydrator::new(record, data);
+        let contract = contracts.main(age, primary);
+        let contract_loan = contracts.loan();
+
+        let mut player_attributes = PlayerAttributeHydrator::new(
+            record,
+            record_ca,
+            age,
+            primary,
+            &skills,
+            potential_ability,
+            &mut rng,
+        )
+        .build();
+        let mut person_attributes = Self::generate_person_attributes(&mut rng);
+        if let Some(attrs) = record.attrs.as_ref() {
+            RecordedPerson::apply(attrs, &mut person_attributes, &mut player_attributes);
+        }
+
+        let native_languages = Self::native_languages(record.country_id);
+        let statistics_history = StatisticsHistoryHydrator::new(&record.history, data).build();
+
+        PlayerAssembly {
+            record,
+            age,
+            full_name,
+            skills,
+            person_attributes,
+            player_attributes,
+            contract,
+            contract_loan,
+            foots,
+            preferred_foot,
+            positions,
+            native_languages,
+            statistics_history,
+        }
+        .build()
+    }
+
+    fn hydrate_skills(
+        record: &OdbPlayer,
+        age: u32,
+        primary: PlayerPositionType,
+        record_ca: u8,
+        potential_ability: u8,
+        continent_id: u32,
+        country_code: &str,
+        rng: &mut HydrationRng,
+    ) -> PlayerSkills {
+        let rep_factor = (record_ca as f32 / 200.0).clamp(0.05, 1.0);
         let mut skills = Self::generate_skills(
             primary,
             age,
@@ -1706,7 +1909,7 @@ impl PlayerGenerator {
             continent_id,
             country_code,
             ODB_SKILL_CAP,
-            &mut rng,
+            rng,
         );
         BodySkillPrior::apply(
             &mut skills,
@@ -1725,77 +1928,75 @@ impl PlayerGenerator {
             Some(recorded) => recorded.fit(&mut skills, primary, record_ca, potential_ability),
             None => SkillRescaler::to_target_ca(&mut skills, primary, record_ca),
         }
-        skills.physical.match_readiness = FitnessState::match_readiness(age, &mut rng);
+        skills.physical.match_readiness = FitnessState::match_readiness(age, rng);
+        skills
+    }
 
-        let full_name = build_full_name(record);
-
-        // Per-foot levels: record values win; an explicit preferred_foot
-        // label wins over the level-derived one; records carrying neither
-        // default to right-footed with derived levels. A blank/zeroed foots
-        // block carries no data and falls through to the same default.
+    /// Per-foot levels: record values win; an explicit preferred_foot
+    /// label wins over the level-derived one; records carrying neither
+    /// default to right-footed with derived levels. A blank/zeroed foots
+    /// block carries no data and falls through to the same default.
+    fn hydrate_foots(record: &OdbPlayer) -> (PlayerFoots, PlayerPreferredFoot) {
         let foots = record
             .foots
             .as_ref()
             .filter(|f| f.left > 0 || f.right > 0)
             .map(|f| PlayerFoots::new(f.left, f.right));
         let preferred_foot = match record.preferred_foot.as_deref() {
-            Some(label) => parse_preferred_foot(Some(label)),
+            Some(label) => OdbPreferredFoot::parse(Some(label)),
             None => foots
                 .as_ref()
                 .map_or(PlayerPreferredFoot::Right, |f| f.preferred()),
         };
         let foots = foots.unwrap_or_else(|| PlayerFoots::from_preferred(&preferred_foot));
+        (foots, preferred_foot)
+    }
+}
 
-        let contract = build_main_contract(record, age, primary, data);
-        let contract_loan = build_loan_contract(record, data);
+/// Everything hydration has assembled for one ODB record, ready for the
+/// `Player` builder. Keeps the long builder chain out of the hydration body.
+struct PlayerAssembly<'a> {
+    record: &'a OdbPlayer,
+    age: u32,
+    full_name: FullName,
+    skills: PlayerSkills,
+    person_attributes: PersonAttributes,
+    player_attributes: PlayerAttributes,
+    contract: Option<PlayerClubContract>,
+    contract_loan: Option<PlayerClubContract>,
+    foots: PlayerFoots,
+    preferred_foot: PlayerPreferredFoot,
+    positions: PlayerPositions,
+    native_languages: Vec<core::PlayerLanguage>,
+    statistics_history: Option<PlayerStatisticsHistory>,
+}
 
-        let mut player_attributes = build_player_attributes(
-            record,
-            record_ca,
-            age,
-            primary,
-            &skills,
-            potential_ability,
-            &mut rng,
-        );
-        let mut person_attributes = Self::generate_person_attributes(&mut rng);
-        if let Some(attrs) = record.attrs.as_ref() {
-            RecordedPerson::apply(attrs, &mut person_attributes, &mut player_attributes);
-        }
-
-        let native_languages: Vec<core::PlayerLanguage> =
-            core::Language::from_country_code(&CountryLoader::code_for_id(record.country_id))
-                .iter()
-                .copied()
-                .map(core::PlayerLanguage::native)
-                .collect();
-
-        let statistics_history = build_statistics_history(&record.history, data);
-
+impl PlayerAssembly<'_> {
+    fn build(self) -> Player {
         let mut builder = Player::builder()
-            .id(record.id)
-            .full_name(full_name)
-            .birth_date(record.birth_date)
-            .country_id(record.country_id)
-            .skills(skills)
-            .attributes(person_attributes)
-            .player_attributes(player_attributes)
-            .contract(contract)
-            .contract_loan(contract_loan)
-            .preferred_foot(preferred_foot)
-            .foots(foots)
-            .positions(positions)
-            .languages(native_languages)
+            .id(self.record.id)
+            .full_name(self.full_name)
+            .birth_date(self.record.birth_date)
+            .country_id(self.record.country_id)
+            .skills(self.skills)
+            .attributes(self.person_attributes)
+            .player_attributes(self.player_attributes)
+            .contract(self.contract)
+            .contract_loan(self.contract_loan)
+            .preferred_foot(self.preferred_foot)
+            .foots(self.foots)
+            .positions(self.positions)
+            .languages(self.native_languages)
             .last_transfer_date(ClubJoinAnchor::resolve(
-                record,
+                self.record,
                 WorldStart::season_start_year(),
             ))
             .made_senior_debut(Player::presumed_already_debuted(
-                age,
-                statistics_history.is_some(),
+                self.age,
+                self.statistics_history.is_some(),
             ));
 
-        if let Some(history) = statistics_history {
+        if let Some(history) = self.statistics_history {
             builder = builder.statistics_history(history);
         }
 
@@ -1959,147 +2160,169 @@ impl ClubJoinAnchor {
     }
 }
 
-/// Build a `PlayerStatisticsHistory` from scraped per-season records, looking
-/// up each entry's club/team/league/country name and slug from the current
-/// database. Returns `None` when there is no history to avoid overriding the
-/// default empty history (and the simulator's initial-team seeding).
-fn build_statistics_history(
-    history: &[OdbHistoryItem],
-    data: &DatabaseEntity,
-) -> Option<PlayerStatisticsHistory> {
-    if history.is_empty() {
-        return None;
-    }
-
-    // Chronological order — oldest first — so the assigned seq_ids grow with
-    // time and `view_items` sorts the newest season to the top.
-    let mut sorted: Vec<&OdbHistoryItem> = history.iter().collect();
-    sorted.sort_by_key(|h| h.season);
-
-    let items: Vec<PlayerStatisticsHistoryItem> = sorted
-        .into_iter()
-        .enumerate()
-        .map(|(seq, h)| {
-            let (team_name, team_slug, team_reputation, league_name, league_slug) =
-                resolve_club_display(h.club_id, data);
-
-            let statistics = PlayerStatistics {
-                played: h.played,
-                played_subs: 0,
-                goals: h.goals,
-                assists: 0,
-                penalties: 0,
-                player_of_the_match: 0,
-                yellow_cards: 0,
-                red_cards: 0,
-                shots_on_target: 0.0,
-                tackling: 0.0,
-                passes: 0,
-                average_rating: h.rating,
-                rating_points: 0.0,
-                rating_weight: 0.0,
-                // Imported career history carries a season average, not
-                // per-match ratings. Both ledgers stay empty and their
-                // accessors fall back to `average_rating`.
-                rating_sum: 0.0,
-                rating_matches: 0,
-                conceded: 0,
-                clean_sheets: 0,
-            };
-
-            PlayerStatisticsHistoryItem {
-                season: Season::new(h.season),
-                team_name,
-                team_slug,
-                team_reputation,
-                league_name,
-                league_slug,
-                is_loan: h.is_loan,
-                transfer_fee: None,
-                statistics,
-                seq_id: seq as u32,
-            }
-        })
-        .collect();
-
-    Some(PlayerStatisticsHistory::from_items(items))
-}
-
-/// Look up a club by id and return (team_name, team_slug, team_reputation,
-/// league_name, league_slug). Prefers the club's main team; falls back to the
-/// first team. The id may also be a sub-team id: satellite clubs (e.g.
-/// "Spartak Moscow 2") are folded into their parent by the compiler, so a
-/// history spell at one is referenced by an id that only exists in some
-/// club's teams[] — those resolve to that specific team rather than the
-/// parent's main squad. Missing ids return empty strings so the page still
-/// renders the stats row with no links.
-fn resolve_club_display(
-    club_id: u32,
-    data: &DatabaseEntity,
-) -> (String, String, u16, String, String) {
-    let Some(club) = data.club_by_id(club_id) else {
-        if let Some((_, team)) = data.team_by_id(club_id) {
-            let (league_name, league_slug) = team
-                .league_id
-                .and_then(|lid| data.league_by_id(lid))
-                .map(|l| (l.name.clone(), l.slug.clone()))
-                .unwrap_or_default();
-            return (
-                team.name.clone(),
-                team.slug.clone(),
-                team.reputation.world,
-                league_name,
-                league_slug,
-            );
+impl OdbPlayer {
+    fn age_in_years(&self, now: NaiveDate) -> u32 {
+        let mut years = now.year() - self.birth_date.year();
+        if (now.month(), now.day()) < (self.birth_date.month(), self.birth_date.day()) {
+            years -= 1;
         }
-        // Not a club this database models. Careers span the whole football
-        // world, so this is the normal case for about a third of history rows
-        // — Schalke, SPAL, Jong Ajax. The compiled `history_clubs` table names
-        // them; the slug stays empty because there is no page to link to, and
-        // the template already renders an unlinked name in that case.
-        return (
-            data.history_club_name(club_id)
-                .unwrap_or_default()
-                .to_string(),
-            String::new(),
-            0,
-            String::new(),
-            String::new(),
-        );
-    };
+        years.max(0) as u32
+    }
 
-    // Prefer the "Main" team; fall back to the first listed team.
-    let team = club
-        .teams
-        .iter()
-        .find(|t| t.team_type.eq_ignore_ascii_case("Main"))
-        .or_else(|| club.teams.first());
-
-    let (team_slug, team_reputation, league_id) = match team {
-        Some(t) => (t.slug.clone(), t.reputation.world, t.league_id),
-        None => (String::new(), 0, None),
-    };
-
-    let (league_name, league_slug) = league_id
-        .and_then(|lid| data.league_by_id(lid))
-        .map(|l| (l.name.clone(), l.slug.clone()))
-        .unwrap_or_default();
-
-    (
-        club.name.clone(),
-        team_slug,
-        team_reputation,
-        league_name,
-        league_slug,
-    )
+    fn full_name(&self) -> FullName {
+        let first = self.first_name.clone();
+        let last = self.last_name.clone();
+        match (self.middle_name.as_ref(), self.nickname.as_ref()) {
+            (None, Some(nick)) => FullName::with_nickname(first, last, nick.clone()),
+            _ => FullName::new(first, last),
+        }
+    }
 }
 
-fn age_in_years(dob: NaiveDate, now: NaiveDate) -> u32 {
-    let mut years = now.year() - dob.year();
-    if (now.month(), now.day()) < (dob.month(), dob.day()) {
-        years -= 1;
+/// Builds a `PlayerStatisticsHistory` from scraped per-season records,
+/// looking up each entry's club/team/league/country name and slug from the
+/// current database. Returns `None` when there is no history to avoid
+/// overriding the default empty history (and the simulator's initial-team
+/// seeding).
+struct StatisticsHistoryHydrator<'a> {
+    history: &'a [OdbHistoryItem],
+    data: &'a DatabaseEntity,
+}
+
+impl<'a> StatisticsHistoryHydrator<'a> {
+    fn new(history: &'a [OdbHistoryItem], data: &'a DatabaseEntity) -> Self {
+        Self { history, data }
     }
-    years.max(0) as u32
+
+    fn build(&self) -> Option<PlayerStatisticsHistory> {
+        if self.history.is_empty() {
+            return None;
+        }
+
+        // Chronological order — oldest first — so the assigned seq_ids grow
+        // with time and `view_items` sorts the newest season to the top.
+        let mut sorted: Vec<&OdbHistoryItem> = self.history.iter().collect();
+        sorted.sort_by_key(|h| h.season);
+
+        let items: Vec<PlayerStatisticsHistoryItem> = sorted
+            .into_iter()
+            .enumerate()
+            .map(|(seq, h)| self.item(seq, h))
+            .collect();
+
+        Some(PlayerStatisticsHistory::from_items(items))
+    }
+
+    fn item(&self, seq: usize, h: &OdbHistoryItem) -> PlayerStatisticsHistoryItem {
+        let (team_name, team_slug, team_reputation, league_name, league_slug) =
+            self.data.club_display(h.club_id);
+
+        let statistics = PlayerStatistics {
+            played: h.played,
+            played_subs: 0,
+            goals: h.goals,
+            assists: 0,
+            penalties: 0,
+            player_of_the_match: 0,
+            yellow_cards: 0,
+            red_cards: 0,
+            shots_on_target: 0.0,
+            tackling: 0.0,
+            passes: 0,
+            average_rating: h.rating,
+            rating_points: 0.0,
+            rating_weight: 0.0,
+            // Imported career history carries a season average, not
+            // per-match ratings. Both ledgers stay empty and their
+            // accessors fall back to `average_rating`.
+            rating_sum: 0.0,
+            rating_matches: 0,
+            conceded: 0,
+            clean_sheets: 0,
+        };
+
+        PlayerStatisticsHistoryItem {
+            season: Season::new(h.season),
+            team_name,
+            team_slug,
+            team_reputation,
+            league_name,
+            league_slug,
+            is_loan: h.is_loan,
+            transfer_fee: None,
+            statistics,
+            seq_id: seq as u32,
+        }
+    }
+}
+
+impl DatabaseEntity {
+    /// Look up a club by id and return (team_name, team_slug,
+    /// team_reputation, league_name, league_slug). Prefers the club's main
+    /// team; falls back to the first team. The id may also be a sub-team id:
+    /// satellite clubs (e.g. "Spartak Moscow 2") are folded into their parent
+    /// by the compiler, so a history spell at one is referenced by an id that
+    /// only exists in some club's teams[] — those resolve to that specific
+    /// team rather than the parent's main squad. Missing ids return empty
+    /// strings so the page still renders the stats row with no links.
+    fn club_display(&self, club_id: u32) -> (String, String, u16, String, String) {
+        let Some(club) = self.club_by_id(club_id) else {
+            if let Some((_, team)) = self.team_by_id(club_id) {
+                let (league_name, league_slug) = team
+                    .league_id
+                    .and_then(|lid| self.league_by_id(lid))
+                    .map(|l| (l.name.clone(), l.slug.clone()))
+                    .unwrap_or_default();
+                return (
+                    team.name.clone(),
+                    team.slug.clone(),
+                    team.reputation.world,
+                    league_name,
+                    league_slug,
+                );
+            }
+            // Not a club this database models. Careers span the whole football
+            // world, so this is the normal case for about a third of history
+            // rows — Schalke, SPAL, Jong Ajax. The compiled `history_clubs`
+            // table names them; the slug stays empty because there is no page
+            // to link to, and the template already renders an unlinked name in
+            // that case.
+            return (
+                self.history_club_name(club_id)
+                    .unwrap_or_default()
+                    .to_string(),
+                String::new(),
+                0,
+                String::new(),
+                String::new(),
+            );
+        };
+
+        // Prefer the "Main" team; fall back to the first listed team.
+        let team = club
+            .teams
+            .iter()
+            .find(|t| t.team_type.eq_ignore_ascii_case("Main"))
+            .or_else(|| club.teams.first());
+
+        let (team_slug, team_reputation, league_id) = match team {
+            Some(t) => (t.slug.clone(), t.reputation.world, t.league_id),
+            None => (String::new(), 0, None),
+        };
+
+        let (league_name, league_slug) = league_id
+            .and_then(|lid| self.league_by_id(lid))
+            .map(|l| (l.name.clone(), l.slug.clone()))
+            .unwrap_or_default();
+
+        (
+            club.name.clone(),
+            team_slug,
+            team_reputation,
+            league_name,
+            league_slug,
+        )
+    }
 }
 
 impl PositionType {
@@ -2146,10 +2369,10 @@ pub struct OdbPositionCode;
 impl OdbPositionCode {
     /// The position group the record's STRONGEST listed position falls in
     /// — the same "primary position" reading hydration performs when it
-    /// sorts `positions_from_odb` by level, descending. Records with no
+    /// sorts [`Self::positions`] by level, descending. Records with no
     /// parseable code fall back to midfield, exactly as hydration does.
     pub fn group(positions: &[OdbPosition]) -> PlayerFieldPositionGroup {
-        // FIRST maximum, not the last: `positions_from_odb` sorts by level
+        // FIRST maximum, not the last: `Self::positions` sorts by level
         // with a STABLE sort and the runtime reads the front, so record
         // order breaks a tie there. `max_by_key` breaks it the other way,
         // which quietly filed every equally-rated two-position player under
@@ -2158,7 +2381,7 @@ impl OdbPositionCode {
         // against the wrong group.
         positions
             .iter()
-            .filter_map(|p| parse_position_code(&p.code).map(|pt| (p.level, pt)))
+            .filter_map(|p| Self::parse(&p.code).map(|pt| (p.level, pt)))
             .fold(
                 None,
                 |best: Option<(u8, PlayerPositionType)>, candidate| match best {
@@ -2169,342 +2392,379 @@ impl OdbPositionCode {
             .map(|(_, pt)| pt.position_group())
             .unwrap_or(PlayerFieldPositionGroup::Midfielder)
     }
-}
 
-fn parse_position_code(code: &str) -> Option<PlayerPositionType> {
-    Some(match code.to_ascii_uppercase().as_str() {
-        "GK" => PlayerPositionType::Goalkeeper,
-        "SW" => PlayerPositionType::Sweeper,
-        "DL" => PlayerPositionType::DefenderLeft,
-        "DCL" => PlayerPositionType::DefenderCenterLeft,
-        "DC" => PlayerPositionType::DefenderCenter,
-        "DCR" => PlayerPositionType::DefenderCenterRight,
-        "DR" => PlayerPositionType::DefenderRight,
-        "DM" => PlayerPositionType::DefensiveMidfielder,
-        "ML" => PlayerPositionType::MidfielderLeft,
-        "MCL" => PlayerPositionType::MidfielderCenterLeft,
-        "MC" => PlayerPositionType::MidfielderCenter,
-        "MCR" => PlayerPositionType::MidfielderCenterRight,
-        "MR" => PlayerPositionType::MidfielderRight,
-        "AML" => PlayerPositionType::AttackingMidfielderLeft,
-        "AMC" => PlayerPositionType::AttackingMidfielderCenter,
-        "AMR" => PlayerPositionType::AttackingMidfielderRight,
-        "WBL" => PlayerPositionType::WingbackLeft,
-        "WBR" => PlayerPositionType::WingbackRight,
-        "ST" => PlayerPositionType::Striker,
-        "FL" => PlayerPositionType::ForwardLeft,
-        "FC" => PlayerPositionType::ForwardCenter,
-        "FR" => PlayerPositionType::ForwardRight,
-        _ => return None,
-    })
-}
-
-fn positions_from_odb(player_id: u32, odb_positions: &[OdbPosition]) -> PlayerPositions {
-    let mut positions: Vec<PlayerPosition> = Vec::with_capacity(odb_positions.len());
-    for p in odb_positions {
-        match parse_position_code(&p.code) {
-            Some(pt) => positions.push(PlayerPosition {
-                position: pt,
-                level: p.level.clamp(1, 20),
-            }),
-            None => warn!(
-                "player {}: unknown position code '{}' skipped",
-                player_id, p.code
-            ),
-        }
-    }
-    if positions.is_empty() {
-        warn!(
-            "player {}: no usable position codes, defaulting to MC",
-            player_id
-        );
-        positions.push(PlayerPosition {
-            position: PlayerPositionType::MidfielderCenter,
-            level: 20,
-        });
-    }
-    // Strongest first. The hydrator's primary pick and the runtime's
-    // `PlayerPositions::primary()` both read from the front, and record
-    // order isn't guaranteed to lead with the main role — a GK listed
-    // second would otherwise hydrate as an outfielder with no GK skills.
-    // Stable sort keeps record order between equal levels.
-    positions.sort_by_key(|p| Reverse(p.level));
-    PlayerPositions { positions }
-}
-
-fn parse_preferred_foot(s: Option<&str>) -> PlayerPreferredFoot {
-    match s.map(|v| v.to_ascii_lowercase()).as_deref() {
-        Some("left") => PlayerPreferredFoot::Left,
-        Some("both") | Some("either") => PlayerPreferredFoot::Both,
-        _ => PlayerPreferredFoot::Right,
-    }
-}
-
-fn parse_contract_type(s: Option<&str>) -> ContractType {
-    match s.map(|v| v.to_ascii_lowercase()).as_deref() {
-        Some("parttime") | Some("part-time") | Some("part_time") => ContractType::PartTime,
-        Some("youth") => ContractType::Youth,
-        Some("amateur") => ContractType::Amateur,
-        Some("noncontract") | Some("non-contract") | Some("non_contract") => {
-            ContractType::NonContract
-        }
-        Some("loan") => ContractType::Loan,
-        _ => ContractType::FullTime,
-    }
-}
-
-fn build_full_name(record: &OdbPlayer) -> FullName {
-    let first = record.first_name.clone();
-    let last = record.last_name.clone();
-    match (record.middle_name.as_ref(), record.nickname.as_ref()) {
-        (None, Some(nick)) => FullName::with_nickname(first, last, nick.clone()),
-        _ => FullName::new(first, last),
-    }
-}
-
-fn build_main_contract(
-    record: &OdbPlayer,
-    age: u32,
-    primary: PlayerPositionType,
-    data: &DatabaseEntity,
-) -> Option<PlayerClubContract> {
-    // Free-agent records have no active contract — leave the player
-    // contract-less so the free-agent flows treat them as available.
-    let src = record.contract.as_ref()?;
-    let salary = match src.salary {
-        Some(s) if s > 0 => s,
-        _ => default_annual_salary(record, age, primary, data),
-    };
-    let mut c = PlayerClubContract {
-        shirt_number: src.shirt_number,
-        salary,
-        contract_type: parse_contract_type(src.contract_type.as_deref()),
-        squad_status: core::PlayerSquadStatus::NotYetSet,
-        is_transfer_listed: false,
-        transfer_status: None,
-        started: src.started,
-        expiration: src.expiration,
-        loan_from_club_id: None,
-        loan_from_team_id: None,
-        loan_to_club_id: None,
-        loan_match_fee: None,
-        loan_wage_contribution_pct: None,
-        loan_future_fee: None,
-        loan_future_fee_obligation: false,
-        loan_recall_available_after: None,
-        loan_min_appearances: None,
-        bonuses: vec![],
-        clauses: vec![],
-        last_yearly_rise_year: None,
-        last_loyalty_paid_year: None,
-        signing_bonus_paid: false,
-        promised_squad_status: None,
-    };
-    // If currently loaned out, the main contract retains parent terms but
-    // records the borrower via loan_to_club_id so the value/wage code knows.
-    if let Some(ref loan) = record.loan {
-        c.loan_to_club_id = Some(loan.to_club_id);
-    }
-    Some(c)
-}
-
-/// Default-fill an annual salary using the same wage curve the runtime uses
-/// for renewals and personal-terms. Resolves club + league reputation from
-/// the loaded entity tree; missing pieces fall back to neutral mid-tier
-/// values so the formula still produces a sane number for satellite clubs
-/// or records pointing at an unknown club_id.
-fn default_annual_salary(
-    record: &OdbPlayer,
-    age: u32,
-    primary: PlayerPositionType,
-    data: &DatabaseEntity,
-) -> u32 {
-    let club = data.club_by_id(record.club_id);
-    let main_team = club.and_then(|c| {
-        c.teams
-            .iter()
-            .find(|t| t.team_type.eq_ignore_ascii_case("Main"))
-    });
-    let team_rep = main_team.map(|t| t.reputation.world).unwrap_or(1500);
-    // 0..1 normalised club reputation, mirrors TeamReputation::overall_score
-    // closely enough for an initial wage anchor.
-    let club_reputation_score = (team_rep as f32 / 10000.0).clamp(0.0, 1.0);
-
-    let league_id = main_team.and_then(|t| t.league_id);
-    let league_reputation = league_id
-        .and_then(|id| data.league_by_id(id))
-        .map(|l| l.reputation)
-        .unwrap_or(1500);
-
-    // Player reputation: prefer the explicit current rep on the record, else
-    // derive an approximation from CA so the wage curve still tilts toward
-    // higher-quality players when the scrape didn't capture reputation.
-    let current_reputation = record
-        .reputation
-        .as_ref()
-        .and_then(|r| r.current)
-        .unwrap_or_else(|| (record.current_ability as i16) * 8);
-
-    use core::PlayerPositionType as Pp;
-    let is_forward = matches!(
-        primary,
-        Pp::Striker
-            | Pp::ForwardLeft
-            | Pp::ForwardCenter
-            | Pp::ForwardRight
-            | Pp::AttackingMidfielderCenter
-    );
-    let is_goalkeeper = matches!(primary, Pp::Goalkeeper);
-
-    WageCalculator::expected_annual_wage_raw(
-        record.current_ability,
-        current_reputation,
-        is_forward,
-        is_goalkeeper,
-        age.min(u8::MAX as u32) as u8,
-        club_reputation_score,
-        league_reputation,
-    )
-}
-
-fn build_loan_contract(record: &OdbPlayer, data: &DatabaseEntity) -> Option<PlayerClubContract> {
-    let loan = record.loan.as_ref()?;
-    // Anchor the loan-out on the parent club's Reserve team rather than
-    // the Main squad, so the player shows up in the reserve squad page
-    // (via the loaned-out scanner) while physically playing at the
-    // borrower. Fall back to B → U23/U21/U20/U19/U18 → Main in that
-    // order for clubs that don't have a Reserve team.
-    const TEAM_PRIORITY: [&str; 8] = ["Reserve", "B", "U23", "U21", "U20", "U19", "U18", "Main"];
-    let loan_from_team_id = data.club_by_id(record.club_id).and_then(|c| {
-        TEAM_PRIORITY.iter().find_map(|preferred| {
-            c.teams
-                .iter()
-                .find(|t| t.team_type.eq_ignore_ascii_case(preferred))
-                .map(|t| t.id)
-        })
-    });
-    // Loan-leg salary defaults to the borrower's share of the parent contract
-    // when the data omits it (loan blocks scraped without a wage figure).
-    let loan_salary = match loan.salary {
-        Some(s) if s > 0 => s,
-        _ => {
-            let parent_salary = record.contract.as_ref().and_then(|c| c.salary).unwrap_or(0);
-            if parent_salary > 0 {
-                WageCalculator::loan_wage_split(parent_salary).0
-            } else {
-                0
+    pub fn positions(player_id: u32, odb_positions: &[OdbPosition]) -> PlayerPositions {
+        let mut positions: Vec<PlayerPosition> = Vec::with_capacity(odb_positions.len());
+        for p in odb_positions {
+            match Self::parse(&p.code) {
+                Some(pt) => positions.push(PlayerPosition {
+                    position: pt,
+                    level: p.level.clamp(1, 20),
+                }),
+                None => warn!(
+                    "player {}: unknown position code '{}' skipped",
+                    player_id, p.code
+                ),
             }
         }
-    };
-    Some(PlayerClubContract {
-        shirt_number: None,
-        salary: loan_salary,
-        contract_type: ContractType::Loan,
-        squad_status: core::PlayerSquadStatus::NotYetSet,
-        is_transfer_listed: false,
-        transfer_status: None,
-        started: None,
-        expiration: loan.expiration,
-        loan_from_club_id: Some(record.club_id),
-        loan_from_team_id,
-        loan_to_club_id: Some(loan.to_club_id),
-        loan_match_fee: loan.match_fee,
-        loan_wage_contribution_pct: loan.wage_contribution_pct,
-        loan_future_fee: loan.future_fee,
-        loan_future_fee_obligation: loan.future_fee_obligation,
-        loan_recall_available_after: None,
-        loan_min_appearances: loan.min_appearances,
-        bonuses: vec![],
-        clauses: vec![],
-        last_yearly_rise_year: None,
-        last_loyalty_paid_year: None,
-        signing_bonus_paid: false,
-        promised_squad_status: None,
-    })
+        if positions.is_empty() {
+            warn!(
+                "player {}: no usable position codes, defaulting to MC",
+                player_id
+            );
+            positions.push(PlayerPosition {
+                position: PlayerPositionType::MidfielderCenter,
+                level: 20,
+            });
+        }
+        // Strongest first. The hydrator's primary pick and the runtime's
+        // `PlayerPositions::primary()` both read from the front, and record
+        // order isn't guaranteed to lead with the main role — a GK listed
+        // second would otherwise hydrate as an outfielder with no GK skills.
+        // Stable sort keeps record order between equal levels.
+        positions.sort_by_key(|p| Reverse(p.level));
+        PlayerPositions { positions }
+    }
+
+    pub fn parse(code: &str) -> Option<PlayerPositionType> {
+        Some(match code.to_ascii_uppercase().as_str() {
+            "GK" => PlayerPositionType::Goalkeeper,
+            "SW" => PlayerPositionType::Sweeper,
+            "DL" => PlayerPositionType::DefenderLeft,
+            "DCL" => PlayerPositionType::DefenderCenterLeft,
+            "DC" => PlayerPositionType::DefenderCenter,
+            "DCR" => PlayerPositionType::DefenderCenterRight,
+            "DR" => PlayerPositionType::DefenderRight,
+            "DM" => PlayerPositionType::DefensiveMidfielder,
+            "ML" => PlayerPositionType::MidfielderLeft,
+            "MCL" => PlayerPositionType::MidfielderCenterLeft,
+            "MC" => PlayerPositionType::MidfielderCenter,
+            "MCR" => PlayerPositionType::MidfielderCenterRight,
+            "MR" => PlayerPositionType::MidfielderRight,
+            "AML" => PlayerPositionType::AttackingMidfielderLeft,
+            "AMC" => PlayerPositionType::AttackingMidfielderCenter,
+            "AMR" => PlayerPositionType::AttackingMidfielderRight,
+            "WBL" => PlayerPositionType::WingbackLeft,
+            "WBR" => PlayerPositionType::WingbackRight,
+            "ST" => PlayerPositionType::Striker,
+            "FL" => PlayerPositionType::ForwardLeft,
+            "FC" => PlayerPositionType::ForwardCenter,
+            "FR" => PlayerPositionType::ForwardRight,
+            _ => return None,
+        })
+    }
 }
 
-fn build_player_attributes(
-    record: &OdbPlayer,
+/// The scrape's preferred-foot label. Owns the label vocabulary so the
+/// hydrator and any future source read one parser.
+struct OdbPreferredFoot;
+
+impl OdbPreferredFoot {
+    fn parse(label: Option<&str>) -> PlayerPreferredFoot {
+        match label.map(|v| v.to_ascii_lowercase()).as_deref() {
+            Some("left") => PlayerPreferredFoot::Left,
+            Some("both") | Some("either") => PlayerPreferredFoot::Both,
+            _ => PlayerPreferredFoot::Right,
+        }
+    }
+}
+
+/// Hydrates the ODB contract and loan blocks, including the default salary
+/// the scrape omits. Keeps the contract vocabulary and wage fallback on one
+/// named type instead of a family of free helpers.
+struct ContractHydrator<'a> {
+    record: &'a OdbPlayer,
+    data: &'a DatabaseEntity,
+}
+
+impl<'a> ContractHydrator<'a> {
+    fn new(record: &'a OdbPlayer, data: &'a DatabaseEntity) -> Self {
+        Self { record, data }
+    }
+
+    fn main(&self, age: u32, primary: PlayerPositionType) -> Option<PlayerClubContract> {
+        // Free-agent records have no active contract — leave the player
+        // contract-less so the free-agent flows treat them as available.
+        let src = self.record.contract.as_ref()?;
+        let salary = match src.salary {
+            Some(s) if s > 0 => s,
+            _ => self.annual_salary(age, primary),
+        };
+        let mut c = PlayerClubContract {
+            shirt_number: src.shirt_number,
+            salary,
+            contract_type: Self::contract_type(src.contract_type.as_deref()),
+            squad_status: core::PlayerSquadStatus::NotYetSet,
+            is_transfer_listed: false,
+            transfer_status: None,
+            started: src.started,
+            expiration: src.expiration,
+            loan_from_club_id: None,
+            loan_from_team_id: None,
+            loan_to_club_id: None,
+            loan_match_fee: None,
+            loan_wage_contribution_pct: None,
+            loan_future_fee: None,
+            loan_future_fee_obligation: false,
+            loan_recall_available_after: None,
+            loan_min_appearances: None,
+            bonuses: vec![],
+            clauses: vec![],
+            last_yearly_rise_year: None,
+            last_loyalty_paid_year: None,
+            signing_bonus_paid: false,
+            promised_squad_status: None,
+        };
+        // If currently loaned out, the main contract retains parent terms but
+        // records the borrower via loan_to_club_id so the value/wage code knows.
+        if let Some(ref loan) = self.record.loan {
+            c.loan_to_club_id = Some(loan.to_club_id);
+        }
+        Some(c)
+    }
+
+    /// Default-fill an annual salary using the same wage curve the runtime
+    /// uses for renewals and personal-terms. Resolves club + league
+    /// reputation from the loaded entity tree; missing pieces fall back to
+    /// neutral mid-tier values so the formula still produces a sane number
+    /// for satellite clubs or records pointing at an unknown club_id.
+    fn annual_salary(&self, age: u32, primary: PlayerPositionType) -> u32 {
+        let club = self.data.club_by_id(self.record.club_id);
+        let main_team = club.and_then(|c| {
+            c.teams
+                .iter()
+                .find(|t| t.team_type.eq_ignore_ascii_case("Main"))
+        });
+        let team_rep = main_team.map(|t| t.reputation.world).unwrap_or(1500);
+        // 0..1 normalised club reputation, mirrors TeamReputation::overall_score
+        // closely enough for an initial wage anchor.
+        let club_reputation_score = (team_rep as f32 / 10000.0).clamp(0.0, 1.0);
+
+        let league_id = main_team.and_then(|t| t.league_id);
+        let league_reputation = league_id
+            .and_then(|id| self.data.league_by_id(id))
+            .map(|l| l.reputation)
+            .unwrap_or(1500);
+
+        // Player reputation: prefer the explicit current rep on the record,
+        // else derive an approximation from CA so the wage curve still tilts
+        // toward higher-quality players when the scrape didn't capture
+        // reputation.
+        let current_reputation = self
+            .record
+            .reputation
+            .as_ref()
+            .and_then(|r| r.current)
+            .unwrap_or_else(|| (self.record.current_ability as i16) * 8);
+
+        use core::PlayerPositionType as Pp;
+        let is_forward = matches!(
+            primary,
+            Pp::Striker
+                | Pp::ForwardLeft
+                | Pp::ForwardCenter
+                | Pp::ForwardRight
+                | Pp::AttackingMidfielderCenter
+        );
+        let is_goalkeeper = matches!(primary, Pp::Goalkeeper);
+
+        WageCalculator::expected_annual_wage_raw(
+            self.record.current_ability,
+            current_reputation,
+            is_forward,
+            is_goalkeeper,
+            age.min(u8::MAX as u32) as u8,
+            club_reputation_score,
+            league_reputation,
+        )
+    }
+
+    fn loan(&self) -> Option<PlayerClubContract> {
+        let loan = self.record.loan.as_ref()?;
+        // Anchor the loan-out on the parent club's Reserve team rather than
+        // the Main squad, so the player shows up in the reserve squad page
+        // (via the loaned-out scanner) while physically playing at the
+        // borrower. Fall back to B → U23/U21/U20/U19/U18 → Main in that
+        // order for clubs that don't have a Reserve team.
+        const TEAM_PRIORITY: [&str; 8] =
+            ["Reserve", "B", "U23", "U21", "U20", "U19", "U18", "Main"];
+        let loan_from_team_id = self.data.club_by_id(self.record.club_id).and_then(|c| {
+            TEAM_PRIORITY.iter().find_map(|preferred| {
+                c.teams
+                    .iter()
+                    .find(|t| t.team_type.eq_ignore_ascii_case(preferred))
+                    .map(|t| t.id)
+            })
+        });
+        // Loan-leg salary defaults to the borrower's share of the parent
+        // contract when the data omits it (loan blocks scraped without a
+        // wage figure).
+        let loan_salary = match loan.salary {
+            Some(s) if s > 0 => s,
+            _ => {
+                let parent_salary = self
+                    .record
+                    .contract
+                    .as_ref()
+                    .and_then(|c| c.salary)
+                    .unwrap_or(0);
+                if parent_salary > 0 {
+                    WageCalculator::loan_wage_split(parent_salary).0
+                } else {
+                    0
+                }
+            }
+        };
+        Some(PlayerClubContract {
+            shirt_number: None,
+            salary: loan_salary,
+            contract_type: ContractType::Loan,
+            squad_status: core::PlayerSquadStatus::NotYetSet,
+            is_transfer_listed: false,
+            transfer_status: None,
+            started: None,
+            expiration: loan.expiration,
+            loan_from_club_id: Some(self.record.club_id),
+            loan_from_team_id,
+            loan_to_club_id: Some(loan.to_club_id),
+            loan_match_fee: loan.match_fee,
+            loan_wage_contribution_pct: loan.wage_contribution_pct,
+            loan_future_fee: loan.future_fee,
+            loan_future_fee_obligation: loan.future_fee_obligation,
+            loan_recall_available_after: None,
+            loan_min_appearances: loan.min_appearances,
+            bonuses: vec![],
+            clauses: vec![],
+            last_yearly_rise_year: None,
+            last_loyalty_paid_year: None,
+            signing_bonus_paid: false,
+            promised_squad_status: None,
+        })
+    }
+
+    fn contract_type(label: Option<&str>) -> ContractType {
+        match label.map(|v| v.to_ascii_lowercase()).as_deref() {
+            Some("parttime") | Some("part-time") | Some("part_time") => ContractType::PartTime,
+            Some("youth") => ContractType::Youth,
+            Some("amateur") => ContractType::Amateur,
+            Some("noncontract") | Some("non-contract") | Some("non_contract") => {
+                ContractType::NonContract
+            }
+            Some("loan") => ContractType::Loan,
+            _ => ContractType::FullTime,
+        }
+    }
+}
+
+/// Hydrates `PlayerAttributes` from the record, with ability-curve fallbacks
+/// for every reputation or contract field the scrape omitted.
+struct PlayerAttributeHydrator<'a> {
+    record: &'a OdbPlayer,
     record_ca: u8,
     age: u32,
     primary: PlayerPositionType,
-    skills: &PlayerSkills,
+    skills: &'a PlayerSkills,
     potential_ability: u8,
-    rng: &mut HydrationRng,
-) -> PlayerAttributes {
-    // Reputation: any record-supplied value wins for its own field;
-    // every missing field falls back to an ability-curve derivation so
-    // partial overrides (e.g. a scraper that only captured world fame)
-    // still produce coherent home/current numbers.
-    let derived_ca = skills.calculate_ability_for_position(primary);
-    let reputation_ca = if record_ca == 0 {
-        derived_ca
-    } else {
-        record_ca
-    };
-    let derived = ReputationStanding::for_ability(reputation_ca);
-    let (derived_current, derived_home, derived_world) =
-        (derived.current, derived.home, derived.world);
-    let (current_rep, home_rep, world_rep) = match record.reputation.as_ref() {
-        Some(r) => (
-            r.current.unwrap_or(derived_current),
-            r.home.unwrap_or(derived_home),
-            r.world.unwrap_or(derived_world),
-        ),
-        None => (derived_current, derived_home, derived_world),
-    };
+    rng: &'a mut HydrationRng,
+}
 
-    // Scaled CA can drift a couple of points off target after rescaling;
-    // pull the recorded value back in so downstream code (squad status,
-    // value calc) sees what the ODB intended. A larger drift means the
-    // generator could not realise the recorded value — keep the derived
-    // number but say so, since silently altering authoritative data hides
-    // both data problems and generator regressions.
-    let current_ability = if record_ca == 0 {
-        derived_ca
-    } else if (derived_ca as i32 - record_ca as i32).abs() <= ODB_CA_DRIFT {
-        record_ca
-    } else {
-        warn!(
-            "player {}: recorded CA {} not reachable from generated skills (derived {}), keeping derived",
-            record.id, record_ca, derived_ca
-        );
-        derived_ca
-    };
-    let potential_ability = potential_ability.max(current_ability);
+impl<'a> PlayerAttributeHydrator<'a> {
+    fn new(
+        record: &'a OdbPlayer,
+        record_ca: u8,
+        age: u32,
+        primary: PlayerPositionType,
+        skills: &'a PlayerSkills,
+        potential_ability: u8,
+        rng: &'a mut HydrationRng,
+    ) -> Self {
+        Self {
+            record,
+            record_ca,
+            age,
+            primary,
+            skills,
+            potential_ability,
+            rng,
+        }
+    }
 
-    let physical = PhysicalProfile::for_position(primary, record.country_id, rng);
-    let state = FitnessState::for_age(age, rng);
-    let caps = record.international.unwrap_or_default();
+    fn build(self) -> PlayerAttributes {
+        // Reputation: any record-supplied value wins for its own field;
+        // every missing field falls back to an ability-curve derivation so
+        // partial overrides (e.g. a scraper that only captured world fame)
+        // still produce coherent home/current numbers.
+        let derived_ca = self.skills.calculate_ability_for_position(self.primary);
+        let reputation_ca = if self.record_ca == 0 {
+            derived_ca
+        } else {
+            self.record_ca
+        };
+        let derived = ReputationStanding::for_ability(reputation_ca);
+        let (derived_current, derived_home, derived_world) =
+            (derived.current, derived.home, derived.world);
+        let (current_rep, home_rep, world_rep) = match self.record.reputation.as_ref() {
+            Some(r) => (
+                r.current.unwrap_or(derived_current),
+                r.home.unwrap_or(derived_home),
+                r.world.unwrap_or(derived_world),
+            ),
+            None => (derived_current, derived_home, derived_world),
+        };
 
-    PlayerAttributes {
-        is_banned: false,
-        is_injured: false,
-        condition: state.condition,
-        fitness: state.fitness,
-        jadedness: state.jadedness,
-        weight: record.weight.unwrap_or(physical.weight_kg),
-        height: record.height.unwrap_or(physical.height_cm),
-        value: record.value.unwrap_or(0),
-        current_reputation: current_rep,
-        home_reputation: home_rep,
-        world_reputation: world_rep,
-        current_ability,
-        ability_marker: 0,
-        ability_marked_on_day: 0,
-        potential_ability,
-        international_apps: caps.apps,
-        international_goals: caps.goals,
-        under_21_international_apps: caps.u21_apps,
-        under_21_international_goals: caps.u21_goals,
-        injury_days_remaining: 0,
-        injury_type: None,
-        injury_proneness: (rng.int_range(1, 10) + rng.int_range(1, 10)) as u8,
-        recovery_days_remaining: 0,
-        last_injury_body_part: 0,
-        injury_count: 0,
-        days_since_last_match: 0,
-        discipline: Default::default(),
+        // Scaled CA can drift a couple of points off target after rescaling;
+        // pull the recorded value back in so downstream code (squad status,
+        // value calc) sees what the ODB intended. A larger drift means the
+        // generator could not realise the recorded value — keep the derived
+        // number but say so, since silently altering authoritative data hides
+        // both data problems and generator regressions.
+        let current_ability = if self.record_ca == 0 {
+            derived_ca
+        } else if (derived_ca as i32 - self.record_ca as i32).abs() <= ODB_CA_DRIFT {
+            self.record_ca
+        } else {
+            warn!(
+                "player {}: recorded CA {} not reachable from generated skills (derived {}), keeping derived",
+                self.record.id, self.record_ca, derived_ca
+            );
+            derived_ca
+        };
+        let potential_ability = self.potential_ability.max(current_ability);
+
+        let physical =
+            PhysicalProfile::for_position(self.primary, self.record.country_id, &mut *self.rng);
+        let state = FitnessState::for_age(self.age, &mut *self.rng);
+        let caps = self.record.international.unwrap_or_default();
+
+        PlayerAttributes {
+            is_banned: false,
+            is_injured: false,
+            condition: state.condition,
+            fitness: state.fitness,
+            jadedness: state.jadedness,
+            weight: self.record.weight.unwrap_or(physical.weight_kg),
+            height: self.record.height.unwrap_or(physical.height_cm),
+            value: self.record.value.unwrap_or(0),
+            current_reputation: current_rep,
+            home_reputation: home_rep,
+            world_reputation: world_rep,
+            current_ability,
+            ability_marker: 0,
+            ability_marked_on_day: 0,
+            potential_ability,
+            international_apps: caps.apps,
+            international_goals: caps.goals,
+            under_21_international_apps: caps.u21_apps,
+            under_21_international_goals: caps.u21_goals,
+            injury_days_remaining: 0,
+            injury_type: None,
+            injury_proneness: (self.rng.int_range(1, 10) + self.rng.int_range(1, 10)) as u8,
+            recovery_days_remaining: 0,
+            last_injury_body_part: 0,
+            injury_count: 0,
+            days_since_last_match: 0,
+            discipline: Default::default(),
+        }
     }
 }
 
@@ -4090,7 +4350,7 @@ mod odb_hydration_tests {
     #[test]
     fn history_at_an_unmodelled_club_still_names_it() {
         let data = crate::DatabaseLoader::load();
-        let (name, slug, reputation, league_name, league_slug) = resolve_club_display(1569, &data); // Celtic
+        let (name, slug, reputation, league_name, league_slug) = data.club_display(1569); // Celtic
         assert_eq!(name, "Celtic");
         assert!(slug.is_empty(), "an unmodelled club has no page to link to");
         assert_eq!(reputation, 0);
@@ -4102,7 +4362,7 @@ mod odb_hydration_tests {
     #[test]
     fn history_at_a_wholly_unknown_club_stays_empty() {
         let data = crate::DatabaseLoader::load();
-        let (name, slug, ..) = resolve_club_display(4_000_000_001, &data);
+        let (name, slug, ..) = data.club_display(4_000_000_001);
         assert!(name.is_empty() && slug.is_empty());
     }
 

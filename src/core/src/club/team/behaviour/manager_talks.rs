@@ -15,7 +15,6 @@ use crate::club::player::happiness::{PlayingTimeFrustrationConfig, PlayingTimeOp
 use crate::club::player::interaction::{InteractionTone, InteractionTopic};
 use crate::club::player::mind::{CareerArc, MindClock};
 use crate::club::staff::CoachPlayerBond;
-use crate::club::team::behaviour::topic_for_talk;
 use crate::club::team::behaviour::{
     ContractTermination, ManagerTalkResult, ManagerTalkType, PraiseGrounds, TeamBehaviourResult,
 };
@@ -32,17 +31,49 @@ use log::debug;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Reverse;
 
+impl Player {
+    fn talk_success_chance(&self, manager: &Staff) -> f32 {
+        let player = self;
+        let man_management = manager.staff_attributes.mental.man_management as f32;
+        let motivating = manager.staff_attributes.mental.motivating as f32;
+        let temperament = player.attributes.temperament;
+        let professionalism = player.attributes.professionalism;
+        let loyalty = player.attributes.loyalty;
+
+        // Relationship bonus from existing relationship.
+        let relationship_bonus = player
+            .relations
+            .get_staff(manager.id)
+            .map(|r| (r.level / 100.0) * 0.2)
+            .unwrap_or(0.0);
+
+        // Rapport, kept-promise track record, and lived experience of the
+        // coach's competence move success_chance on top of the raw attribute
+        // formula. Trusted coaches have an easier time landing every kind of
+        // talk; an exposed coach (low credibility, broken promises) is
+        // fighting uphill.
+        let rapport_score = player.rapport.score(manager.id) as f32;
+        let rapport_chance = (rapport_score / 400.0).clamp(-0.125, 0.25);
+        let promise_chance = player.happiness.factors.promise_trust / 100.0;
+        let credibility_chance = player.happiness.factors.coach_credibility / 120.0;
+
+        (0.5 + man_management / 40.0 + motivating / 60.0 - temperament / 60.0
+            + professionalism / 80.0
+            + loyalty / 80.0
+            + relationship_bonus
+            + rapport_chance
+            + promise_chance
+            + credibility_chance)
+            .clamp(0.1, 0.95)
+    }
+}
+
 impl TeamBehaviour {
     /// How close a man has to be to the deadline he gave his own plan
     /// before he takes it to the manager. Half of it: he asks while
     /// there is still time for an answer, not once it has run out.
     const PLAN_TALK_PRESSURE: f32 = 0.5;
 
-    /// Date-aware. The interaction-log cooldown gate needs the
-    /// simulation date so re-asking the same player about the same topic
-    /// is throttled; pass `None` only from contexts where date isn't
-    /// known and you accept that the cooldown gate becomes a no-op.
-    #[expect(clippy::too_many_lines)]
     pub(super) fn process_manager_player_talks_dated(
         players: &PlayerCollection,
         staffs: &StaffCollection,
@@ -52,143 +83,177 @@ impl TeamBehaviour {
         // Head-coach lookup: Manager → CaretakerManager → AssistantManager →
         // FirstTeamCoach → Coach. A caretaker / assistant can run morale and
         // preventive talks while the manager seat is open.
-        let manager = match staffs.social_head_coach() {
-            Some(m) => m,
-            None => return,
+        let Some(manager) = staffs.social_head_coach() else {
+            return;
         };
 
-        // Identify players who need talks, sorted by priority
-        let mut talk_candidates: Vec<(u32, ManagerTalkType, u8)> = Vec::new(); // (player_id, type, priority)
+        let candidates = Self::collect_talk_candidates(players, manager, today);
+        let candidates = Self::cool_and_dedup_talk_candidates(candidates, players, today);
 
-        for player in &players.players {
-            // Highest priority: transfer request
-            if player.statuses.has(PlayerStatusType::Req) {
-                talk_candidates.push((player.id, ManagerTalkType::TransferDiscussion, 100));
-            }
-
-            // High priority: unhappy players. A player the club is moving
-            // on has had his conversation — he was told he is not in the
-            // plans when he was listed — and the market owns him now. The
-            // weekly playing-time talk would otherwise promise him
-            // minutes the manager cannot give, and every successful one
-            // clears his unhappiness, so the six-month clock behind his
-            // own transfer request never completes — seventeen promises
-            // in a season to a keeper the board has listed three times.
-            if player.statuses.has(PlayerStatusType::Unh) && !player.is_being_moved_on() {
-                // Decide between playing time talk and morale talk
-                let talk_type = if player.happiness.factors.playing_time < -5.0 {
-                    ManagerTalkType::PlayingTimeTalk
-                } else {
-                    ManagerTalkType::MoraleTalk
-                };
-                talk_candidates.push((player.id, talk_type, 90));
-            }
-
-            // Player-requested private talk: an unanswered
-            // `AskedForPrivateTalk` routes straight into this week's
-            // queue, above everything except a formal transfer request
-            // (a Req player's conversation is already the transfer
-            // discussion). Priority ≥ 90 also bypasses the topic-
-            // cooldown gate, so the knock on the door gets answered.
-            if let Some(date) = today
-                && !player.statuses.has(PlayerStatusType::Req)
-                && let Some(reason) = PrivateTalkInbox::pending_reason(player, date)
-            {
-                talk_candidates.push((
-                    player.id,
-                    PrivateTalkInbox::talk_type_for(reason, player),
-                    95,
-                ));
-            }
-
-            // Proactive: coach talks to high-ability players showing early playing time
-            // frustration BEFORE they become fully unhappy — persuade them to stay patient.
-            // Only for players with developed skills (CA >= 80).
-            let ability = player.player_attributes.current_ability;
-            if ability >= 80
-                && player.happiness.factors.playing_time < -3.0
-                && !player.statuses.has(PlayerStatusType::Unh)
-                && !player.statuses.has(PlayerStatusType::Req)
-            {
-                // Higher ability = higher priority for proactive talk
-                let priority = 75 + (ability.saturating_sub(80) / 10).min(15);
-                talk_candidates.push((player.id, ManagerTalkType::PlayingTimeTalk, priority));
-            }
-
-            // Medium priority: very low morale
-            if player.happiness.morale < 30.0
-                && !player.statuses.has(PlayerStatusType::Unh)
-                && !player.statuses.has(PlayerStatusType::Req)
-            {
-                talk_candidates.push((player.id, ManagerTalkType::Motivational, 70));
-            }
-
-            // Discipline for poor behaviour + high ability
-            if player.behaviour.is_poor() && player.player_attributes.current_ability > 100 {
-                talk_candidates.push((player.id, ManagerTalkType::Discipline, 60));
-            }
-
-            let mgr_motivating = manager.staff_attributes.mental.motivating;
-            let mgr_discipline = manager.staff_attributes.mental.discipline;
-
-            // A word for the man who has earned one. What the manager can
-            // point to decides whether the conversation happens at all and
-            // what it is about — a run of form, or the way he has been
-            // training. Nothing to point to, no praise.
-            if let Some(grounds) = PraiseGrounds::read(player)
-                && player.happiness.morale < grounds.morale_ceiling()
-            {
-                talk_candidates.push((
-                    player.id,
-                    ManagerTalkType::Praise,
-                    grounds.talk_priority(mgr_motivating),
-                ));
-            }
-
-            // Form-driven discipline — gate on the manager's personality.
-            // A strong disciplinarian spots slumps. Read the regressed
-            // form so a single stinker doesn't summon a meeting after
-            // three games.
-            let pos = player.position().position_group();
-            let form = player.statistics.average_rating_realistic(pos);
-            let apps = player.statistics.played + player.statistics.played_subs;
-            if apps >= 3
-                && mgr_discipline >= 14
-                && form > 0.0
-                && form < 5.5
-                && player.player_attributes.current_ability >= 70
-            {
-                talk_candidates.push((player.id, ManagerTalkType::Discipline, 55));
-            }
-
-            // Polish task #5: conflict-risk gated preventive talks. The
-            // bond's `conflict_risk` reads across staff relation,
-            // promise track-record, low rapport, low authority and
-            // personality controversy — so a player whose risk has
-            // crept above 0.65 is showing the warning signs of a
-            // dressing-room incident before anything formal has
-            // happened. Catch it early.
-            if let Some(date) = today {
-                let bond = CoachPlayerBond::build(player, manager, date);
-                if let Some(candidate) =
-                    ConflictTalkGate::candidate_for(player.id, bond.conflict_risk)
-                {
-                    talk_candidates.push(candidate);
-                }
+        // Max 4 talks per week, +1 emergency slot for influential players.
+        for (player_id, talk_type, _) in candidates.iter().take(5) {
+            if let Some(player) = players.find(*player_id) {
+                let talk_result = Self::conduct_manager_talk(manager, player, talk_type.clone());
+                result.manager_talks.push(talk_result);
             }
         }
+    }
 
-        // Sort by priority (highest first)
+    fn collect_talk_candidates(
+        players: &PlayerCollection,
+        manager: &Staff,
+        today: Option<NaiveDate>,
+    ) -> Vec<(u32, ManagerTalkType, u8)> {
+        let mut talk_candidates: Vec<(u32, ManagerTalkType, u8)> = Vec::new();
+        for player in &players.players {
+            Self::add_status_talk_candidates(player, today, &mut talk_candidates);
+            Self::add_read_talk_candidates(player, manager, today, &mut talk_candidates);
+        }
+        talk_candidates
+    }
+
+    /// Status-driven conversations: transfer requests, unhappiness, the
+    /// player's own knock on the door, and preventive morale work.
+    fn add_status_talk_candidates(
+        player: &Player,
+        today: Option<NaiveDate>,
+        talk_candidates: &mut Vec<(u32, ManagerTalkType, u8)>,
+    ) {
+        // Highest priority: transfer request.
+        if player.statuses.has(PlayerStatusType::Req) {
+            talk_candidates.push((player.id, ManagerTalkType::TransferDiscussion, 100));
+        }
+
+        // High priority: unhappy players. A player the club is moving on has
+        // had his conversation — he was told he is not in the plans when he
+        // was listed — and the market owns him now. The weekly playing-time
+        // talk would otherwise promise him minutes the manager cannot give,
+        // and every successful one clears his unhappiness, so the six-month
+        // clock behind his own transfer request never completes — seventeen
+        // promises in a season to a keeper the board has listed three times.
+        if player.statuses.has(PlayerStatusType::Unh) && !player.is_being_moved_on() {
+            let talk_type = if player.happiness.factors.playing_time < -5.0 {
+                ManagerTalkType::PlayingTimeTalk
+            } else {
+                ManagerTalkType::MoraleTalk
+            };
+            talk_candidates.push((player.id, talk_type, 90));
+        }
+
+        // Player-requested private talk: an unanswered
+        // `AskedForPrivateTalk` routes straight into this week's queue, above
+        // everything except a formal transfer request (a Req player's
+        // conversation is already the transfer discussion). Priority ≥ 90
+        // also bypasses the topic-cooldown gate, so the knock on the door
+        // gets answered.
+        if let Some(date) = today
+            && !player.statuses.has(PlayerStatusType::Req)
+            && let Some(reason) = PrivateTalkInbox::pending_reason(player, date)
+        {
+            talk_candidates.push((
+                player.id,
+                PrivateTalkInbox::talk_type_for(reason, player),
+                95,
+            ));
+        }
+
+        // Proactive: coach talks to high-ability players showing early
+        // playing-time frustration BEFORE they become fully unhappy —
+        // persuade them to stay patient. Only for developed players (CA >=
+        // 80).
+        let ability = player.player_attributes.current_ability;
+        if ability >= 80
+            && player.happiness.factors.playing_time < -3.0
+            && !player.statuses.has(PlayerStatusType::Unh)
+            && !player.statuses.has(PlayerStatusType::Req)
+        {
+            let priority = 75 + (ability.saturating_sub(80) / 10).min(15);
+            talk_candidates.push((player.id, ManagerTalkType::PlayingTimeTalk, priority));
+        }
+
+        // Medium priority: very low morale.
+        if player.happiness.morale < 30.0
+            && !player.statuses.has(PlayerStatusType::Unh)
+            && !player.statuses.has(PlayerStatusType::Req)
+        {
+            talk_candidates.push((player.id, ManagerTalkType::Motivational, 70));
+        }
+    }
+
+    /// Conversations read from the manager's own tendencies and the player's
+    /// form, praise grounds, and conflict risk.
+    fn add_read_talk_candidates(
+        player: &Player,
+        manager: &Staff,
+        today: Option<NaiveDate>,
+        talk_candidates: &mut Vec<(u32, ManagerTalkType, u8)>,
+    ) {
+        // Discipline for poor behaviour + high ability.
+        if player.behaviour.is_poor() && player.player_attributes.current_ability > 100 {
+            talk_candidates.push((player.id, ManagerTalkType::Discipline, 60));
+        }
+
+        let mgr_motivating = manager.staff_attributes.mental.motivating;
+        let mgr_discipline = manager.staff_attributes.mental.discipline;
+
+        // A word for the man who has earned one. What the manager can point
+        // to decides whether the conversation happens at all and what it is
+        // about — a run of form, or the way he has been training. Nothing to
+        // point to, no praise.
+        if let Some(grounds) = PraiseGrounds::read(player)
+            && player.happiness.morale < grounds.morale_ceiling()
+        {
+            talk_candidates.push((
+                player.id,
+                ManagerTalkType::Praise,
+                grounds.talk_priority(mgr_motivating),
+            ));
+        }
+
+        // Form-driven discipline — gate on the manager's personality. A
+        // strong disciplinarian spots slumps. Read the regressed form so a
+        // single stinker doesn't summon a meeting after three games.
+        let pos = player.position().position_group();
+        let form = player.statistics.average_rating_realistic(pos);
+        let apps = player.statistics.played + player.statistics.played_subs;
+        if apps >= 3
+            && mgr_discipline >= 14
+            && form > 0.0
+            && form < 5.5
+            && player.player_attributes.current_ability >= 70
+        {
+            talk_candidates.push((player.id, ManagerTalkType::Discipline, 55));
+        }
+
+        // Conflict-risk gated preventive talks. The bond's `conflict_risk`
+        // reads across staff relation, promise track-record, low rapport, low
+        // authority and personality controversy — so a player whose risk has
+        // crept above 0.65 is showing the warning signs of a dressing-room
+        // incident before anything formal has happened. Catch it early.
+        if let Some(date) = today {
+            let bond = CoachPlayerBond::build(player, manager, date);
+            if let Some(candidate) = ConflictTalkGate::candidate_for(player.id, bond.conflict_risk)
+            {
+                talk_candidates.push(candidate);
+            }
+        }
+    }
+
+    fn cool_and_dedup_talk_candidates(
+        mut talk_candidates: Vec<(u32, ManagerTalkType, u8)>,
+        players: &PlayerCollection,
+        today: Option<NaiveDate>,
+    ) -> Vec<(u32, ManagerTalkType, u8)> {
+        // Sort by priority (highest first).
         talk_candidates.sort_by_key(|c| Reverse(c.2));
 
-        // Cooldown gate — drop a candidate if the same topic for the
-        // same player is still on cooldown from a previous talk. We
-        // can't deduplicate solely on (player, talk_type) because
-        // different talk_types map to the same topic; we collapse via
-        // `topic_for_talk`. Only emergency talks (priority ≥ 90) may
-        // bypass the cooldown so genuinely unhappy players still get
-        // attention.
-        let cooled: Vec<(u32, ManagerTalkType, u8)> = talk_candidates
+        // Cooldown gate — drop a candidate if the same topic for the same
+        // player is still on cooldown from a previous talk. We can't
+        // deduplicate solely on (player, talk_type) because different
+        // talk_types map to the same topic; we collapse via the topic. Only
+        // emergency talks (priority ≥ 90) may bypass the cooldown so
+        // genuinely unhappy players still get attention.
+        let mut cooled: Vec<(u32, ManagerTalkType, u8)> = talk_candidates
             .into_iter()
             .filter(|(player_id, talk_type, priority)| {
                 if *priority >= 90 {
@@ -198,17 +263,16 @@ impl TeamBehaviour {
                 let Some(player) = players.find(*player_id) else {
                     return true;
                 };
-                let topic = topic_for_talk(talk_type.clone());
+                let topic = talk_type.topic();
                 !player.interactions.topic_on_cooldown(topic, date)
             })
             .collect();
 
         // Dedup so we never emit two talks of the same topic to the same
         // player in one weekly batch.
-        let mut talk_candidates = cooled;
         let mut seen: Vec<(u32, InteractionTopic)> = Vec::new();
-        talk_candidates.retain(|(player_id, talk_type, _)| {
-            let topic = topic_for_talk(talk_type.clone());
+        cooled.retain(|(player_id, talk_type, _)| {
+            let topic = talk_type.topic();
             if seen
                 .iter()
                 .any(|(pid, t)| *pid == *player_id && *t == topic)
@@ -218,61 +282,21 @@ impl TeamBehaviour {
             seen.push((*player_id, topic));
             true
         });
-
-        // Max 4 talks per week, +1 emergency slot for influential players
-        for (player_id, talk_type, _) in talk_candidates.iter().take(5) {
-            if let Some(player) = players.find(*player_id) {
-                let talk_result = Self::conduct_manager_talk(manager, player, talk_type.clone());
-                result.manager_talks.push(talk_result);
-            }
-        }
+        cooled
     }
 
-    #[expect(clippy::too_many_lines)]
     fn conduct_manager_talk(
         manager: &Staff,
         player: &Player,
         talk_type: ManagerTalkType,
     ) -> ManagerTalkResult {
-        // Success chance formula
-        let man_management = manager.staff_attributes.mental.man_management as f32;
-        let motivating = manager.staff_attributes.mental.motivating as f32;
-        let discipline = manager.staff_attributes.mental.discipline as f32;
-        let temperament = player.attributes.temperament;
-        let professionalism = player.attributes.professionalism;
-        let loyalty = player.attributes.loyalty;
-
-        // Relationship bonus from existing relationship
-        let relationship_bonus = player
-            .relations
-            .get_staff(manager.id)
-            .map(|r| (r.level / 100.0) * 0.2)
-            .unwrap_or(0.0);
-
-        // Rapport, kept-promise track record, and lived experience of
-        // the coach's competence move success_chance on top of the raw
-        // attribute formula. Trusted coaches have an easier time
-        // landing every kind of talk; an exposed coach (low credibility,
-        // broken promises) is fighting uphill.
-        let rapport_score = player.rapport.score(manager.id) as f32;
-        let rapport_chance = (rapport_score / 400.0).clamp(-0.125, 0.25);
-        let promise_chance = player.happiness.factors.promise_trust / 100.0;
-        let credibility_chance = player.happiness.factors.coach_credibility / 120.0;
-
-        let success_chance = (0.5 + man_management / 40.0 + motivating / 60.0 - temperament / 60.0
-            + professionalism / 80.0
-            + loyalty / 80.0
-            + relationship_bonus
-            + rapport_chance
-            + promise_chance
-            + credibility_chance)
-            .clamp(0.1, 0.95);
-
+        let success_chance = player.talk_success_chance(manager);
         let success = RandomEngine::gen_f32() < success_chance;
 
-        // For transfer discussion, the talk going well doesn't guarantee the coach
-        // agrees to consider a sale — there's only a 30% chance of that. Either way
-        // the request stands: what ends it is a move, or his reasons going away.
+        // For transfer discussion, the talk going well doesn't guarantee the
+        // coach agrees to consider a sale — there's only a 30% chance of
+        // that. Either way the request stands: what ends it is a move, or his
+        // reasons going away.
         let actual_success = if talk_type == ManagerTalkType::TransferDiscussion && success {
             RandomEngine::gen_f32() < 0.3
         } else {
@@ -281,19 +305,21 @@ impl TeamBehaviour {
 
         // Pick a tone based on talk_type + manager personality. A
         // discipline-heavy coach reaches for Authoritarian; a high
-        // man-management coach for Supportive. Honest framing engages
-        // when the underlying squad situation contradicts a successful
-        // outcome — e.g. "you'll play more" for a player at the bottom
-        // of the depth chart. The picker prefers honesty when the
-        // manager has high man_management; weak coaches lie.
-        let topic = topic_for_talk(talk_type.clone());
-        let tone = pick_tone(&talk_type, manager, player);
+        // man-management coach for Supportive. Honest framing engages when
+        // the underlying squad situation contradicts a successful outcome —
+        // e.g. "you'll play more" for a player at the bottom of the depth
+        // chart. The picker prefers honesty when the manager has high
+        // man_management; weak coaches lie.
+        let topic = talk_type.topic();
+        let tone = manager.pick_tone_for(&talk_type, player);
         let credibility =
             player.promise_credibility(ManagerPromiseKind::PlayingTime, Some(manager.id));
+        let man_management = manager.staff_attributes.mental.man_management as f32;
+        let discipline = manager.staff_attributes.mental.discipline as f32;
 
-        // Honest framing if the talk is a "you'll play more" / "we'll
-        // sort it out" promise but the squad situation makes that hard
-        // to deliver, AND the manager is honest enough to admit it.
+        // Honest framing if the talk is a "you'll play more" / "we'll sort it
+        // out" promise but the squad situation makes that hard to deliver,
+        // AND the manager is honest enough to admit it.
         let promise_topic = matches!(
             topic,
             InteractionTopic::PlayingTime
@@ -303,34 +329,12 @@ impl TeamBehaviour {
         let honest_framing =
             promise_topic && credibility < 50 && (man_management + discipline) / 2.0 >= 12.0;
 
-        // Outcomes — base table.
-        let (mut morale_change, mut relationship_change) = match (&talk_type, actual_success) {
-            (ManagerTalkType::PlayingTimeTalk, true) => (10.0, 0.3),
-            (ManagerTalkType::PlayingTimeTalk, false) => (-5.0, -0.1),
-            (ManagerTalkType::MoraleTalk, true) => (8.0, 0.3),
-            (ManagerTalkType::MoraleTalk, false) => (-3.0, -0.2),
-            (ManagerTalkType::TransferDiscussion, true) => (5.0, 0.2),
-            (ManagerTalkType::TransferDiscussion, false) => (0.0, 0.0),
-            // The honest answer to a man the club is moving on carries no
-            // lift and no promise; what it costs him lands as the
-            // told-not-in-plans event when the result is applied.
-            (ManagerTalkType::MovingOnTalk, _) => (0.0, 0.0),
-            (ManagerTalkType::Praise, true) => (5.0, 0.5),
-            (ManagerTalkType::Praise, false) => (1.0, 0.1),
-            (ManagerTalkType::Discipline, true) => (-3.0, 0.1),
-            (ManagerTalkType::Discipline, false) => (-8.0, -0.5),
-            (ManagerTalkType::Motivational, true) => (6.0, 0.2),
-            (ManagerTalkType::Motivational, false) => (-2.0, -0.1),
-            (ManagerTalkType::PlayingTimeRequest, true) => (8.0, 0.3),
-            (ManagerTalkType::PlayingTimeRequest, false) => (-5.0, -0.2),
-            (ManagerTalkType::LoanRequest, true) => (5.0, 0.2),
-            (ManagerTalkType::LoanRequest, false) => (-3.0, -0.1),
-        };
+        let (mut morale_change, mut relationship_change) =
+            Self::manager_talk_base_outcome(&talk_type, actual_success);
 
-        // Credibility scaling for promise-bearing successful talks. A
-        // promise the player half-believed lifts morale less; a
-        // not-credible promise barely helps and primes a hard fall when
-        // it breaks.
+        // Credibility scaling for promise-bearing successful talks. A promise
+        // the player half-believed lifts morale less; a not-credible promise
+        // barely helps and primes a hard fall when it breaks.
         if actual_success && promise_topic {
             let cred_factor = 0.4 + (credibility as f32 / 100.0) * 0.8; // 0.4..1.2
             morale_change *= cred_factor;
@@ -344,18 +348,18 @@ impl TeamBehaviour {
 
         // Tone modifier: matching tone with player personality lifts the
         // outcome; mismatch dampens or backfires.
-        let (tone_morale_mul, tone_rel_mul) = tone_modifier(tone, player);
+        let (tone_morale_mul, tone_rel_mul) = player.tone_modifier(tone);
         morale_change *= tone_morale_mul;
         relationship_change *= tone_rel_mul;
 
         // Rapport reception — praise from a trusted coach lands harder,
-        // criticism from an untrusted coach lands much harder. Decide
-        // tone from the *outcome* (morale_change sign) rather than the
-        // talk type alone: a failed playing-time talk that drops morale
-        // should read as criticism even though the talk type is
-        // nominally "positive". Discipline always reads negative unless
-        // the disciplined player ended up morale-positive (rare — e.g.
-        // a pro who wanted clear standards).
+        // criticism from an untrusted coach lands much harder. Decide tone
+        // from the *outcome* (morale_change sign) rather than the talk type
+        // alone: a failed playing-time talk that drops morale should read as
+        // criticism even though the talk type is nominally "positive".
+        // Discipline always reads negative unless the disciplined player
+        // ended up morale-positive (rare — e.g. a pro who wanted clear
+        // standards).
         let positive_tone = if matches!(talk_type, ManagerTalkType::Discipline) {
             morale_change > 0.0
         } else {
@@ -387,6 +391,31 @@ impl TeamBehaviour {
             tone,
             honest_framing,
             mood_before: player.happiness.morale,
+        }
+    }
+
+    fn manager_talk_base_outcome(talk_type: &ManagerTalkType, actual_success: bool) -> (f32, f32) {
+        match (talk_type, actual_success) {
+            (ManagerTalkType::PlayingTimeTalk, true) => (10.0, 0.3),
+            (ManagerTalkType::PlayingTimeTalk, false) => (-5.0, -0.1),
+            (ManagerTalkType::MoraleTalk, true) => (8.0, 0.3),
+            (ManagerTalkType::MoraleTalk, false) => (-3.0, -0.2),
+            (ManagerTalkType::TransferDiscussion, true) => (5.0, 0.2),
+            (ManagerTalkType::TransferDiscussion, false) => (0.0, 0.0),
+            // The honest answer to a man the club is moving on carries no
+            // lift and no promise; what it costs him lands as the
+            // told-not-in-plans event when the result is applied.
+            (ManagerTalkType::MovingOnTalk, _) => (0.0, 0.0),
+            (ManagerTalkType::Praise, true) => (5.0, 0.5),
+            (ManagerTalkType::Praise, false) => (1.0, 0.1),
+            (ManagerTalkType::Discipline, true) => (-3.0, 0.1),
+            (ManagerTalkType::Discipline, false) => (-8.0, -0.5),
+            (ManagerTalkType::Motivational, true) => (6.0, 0.2),
+            (ManagerTalkType::Motivational, false) => (-2.0, -0.1),
+            (ManagerTalkType::PlayingTimeRequest, true) => (8.0, 0.3),
+            (ManagerTalkType::PlayingTimeRequest, false) => (-5.0, -0.2),
+            (ManagerTalkType::LoanRequest, true) => (5.0, 0.2),
+            (ManagerTalkType::LoanRequest, false) => (-3.0, -0.1),
         }
     }
 
@@ -499,7 +528,7 @@ impl TeamBehaviour {
                     _ => None,
                 };
                 if let Some(talk) = talk {
-                    let topic = topic_for_talk(talk.clone());
+                    let topic = talk.topic();
                     if !player.interactions.topic_on_cooldown(topic, current_date) {
                         // He pushes with what he holds it at, and the
                         // deadline he gave himself sharpens it.
@@ -547,7 +576,7 @@ impl TeamBehaviour {
                 // would head it every week until one was refused.
                 if player
                     .interactions
-                    .topic_on_cooldown(topic_for_talk(talk_type.clone()), current_date)
+                    .topic_on_cooldown(talk_type.topic(), current_date)
                 {
                     continue;
                 }
@@ -856,7 +885,7 @@ impl TeamBehaviour {
                 .talk_reception_multiplier(manager.id, positive_tone);
             morale_change *= rapport_mult;
 
-            let tone = pick_tone(&talk_type, manager, player);
+            let tone = manager.pick_tone_for(&talk_type, player);
             ManagerTalkResult {
                 player_id: player.id,
                 staff_id: manager.id,
@@ -1084,104 +1113,110 @@ impl ComplaintPlayingTime {
     }
 }
 
-/// Choose a tone for a manager-player talk based on the talk type and
-/// the manager's mental attributes. The picker prefers tones the
-/// manager is comfortable with: a high-discipline coach reaches for
-/// `Authoritarian`, a high-man-management coach for `Supportive`. The
-/// player's personality isn't a hard gate here — the *modifier* below
-/// applies the matchup penalty instead.
-fn pick_tone(talk_type: &ManagerTalkType, manager: &Staff, _player: &Player) -> InteractionTone {
-    let man_mgmt = manager.staff_attributes.mental.man_management;
-    let discipline = manager.staff_attributes.mental.discipline;
-    let motivating = manager.staff_attributes.mental.motivating;
+impl Staff {
+    /// Choose a tone for a manager-player talk based on the talk type and
+    /// the manager's mental attributes. The picker prefers tones the
+    /// manager is comfortable with: a high-discipline coach reaches for
+    /// `Authoritarian`, a high-man-management coach for `Supportive`. The
+    /// player's personality isn't a hard gate here — the *modifier* below
+    /// applies the matchup penalty instead.
+    fn pick_tone_for(&self, talk_type: &ManagerTalkType, _player: &Player) -> InteractionTone {
+        let manager = self;
+        let man_mgmt = manager.staff_attributes.mental.man_management;
+        let discipline = manager.staff_attributes.mental.discipline;
+        let motivating = manager.staff_attributes.mental.motivating;
 
-    match talk_type {
-        ManagerTalkType::Discipline => {
-            if discipline >= 15 {
-                InteractionTone::Authoritarian
-            } else {
-                InteractionTone::Demanding
+        match talk_type {
+            ManagerTalkType::Discipline => {
+                if discipline >= 15 {
+                    InteractionTone::Authoritarian
+                } else {
+                    InteractionTone::Demanding
+                }
             }
-        }
-        ManagerTalkType::Praise => {
-            if motivating >= 14 {
-                InteractionTone::Supportive
-            } else {
-                InteractionTone::Calm
+            ManagerTalkType::Praise => {
+                if motivating >= 14 {
+                    InteractionTone::Supportive
+                } else {
+                    InteractionTone::Calm
+                }
             }
-        }
-        ManagerTalkType::Motivational => {
-            if motivating >= 14 {
-                InteractionTone::Supportive
-            } else if discipline >= 14 {
-                InteractionTone::Demanding
-            } else {
-                InteractionTone::Calm
+            ManagerTalkType::Motivational => {
+                if motivating >= 14 {
+                    InteractionTone::Supportive
+                } else if discipline >= 14 {
+                    InteractionTone::Demanding
+                } else {
+                    InteractionTone::Calm
+                }
             }
-        }
-        ManagerTalkType::PlayingTimeTalk
-        | ManagerTalkType::PlayingTimeRequest
-        | ManagerTalkType::TransferDiscussion
-        | ManagerTalkType::MovingOnTalk
-        | ManagerTalkType::LoanRequest => {
-            if man_mgmt >= 15 {
-                InteractionTone::Honest
-            } else if man_mgmt >= 11 {
-                InteractionTone::Calm
-            } else {
-                InteractionTone::Evasive
+            ManagerTalkType::PlayingTimeTalk
+            | ManagerTalkType::PlayingTimeRequest
+            | ManagerTalkType::TransferDiscussion
+            | ManagerTalkType::MovingOnTalk
+            | ManagerTalkType::LoanRequest => {
+                if man_mgmt >= 15 {
+                    InteractionTone::Honest
+                } else if man_mgmt >= 11 {
+                    InteractionTone::Calm
+                } else {
+                    InteractionTone::Evasive
+                }
             }
-        }
-        ManagerTalkType::MoraleTalk => {
-            if man_mgmt >= 13 {
-                InteractionTone::Supportive
-            } else {
-                InteractionTone::Calm
+            ManagerTalkType::MoraleTalk => {
+                if man_mgmt >= 13 {
+                    InteractionTone::Supportive
+                } else {
+                    InteractionTone::Calm
+                }
             }
         }
     }
 }
 
-/// Multipliers applied to (morale_change, relationship_change) given the
-/// chosen tone and the player's personality. Approximations of how each
-/// player type reacts: hot-headed temperaments rebel against
-/// authoritarian, low-pressure personalities retreat under demanding,
-/// honest tones land regardless of personality, evasive tones always
-/// blunt morale and corrode rapport.
-fn tone_modifier(tone: InteractionTone, player: &Player) -> (f32, f32) {
-    let temperament = player.attributes.temperament;
-    let pressure = player.attributes.pressure;
-    let professionalism = player.attributes.professionalism;
-    match tone {
-        InteractionTone::Calm => (1.0, 1.0),
-        InteractionTone::Demanding => {
-            if professionalism >= 14.0 {
-                (1.1, 1.05)
-            } else if pressure <= 8.0 {
-                (0.7, 0.7)
-            } else {
-                (0.95, 0.9)
+impl Player {
+    /// Multipliers applied to (morale_change, relationship_change) given the
+    /// chosen tone and the player's personality. Approximations of how each
+    /// player type reacts: hot-headed temperaments rebel against
+    /// authoritarian, low-pressure personalities retreat under demanding,
+    /// honest tones land regardless of personality, evasive tones always
+    /// blunt morale and corrode rapport.
+    fn tone_modifier(&self, tone: InteractionTone) -> (f32, f32) {
+        let player = self;
+        let temperament = player.attributes.temperament;
+        let pressure = player.attributes.pressure;
+        let professionalism = player.attributes.professionalism;
+        match tone {
+            InteractionTone::Calm => (1.0, 1.0),
+            InteractionTone::Demanding => {
+                if professionalism >= 14.0 {
+                    (1.1, 1.05)
+                } else if pressure <= 8.0 {
+                    (0.7, 0.7)
+                } else {
+                    (0.95, 0.9)
+                }
             }
-        }
-        InteractionTone::Supportive => {
-            if pressure <= 10.0 {
-                (1.15, 1.1)
-            } else {
-                (1.05, 1.05)
+            InteractionTone::Supportive => {
+                if pressure <= 10.0 {
+                    (1.15, 1.1)
+                } else {
+                    (1.05, 1.05)
+                }
             }
-        }
-        InteractionTone::Honest => (0.9, 1.2),
-        InteractionTone::Evasive => (0.6, 0.5),
-        InteractionTone::Authoritarian => {
-            if temperament <= 8.0 {
-                (0.7, 0.5)
-            } else if professionalism >= 15.0 {
-                (1.05, 0.95)
-            } else {
-                (0.85, 0.8)
+            InteractionTone::Honest => (0.9, 1.2),
+            InteractionTone::Evasive => (0.6, 0.5),
+            InteractionTone::Authoritarian => {
+                if temperament <= 8.0 {
+                    (0.7, 0.5)
+                } else if professionalism >= 15.0 {
+                    (1.05, 0.95)
+                } else {
+                    (0.85, 0.8)
+                }
             }
+            InteractionTone::Apologetic => (1.05, 1.15),
         }
-        InteractionTone::Apologetic => (1.05, 1.15),
     }
 }
 

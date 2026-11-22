@@ -45,8 +45,7 @@ use crate::worker::transport::Frame;
 use crate::worker::wire::{LeagueMatchWire, SquadFixtureWire, SquadWire};
 use core::MatchRuntime;
 use core::r#match::{
-    Match, MatchDispatcher, MatchResult, MatchResultRaw, RecordingArtifacts, Score,
-    SquadFixture,
+    Match, MatchDispatcher, MatchResult, MatchResultRaw, RecordingArtifacts, Score, SquadFixture,
 };
 use log::{debug, info, warn};
 use std::collections::{HashMap, VecDeque};
@@ -530,8 +529,7 @@ impl DistributedDispatcher {
                 "dispatch squads: {} matches unprocessed after worker failures — running locally",
                 missing.len()
             );
-            let chunk: Vec<SquadFixture> =
-                missing.iter().map(|&p| matches[p].clone()).collect();
+            let chunk: Vec<SquadFixture> = missing.iter().map(|&p| matches[p].clone()).collect();
             let local = tokio::task::spawn_blocking(move || {
                 MatchRuntime::engine_pool().play_squads_local(chunk)
             })
@@ -559,8 +557,7 @@ impl DistributedDispatcher {
                 break;
             }
             let count = indices.len();
-            let chunk: Vec<SquadFixture> =
-                indices.iter().map(|&i| matches[i].clone()).collect();
+            let chunk: Vec<SquadFixture> = indices.iter().map(|&i| matches[i].clone()).collect();
             match &slot.target {
                 Target::Local => {
                     let timer = LatencyTimer::start();

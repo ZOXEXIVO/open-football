@@ -54,7 +54,7 @@ impl TeamBehaviour {
                     .unwrap_or(0.0);
 
                 if is_senior_leader && other_age <= 22 {
-                    let mut lift = senior_leader_lift(leader, other);
+                    let mut lift = leader.senior_leader_lift_to(other);
                     // Halve further positive drift once the youngster
                     // already idolises the senior — the bond is what
                     // it is, more weeks don't make it stronger.
@@ -87,7 +87,7 @@ impl TeamBehaviour {
                     // numbers. A high-controversy player who has been
                     // quiet lately doesn't need a weekly drag.
                     let star_currently_poor = leader.behaviour.is_poor();
-                    let mut drag = controversial_clique_tension(leader, other);
+                    let mut drag = leader.controversial_clique_tension_with(other);
                     if !star_currently_poor {
                         drag *= 0.5;
                     }
@@ -117,26 +117,30 @@ impl TeamBehaviour {
     }
 }
 
-fn senior_leader_lift(leader: &Player, youngster: &Player) -> f32 {
-    let leadership = leader.skills.mental.leadership;
-    let professionalism = leader.attributes.professionalism;
-    let receptiveness = (youngster.attributes.adaptability / 20.0).max(0.4);
+impl Player {
+    fn senior_leader_lift_to(&self, youngster: &Player) -> f32 {
+        let leader = self;
+        let leadership = leader.skills.mental.leadership;
+        let professionalism = leader.attributes.professionalism;
+        let receptiveness = (youngster.attributes.adaptability / 20.0).max(0.4);
 
-    let base = (leadership - 14.0) * 0.012 + (professionalism - 14.0) * 0.008;
-    let lift = base.max(0.0) + 0.03;
-    (lift * receptiveness).clamp(0.03, 0.10)
-}
+        let base = (leadership - 14.0) * 0.012 + (professionalism - 14.0) * 0.008;
+        let lift = base.max(0.0) + 0.03;
+        (lift * receptiveness).clamp(0.03, 0.10)
+    }
 
-fn controversial_clique_tension(star: &Player, pro: &Player) -> f32 {
-    let controversy = star.attributes.controversy;
-    let star_temperament = star.attributes.temperament;
-    let pro_professionalism = pro.attributes.professionalism;
+    fn controversial_clique_tension_with(&self, pro: &Player) -> f32 {
+        let star = self;
+        let controversy = star.attributes.controversy;
+        let star_temperament = star.attributes.temperament;
+        let pro_professionalism = pro.attributes.professionalism;
 
-    // Bigger controversy + lower temperament + stronger pro reaction
-    // → bigger split. Cap as specified.
-    let base = (controversy - 14.0) * 0.02
-        + (20.0 - star_temperament).max(0.0) * 0.005
-        + (pro_professionalism - 14.0) * 0.006;
-    let drag = -(base + 0.04).max(0.04);
-    drag.clamp(-0.12, -0.04)
+        // Bigger controversy + lower temperament + stronger pro reaction
+        // → bigger split. Cap as specified.
+        let base = (controversy - 14.0) * 0.02
+            + (20.0 - star_temperament).max(0.0) * 0.005
+            + (pro_professionalism - 14.0) * 0.006;
+        let drag = -(base + 0.04).max(0.04);
+        drag.clamp(-0.12, -0.04)
+    }
 }

@@ -28,7 +28,7 @@ use crate::club::person::Person;
 use crate::club::player::PlayerUsage;
 use crate::club::player::calculators::PlayerValueCalculator;
 use crate::club::player::statistics::{FootballRecord, StuckCareerScan};
-use crate::club::staff::coach::chart::SquadDepthChart;
+use crate::club::staff::coach::chart::{ShirtDepth, SquadDepthChart};
 use crate::club::staff::coach::memory::CoachMemoryStore;
 use crate::club::staff::coach::shares::{
     PlanFloor, PlanFloorKind, ShareClimate, ShirtCandidate, ShirtShares,
@@ -199,6 +199,18 @@ impl PlayerPlanEntry {
     }
 }
 
+/// How one shirt's football is divided between the men planned for it.
+struct ShirtDivision {
+    /// Indices into the shirt's men who are promised a part of the share.
+    sharing: Vec<usize>,
+    /// The football each sharing man is given, by his index in `sharing`.
+    shares: Vec<f32>,
+    /// The floor each sharing man brought to the shirt, by the same index.
+    floors: Vec<Option<PlanFloor>>,
+    /// Sharing men whose floor could not be met.
+    unmet: Vec<usize>,
+}
+
 /// What a coach plans from: the squad in front of him, the shape he plays,
 /// and the season the club expects.
 pub struct PlanReading<'a> {
@@ -355,7 +367,6 @@ impl CoachSquadPlan {
     /// each stands with him. Never from hidden ability. Each shirt's
     /// football is then divided between the men planned for it, so the
     /// shares of a squad add up to the football its formation plays.
-    #[expect(clippy::too_many_lines)]
     pub fn revise(&mut self, reading: &PlanReading<'_>) -> Vec<(u32, PlannedRole)> {
         let today = reading.today;
         let squad: Vec<&Player> = reading.players.iter().collect();
@@ -368,119 +379,84 @@ impl CoachSquadPlan {
             today,
         );
         let by_id: FxHashMap<u32, &Player> = squad.iter().map(|p| (p.id, *p)).collect();
-        let standing_of = |id: u32| reading.memory.and_then(|store| store.standing_of(id));
+        let drafted = self.draft_entries(&chart, &by_id, reading, today);
 
+        self.commit_draft(drafted, &by_id, today, reading.tactics.tactic_type)
+    }
+
+    /// Draw every shirt of the chart into a plan entry.
+    fn draft_entries(
+        &self,
+        chart: &SquadDepthChart,
+        by_id: &FxHashMap<u32, &Player>,
+        reading: &PlanReading<'_>,
+        today: NaiveDate,
+    ) -> FxHashMap<u32, PlayerPlanEntry> {
         let mut drafted: FxHashMap<u32, PlayerPlanEntry> = FxHashMap::default();
         for depth in chart.shirts() {
-            let keeper = depth.slot == PlayerPositionType::Goalkeeper;
-            let men: Vec<&Player> = depth
-                .men
-                .iter()
-                .filter_map(|(id, _)| by_id.get(id).copied())
-                .collect();
-            let roles: Vec<(PlannedRole, Option<u32>)> = men
-                .iter()
-                .map(|player| {
-                    // The club's decision to sell him is the fact; the
-                    // coach's picture of the shirt does not argue with it.
-                    if player.is_on_the_market() {
-                        return (PlannedRole::ShopWindow, None);
-                    }
-                    let set_by_hand = self
-                        .entries
-                        .get(&player.id)
-                        .filter(|standing| standing.shirt.is_none())
-                        .map(|standing| standing.role);
-                    if let Some(role) = set_by_hand {
-                        return (role, None);
-                    }
-                    let place = chart.place_of(player.id).map(|p| p.place).unwrap_or(0);
-                    let (derived, succeeds) = Self::keeper_role(player, reading.keepers)
-                        .map(|role| (role, None))
-                        .unwrap_or_else(|| Self::derive_role(player, &chart, &by_id, today));
-                    (
-                        StandingRead::bound_role(derived, standing_of(player.id), place),
-                        succeeds,
-                    )
-                })
-                .collect();
+            for (id, entry) in self.draft_shirt(depth, by_id, chart, reading, today) {
+                drafted.insert(id, entry);
+            }
+        }
+        drafted
+    }
 
-            // A man the coach is finished with holds a place in no shirt's
-            // football. One the club is selling keeps what his place earns
-            // him, with the shop window as a floor under it, unless the
-            // coach has frozen him out: then the window is all he is given.
-            let sharing: Vec<usize> = (0..men.len())
-                .filter(|i| roles[*i].0 != PlannedRole::NotInPlans)
-                .collect();
-            let for_sale = |i: usize| roles[i].0 == PlannedRole::ShopWindow;
-            let frozen_out = |i: usize| {
-                standing_of(men[i].id)
-                    .is_some_and(|standing| standing.rung == StandingRung::FrozenOut)
-            };
-            let dividing: Vec<usize> = sharing
-                .iter()
-                .copied()
-                .filter(|i| !(for_sale(*i) && frozen_out(*i)))
-                .collect();
-            let candidates: Vec<ShirtCandidate> = dividing
-                .iter()
-                .map(|&i| ShirtCandidate {
-                    standing: depth.men[i].1,
-                    belief: PotentialEstimator::believed_growth(men[i], today),
-                })
-                .collect();
-            // The gloves are shared as the goalkeeping order declares them,
-            // where the club has one; the coach's own eye otherwise.
-            let declared: Option<Vec<f32>> = reading.keepers.filter(|_| keeper).and_then(|room| {
-                let raw: Vec<f32> = dividing
-                    .iter()
-                    .map(|&i| room.glove_share(men[i].id).unwrap_or(0.0))
-                    .collect();
-                let total: f32 = raw.iter().sum();
-                (total > 0.0).then(|| raw.iter().map(|share| share / total).collect())
-            });
-            let divided = declared
-                .unwrap_or_else(|| ShirtShares::divide(&reading.climate, &candidates, keeper));
-            let mut shares: Vec<f32> = sharing
-                .iter()
-                .map(|i| {
-                    dividing
-                        .iter()
-                        .position(|d| d == i)
-                        .map_or(0.0, |at| divided[at])
-                })
-                .collect();
-            let floors: Vec<Option<PlanFloor>> = sharing
-                .iter()
-                .map(|&i| {
-                    let window = for_sale(i)
-                        .then(|| Self::shop_window(men[i], &reading.climate, keeper))
-                        .flatten()
-                        .map(|share| {
-                            let demanded = men[i].decision_history.sale_was_demanded_by_the_board();
-                            if frozen_out(i) && !demanded {
-                                share * reading.board_hold.clamp(0.0, 1.0)
-                            } else {
-                                share
-                            }
-                        })
-                        .filter(|share| *share > 0.0)
-                        .map(|share| PlanFloor {
-                            kind: PlanFloorKind::ShopWindow,
-                            share,
-                        });
-                    PlanFloor::of(men[i], reading.coach_id, &reading.climate, today)
-                        .into_iter()
-                        .chain(window)
-                        .max_by(|a, b| a.share.total_cmp(&b.share))
-                })
-                .collect();
-            let unmet = PlanFloor::apply(&mut shares, &floors);
+    /// One shirt: who is planned for it and what share of its football he
+    /// is given.
+    fn draft_shirt(
+        &self,
+        depth: &ShirtDepth,
+        by_id: &FxHashMap<u32, &Player>,
+        chart: &SquadDepthChart,
+        reading: &PlanReading<'_>,
+        today: NaiveDate,
+    ) -> Vec<(u32, PlayerPlanEntry)> {
+        let keeper = depth.slot == PlayerPositionType::Goalkeeper;
+        let men: Vec<&Player> = depth
+            .men
+            .iter()
+            .filter_map(|(id, _)| by_id.get(id).copied())
+            .collect();
+        let roles: Vec<(PlannedRole, Option<u32>)> = men
+            .iter()
+            .map(|player| {
+                // The club's decision to sell him is the fact; the
+                // coach's picture of the shirt does not argue with it.
+                if player.is_on_the_market() {
+                    return (PlannedRole::ShopWindow, None);
+                }
+                let set_by_hand = self
+                    .entries
+                    .get(&player.id)
+                    .filter(|standing| standing.shirt.is_none())
+                    .map(|standing| standing.role);
+                if let Some(role) = set_by_hand {
+                    return (role, None);
+                }
+                let place = chart.place_of(player.id).map(|p| p.place).unwrap_or(0);
+                let (derived, succeeds) = Self::keeper_role(player, reading.keepers)
+                    .map(|role| (role, None))
+                    .unwrap_or_else(|| Self::derive_role(player, chart, by_id, today));
+                (
+                    StandingRead::bound_role(
+                        derived,
+                        reading
+                            .memory
+                            .and_then(|store| store.standing_of(player.id)),
+                        place,
+                    ),
+                    succeeds,
+                )
+            })
+            .collect();
 
-            for (i, player) in men.iter().enumerate() {
-                let slot = sharing.iter().position(|s| *s == i);
+        let division = Self::divide_shirt(&roles, &men, depth, reading, keeper, today);
+        men.iter()
+            .enumerate()
+            .map(|(i, player)| {
+                let slot = division.sharing.iter().position(|s| *s == i);
                 let (role, succeeds) = roles[i];
-                drafted.insert(
+                (
                     player.id,
                     PlayerPlanEntry {
                         role,
@@ -489,15 +465,115 @@ impl CoachSquadPlan {
                         baseline: PlayerUsage::of(player),
                         shirt: Some(depth.slot),
                         place: i.min(u8::MAX as usize) as u8,
-                        share: slot.map(|s| shares[s]).unwrap_or(0.0),
+                        share: slot.map(|s| division.shares[s]).unwrap_or(0.0),
                         unmet_floor: slot
-                            .filter(|s| unmet.contains(s))
-                            .and_then(|s| floors[s].map(|f| f.kind)),
+                            .filter(|s| division.unmet.contains(s))
+                            .and_then(|s| division.floors[s].map(|f| f.kind)),
                     },
-                );
-            }
-        }
+                )
+            })
+            .collect()
+    }
 
+    /// Split one shirt's football between the men its roles promise it to.
+    fn divide_shirt(
+        roles: &[(PlannedRole, Option<u32>)],
+        men: &[&Player],
+        depth: &ShirtDepth,
+        reading: &PlanReading<'_>,
+        keeper: bool,
+        today: NaiveDate,
+    ) -> ShirtDivision {
+        let standing_of = |id: u32| reading.memory.and_then(|store| store.standing_of(id));
+
+        // A man the coach is finished with holds a place in no shirt's
+        // football. One the club is selling keeps what his place earns
+        // him, with the shop window as a floor under it, unless the
+        // coach has frozen him out: then the window is all he is given.
+        let sharing: Vec<usize> = (0..men.len())
+            .filter(|i| roles[*i].0 != PlannedRole::NotInPlans)
+            .collect();
+        let for_sale = |i: usize| roles[i].0 == PlannedRole::ShopWindow;
+        let frozen_out = |i: usize| {
+            standing_of(men[i].id).is_some_and(|standing| standing.rung == StandingRung::FrozenOut)
+        };
+        let dividing: Vec<usize> = sharing
+            .iter()
+            .copied()
+            .filter(|i| !(for_sale(*i) && frozen_out(*i)))
+            .collect();
+        let candidates: Vec<ShirtCandidate> = dividing
+            .iter()
+            .map(|&i| ShirtCandidate {
+                standing: depth.men[i].1,
+                belief: PotentialEstimator::believed_growth(men[i], today),
+            })
+            .collect();
+        // The gloves are shared as the goalkeeping order declares them,
+        // where the club has one; the coach's own eye otherwise.
+        let declared: Option<Vec<f32>> = reading.keepers.filter(|_| keeper).and_then(|room| {
+            let raw: Vec<f32> = dividing
+                .iter()
+                .map(|&i| room.glove_share(men[i].id).unwrap_or(0.0))
+                .collect();
+            let total: f32 = raw.iter().sum();
+            (total > 0.0).then(|| raw.iter().map(|share| share / total).collect())
+        });
+        let divided =
+            declared.unwrap_or_else(|| ShirtShares::divide(&reading.climate, &candidates, keeper));
+        let mut shares: Vec<f32> = sharing
+            .iter()
+            .map(|i| {
+                dividing
+                    .iter()
+                    .position(|d| d == i)
+                    .map_or(0.0, |at| divided[at])
+            })
+            .collect();
+        let floors: Vec<Option<PlanFloor>> = sharing
+            .iter()
+            .map(|&i| {
+                let window = for_sale(i)
+                    .then(|| Self::shop_window(men[i], &reading.climate, keeper))
+                    .flatten()
+                    .map(|share| {
+                        let demanded = men[i].decision_history.sale_was_demanded_by_the_board();
+                        if frozen_out(i) && !demanded {
+                            share * reading.board_hold.clamp(0.0, 1.0)
+                        } else {
+                            share
+                        }
+                    })
+                    .filter(|share| *share > 0.0)
+                    .map(|share| PlanFloor {
+                        kind: PlanFloorKind::ShopWindow,
+                        share,
+                    });
+                PlanFloor::of(men[i], reading.coach_id, &reading.climate, today)
+                    .into_iter()
+                    .chain(window)
+                    .max_by(|a, b| a.share.total_cmp(&b.share))
+            })
+            .collect();
+        let unmet = PlanFloor::apply(&mut shares, &floors);
+
+        ShirtDivision {
+            sharing,
+            shares,
+            floors,
+            unmet,
+        }
+    }
+
+    /// Commit the drawn entries, keeping the history of every role that
+    /// did not change.
+    fn commit_draft(
+        &mut self,
+        drafted: FxHashMap<u32, PlayerPlanEntry>,
+        by_id: &FxHashMap<u32, &Player>,
+        today: NaiveDate,
+        formation: MatchTacticType,
+    ) -> Vec<(u32, PlannedRole)> {
         // A role that has not changed keeps the day it was set and the
         // ledger opened on it; only what the role is planned for moves.
         let mut changes = Vec::new();
@@ -516,7 +592,7 @@ impl CoachSquadPlan {
         self.entries.retain(|id, _| by_id.contains_key(id));
 
         self.last_revised = Some(today);
-        self.formation = Some(reading.tactics.tactic_type);
+        self.formation = Some(formation);
         changes.sort_unstable_by_key(|(id, _)| *id);
         changes
     }

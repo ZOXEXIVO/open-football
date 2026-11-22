@@ -1,5 +1,5 @@
 //! Material previews and geometry checks for the runtime home surfaces.
-use super::surface::{Pattern, Surface, catalogue};
+use super::surface::{Pattern, Style, Surface};
 use super::*;
 
 #[test]
@@ -65,7 +65,7 @@ fn upkeep_changes_condition_without_changing_style_or_geometry() {
 #[test]
 fn candidate_surfaces_are_complete_and_finite() {
     use bevy::mesh::VertexAttributeValues;
-    let catalogue = catalogue();
+    let catalogue = Style::catalogue();
     assert_eq!(catalogue.len(), 20);
     assert_eq!(
         catalogue
@@ -164,7 +164,7 @@ fn dump_field_candidates() {
         println!("{id}: {width}x{height}");
     };
     render("00", &Sward::mow(Upkeep::at(1.0), Pitch::TURF_TILE));
-    for candidate in catalogue() {
+    for candidate in Style::catalogue() {
         render(
             &format!("{:02}", candidate.id),
             &candidate.mesh(Upkeep::at(1.0)),

@@ -840,7 +840,6 @@ impl SquadReviewPass {
     // Step 2: Squad Evaluation - Coach-driven, formation-based
     // ============================================================
 
-    #[expect(clippy::too_many_lines)]
     pub fn evaluate_squads(country: &mut Country, date: NaiveDate) {
         let is_window_start = MarketCadence::is_window_start_for(&country.code, date);
         // Three cadences now reach this pass. The window ones are unchanged
@@ -862,17 +861,43 @@ impl SquadReviewPass {
         // countries got no review at all.
         let mid_season_window = MarketCadence::is_mid_season_window_for(&country.code, date);
 
-        // Pass 0 (mut): harvest the searches that died since the last meeting,
-        // BEFORE the read pass builds this tick's requests — that ordering is
-        // what lets a fresh request be raised in the voice of a club that has
-        // tried and failed before.
+        Self::harvest_failed_searches(country, date);
+
+        let evaluations = Self::collect_evaluations(
+            country,
+            date,
+            should_evaluate,
+            current_window,
+            mid_season_window,
+        );
+
+        if !evaluations.is_empty() {
+            debug!("Transfer pipeline: evaluated {} clubs", evaluations.len());
+        }
+
+        Self::apply_evaluations(country, date, is_window_start, evaluations);
+    }
+
+    /// Pass 0 — harvest the searches that died since the last meeting,
+    /// BEFORE the read pass builds this tick's requests. That ordering is
+    /// what lets a fresh request be raised in the voice of a club that has
+    /// tried and failed before.
+    fn harvest_failed_searches(country: &mut Country, date: NaiveDate) {
         for club in &mut country.clubs {
             if club.transfer_plan.initialized {
                 club.transfer_plan.harvest_failed_searches(date);
             }
         }
+    }
 
-        // Pass 1: Collect evaluations (immutable reads)
+    /// Pass 1 — collect every club's evaluation from immutable reads.
+    fn collect_evaluations(
+        country: &Country,
+        date: NaiveDate,
+        should_evaluate: bool,
+        current_window: Option<(NaiveDate, NaiveDate)>,
+        mid_season_window: bool,
+    ) -> Vec<SquadEvaluation> {
         let mut evaluations: Vec<SquadEvaluation> = Vec::new();
 
         for club in &country.clubs {
@@ -902,141 +927,183 @@ impl SquadReviewPass {
             evaluations.push(eval);
         }
 
-        if !evaluations.is_empty() {
-            debug!("Transfer pipeline: evaluated {} clubs", evaluations.len());
+        evaluations
+    }
+
+    /// Pass 2 — apply every evaluation against the mutable country.
+    fn apply_evaluations(
+        country: &mut Country,
+        date: NaiveDate,
+        is_window_start: bool,
+        evaluations: Vec<SquadEvaluation>,
+    ) {
+        for eval in evaluations {
+            Self::apply_evaluation(country, date, is_window_start, eval);
+        }
+    }
+
+    fn apply_evaluation(
+        country: &mut Country,
+        date: NaiveDate,
+        is_window_start: bool,
+        eval: SquadEvaluation,
+    ) {
+        if !eval.requests.is_empty() {
+            debug!(
+                "Transfer pipeline: Club {} has {} requests, {} loan-outs, budget={:.0}",
+                eval.club_id,
+                eval.requests.len(),
+                eval.loan_outs.len(),
+                eval.total_budget
+            );
         }
 
-        // Pass 2: Apply evaluations (mutable writes)
-        for eval in evaluations {
-            if !eval.requests.is_empty() {
-                debug!(
-                    "Transfer pipeline: Club {} has {} requests, {} loan-outs, budget={:.0}",
-                    eval.club_id,
-                    eval.requests.len(),
-                    eval.loan_outs.len(),
-                    eval.total_budget
+        if let Some(club) = country.clubs.iter_mut().find(|c| c.id == eval.club_id) {
+            Self::apply_plan_evaluation(club, date, is_window_start, eval);
+        }
+    }
+
+    fn apply_plan_evaluation(
+        club: &mut Club,
+        date: NaiveDate,
+        is_window_start: bool,
+        eval: SquadEvaluation,
+    ) {
+        let loan_outs = eval.loan_outs;
+        let plan = &mut club.transfer_plan;
+
+        // Only fully reset plans at window start or first initialization
+        if !plan.initialized || is_window_start {
+            plan.reset_for_window();
+        } else {
+            // On re-evaluation: remove completed assignments and exhausted shortlists
+            // so new requests can be scouted fresh
+            plan.scouting_assignments.retain(|a| !a.completed);
+            plan.drop_exhausted_shortlists();
+        }
+
+        plan.total_budget = eval.total_budget;
+        plan.max_concurrent_negotiations = eval.max_concurrent;
+
+        // The brief and the ledger REPLACE their predecessors rather
+        // than accumulating: they are the club's current intent and
+        // its current prices, and a stale slot is worse than none.
+        // Both survive `reset_for_window` on purpose — a brief is
+        // written six weeks ahead of the window and is exactly the
+        // preparation the reset must not throw away.
+        if let Some(brief) = eval.brief {
+            plan.brief = Some(brief);
+            plan.last_plan_date = Some(date);
+        }
+        Self::apply_sell_list(plan, eval.sell_list, date);
+
+        // Track the highest request ID so re-evaluations don't create duplicate IDs
+        if let Some(max_id) = eval.requests.iter().map(|r| r.id).max() {
+            plan.next_request_id = max_id + 1;
+        }
+
+        Self::apply_need_requests(plan, eval.vacancies, eval.requests);
+        plan.last_evaluation_date = Some(date);
+        plan.initialized = true;
+
+        // The loan-out scan's candidates are a club decision, so
+        // they are staged as one: the purpose reaches the borrower
+        // and the pathway says he is on his way out, instead of
+        // both being re-derived downstream.
+        for candidate in loan_outs {
+            club.on_pathway_loan_staged(candidate.player_id, candidate.reason, date);
+        }
+
+        Self::apply_forced_transfer_list(club, date, eval.force_transfer_list);
+    }
+
+    fn apply_sell_list(
+        plan: &mut ClubTransferPlan,
+        sell_list: Vec<SellListEntry>,
+        date: NaiveDate,
+    ) {
+        // The asset-ledger flip. Not a listing — nothing here adds
+        // `Lst` — but it is the moment the club would start
+        // answering calls about him, and the seller-side funnel had
+        // no record of it at all: a player could go from untouchable
+        // to quietly marketed with the trace showing nothing between
+        // the signing and the sale.
+        for entry in &sell_list {
+            if TransferTrace::is(entry.player_id) && entry.is_marketed() {
+                TransferTrace::line(
+                    entry.player_id,
+                    "list",
+                    format!(
+                        "pass=asset_ledger reason={:?} score={:.2} asking={:.0} \
+                         marketed=true",
+                        entry.motive, entry.score, entry.asking,
+                    ),
                 );
             }
+        }
+        plan.sell_list = sell_list;
+        plan.last_ledger_date = Some(date);
+    }
 
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == eval.club_id) {
-                let loan_outs = eval.loan_outs;
-                let plan = &mut club.transfer_plan;
+    fn apply_need_requests(
+        plan: &mut ClubTransferPlan,
+        vacancies: Vec<(u32, VacancyOutcome)>,
+        requests: Vec<TransferRequest>,
+    ) {
+        // Don't re-raise a need the plan is already working on.
+        // Without this, each weekly re-evaluation piled another
+        // "need GK" onto the list and every copy was acted on
+        // independently, so clubs loaned in ten players for one
+        // position.
+        //
+        // Matched on (group, reason) rather than group alone. A
+        // club genuinely can need two different things from the
+        // same group — cover for a hole in the XI is not the same
+        // brief as a long-term upgrade or a youngster for the
+        // future — and collapsing them meant one live request
+        // silenced every other need at that position for the whole
+        // window: a stalled centre-back pursuit stopped the club
+        // ever asking about a full-back. The reason is what the
+        // scouts and the loan market actually recruit against, so
+        // it is the right unit of duplication.
+        for (player_id, outcome) in vacancies {
+            plan.on_vacancy_reviewed(player_id, outcome);
+        }
+        // A vacancy's search is raised, or the search already open
+        // for its shirt becomes it.
+        let (replacements, ordinary): (Vec<_>, Vec<_>) = requests
+            .into_iter()
+            .partition(|request| request.reason == TransferNeedReason::Replacement);
+        for replacement in replacements {
+            plan.open_replacement_search(replacement);
+        }
+        let new_requests: Vec<_> = ordinary
+            .into_iter()
+            .filter(|new_req| {
+                !plan.transfer_requests.iter().any(|existing| {
+                    existing.position.position_group() == new_req.position.position_group()
+                        && existing.reason == new_req.reason
+                        && existing.status != TransferRequestStatus::Fulfilled
+                        && existing.status != TransferRequestStatus::Abandoned
+                })
+            })
+            .collect();
+        plan.transfer_requests.extend(new_requests);
+    }
 
-                // Only fully reset plans at window start or first initialization
-                if !plan.initialized || is_window_start {
-                    plan.reset_for_window();
-                } else {
-                    // On re-evaluation: remove completed assignments and exhausted shortlists
-                    // so new requests can be scouted fresh
-                    plan.scouting_assignments.retain(|a| !a.completed);
-                    plan.drop_exhausted_shortlists();
-                }
-
-                plan.total_budget = eval.total_budget;
-                plan.max_concurrent_negotiations = eval.max_concurrent;
-
-                // The brief and the ledger REPLACE their predecessors rather
-                // than accumulating: they are the club's current intent and
-                // its current prices, and a stale slot is worse than none.
-                // Both survive `reset_for_window` on purpose — a brief is
-                // written six weeks ahead of the window and is exactly the
-                // preparation the reset must not throw away.
-                if let Some(brief) = eval.brief {
-                    plan.brief = Some(brief);
-                    plan.last_plan_date = Some(date);
-                }
-                // The asset-ledger flip. Not a listing — nothing here adds
-                // `Lst` — but it is the moment the club would start
-                // answering calls about him, and the seller-side funnel had
-                // no record of it at all: a player could go from untouchable
-                // to quietly marketed with the trace showing nothing between
-                // the signing and the sale.
-                for entry in &eval.sell_list {
-                    if TransferTrace::is(entry.player_id) && entry.is_marketed() {
-                        TransferTrace::line(
-                            entry.player_id,
-                            "list",
-                            format!(
-                                "pass=asset_ledger reason={:?} score={:.2} asking={:.0} \
-                                 marketed=true",
-                                entry.motive, entry.score, entry.asking,
-                            ),
-                        );
-                    }
-                }
-                plan.sell_list = eval.sell_list;
-                plan.last_ledger_date = Some(date);
-
-                // Track the highest request ID so re-evaluations don't create duplicate IDs
-                if let Some(max_id) = eval.requests.iter().map(|r| r.id).max() {
-                    plan.next_request_id = max_id + 1;
-                }
-
-                // Don't re-raise a need the plan is already working on.
-                // Without this, each weekly re-evaluation piled another
-                // "need GK" onto the list and every copy was acted on
-                // independently, so clubs loaned in ten players for one
-                // position.
-                //
-                // Matched on (group, reason) rather than group alone. A
-                // club genuinely can need two different things from the
-                // same group — cover for a hole in the XI is not the same
-                // brief as a long-term upgrade or a youngster for the
-                // future — and collapsing them meant one live request
-                // silenced every other need at that position for the whole
-                // window: a stalled centre-back pursuit stopped the club
-                // ever asking about a full-back. The reason is what the
-                // scouts and the loan market actually recruit against, so
-                // it is the right unit of duplication.
-                for (player_id, outcome) in eval.vacancies {
-                    plan.on_vacancy_reviewed(player_id, outcome);
-                }
-                // A vacancy's search is raised, or the search already open
-                // for its shirt becomes it.
-                let (replacements, ordinary): (Vec<_>, Vec<_>) = eval
-                    .requests
-                    .into_iter()
-                    .partition(|request| request.reason == TransferNeedReason::Replacement);
-                for replacement in replacements {
-                    plan.open_replacement_search(replacement);
-                }
-                let new_requests: Vec<_> = ordinary
-                    .into_iter()
-                    .filter(|new_req| {
-                        !plan.transfer_requests.iter().any(|existing| {
-                            existing.position.position_group() == new_req.position.position_group()
-                                && existing.reason == new_req.reason
-                                && existing.status != TransferRequestStatus::Fulfilled
-                                && existing.status != TransferRequestStatus::Abandoned
-                        })
-                    })
-                    .collect();
-                plan.transfer_requests.extend(new_requests);
-                plan.last_evaluation_date = Some(date);
-                plan.initialized = true;
-
-                // The loan-out scan's candidates are a club decision, so
-                // they are staged as one: the purpose reaches the borrower
-                // and the pathway says he is on his way out, instead of
-                // both being re-derived downstream.
-                for candidate in loan_outs {
-                    club.on_pathway_loan_staged(candidate.player_id, candidate.reason, date);
-                }
-
-                // Apply position-glut transfer-list decisions. These
-                // write Lst directly. Cheap — usually empty; non-empty
-                // only when a club has accumulated a positional surplus
-                // (e.g. the Gzira 10-GK case).
-                if !eval.force_transfer_list.is_empty()
-                    && let Some(main_team) = club.teams.main_mut()
+    fn apply_forced_transfer_list(club: &mut Club, date: NaiveDate, players: Vec<u32>) {
+        // Apply position-glut transfer-list decisions. These
+        // write Lst directly. Cheap — usually empty; non-empty
+        // only when a club has accumulated a positional surplus
+        // (e.g. the Gzira 10-GK case).
+        if !players.is_empty()
+            && let Some(main_team) = club.teams.main_mut()
+        {
+            for player_id in players {
+                if let Some(player) = main_team.players.find_mut(player_id)
+                    && !player.statuses.has(PlayerStatusType::Lst)
                 {
-                    for player_id in eval.force_transfer_list {
-                        if let Some(player) = main_team.players.find_mut(player_id)
-                            && !player.statuses.has(PlayerStatusType::Lst)
-                        {
-                            player.statuses.add(date, PlayerStatusType::Lst);
-                        }
-                    }
+                    player.statuses.add(date, PlayerStatusType::Lst);
                 }
             }
         }
@@ -1395,7 +1462,6 @@ impl SquadReviewPass {
     /// (on-loan, manager-pinned, same-window, plan-protected, already
     /// listed / already planned for) is respected so nothing the
     /// calibration-sensitive branches decided is overridden.
-    #[expect(clippy::too_many_lines)]
     fn identify_stalled_prospects(
         squad: &[SquadPlayerInfo],
         date: NaiveDate,
@@ -1411,118 +1477,25 @@ impl SquadReviewPass {
                 continue;
             };
 
-            // ── Guards (mirror the other loan-out paths) ─────────────
-            if player.is_on_loan() {
-                continue;
-            }
-            if player.is_force_match_selection && player.contract.is_some() {
-                continue;
-            }
-            // Core / first-team protection: a key or inferred-first-team
-            // player is never routed through the stalled-prospect pathway,
-            // however thin his current minutes look.
-            if info.asset_class.is_first_team_protected() {
-                continue;
-            }
-            // International duty isn't a club decision to bench him — his
-            // missing minutes must not read as a stalled pathway.
-            if player.statuses.is_on_international_duty() {
-                continue;
-            }
-            // Already handled by an earlier pass — don't double-tag or
-            // contradict a plan (e.g. loan-listing a player marked to sell).
-            if loan_outs.iter().any(|c| c.player_id == info.player_id)
-                || force_list.contains(&info.player_id)
-            {
-                continue;
-            }
-            if player.statuses.has(PlayerStatusType::Lst)
-                || player.statuses.has(PlayerStatusType::Loa)
-            {
-                continue;
-            }
-            // Same-window signing protection.
-            if let (Some(transfer_date), Some((window_start, window_end))) =
-                (player.last_transfer_date, current_window)
-                && transfer_date >= window_start
-                && transfer_date <= window_end
-            {
-                continue;
-            }
-            // Club signing plan still under evaluation pins the player —
-            // except a development plan, where loaning IS the plan.
-            if player.signing_protection_active(date)
-                && player.plan.as_ref().map(|p| p.role) != Some(PlayerPlanRole::Development)
-            {
+            if !Self::stalled_prospect_clear(
+                info,
+                player,
+                date,
+                current_window,
+                loan_outs,
+                force_list,
+            ) {
                 continue;
             }
 
-            // ── Position-group depth / blocking picture ──────────────
-            let group = info.primary_position.position_group();
-            let group_members: Vec<&SquadPlayerInfo> = squad
-                .iter()
-                .filter(|p| p.primary_position.position_group() == group)
-                .collect();
-            let group_count = group_members.len();
-            let min_needed = Self::group_min_needed(group, formation_positions);
-
-            let mut ahead = 0usize;
-            let mut clearly_blocked = false;
-            for other in &group_members {
-                if other.player_id == info.player_id {
-                    continue;
-                }
-                if other.current_ability > info.current_ability {
-                    ahead += 1;
-                }
-                if other.current_ability
-                    >= info
-                        .current_ability
-                        .saturating_add(ProspectPathway::CLEAR_GAP)
-                {
-                    clearly_blocked = true;
-                }
-            }
-            let group_avg_ability: u8 = if group_count > 0 {
-                (group_members
-                    .iter()
-                    .map(|p| p.current_ability as u32)
-                    .sum::<u32>()
-                    / group_count as u32) as u8
-            } else {
-                info.current_ability
-            };
-
-            let contract_months_remaining = player
-                .contract
-                .as_ref()
-                .map(|c| ((c.expiration - date).num_days() / 30) as i32);
-            // Only a SHORT-contract player's renewal state can change the
-            // decision (asset-value protection), so skip the stalemate
-            // assessment entirely for everyone else.
-            let renewal_exhausted = contract_months_remaining
-                .is_some_and(|m| m <= ProspectPathway::SHORT_CONTRACT_MONTHS)
-                && Self::renewal_exhausted(player, date);
-
-            let signals = ProspectSignals {
-                age: info.age,
-                current_ability: info.current_ability,
-                estimated_potential: info.estimated_potential,
-                potential_confidence: info.potential_confidence,
-                group_avg_ability,
-                official_appearances: info.official_appearances,
-                last_season_official_games: Self::last_completed_season_official_games(player),
-                depth_rank: ahead,
-                clearly_blocked,
-                has_loanable_depth: group_count > min_needed,
-                previous_loans: Self::loan_spell_count(player),
-                failed_loans: Self::failed_loan_count(player),
-                consecutive_zero_seasons: Self::consecutive_zero_official_seasons(player),
+            let signals = Self::stalled_prospect_signals(
+                info,
+                player,
+                squad,
+                formation_positions,
+                date,
                 is_january,
-                unavailable: Self::pathway_unavailable(player),
-                contract_months_remaining,
-                renewal_exhausted,
-            };
+            );
 
             match ProspectPathway::decide(&signals) {
                 PathwayAction::Hold => {}
@@ -1557,6 +1530,138 @@ impl SquadReviewPass {
                     force_list.push(info.player_id);
                 }
             }
+        }
+    }
+
+    /// Every guard the stalled-prospect sweep mirrors from the other
+    /// loan-out paths. Returns false when the player is already handled,
+    /// protected, unavailable, or not a free squad decision.
+    fn stalled_prospect_clear(
+        info: &SquadPlayerInfo,
+        player: &Player,
+        date: NaiveDate,
+        current_window: Option<(NaiveDate, NaiveDate)>,
+        loan_outs: &[LoanOutCandidate],
+        force_list: &[u32],
+    ) -> bool {
+        // ── Guards (mirror the other loan-out paths) ─────────────
+        if player.is_on_loan() {
+            return false;
+        }
+        if player.is_force_match_selection && player.contract.is_some() {
+            return false;
+        }
+        // Core / first-team protection: a key or inferred-first-team
+        // player is never routed through the stalled-prospect pathway,
+        // however thin his current minutes look.
+        if info.asset_class.is_first_team_protected() {
+            return false;
+        }
+        // International duty isn't a club decision to bench him — his
+        // missing minutes must not read as a stalled pathway.
+        if player.statuses.is_on_international_duty() {
+            return false;
+        }
+        // Already handled by an earlier pass — don't double-tag or
+        // contradict a plan (e.g. loan-listing a player marked to sell).
+        if loan_outs.iter().any(|c| c.player_id == info.player_id)
+            || force_list.contains(&info.player_id)
+        {
+            return false;
+        }
+        if player.statuses.has(PlayerStatusType::Lst) || player.statuses.has(PlayerStatusType::Loa)
+        {
+            return false;
+        }
+        // Same-window signing protection.
+        if let (Some(transfer_date), Some((window_start, window_end))) =
+            (player.last_transfer_date, current_window)
+            && transfer_date >= window_start
+            && transfer_date <= window_end
+        {
+            return false;
+        }
+        // Club signing plan still under evaluation pins the player —
+        // except a development plan, where loaning IS the plan.
+        !(player.signing_protection_active(date)
+            && player.plan.as_ref().map(|p| p.role) != Some(PlayerPlanRole::Development))
+    }
+
+    /// The observable picture the pathway decides on: depth and blocking,
+    /// contract runway, and the player's own record.
+    fn stalled_prospect_signals(
+        info: &SquadPlayerInfo,
+        player: &Player,
+        squad: &[SquadPlayerInfo],
+        formation_positions: &[PlayerPositionType; 11],
+        date: NaiveDate,
+        is_january: bool,
+    ) -> ProspectSignals {
+        // ── Position-group depth / blocking picture ──────────────
+        let group = info.primary_position.position_group();
+        let group_members: Vec<&SquadPlayerInfo> = squad
+            .iter()
+            .filter(|p| p.primary_position.position_group() == group)
+            .collect();
+        let group_count = group_members.len();
+        let min_needed = Self::group_min_needed(group, formation_positions);
+
+        let mut ahead = 0usize;
+        let mut clearly_blocked = false;
+        for other in &group_members {
+            if other.player_id == info.player_id {
+                continue;
+            }
+            if other.current_ability > info.current_ability {
+                ahead += 1;
+            }
+            if other.current_ability
+                >= info
+                    .current_ability
+                    .saturating_add(ProspectPathway::CLEAR_GAP)
+            {
+                clearly_blocked = true;
+            }
+        }
+        let group_avg_ability: u8 = if group_count > 0 {
+            (group_members
+                .iter()
+                .map(|p| p.current_ability as u32)
+                .sum::<u32>()
+                / group_count as u32) as u8
+        } else {
+            info.current_ability
+        };
+
+        let contract_months_remaining = player
+            .contract
+            .as_ref()
+            .map(|c| ((c.expiration - date).num_days() / 30) as i32);
+        // Only a SHORT-contract player's renewal state can change the
+        // decision (asset-value protection), so skip the stalemate
+        // assessment entirely for everyone else.
+        let renewal_exhausted = contract_months_remaining
+            .is_some_and(|m| m <= ProspectPathway::SHORT_CONTRACT_MONTHS)
+            && Self::renewal_exhausted(player, date);
+
+        ProspectSignals {
+            age: info.age,
+            current_ability: info.current_ability,
+            estimated_potential: info.estimated_potential,
+            potential_confidence: info.potential_confidence,
+            group_avg_ability,
+            official_appearances: info.official_appearances,
+            last_season_official_games: Self::last_completed_season_official_games(player),
+            depth_rank: ahead,
+            clearly_blocked,
+            has_loanable_depth: group_count > min_needed,
+            previous_loans: Self::loan_spell_count(player),
+            failed_loans: Self::failed_loan_count(player),
+            consecutive_zero_seasons: Self::consecutive_zero_official_seasons(player),
+            is_january,
+            unavailable: Self::pathway_unavailable(player),
+            contract_months_remaining,
+            renewal_exhausted,
         }
     }
 

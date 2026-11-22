@@ -2,9 +2,13 @@ use crate::GameAppData;
 use axum::Router;
 use axum::routing::get;
 
-pub fn routes() -> Router<GameAppData> {
-    Router::new().route(
-        "/{lang}/teams/{team_slug}/scouting",
-        get(super::team_scouting_action),
-    )
+pub struct TeamScoutingRoutes;
+
+impl TeamScoutingRoutes {
+    pub fn router() -> Router<GameAppData> {
+        Router::new().route(
+            "/{lang}/teams/{team_slug}/scouting",
+            get(super::TeamScoutingPage::action),
+        )
+    }
 }

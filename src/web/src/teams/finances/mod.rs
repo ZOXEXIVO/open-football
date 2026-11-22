@@ -1,15 +1,16 @@
 pub mod routes;
 
-use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::leagues::address::LeagueAddress;
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::teams::newspaper::NewspaperCounter;
-use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
+use crate::teams::{TeamLookup, TeamNeighborhood};
+use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use core::SimulatorData;
 use core::utils::FormattingUtils;
+use core::{Club, ClubFinances};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -95,283 +96,324 @@ pub struct FinanceHistoryEntry {
     pub net_positive: bool,
 }
 
-#[expect(clippy::too_many_lines)]
-pub async fn team_finances_get_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<TeamFinancesGetRequest>,
-) -> ApiResult<impl IntoResponse> {
-    let guard = state.data.read().await;
+pub struct TeamFinancesPage;
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+impl TeamFinancesPage {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<TeamFinancesGetRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        let guard = state.data.read().await;
 
-    let i18n = state.i18n.for_lang(&route_params.lang);
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let team_id = simulator_data
-        .indexes
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Indexes not available".to_string()))?
-        .slug_indexes
-        .get_team_by_slug(&route_params.team_slug)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("Team '{}' not found", route_params.team_slug))
+        let i18n = state.i18n.for_lang(&route_params.lang);
+
+        let team = TeamLookup::by_slug(simulator_data, &route_params.team_slug)?;
+
+        // Finances tab only available for senior teams that compete under their
+        // own brand (Main, B, Second) — see TeamType::is_own_team.
+        if !team.team_type.is_own_team() {
+            return Err(ApiError::NotFound(
+                "Finances not available for this team type".to_string(),
+            ));
+        }
+
+        let club = simulator_data.club(team.club_id).ok_or_else(|| {
+            ApiError::InternalError(format!("Club with ID {} not found", team.club_id))
         })?;
 
-    let team = simulator_data
-        .team(team_id)
-        .ok_or_else(|| ApiError::NotFound(format!("Team with ID {} not found", team_id)))?;
-
-    // Finances tab only available for senior teams that compete under their
-    // own brand (Main, B, Second) — see TeamType::is_own_team.
-    if !team.team_type.is_own_team() {
-        return Err(ApiError::NotFound(
-            "Finances not available for this team type".to_string(),
-        ));
+        Self::template(simulator_data, team, club, i18n, &route_params)
     }
 
-    let league = team.league_id.and_then(|id| simulator_data.league(id));
+    fn template(
+        data: &core::SimulatorData,
+        team: &core::Team,
+        club: &Club,
+        i18n: I18n,
+        route_params: &TeamFinancesGetRequest,
+    ) -> Result<TeamFinancesTemplate, ApiError> {
+        let snapshot = FinanceSnapshot::of(club, &i18n);
+        let league = team.league_id.and_then(|id| data.league(id));
+        let current_path = format!("/{}/teams/{}/finances", route_params.lang, team.slug);
+        let neighborhood = TeamNeighborhood::for_club(team.club_id, data, &i18n)?;
+        let menu_sections = neighborhood.menu_sections(
+            data,
+            team.club_id,
+            &i18n,
+            &route_params.lang,
+            &current_path,
+        );
+        let title = team.name.clone();
+        let league_title = league
+            .map(|l| views::Menus::league_display_name(l, &i18n, data))
+            .unwrap_or_default();
+        let figures = snapshot.figures;
 
-    let club = simulator_data.club(team.club_id).ok_or_else(|| {
-        ApiError::InternalError(format!("Club with ID {} not found", team.club_id))
-    })?;
-
-    let finance = &club.finance;
-
-    // Current balance
-    let balance_positive = finance.balance.balance >= 0;
-    let balance = format_currency(finance.balance.balance as i64);
-
-    // Budgets
-    let transfer_budget = finance
-        .transfer_budget
-        .as_ref()
-        .map(|b| FormattingUtils::format_money(b.amount))
-        .unwrap_or_else(|| i18n.t("fin_not_set").to_string());
-
-    let wage_budget = finance
-        .wage_budget
-        .as_ref()
-        .map(|b| FormattingUtils::format_money(b.amount))
-        .unwrap_or_else(|| i18n.t("fin_not_set").to_string());
-
-    // Annual wages (sum across all teams in the club)
-    let total_annual_wages: u32 = club.teams.teams.iter().map(|t| t.get_annual_salary()).sum();
-    let annual_wages = format_currency(total_annual_wages as i64);
-
-    // Monthly income/expenses (use latest completed month from history, not in-progress month)
-    let latest_bal = finance
-        .history
-        .iter()
-        .next()
-        .map(|(_, bal)| bal)
-        .unwrap_or(&finance.balance);
-    let monthly_income_val = latest_bal.income;
-    let monthly_expenses_val = latest_bal.outcome;
-    let monthly_income = format_currency(monthly_income_val);
-    let monthly_expenses = format_currency(monthly_expenses_val);
-    let net = monthly_income_val - monthly_expenses_val;
-    let net_monthly_positive = net >= 0;
-    let net_monthly = format_currency(net);
-
-    // Income/expense category breakdown
-    let income_tv = format_currency(latest_bal.income_tv);
-    let income_tv_placement = format_currency(latest_bal.income_tv_placement);
-    let income_matchday = format_currency(latest_bal.income_matchday);
-    let income_sponsorship = format_currency(latest_bal.income_sponsorship);
-    let income_merchandising = format_currency(latest_bal.income_merchandising);
-    // Generic prize_money already includes cup + continental, so subtract
-    // them here to avoid double-counting in the UI.
-    let other_prize = (latest_bal.income_prize_money
-        - latest_bal.income_cup_prize
-        - latest_bal.income_continental_prize)
-        .max(0);
-    let income_prize_money = format_currency(other_prize);
-    let income_cup_prize = format_currency(latest_bal.income_cup_prize);
-    let income_continental_prize = format_currency(latest_bal.income_continental_prize);
-    let income_parachute = format_currency(latest_bal.income_parachute);
-    let income_owner_investment = format_currency(latest_bal.income_owner_investment);
-    let income_loan_fees = format_currency(latest_bal.income_loan_fees);
-    let expense_player_wages = format_currency(latest_bal.expense_player_wages);
-    let expense_staff_wages = format_currency(latest_bal.expense_staff_wages);
-    let expense_facilities = format_currency(latest_bal.expense_facilities);
-    let expense_amortization = format_currency(latest_bal.expense_amortization);
-    let expense_debt_interest = format_currency(latest_bal.expense_debt_interest);
-    let expense_loan_fees = format_currency(latest_bal.expense_loan_fees);
-
-    // Sponsorship
-    let sponsors: Vec<SponsorDto> = club
-        .finance
-        .sponsorship
-        .sponsorship_contracts
-        .iter()
-        .map(|c| SponsorDto {
-            name: c.sponsor_name.clone(),
-            annual_income: format_currency(c.wage as i64),
+        Ok(TeamFinancesTemplate {
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
+            cpu_brand: &CPU_BRAND,
+            cores_count: *CPU_CORES,
+            i18n,
+            lang: route_params.lang.clone(),
+            title,
+            sub_title_prefix: String::new(),
+            sub_title_suffix: String::new(),
+            sub_title: league_title,
+            sub_title_link: league
+                .map(|l| LeagueAddress::of(data, l).url(&route_params.lang))
+                .unwrap_or_default(),
+            sub_title_flag: None,
+            header_color: club.colors.background.clone(),
+            foreground_color: club.colors.foreground.clone(),
+            menu_sections,
+            team_slug: team.slug.clone(),
+            active_tab: "finances",
+            show_finances_tab: true,
+            show_academy_tab: team.team_type == core::TeamType::Main
+                || team.team_type == core::TeamType::U18,
+            newspaper_count: NewspaperCounter::count(data, team),
+            balance: snapshot.balance,
+            balance_positive: snapshot.balance_positive,
+            transfer_budget: snapshot.transfer_budget,
+            wage_budget: snapshot.wage_budget,
+            annual_wages: snapshot.annual_wages,
+            monthly_income: figures.monthly_income,
+            monthly_expenses: figures.monthly_expenses,
+            net_monthly: figures.net_monthly,
+            net_monthly_positive: figures.net_monthly_positive,
+            sponsors: snapshot.sponsors,
+            history_entries: snapshot.history.entries,
+            income_tv: figures.income_tv,
+            income_tv_placement: figures.income_tv_placement,
+            income_matchday: figures.income_matchday,
+            income_sponsorship: figures.income_sponsorship,
+            income_merchandising: figures.income_merchandising,
+            income_prize_money: figures.income_prize_money,
+            income_cup_prize: figures.income_cup_prize,
+            income_continental_prize: figures.income_continental_prize,
+            income_parachute: figures.income_parachute,
+            income_owner_investment: figures.income_owner_investment,
+            income_loan_fees: figures.income_loan_fees,
+            expense_player_wages: figures.expense_player_wages,
+            expense_staff_wages: figures.expense_staff_wages,
+            expense_facilities: figures.expense_facilities,
+            expense_amortization: figures.expense_amortization,
+            expense_debt_interest: figures.expense_debt_interest,
+            expense_loan_fees: figures.expense_loan_fees,
+            chart_labels: snapshot.history.labels,
+            chart_balances: snapshot.history.balances,
+            chart_incomes: snapshot.history.incomes,
+            chart_expenses: snapshot.history.expenses,
         })
-        .collect();
-
-    // History (most recent first, take last 12 months)
-    let history_items: Vec<_> = finance.history.iter().take(12).collect();
-
-    let mut chart_labels: Vec<String> = Vec::new();
-    let mut chart_balances: Vec<i64> = Vec::new();
-    let mut chart_incomes: Vec<i64> = Vec::new();
-    let mut chart_expenses: Vec<i64> = Vec::new();
-
-    let history_entries: Vec<FinanceHistoryEntry> = history_items
-        .iter()
-        .map(|(date, bal)| {
-            let month_str = format!("{}/{}", date.format("%m"), date.format("%y"));
-            chart_labels.push(month_str.clone());
-            chart_balances.push(bal.balance);
-            chart_incomes.push(bal.income);
-            chart_expenses.push(bal.outcome);
-
-            let net_val = bal.income - bal.outcome;
-            FinanceHistoryEntry {
-                month: i18n.format_month_year(*date),
-                balance: format_currency(bal.balance),
-                balance_positive: bal.balance >= 0,
-                income: format_currency(bal.income),
-                expenses: format_currency(bal.outcome),
-                net: format_currency(net_val),
-                net_positive: net_val >= 0,
-            }
-        })
-        .collect();
-
-    // Reverse chart data so it goes oldest -> newest for the chart
-    chart_labels.reverse();
-    chart_balances.reverse();
-    chart_incomes.reverse();
-    chart_expenses.reverse();
-
-    let (neighbor_teams, country_leagues) =
-        get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
-    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-
-    let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-    let current_path = format!("/{}/teams/{}/finances", route_params.lang, team.slug);
-    let menu_params = views::MenuParams {
-        i18n: &i18n,
-        lang: &route_params.lang,
-        current_path: &current_path,
-        country_name: cn,
-        country_slug: cs,
-    };
-    let menu_sections = views::team_menu(&menu_params, &neighbor_refs, &league_refs);
-    let title = team.name.clone();
-    let league_title = league
-        .map(|l| views::league_display_name(l, &i18n, simulator_data))
-        .unwrap_or_default();
-
-    Ok(TeamFinancesTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        i18n,
-        lang: route_params.lang.clone(),
-        title,
-        sub_title_prefix: String::new(),
-        sub_title_suffix: String::new(),
-        sub_title: league_title,
-        sub_title_link: league
-            .map(|l| LeagueAddress::of(simulator_data, l).url(&route_params.lang))
-            .unwrap_or_default(),
-        sub_title_flag: None,
-        header_color: club.colors.background.clone(),
-        foreground_color: club.colors.foreground.clone(),
-        menu_sections,
-        team_slug: team.slug.clone(),
-        active_tab: "finances",
-        show_finances_tab: true,
-        show_academy_tab: team.team_type == core::TeamType::Main
-            || team.team_type == core::TeamType::U18,
-        newspaper_count: NewspaperCounter::count(simulator_data, team),
-        balance,
-        balance_positive,
-        transfer_budget,
-        wage_budget,
-        annual_wages,
-        monthly_income,
-        monthly_expenses,
-        net_monthly,
-        net_monthly_positive,
-        sponsors,
-        history_entries,
-        income_tv,
-        income_tv_placement,
-        income_matchday,
-        income_sponsorship,
-        income_merchandising,
-        income_prize_money,
-        income_cup_prize,
-        income_continental_prize,
-        income_parachute,
-        income_owner_investment,
-        income_loan_fees,
-        expense_player_wages,
-        expense_staff_wages,
-        expense_facilities,
-        expense_amortization,
-        expense_debt_interest,
-        expense_loan_fees,
-        chart_labels: serde_json::to_string(&chart_labels).unwrap_or_default(),
-        chart_balances: serde_json::to_string(&chart_balances).unwrap_or_default(),
-        chart_incomes: serde_json::to_string(&chart_incomes).unwrap_or_default(),
-        chart_expenses: serde_json::to_string(&chart_expenses).unwrap_or_default(),
-    })
-}
-
-fn format_currency(amount: i64) -> String {
-    if amount.abs() >= 1_000_000 {
-        format!("${:.1}M", amount as f64 / 1_000_000.0)
-    } else if amount.abs() >= 1_000 {
-        format!("${:.0}K", amount as f64 / 1_000.0)
-    } else {
-        format!("${}", amount)
     }
 }
 
-fn get_neighbor_teams(
-    club_id: u32,
-    data: &SimulatorData,
-    i18n: &I18n,
-) -> Result<NeighborMenus, ApiError> {
-    let club = data
-        .club(club_id)
-        .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
+struct FinanceSnapshot {
+    balance: String,
+    balance_positive: bool,
+    transfer_budget: String,
+    wage_budget: String,
+    annual_wages: String,
+    figures: MonthlyFigures,
+    sponsors: Vec<SponsorDto>,
+    history: FinanceHistoryView,
+}
 
-    let teams = views::neighbor_teams(club, i18n);
+impl FinanceSnapshot {
+    fn of(club: &Club, i18n: &I18n) -> Self {
+        let finance = &club.finance;
 
-    let mut country_leagues: Vec<(u32, String, String)> = data
-        .country_by_club(club_id)
-        .map(|country| {
-            country
-                .leagues
-                .leagues
-                .iter()
-                .filter(|l| !l.friendly)
-                .map(|l| (l.id, l.name.clone(), l.slug.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
-    country_leagues.sort_by_key(|(id, _, _)| *id);
+        // Current balance
+        let balance_positive = finance.balance.balance >= 0;
+        let balance = Money::compact(finance.balance.balance);
 
-    Ok((
-        teams,
-        country_leagues
-            .into_iter()
-            .map(|(_, name, slug)| (name, slug))
-            .collect(),
-    ))
+        // Budgets
+        let transfer_budget = finance
+            .transfer_budget
+            .as_ref()
+            .map(|b| FormattingUtils::format_money(b.amount))
+            .unwrap_or_else(|| i18n.t("fin_not_set").to_string());
+
+        let wage_budget = finance
+            .wage_budget
+            .as_ref()
+            .map(|b| FormattingUtils::format_money(b.amount))
+            .unwrap_or_else(|| i18n.t("fin_not_set").to_string());
+
+        // Annual wages (sum across all teams in the club)
+        let total_annual_wages: u32 = club.teams.teams.iter().map(|t| t.get_annual_salary()).sum();
+        let annual_wages = Money::compact(total_annual_wages as i64);
+
+        let latest = Self::latest_balance(finance);
+        let figures = MonthlyFigures::of(latest);
+
+        Self {
+            balance,
+            balance_positive,
+            transfer_budget,
+            wage_budget,
+            annual_wages,
+            figures,
+            sponsors: Self::sponsors(club),
+            history: FinanceHistoryView::of(finance, i18n),
+        }
+    }
+
+    fn latest_balance(finance: &ClubFinances) -> &core::ClubFinancialBalance {
+        // The latest completed month, not the in-progress one.
+        finance
+            .history
+            .iter()
+            .next()
+            .map(|(_, bal)| bal)
+            .unwrap_or(&finance.balance)
+    }
+
+    fn sponsors(club: &Club) -> Vec<SponsorDto> {
+        club.finance
+            .sponsorship
+            .sponsorship_contracts
+            .iter()
+            .map(|c| SponsorDto {
+                name: c.sponsor_name.clone(),
+                annual_income: Money::compact(c.wage as i64),
+            })
+            .collect()
+    }
+}
+
+struct MonthlyFigures {
+    monthly_income: String,
+    monthly_expenses: String,
+    net_monthly: String,
+    net_monthly_positive: bool,
+    income_tv: String,
+    income_tv_placement: String,
+    income_matchday: String,
+    income_sponsorship: String,
+    income_merchandising: String,
+    income_prize_money: String,
+    income_cup_prize: String,
+    income_continental_prize: String,
+    income_parachute: String,
+    income_owner_investment: String,
+    income_loan_fees: String,
+    expense_player_wages: String,
+    expense_staff_wages: String,
+    expense_facilities: String,
+    expense_amortization: String,
+    expense_debt_interest: String,
+    expense_loan_fees: String,
+}
+
+impl MonthlyFigures {
+    fn of(latest: &core::ClubFinancialBalance) -> Self {
+        let monthly_income_val = latest.income;
+        let monthly_expenses_val = latest.outcome;
+        let net = monthly_income_val - monthly_expenses_val;
+
+        // Generic prize_money already includes cup + continental, so subtract
+        // them here to avoid double-counting in the UI.
+        let other_prize =
+            (latest.income_prize_money - latest.income_cup_prize - latest.income_continental_prize)
+                .max(0);
+
+        Self {
+            monthly_income: Money::compact(monthly_income_val),
+            monthly_expenses: Money::compact(monthly_expenses_val),
+            net_monthly: Money::compact(net),
+            net_monthly_positive: net >= 0,
+            income_tv: Money::compact(latest.income_tv),
+            income_tv_placement: Money::compact(latest.income_tv_placement),
+            income_matchday: Money::compact(latest.income_matchday),
+            income_sponsorship: Money::compact(latest.income_sponsorship),
+            income_merchandising: Money::compact(latest.income_merchandising),
+            income_prize_money: Money::compact(other_prize),
+            income_cup_prize: Money::compact(latest.income_cup_prize),
+            income_continental_prize: Money::compact(latest.income_continental_prize),
+            income_parachute: Money::compact(latest.income_parachute),
+            income_owner_investment: Money::compact(latest.income_owner_investment),
+            income_loan_fees: Money::compact(latest.income_loan_fees),
+            expense_player_wages: Money::compact(latest.expense_player_wages),
+            expense_staff_wages: Money::compact(latest.expense_staff_wages),
+            expense_facilities: Money::compact(latest.expense_facilities),
+            expense_amortization: Money::compact(latest.expense_amortization),
+            expense_debt_interest: Money::compact(latest.expense_debt_interest),
+            expense_loan_fees: Money::compact(latest.expense_loan_fees),
+        }
+    }
+}
+
+struct FinanceHistoryView {
+    entries: Vec<FinanceHistoryEntry>,
+    labels: String,
+    balances: String,
+    incomes: String,
+    expenses: String,
+}
+
+impl FinanceHistoryView {
+    fn of(finance: &ClubFinances, i18n: &I18n) -> Self {
+        // History (most recent first, take last 12 months)
+        let history_items: Vec<_> = finance.history.iter().take(12).collect();
+
+        let mut chart_labels: Vec<String> = Vec::new();
+        let mut chart_balances: Vec<i64> = Vec::new();
+        let mut chart_incomes: Vec<i64> = Vec::new();
+        let mut chart_expenses: Vec<i64> = Vec::new();
+
+        let entries: Vec<FinanceHistoryEntry> = history_items
+            .iter()
+            .map(|(date, bal)| {
+                let month_str = format!("{}/{}", date.format("%m"), date.format("%y"));
+                chart_labels.push(month_str.clone());
+                chart_balances.push(bal.balance);
+                chart_incomes.push(bal.income);
+                chart_expenses.push(bal.outcome);
+
+                let net_val = bal.income - bal.outcome;
+                FinanceHistoryEntry {
+                    month: i18n.format_month_year(*date),
+                    balance: Money::compact(bal.balance),
+                    balance_positive: bal.balance >= 0,
+                    income: Money::compact(bal.income),
+                    expenses: Money::compact(bal.outcome),
+                    net: Money::compact(net_val),
+                    net_positive: net_val >= 0,
+                }
+            })
+            .collect();
+
+        // Reverse chart data so it goes oldest -> newest for the chart
+        chart_labels.reverse();
+        chart_balances.reverse();
+        chart_incomes.reverse();
+        chart_expenses.reverse();
+
+        Self {
+            entries,
+            labels: serde_json::to_string(&chart_labels).unwrap_or_default(),
+            balances: serde_json::to_string(&chart_balances).unwrap_or_default(),
+            incomes: serde_json::to_string(&chart_incomes).unwrap_or_default(),
+            expenses: serde_json::to_string(&chart_expenses).unwrap_or_default(),
+        }
+    }
+}
+
+struct Money;
+
+impl Money {
+    fn compact(amount: i64) -> String {
+        if amount.abs() >= 1_000_000 {
+            format!("${:.1}M", amount as f64 / 1_000_000.0)
+        } else if amount.abs() >= 1_000 {
+            format!("${:.0}K", amount as f64 / 1_000.0)
+        } else {
+            format!("${}", amount)
+        }
+    }
 }

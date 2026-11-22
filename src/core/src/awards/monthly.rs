@@ -347,129 +347,63 @@ impl MonthlyAwardsTick {
         })
     }
 
-    #[expect(clippy::too_many_lines)]
     fn apply(data: &mut SimulatorData, pending: Vec<PendingMonthlyAward>) {
         let now = data.date.date();
         for entry in pending {
             let league_rep = data.league(entry.league_id).map(|l| l.reputation);
             // Young POM fires before senior POM so the centralised
-            // award-reputation pipeline dampens the senior emit when
-            // the same player wins both — young base is larger, so it
-            // takes the full impact.
+            // award-reputation pipeline dampens the senior emit when the same
+            // player wins both — young base is larger, so it takes the full
+            // impact.
             if let Some(award) = &entry.young {
-                let ctx = Self::pom_context(
-                    RecognitionEventKind::YoungPlayerOfTheMonth,
+                Self::apply_monthly_player_award(
+                    data,
                     entry.league_id,
                     award,
+                    RecognitionEventKind::YoungPlayerOfTheMonth,
+                    HappinessEventType::YoungPlayerOfTheMonth,
+                    AwardReputationKind::YoungPlayerOfTheMonth,
+                    league_rep,
+                    now,
                 );
-                let avg_rating = award.average_rating;
-                let matches_played = award.matches_played;
-                if let Some(player) = data.player_mut(award.player_id) {
-                    player.on_recognition_award(HappinessEventType::YoungPlayerOfTheMonth, ctx, 28);
-                    let mut input = AwardReputationInput::new()
-                        .with_avg_rating(avg_rating)
-                        .with_matches_played(matches_played as u16)
-                        .with_league_id(entry.league_id);
-                    if let Some(rep) = league_rep {
-                        input = input.with_league_reputation(rep);
-                    }
-                    player.apply_award_reputation_impact(
-                        AwardReputationKind::YoungPlayerOfTheMonth,
-                        input,
-                        now,
-                    );
-                }
             }
             if let Some(award) = &entry.pom {
-                let ctx = Self::pom_context(
-                    RecognitionEventKind::PlayerOfTheMonth,
+                Self::apply_monthly_player_award(
+                    data,
                     entry.league_id,
                     award,
+                    RecognitionEventKind::PlayerOfTheMonth,
+                    HappinessEventType::PlayerOfTheMonth,
+                    AwardReputationKind::PlayerOfTheMonth,
+                    league_rep,
+                    now,
                 );
-                let avg_rating = award.average_rating;
-                let matches_played = award.matches_played;
-                if let Some(player) = data.player_mut(award.player_id) {
-                    player.on_recognition_award(HappinessEventType::PlayerOfTheMonth, ctx, 28);
-                    let mut input = AwardReputationInput::new()
-                        .with_avg_rating(avg_rating)
-                        .with_matches_played(matches_played as u16)
-                        .with_league_id(entry.league_id);
-                    if let Some(rep) = league_rep {
-                        input = input.with_league_reputation(rep);
-                    }
-                    player.apply_award_reputation_impact(
-                        AwardReputationKind::PlayerOfTheMonth,
-                        input,
-                        now,
-                    );
-                }
             }
-            // Team-of-month XIs fire after the individual monthly
-            // awards so the centralised stacking dampener can suppress
-            // the team-XI reputation gain when the same player just
-            // won POM / Young POM. Young XI runs first by the same
-            // larger-base-takes-full-impact rule used for POW/TOTW.
-            for slot in &entry.snapshot.young_team_of_month {
-                let avg_rating = slot.average_rating;
-                let matches_played = slot.matches_played;
-                let ctx = RecognitionEventContext::new(
-                    RecognitionEventKind::YoungTeamOfTheMonthSelection,
-                )
-                .with_league(entry.league_id)
-                .with_avg_rating(avg_rating)
-                .with_matches_played(matches_played as u16)
-                .with_season_goals(slot.goals as u16)
-                .with_season_assists(slot.assists as u16);
-                if let Some(player) = data.player_mut(slot.player_id) {
-                    player.on_recognition_award(
-                        HappinessEventType::YoungTeamOfTheMonthSelection,
-                        ctx,
-                        28,
-                    );
-                    let mut input = AwardReputationInput::new()
-                        .with_avg_rating(avg_rating)
-                        .with_matches_played(matches_played as u16)
-                        .with_league_id(entry.league_id);
-                    if let Some(rep) = league_rep {
-                        input = input.with_league_reputation(rep);
-                    }
-                    player.apply_award_reputation_impact(
-                        AwardReputationKind::YoungTeamOfTheMonthSelection,
-                        input,
-                        now,
-                    );
-                }
-            }
-            for slot in &entry.snapshot.team_of_month {
-                let avg_rating = slot.average_rating;
-                let matches_played = slot.matches_played;
-                let ctx =
-                    RecognitionEventContext::new(RecognitionEventKind::TeamOfTheMonthSelection)
-                        .with_league(entry.league_id)
-                        .with_avg_rating(avg_rating)
-                        .with_matches_played(matches_played as u16)
-                        .with_season_goals(slot.goals as u16)
-                        .with_season_assists(slot.assists as u16);
-                if let Some(player) = data.player_mut(slot.player_id) {
-                    player.on_recognition_award(
-                        HappinessEventType::TeamOfTheMonthSelection,
-                        ctx,
-                        28,
-                    );
-                    let mut input = AwardReputationInput::new()
-                        .with_avg_rating(avg_rating)
-                        .with_matches_played(matches_played as u16)
-                        .with_league_id(entry.league_id);
-                    if let Some(rep) = league_rep {
-                        input = input.with_league_reputation(rep);
-                    }
-                    player.apply_award_reputation_impact(
-                        AwardReputationKind::TeamOfTheMonthSelection,
-                        input,
-                        now,
-                    );
-                }
-            }
+            // Team-of-month XIs fire after the individual monthly awards so
+            // the centralised stacking dampener can suppress the team-XI
+            // reputation gain when the same player just won POM / Young POM.
+            // Young XI runs first by the same larger-base-takes-full-impact
+            // rule used for POW/TOTW.
+            Self::apply_monthly_team_award(
+                data,
+                entry.league_id,
+                &entry.snapshot.young_team_of_month,
+                RecognitionEventKind::YoungTeamOfTheMonthSelection,
+                HappinessEventType::YoungTeamOfTheMonthSelection,
+                AwardReputationKind::YoungTeamOfTheMonthSelection,
+                league_rep,
+                now,
+            );
+            Self::apply_monthly_team_award(
+                data,
+                entry.league_id,
+                &entry.snapshot.team_of_month,
+                RecognitionEventKind::TeamOfTheMonthSelection,
+                HappinessEventType::TeamOfTheMonthSelection,
+                AwardReputationKind::TeamOfTheMonthSelection,
+                league_rep,
+                now,
+            );
             if let Some(league) = data.league_mut(entry.league_id) {
                 if let Some(a) = entry.pom {
                     league.awards.record_player_of_month(a);
@@ -478,6 +412,67 @@ impl MonthlyAwardsTick {
                     league.awards.record_young_player_of_month(a);
                 }
                 league.awards.record_monthly_snapshot(entry.snapshot);
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_monthly_player_award(
+        data: &mut SimulatorData,
+        league_id: u32,
+        award: &MonthlyPlayerAward,
+        kind: RecognitionEventKind,
+        event: HappinessEventType,
+        reputation_kind: AwardReputationKind,
+        league_rep: Option<u16>,
+        now: NaiveDate,
+    ) {
+        let ctx = Self::pom_context(kind, league_id, award);
+        let avg_rating = award.average_rating;
+        let matches_played = award.matches_played;
+        if let Some(player) = data.player_mut(award.player_id) {
+            player.on_recognition_award(event, ctx, 28);
+            let mut input = AwardReputationInput::new()
+                .with_avg_rating(avg_rating)
+                .with_matches_played(matches_played as u16)
+                .with_league_id(league_id);
+            if let Some(rep) = league_rep {
+                input = input.with_league_reputation(rep);
+            }
+            player.apply_award_reputation_impact(reputation_kind, input, now);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_monthly_team_award(
+        data: &mut SimulatorData,
+        league_id: u32,
+        slots: &[TeamOfTheWeekSlot],
+        kind: RecognitionEventKind,
+        event: HappinessEventType,
+        reputation_kind: AwardReputationKind,
+        league_rep: Option<u16>,
+        now: NaiveDate,
+    ) {
+        for slot in slots {
+            let avg_rating = slot.average_rating;
+            let matches_played = slot.matches_played;
+            let ctx = RecognitionEventContext::new(kind)
+                .with_league(league_id)
+                .with_avg_rating(avg_rating)
+                .with_matches_played(matches_played as u16)
+                .with_season_goals(slot.goals as u16)
+                .with_season_assists(slot.assists as u16);
+            if let Some(player) = data.player_mut(slot.player_id) {
+                player.on_recognition_award(event.clone(), ctx, 28);
+                let mut input = AwardReputationInput::new()
+                    .with_avg_rating(avg_rating)
+                    .with_matches_played(matches_played as u16)
+                    .with_league_id(league_id);
+                if let Some(rep) = league_rep {
+                    input = input.with_league_reputation(rep);
+                }
+                player.apply_award_reputation_impact(reputation_kind, input, now);
             }
         }
     }

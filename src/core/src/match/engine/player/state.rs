@@ -495,10 +495,24 @@ impl DecisionResolver {
     }
 }
 
+/// What the state handler and its decision chain decided this tick.
+struct TransitionOutcome {
+    state: Option<PlayerState>,
+    shot_reason: Option<&'static str>,
+    chain_dive: Option<f32>,
+    chain_claim: Option<ClaimIntent>,
+}
+
+/// The speed cap this tick may move under, and the athlete's raw sprint
+/// capability before effort multipliers.
+struct SpeedCeiling {
+    max_speed: f32,
+    sprint_capability: f32,
+}
+
 pub struct PlayerMatchState;
 
 impl PlayerMatchState {
-    #[expect(clippy::too_many_lines)]
     pub fn process(
         player: &mut MatchPlayer,
         context: &MatchContext,
@@ -509,6 +523,83 @@ impl PlayerMatchState {
         #[cfg(feature = "match-logs")]
         let state_before_overrides = player.state;
 
+        let state_change_result =
+            Self::run_handler(player, player_position_group, context, tick_context);
+        let new_state = Self::held_state(player, &state_change_result);
+
+        #[cfg(feature = "match-logs")]
+        if state_before_overrides.compact_id() != player.state.compact_id()
+            && let Some(after_handler) = new_state
+        {
+            StateCensus::note_double_hop(state_before_overrides, player.state, after_handler);
+        }
+
+        let outcome = Self::resolve_transition(
+            player,
+            context,
+            tick_context,
+            events,
+            &state_change_result,
+            new_state,
+        );
+        let new_state = outcome.state;
+        Self::commit_shot_reason(
+            player,
+            context,
+            &state_change_result,
+            new_state,
+            outcome.shot_reason,
+        );
+
+        // A staged save or claim is read by one decision, the one that has
+        // just run.
+        player.pending_save = None;
+        player.pending_claim = None;
+
+        if let Some(state) = new_state {
+            Self::apply_state(
+                player,
+                context,
+                tick_context,
+                &state_change_result,
+                state,
+                outcome.chain_dive,
+                outcome.chain_claim,
+            );
+        } else {
+            #[cfg(feature = "match-logs")]
+            if player.state == PlayerState::Goalkeeper(GoalkeeperState::Diving) {
+                crate::mid_run_diag::KeeperActionDiag::note(7);
+            }
+            player.in_state_time += 1;
+        }
+
+        Self::apply_split_step(player, player_position_group, tick_context);
+
+        if let Some(velocity) = state_change_result.velocity {
+            Self::apply_velocity(
+                player,
+                context,
+                tick_context,
+                player_position_group,
+                &state_change_result,
+                velocity,
+            );
+        }
+
+        Self::note_tick(player, tick_context, player_position_group);
+
+        if state_change_result.events.has_events() {
+            events.add_from_collection(state_change_result.events);
+        }
+    }
+
+    fn run_handler(
+        player: &mut MatchPlayer,
+        player_position_group: PlayerFieldPositionGroup,
+        context: &MatchContext,
+        tick_context: &GameTickContext,
+    ) -> StateProcessingResult {
         player.staged_challenge = None;
         player.aerial_award &= tick_context.ball.awaits_header_from(player.id);
         let state_change_result =
@@ -538,7 +629,14 @@ impl PlayerMatchState {
         if state_change_result.missed_challenge.is_some() {
             player.motion_trace.after_miss_ticks = StateCensus::AFTER_MISS_TICKS;
         }
-        let new_state = state_change_result
+        state_change_result
+    }
+
+    fn held_state(
+        player: &MatchPlayer,
+        state_change_result: &StateProcessingResult,
+    ) -> Option<PlayerState> {
+        state_change_result
             .state
             // A handler returning its OWN state is not a transition, it is
             // a handler that meant `None`. Treating it as one reset
@@ -551,21 +649,23 @@ impl PlayerMatchState {
             // leaves the timer running, which is what a no-op tick means.
             .filter(|target| target.compact_id() != player.state.compact_id())
             .filter(|target| {
-                let held = DecisionCommitment::holds(player, *target, &state_change_result);
+                let held = DecisionCommitment::holds(player, *target, state_change_result);
                 #[cfg(feature = "match-logs")]
                 if held {
                     StateCensus::note_hold(player.state, *target);
                 }
                 !held
-            });
+            })
+    }
 
-        #[cfg(feature = "match-logs")]
-        if state_before_overrides.compact_id() != player.state.compact_id()
-            && let Some(after_handler) = new_state
-        {
-            StateCensus::note_double_hop(state_before_overrides, player.state, after_handler);
-        }
-
+    fn resolve_transition(
+        player: &mut MatchPlayer,
+        context: &MatchContext,
+        tick_context: &GameTickContext,
+        events: &mut EventCollection,
+        state_change_result: &StateProcessingResult,
+        new_state: Option<PlayerState>,
+    ) -> TransitionOutcome {
         if let Some(kind) = state_change_result.missed_challenge {
             player.on_challenge_missed(kind);
         }
@@ -575,7 +675,7 @@ impl PlayerMatchState {
             player.claim_intent = state_change_result.claim_intent;
         }
         let resolved = new_state
-            .filter(|first| DecisionResolver::applies(player, *first, &state_change_result))
+            .filter(|first| DecisionResolver::applies(player, *first, state_change_result))
             .map(|first| {
                 let decision = DecisionResolver::resolve(player, first, |p| {
                     PlayerFieldPositionGroup::decide(p, context, tick_context)
@@ -623,6 +723,23 @@ impl PlayerMatchState {
             events.add_from_collection(chain_events);
         }
 
+        TransitionOutcome {
+            state: new_state,
+            shot_reason,
+            chain_dive,
+            chain_claim,
+        }
+    }
+
+    fn commit_shot_reason(
+        player: &mut MatchPlayer,
+        context: &MatchContext,
+        state_change_result: &StateProcessingResult,
+        new_state: Option<PlayerState>,
+        shot_reason: Option<&'static str>,
+    ) {
+        #[cfg(not(feature = "match-logs"))]
+        let _ = (context, state_change_result);
         // Stash the shot reason on the player. The Shooting state will
         // consume and clear this when it composes the Shoot event.
         // A reason-less transition to any non-shot state invalidates a
@@ -669,102 +786,123 @@ impl PlayerMatchState {
             }
             player.pending_shot_reason = None;
         }
+    }
 
-        // A staged save or claim is read by one decision, the one that has
-        // just run.
-        player.pending_save = None;
-        player.pending_claim = None;
-
-        if let Some(state) = new_state {
-            Self::change_state(player, state);
-            // A committed dive keeps the side it committed to for as long
-            // as it lasts, and no longer — see `MatchPlayer::dive_aim`.
-            player.dive_aim = if state == PlayerState::Goalkeeper(GoalkeeperState::Diving) {
-                state_change_result.dive_aim.or(chain_dive)
-            } else {
-                None
-            };
-            // A claim lasts while he is in the states it is made in.
-            match state {
-                PlayerState::Goalkeeper(keeper) if keeper.is_claim() => {
-                    if let Some(intent) = state_change_result.claim_intent.or(chain_claim) {
-                        player.claim_intent = Some(intent);
-                    }
-                }
-                _ => {
-                    // Out of the claim states undecided: he never got to it.
-                    #[cfg(feature = "match-logs")]
-                    context
-                        .keeper_census
-                        .borrow_mut()
-                        .claim_end(player.id, ClaimEnd::Lost);
-                    player.claim_intent = None;
-                }
-            }
-            // A player who has just committed to leaving the ground does so
-            // now, on the tick he decided. The rise lives outside `velocity`
-            // and outside everything below — see `MatchPlayer::vertical_speed`
-            // for why a metric axis cannot travel inside a vector the
-            // horizontal speed limits are going to normalise.
-            // How high the ball will be when he MEETS it. For everybody
-            // else that is where it is now; for a keeper leaving his feet
-            // at a shot in flight it is the projected crossing height,
-            // because that is the whole difference between a dive along
-            // the floor and one into the top corner — and the ball is
-            // typically fifteen metres away and still climbing at the
-            // moment he commits (see `KeeperShotDive`).
-            let mut aerial_height = tick_context.positions.ball.position.z;
-            if state == PlayerState::Goalkeeper(GoalkeeperState::Diving)
-                && let Some(target) = tick_context
-                    .ball
-                    .cached_shot_target
-                    .as_ref()
-                    .filter(|t| Some(t.defending_side) == player.side)
-            {
-                aerial_height = target.goal_line_z;
-            }
-            let apex = Self::leap_apex(player, state, aerial_height);
-            #[cfg(feature = "match-logs")]
-            if matches!(
-                state,
-                PlayerState::Defender(DefenderState::Heading)
-                    | PlayerState::Midfielder(MidfielderState::Heading)
-                    | PlayerState::Forward(ForwardState::Heading)
-            ) {
-                crate::r#match::engine::ball::ball::flight_diag::FlightDiag::note_header(
-                    apex.is_some(),
-                );
-            }
-            // Keeper actions are counted HERE rather than inside the
-            // states themselves, so every inbound route is counted exactly
-            // once whoever decided it — including the physics save, which
-            // transitions him from outside the state machine entirely.
-            #[cfg(feature = "match-logs")]
-            match state {
-                PlayerState::Goalkeeper(GoalkeeperState::Diving) => {
-                    crate::mid_run_diag::KeeperActionDiag::note(0)
-                }
-                PlayerState::Goalkeeper(GoalkeeperState::Punching) => {
-                    crate::mid_run_diag::KeeperActionDiag::note(2)
-                }
-                // A missed punch comes down in `Jumping` on the leap it was
-                // already on.
-                PlayerState::Goalkeeper(GoalkeeperState::Jumping) if !player.is_airborne() => {
-                    crate::mid_run_diag::KeeperActionDiag::note(4)
-                }
-                _ => {}
-            }
-            if let Some(apex) = apex {
-                player.leap(apex);
-            }
+    fn apply_state(
+        player: &mut MatchPlayer,
+        context: &MatchContext,
+        tick_context: &GameTickContext,
+        state_change_result: &StateProcessingResult,
+        state: PlayerState,
+        chain_dive: Option<f32>,
+        chain_claim: Option<ClaimIntent>,
+    ) {
+        #[cfg(not(feature = "match-logs"))]
+        let _ = context;
+        Self::change_state(player, state);
+        // A committed dive keeps the side it committed to for as long
+        // as it lasts, and no longer — see `MatchPlayer::dive_aim`.
+        player.dive_aim = if state == PlayerState::Goalkeeper(GoalkeeperState::Diving) {
+            state_change_result.dive_aim.or(chain_dive)
         } else {
-            #[cfg(feature = "match-logs")]
-            if player.state == PlayerState::Goalkeeper(GoalkeeperState::Diving) {
-                crate::mid_run_diag::KeeperActionDiag::note(7);
+            None
+        };
+        // A claim lasts while he is in the states it is made in.
+        match state {
+            PlayerState::Goalkeeper(keeper) if keeper.is_claim() => {
+                if let Some(intent) = state_change_result.claim_intent.or(chain_claim) {
+                    player.claim_intent = Some(intent);
+                }
             }
-            player.in_state_time += 1;
+            _ => {
+                // Out of the claim states undecided: he never got to it.
+                #[cfg(feature = "match-logs")]
+                context
+                    .keeper_census
+                    .borrow_mut()
+                    .claim_end(player.id, ClaimEnd::Lost);
+                player.claim_intent = None;
+            }
         }
+        // A player who has just committed to leaving the ground does so
+        // now, on the tick he decided. The rise lives outside `velocity`
+        // and outside everything below — see `MatchPlayer::vertical_speed`
+        // for why a metric axis cannot travel inside a vector the
+        // horizontal speed limits are going to normalise.
+        let aerial_height = Self::aerial_height(player, tick_context, state);
+        let apex = Self::leap_apex(player, state, aerial_height);
+        #[cfg(feature = "match-logs")]
+        if matches!(
+            state,
+            PlayerState::Defender(DefenderState::Heading)
+                | PlayerState::Midfielder(MidfielderState::Heading)
+                | PlayerState::Forward(ForwardState::Heading)
+        ) {
+            crate::r#match::engine::ball::ball::flight_diag::FlightDiag::note_header(
+                apex.is_some(),
+            );
+        }
+        Self::note_keeper_entry(player, state);
+        if let Some(apex) = apex {
+            player.leap(apex);
+        }
+    }
 
+    fn aerial_height(
+        player: &MatchPlayer,
+        tick_context: &GameTickContext,
+        state: PlayerState,
+    ) -> f32 {
+        // How high the ball will be when he MEETS it. For everybody
+        // else that is where it is now; for a keeper leaving his feet
+        // at a shot in flight it is the projected crossing height,
+        // because that is the whole difference between a dive along
+        // the floor and one into the top corner — and the ball is
+        // typically fifteen metres away and still climbing at the
+        // moment he commits (see `KeeperShotDive`).
+        let mut aerial_height = tick_context.positions.ball.position.z;
+        if state == PlayerState::Goalkeeper(GoalkeeperState::Diving)
+            && let Some(target) = tick_context
+                .ball
+                .cached_shot_target
+                .as_ref()
+                .filter(|t| Some(t.defending_side) == player.side)
+        {
+            aerial_height = target.goal_line_z;
+        }
+        aerial_height
+    }
+
+    #[cfg(feature = "match-logs")]
+    fn note_keeper_entry(player: &MatchPlayer, state: PlayerState) {
+        // Keeper actions are counted HERE rather than inside the
+        // states themselves, so every inbound route is counted exactly
+        // once whoever decided it — including the physics save, which
+        // transitions him from outside the state machine entirely.
+        match state {
+            PlayerState::Goalkeeper(GoalkeeperState::Diving) => {
+                crate::mid_run_diag::KeeperActionDiag::note(0)
+            }
+            PlayerState::Goalkeeper(GoalkeeperState::Punching) => {
+                crate::mid_run_diag::KeeperActionDiag::note(2)
+            }
+            // A missed punch comes down in `Jumping` on the leap it was
+            // already on.
+            PlayerState::Goalkeeper(GoalkeeperState::Jumping) if !player.is_airborne() => {
+                crate::mid_run_diag::KeeperActionDiag::note(4)
+            }
+            _ => {}
+        }
+    }
+
+    #[cfg(not(feature = "match-logs"))]
+    fn note_keeper_entry(_player: &MatchPlayer, _state: PlayerState) {}
+
+    fn apply_split_step(
+        player: &mut MatchPlayer,
+        player_position_group: PlayerFieldPositionGroup,
+        tick_context: &GameTickContext,
+    ) {
         // The split-step. Applied here beside the leap rather than inside
         // any one state, because the keeper can be in any of half a dozen
         // states on the tick a shot is struck and the hop belongs to the
@@ -785,263 +923,371 @@ impl PlayerMatchState {
             crate::mid_run_diag::KeeperActionDiag::note(16);
             player.hop(apex);
         }
+    }
 
-        if let Some(velocity) = state_change_result.velocity {
-            let mut max_speed = if player_position_group == PlayerFieldPositionGroup::Goalkeeper {
-                let speed_context = match player.state {
-                    PlayerState::Goalkeeper(gk) => Self::goalkeeper_speed_context(gk),
-                    // An outfielder standing in for a sent-off keeper keeps
-                    // their own speed model — they are not a goalkeeper.
-                    _ => GoalkeeperSpeedContext::Positioning,
-                };
-                player
-                    .skills
-                    .goalkeeper_max_speed(player.player_attributes.condition, speed_context)
-            } else {
-                player.max_speed_with_condition_cached()
+    fn apply_velocity(
+        player: &mut MatchPlayer,
+        context: &MatchContext,
+        tick_context: &GameTickContext,
+        player_position_group: PlayerFieldPositionGroup,
+        state_change_result: &StateProcessingResult,
+        velocity: Vector3<f32>,
+    ) {
+        let ceiling = Self::speed_ceiling(
+            player,
+            context,
+            tick_context,
+            player_position_group,
+            state_change_result,
+        );
+        Self::integrate_velocity(player, context, player_position_group, &ceiling, velocity);
+    }
+
+    fn speed_ceiling(
+        player: &mut MatchPlayer,
+        context: &MatchContext,
+        tick_context: &GameTickContext,
+        player_position_group: PlayerFieldPositionGroup,
+        state_change_result: &StateProcessingResult,
+    ) -> SpeedCeiling {
+        let mut max_speed = if player_position_group == PlayerFieldPositionGroup::Goalkeeper {
+            let speed_context = match player.state {
+                PlayerState::Goalkeeper(gk) => Self::goalkeeper_speed_context(gk),
+                // An outfielder standing in for a sent-off keeper keeps
+                // their own speed model — they are not a goalkeeper.
+                _ => GoalkeeperSpeedContext::Positioning,
             };
-            // Sprint capability BEFORE the carry / effort multipliers —
-            // the acceleration bound below is a property of the athlete,
-            // not of how hard they happen to be working this tick.
-            let sprint_capability = max_speed;
+            player
+                .skills
+                .goalkeeper_max_speed(player.player_attributes.condition, speed_context)
+        } else {
+            player.max_speed_with_condition_cached()
+        };
+        // Sprint capability BEFORE the carry / effort multipliers —
+        // the acceleration bound below is a property of the athlete,
+        // not of how hard they happen to be working this tick.
+        let sprint_capability = max_speed;
 
-            // Ball-carrier speed ceiling. Real football: carrying the
-            // ball costs ~15-25% of top sprint for an average player —
-            // they keep the ball in stride, look up, protect it. Elite
-            // carriers (Mbappé/Messi) lose almost nothing.
-            //
-            // Routes through `movement_speed_with_ball` so dribbling +
-            // technique + pace + acceleration + agility + balance all
-            // contribute, and so fatigue/late-game effects propagate
-            // through `effective_skill`.
-            //
-            // ⚠ THE CARRIER IS SPRINTING TOO, AND NO SPRINT HERE IS
-            // UNCAPPED.
-            //
-            // The carry multiplier used to be the carrier's ONLY ceiling,
-            // because the `MovementEffort` branch below deliberately skips
-            // him. So he was measured against his own raw top speed while
-            // every player chasing him was measured against a FRACTION of
-            // his — 0.95 flat out, 0.78 in a `High` state. The two
-            // ceilings are set by unrelated code and nothing compared
-            // them, so the race was decided before either man moved.
-            //
-            // Measured (`dead_ball_diag::CHASE_SAMPLES`, n=6.3M carrier
-            // ticks over 60 fixtures): the man on the ball had a ceiling
-            // of **0.525 u/tick against his nearest opponent's 0.450**,
-            // and the chaser was the slower of the pair on **89% of
-            // ticks**. That is the whole of "the defender just runs
-            // alongside him and never gets there" — he is not steering
-            // badly, he is forbidden to arrive. Downstream it is also why
-            // midfielders completed 18.1 dribbles and made 60.1
-            // progressive carries a match (real ~1 and ~2), and why
-            // defenders produced 25.2 pressures for 1.12 successes
-            // (real ~11 for ~3.5).
-            //
-            // So the carrier is capped at the same flat-out ceiling
-            // anybody sprinting off the ball gets, and the carry cost
-            // applies on top of it. An elite carrier then matches a
-            // defender running flat out and everybody else is a little
-            // slower, which is the real relationship.
-            //
-            // The band is also re-anchored. `0.78 + composite * 0.42`
-            // clamped at 1.00 reaches its ceiling at composite 0.524 —
-            // below the population mean — so for essentially every
-            // professional the whole of `movement_speed_with_ball`
-            // resolved to the same number and none of those six
-            // attributes reached anything. `0.80 + composite * 0.20`
-            // spans 0.81 (worst carrier under fatigue) to 1.00 (elite)
-            // with no clamp collapse, so the skill stays live across the
-            // range the game actually generates.
-            if tick_context.ball.current_owner == Some(player.id)
-                && player_position_group != PlayerFieldPositionGroup::Goalkeeper
-            {
-                let minute = sc::minute_from_ms(context.total_match_time);
-                max_speed *= MovementEffort::carrier_ceiling(
-                    player,
-                    minute,
-                    player.player_attributes.condition_percentage(),
-                );
-            }
+        max_speed = Self::carrier_speed_ceiling(
+            player,
+            context,
+            tick_context,
+            player_position_group,
+            max_speed,
+        );
+        max_speed = Self::off_ball_speed_ceiling(
+            player,
+            context,
+            tick_context,
+            player_position_group,
+            state_change_result,
+            max_speed,
+        );
+        max_speed = Self::dead_ball_speed_ceiling(
+            player,
+            context,
+            tick_context,
+            player_position_group,
+            sprint_capability,
+            max_speed,
+        );
 
-            // Off-ball effort: a player jogs to reposition and only
-            // sprints to press / chase / break in behind. Scale the speed
-            // cap by the effort the state itself declared this tick (the
-            // same `ActivityIntensity` the fatigue model reads), so
-            // off-ball movement stops pinning to a full sprint — the
-            // condition diagnostic had ~77% of outfield ticks in the top
-            // band. This caps the top speed only: a velocity already below
-            // the ceiling (a decelerating `Arrive`, a slow walk vector) is
-            // untouched. On-ball carriers keep the carry model applied
-            // above; goalkeepers keep their context-managed speed.
-            if player_position_group != PlayerFieldPositionGroup::Goalkeeper
-                && tick_context.ball.current_owner != Some(player.id)
-            {
-                // …but a shape recall is a RECOVERY RUN, and must not be
-                // throttled by the state the player was drifting in.
-                //
-                // `ShapeDiscipline` builds its recall at full top speed on
-                // purpose. The states a player drifts out of shape in are
-                // the low-effort ones — `Standing` is `Recovery` (0.12),
-                // `Returning` and `CreatingSpace` are `Moderate` (0.52) —
-                // so without this floor the recall was computed at 1.0 and
-                // then served at an amble, and the tether could never close
-                // the gap it was measuring. Flooring at the pull is exact
-                // rather than approximate: `pull` is literally the share of
-                // the final velocity that IS the recall, so this permits
-                // the recovery component and nothing more.
-                let effort = MovementEffort::speed_fraction(
-                    player.last_activity_intensity,
-                    player.player_attributes.condition_percentage(),
-                );
-                // …times the player's APPETITE for that effort:
-                // `work_rate` decides how much of a sub-maximal band he
-                // actually uses all match, `determination` whether he
-                // keeps using it when it is late or his team is behind.
-                // See `MovementEffort::effort_appetite` — both terms are
-                // population-centred at ~1.0 and the product is clamped
-                // so nobody exceeds his conditioned ceiling.
-                let minute = sc::minute_from_ms(context.total_match_time);
-                let (own, opp) = if player.team_id == context.field_home_team_id {
-                    (context.score.home_team.get(), context.score.away_team.get())
-                } else {
-                    (context.score.away_team.get(), context.score.home_team.get())
-                };
-                let appetite = MovementEffort::effort_appetite(
-                    player,
-                    player.last_activity_intensity,
-                    minute,
-                    own < opp,
-                );
-                max_speed *= (effort * appetite)
-                    .min(1.0)
-                    .max(state_change_result.shape_recall_pull)
-                    .max(state_change_result.effort_floor);
-            }
-            if let Some(team) = tick_context.ball.restarting_team
-                && player_position_group != PlayerFieldPositionGroup::Goalkeeper
-            {
-                max_speed = max_speed.min(
-                    sprint_capability
-                        * MovementEffort::dead_ball_ceiling(
-                            context.restart_hurry(team),
-                            player.player_attributes.condition_percentage(),
-                        ),
-                );
-            }
-
-            // NaN/Inf guard: state velocity functions compose many
-            // divisions and normalizations, and any zero-magnitude vector
-            // put through `.normalize()` anywhere upstream produces a
-            // NaN that propagates into player.velocity → player.position
-            // → the recording → the viewer renders nothing. Catch it
-            // here at the single integration point so no state has to
-            // remember to self-sanitize. Non-finite → zero this tick.
-            let finite = velocity.x.is_finite() && velocity.y.is_finite() && velocity.z.is_finite();
-            let velocity = if finite { velocity } else { Vector3::zeros() };
-
-            // ACCELERATION LIMIT — a player is a body with momentum, so
-            // this tick's velocity is reachable from last tick's only
-            // within the limits of what they can push against the ground.
-            //
-            // Enforcing the bound HERE, at the one place every state's
-            // velocity passes through, means no state can bypass it and
-            // no caller can compose its way around it: almost every
-            // caller composes steering results (`Arrive{..}.velocity +
-            // separation_velocity()`), and a few scale one past top speed
-            // (`RunningInBehind`'s `Seek` times up to 1.45).
-            //
-            // Outfielders get the real momentum model —
-            // `MovementEffort::sprint_ramp`, where `acceleration` sets
-            // the per-tick budget in physical units (a 20–30 m/s² burst) and
-            // `agility` the braking/turning multiplier. Before it, the
-            // bound below was the only one, and at 0.25–0.55 u/tick it
-            // allowed a full stop-to-sprint change in 1–2 AI ticks
-            // (150–350 m/s²): every race was settled by top speed alone
-            // and the `acceleration` attribute was kinematically inert —
-            // a 6 and an 18 differed by ~2 cm off a standing start.
-            //
-            // Goalkeepers keep the legacy twitch bound: their explosive
-            // lateral band and `SaveModel` reach are one calibrated
-            // budget (see `goalkeeper_max_speed`), and pushing keeper
-            // dive travel through outfield sprint physics would shrink
-            // the goal he defends. The legacy bound also remains the
-            // engine-wide A/B control via `OF_RAMP_LEGACY=1`.
-            //
-            // The twitch history, which is why a bound exists at all:
-            // with no momentum, two competing pulls — a state steering a
-            // defender back to his mark and personal-space steering him
-            // off it — do not settle at a balance point, they alternate:
-            // full velocity one way, full velocity back, at 50 Hz.
-            // Measured, **88% of all velocity reversals happened with no
-            // state change under them** (`dev_match trace`), i.e. inside
-            // a single state's own steering. The ramp's far tighter
-            // budget suppresses that signature even harder than the
-            // twitch bound did.
-            if player_position_group == PlayerFieldPositionGroup::Goalkeeper
-                || MovementEffort::ramp_legacy()
-            {
-                let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
-                let max_accel = sprint_capability
-                    * agility_normalized
-                    * 0.7
-                    * (1.0 + context.conditions.acceleration);
-                let delta = velocity - player.velocity;
-                let delta_sq = delta.norm_squared();
-                let velocity = if delta_sq > max_accel * max_accel && delta_sq > 0.0 {
-                    player.velocity + delta * (max_accel / delta_sq.sqrt())
-                } else {
-                    velocity
-                };
-
-                let velocity_sq = velocity.norm_squared();
-                let max_speed_sq = max_speed * max_speed;
-
-                if velocity_sq > max_speed_sq && velocity_sq > 0.0 {
-                    let velocity_magnitude = velocity_sq.sqrt();
-                    player.velocity = velocity * (max_speed / velocity_magnitude);
-                } else {
-                    player.velocity = velocity;
-                }
-            } else {
-                let minute = sc::minute_from_ms(context.total_match_time);
-                player.velocity = MovementEffort::sprint_ramp(
-                    player,
-                    minute,
-                    velocity,
-                    max_speed,
-                    sprint_capability,
-                    1.0 + context.conditions.acceleration,
-                );
-            }
+        SpeedCeiling {
+            max_speed,
+            sprint_capability,
         }
+    }
 
-        #[cfg(feature = "match-logs")]
+    fn carrier_speed_ceiling(
+        player: &MatchPlayer,
+        context: &MatchContext,
+        tick_context: &GameTickContext,
+        player_position_group: PlayerFieldPositionGroup,
+        mut max_speed: f32,
+    ) -> f32 {
+        // Ball-carrier speed ceiling. Real football: carrying the
+        // ball costs ~15-25% of top sprint for an average player —
+        // they keep the ball in stride, look up, protect it. Elite
+        // carriers (Mbappé/Messi) lose almost nothing.
+        //
+        // Routes through `movement_speed_with_ball` so dribbling +
+        // technique + pace + acceleration + agility + balance all
+        // contribute, and so fatigue/late-game effects propagate
+        // through `effective_skill`.
+        //
+        // ⚠ THE CARRIER IS SPRINTING TOO, AND NO SPRINT HERE IS
+        // UNCAPPED.
+        //
+        // The carry multiplier used to be the carrier's ONLY ceiling,
+        // because the `MovementEffort` branch below deliberately skips
+        // him. So he was measured against his own raw top speed while
+        // every player chasing him was measured against a FRACTION of
+        // his — 0.95 flat out, 0.78 in a `High` state. The two
+        // ceilings are set by unrelated code and nothing compared
+        // them, so the race was decided before either man moved.
+        //
+        // Measured (`dead_ball_diag::CHASE_SAMPLES`, n=6.3M carrier
+        // ticks over 60 fixtures): the man on the ball had a ceiling
+        // of **0.525 u/tick against his nearest opponent's 0.450**,
+        // and the chaser was the slower of the pair on **89% of
+        // ticks**. That is the whole of "the defender just runs
+        // alongside him and never gets there" — he is not steering
+        // badly, he is forbidden to arrive. Downstream it is also why
+        // midfielders completed 18.1 dribbles and made 60.1
+        // progressive carries a match (real ~1 and ~2), and why
+        // defenders produced 25.2 pressures for 1.12 successes
+        // (real ~11 for ~3.5).
+        //
+        // So the carrier is capped at the same flat-out ceiling
+        // anybody sprinting off the ball gets, and the carry cost
+        // applies on top of it. An elite carrier then matches a
+        // defender running flat out and everybody else is a little
+        // slower, which is the real relationship.
+        //
+        // The band is also re-anchored. `0.78 + composite * 0.42`
+        // clamped at 1.00 reaches its ceiling at composite 0.524 —
+        // below the population mean — so for essentially every
+        // professional the whole of `movement_speed_with_ball`
+        // resolved to the same number and none of those six
+        // attributes reached anything. `0.80 + composite * 0.20`
+        // spans 0.81 (worst carrier under fatigue) to 1.00 (elite)
+        // with no clamp collapse, so the skill stays live across the
+        // range the game actually generates.
+        if tick_context.ball.current_owner == Some(player.id)
+            && player_position_group != PlayerFieldPositionGroup::Goalkeeper
         {
-            let step = player.velocity.norm();
-            StateCensus::note_tick(
-                player.state,
-                tick_context.ball.restart_taker == Some(player.id),
-                tick_context.ball.current_owner == Some(player.id),
-                step,
-                player.last_activity_intensity,
+            let minute = sc::minute_from_ms(context.total_match_time);
+            max_speed *= MovementEffort::carrier_ceiling(
+                player,
+                minute,
+                player.player_attributes.condition_percentage(),
             );
-            if player_position_group != PlayerFieldPositionGroup::Goalkeeper {
-                StateCensus::note_outfield_speed(step, player.motion_trace.after_miss_ticks > 0);
-            }
-            if player.state == PlayerState::Injured {
-                StateCensus::note_injured_tick(
-                    tick_context.ball.current_owner == Some(player.id),
-                    tick_context.ball.restart_taker == Some(player.id),
-                );
-            }
-            player.motion_trace.after_miss_ticks =
-                player.motion_trace.after_miss_ticks.saturating_sub(1);
         }
+        max_speed
+    }
 
-        if state_change_result.events.has_events() {
-            events.add_from_collection(state_change_result.events);
+    fn off_ball_speed_ceiling(
+        player: &MatchPlayer,
+        context: &MatchContext,
+        tick_context: &GameTickContext,
+        player_position_group: PlayerFieldPositionGroup,
+        state_change_result: &StateProcessingResult,
+        mut max_speed: f32,
+    ) -> f32 {
+        // Off-ball effort: a player jogs to reposition and only
+        // sprints to press / chase / break in behind. Scale the speed
+        // cap by the effort the state itself declared this tick (the
+        // same `ActivityIntensity` the fatigue model reads), so
+        // off-ball movement stops pinning to a full sprint — the
+        // condition diagnostic had ~77% of outfield ticks in the top
+        // band. This caps the top speed only: a velocity already below
+        // the ceiling (a decelerating `Arrive`, a slow walk vector) is
+        // untouched. On-ball carriers keep the carry model applied
+        // above; goalkeepers keep their context-managed speed.
+        if player_position_group != PlayerFieldPositionGroup::Goalkeeper
+            && tick_context.ball.current_owner != Some(player.id)
+        {
+            // …but a shape recall is a RECOVERY RUN, and must not be
+            // throttled by the state the player was drifting in.
+            //
+            // `ShapeDiscipline` builds its recall at full top speed on
+            // purpose. The states a player drifts out of shape in are
+            // the low-effort ones — `Standing` is `Recovery` (0.12),
+            // `Returning` and `CreatingSpace` are `Moderate` (0.52) —
+            // so without this floor the recall was computed at 1.0 and
+            // then served at an amble, and the tether could never close
+            // the gap it was measuring. Flooring at the pull is exact
+            // rather than approximate: `pull` is literally the share of
+            // the final velocity that IS the recall, so this permits
+            // the recovery component and nothing more.
+            let effort = MovementEffort::speed_fraction(
+                player.last_activity_intensity,
+                player.player_attributes.condition_percentage(),
+            );
+            // …times the player's APPETITE for that effort:
+            // `work_rate` decides how much of a sub-maximal band he
+            // actually uses all match, `determination` whether he
+            // keeps using it when it is late or his team is behind.
+            // See `MovementEffort::effort_appetite` — both terms are
+            // population-centred at ~1.0 and the product is clamped
+            // so nobody exceeds his conditioned ceiling.
+            let minute = sc::minute_from_ms(context.total_match_time);
+            let (own, opp) = if player.team_id == context.field_home_team_id {
+                (context.score.home_team.get(), context.score.away_team.get())
+            } else {
+                (context.score.away_team.get(), context.score.home_team.get())
+            };
+            let appetite = MovementEffort::effort_appetite(
+                player,
+                player.last_activity_intensity,
+                minute,
+                own < opp,
+            );
+            max_speed *= (effort * appetite)
+                .min(1.0)
+                .max(state_change_result.shape_recall_pull)
+                .max(state_change_result.effort_floor);
         }
+        max_speed
+    }
+
+    fn dead_ball_speed_ceiling(
+        player: &MatchPlayer,
+        context: &MatchContext,
+        tick_context: &GameTickContext,
+        player_position_group: PlayerFieldPositionGroup,
+        sprint_capability: f32,
+        mut max_speed: f32,
+    ) -> f32 {
+        if let Some(team) = tick_context.ball.restarting_team
+            && player_position_group != PlayerFieldPositionGroup::Goalkeeper
+        {
+            max_speed = max_speed.min(
+                sprint_capability
+                    * MovementEffort::dead_ball_ceiling(
+                        context.restart_hurry(team),
+                        player.player_attributes.condition_percentage(),
+                    ),
+            );
+        }
+        max_speed
+    }
+
+    fn integrate_velocity(
+        player: &mut MatchPlayer,
+        context: &MatchContext,
+        player_position_group: PlayerFieldPositionGroup,
+        ceiling: &SpeedCeiling,
+        velocity: Vector3<f32>,
+    ) {
+        // NaN/Inf guard: state velocity functions compose many
+        // divisions and normalizations, and any zero-magnitude vector
+        // put through `.normalize()` anywhere upstream produces a
+        // NaN that propagates into player.velocity → player.position
+        // → the recording → the viewer renders nothing. Catch it
+        // here at the single integration point so no state has to
+        // remember to self-sanitize. Non-finite → zero this tick.
+        let finite = velocity.x.is_finite() && velocity.y.is_finite() && velocity.z.is_finite();
+        let velocity = if finite { velocity } else { Vector3::zeros() };
+
+        if player_position_group == PlayerFieldPositionGroup::Goalkeeper
+            || MovementEffort::ramp_legacy()
+        {
+            Self::apply_twitch_limit(player, context, ceiling, velocity);
+        } else {
+            let minute = sc::minute_from_ms(context.total_match_time);
+            player.velocity = MovementEffort::sprint_ramp(
+                player,
+                minute,
+                velocity,
+                ceiling.max_speed,
+                ceiling.sprint_capability,
+                1.0 + context.conditions.acceleration,
+            );
+        }
+    }
+
+    fn apply_twitch_limit(
+        player: &mut MatchPlayer,
+        context: &MatchContext,
+        ceiling: &SpeedCeiling,
+        velocity: Vector3<f32>,
+    ) {
+        // ACCELERATION LIMIT — a player is a body with momentum, so
+        // this tick's velocity is reachable from last tick's only
+        // within the limits of what they can push against the ground.
+        //
+        // Enforcing the bound HERE, at the one place every state's
+        // velocity passes through, means no state can bypass it and
+        // no caller can compose its way around it: almost every
+        // caller composes steering results (`Arrive{..}.velocity +
+        // separation_velocity()`), and a few scale one past top speed
+        // (`RunningInBehind`'s `Seek` times up to 1.45).
+        //
+        // Outfielders get the real momentum model —
+        // `MovementEffort::sprint_ramp`, where `acceleration` sets
+        // the per-tick budget in physical units (a 20–30 m/s² burst) and
+        // `agility` the braking/turning multiplier. Before it, the
+        // bound below was the only one, and at 0.25–0.55 u/tick it
+        // allowed a full stop-to-sprint change in 1–2 AI ticks
+        // (150–350 m/s²): every race was settled by top speed alone
+        // and the `acceleration` attribute was kinematically inert —
+        // a 6 and an 18 differed by ~2 cm off a standing start.
+        //
+        // Goalkeepers keep the legacy twitch bound: their explosive
+        // lateral band and `SaveModel` reach are one calibrated
+        // budget (see `goalkeeper_max_speed`), and pushing keeper
+        // dive travel through outfield sprint physics would shrink
+        // the goal he defends. The legacy bound also remains the
+        // engine-wide A/B control via `OF_RAMP_LEGACY=1`.
+        //
+        // The twitch history, which is why a bound exists at all:
+        // with no momentum, two competing pulls — a state steering a
+        // defender back to his mark and personal-space steering him
+        // off it — do not settle at a balance point, they alternate:
+        // full velocity one way, full velocity back, at 50 Hz.
+        // Measured, **88% of all velocity reversals happened with no
+        // state change under them** (`dev_match trace`), i.e. inside
+        // a single state's own steering. The ramp's far tighter
+        // budget suppresses that signature even harder than the
+        // twitch bound did.
+        let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
+        let max_accel = ceiling.sprint_capability
+            * agility_normalized
+            * 0.7
+            * (1.0 + context.conditions.acceleration);
+        let delta = velocity - player.velocity;
+        let delta_sq = delta.norm_squared();
+        let velocity = if delta_sq > max_accel * max_accel && delta_sq > 0.0 {
+            player.velocity + delta * (max_accel / delta_sq.sqrt())
+        } else {
+            velocity
+        };
+
+        let velocity_sq = velocity.norm_squared();
+        let max_speed_sq = ceiling.max_speed * ceiling.max_speed;
+
+        if velocity_sq > max_speed_sq && velocity_sq > 0.0 {
+            let velocity_magnitude = velocity_sq.sqrt();
+            player.velocity = velocity * (ceiling.max_speed / velocity_magnitude);
+        } else {
+            player.velocity = velocity;
+        }
+    }
+
+    #[cfg(feature = "match-logs")]
+    fn note_tick(
+        player: &mut MatchPlayer,
+        tick_context: &GameTickContext,
+        player_position_group: PlayerFieldPositionGroup,
+    ) {
+        let step = player.velocity.norm();
+        StateCensus::note_tick(
+            player.state,
+            tick_context.ball.restart_taker == Some(player.id),
+            tick_context.ball.current_owner == Some(player.id),
+            step,
+            player.last_activity_intensity,
+        );
+        if player_position_group != PlayerFieldPositionGroup::Goalkeeper {
+            StateCensus::note_outfield_speed(step, player.motion_trace.after_miss_ticks > 0);
+        }
+        if player.state == PlayerState::Injured {
+            StateCensus::note_injured_tick(
+                tick_context.ball.current_owner == Some(player.id),
+                tick_context.ball.restart_taker == Some(player.id),
+            );
+        }
+        player.motion_trace.after_miss_ticks =
+            player.motion_trace.after_miss_ticks.saturating_sub(1);
+    }
+
+    #[cfg(not(feature = "match-logs"))]
+    fn note_tick(
+        _player: &mut MatchPlayer,
+        _tick_context: &GameTickContext,
+        _player_position_group: PlayerFieldPositionGroup,
+    ) {
     }
 
     /// How high a player takes himself, in metres, on entering `state` —

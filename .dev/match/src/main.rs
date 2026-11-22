@@ -582,7 +582,7 @@ impl VenueJson {
             .ok()
             .and_then(|value| value.parse::<u8>().ok())
             .filter(|id| (1..=20).contains(id))
-            .unwrap_or_else(|| shared::field::for_home_team(1));
+            .unwrap_or_else(|| shared::field::FieldStyle::for_home_team(1));
         if std::env::var("OF_SMALL_GROUND").is_ok() {
             VenueJson {
                 field_style,

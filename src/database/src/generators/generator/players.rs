@@ -154,7 +154,6 @@ impl PositionRoleQueue {
 use super::DatabaseGenerator;
 
 impl DatabaseGenerator {
-    #[expect(clippy::too_many_lines)]
     pub(super) fn generate_players(
         player_generator: &PlayerGenerator,
         country_id: u32,
@@ -168,136 +167,30 @@ impl DatabaseGenerator {
         academy_quality: f32,
         recruitment_quality: f32,
     ) -> Vec<Player> {
-        let mut players = Vec::with_capacity(100);
-
         // Youth teams (U18/U19) use the academy generator — same logic as in-game academy intake
         // but with age range matching the team type. This ensures consistent quality between
         // initial squad generation and ongoing academy production.
         if matches!(team_type, TeamType::U18 | TeamType::U19) {
-            let people_names = data
-                .names_by_country
-                .iter()
-                .find(|n| n.country_id == country_id)
-                .map(|n| PeopleNameGeneratorData {
-                    first_names: n.first_names.clone(),
-                    last_names: n.last_names.clone(),
-                    nicknames: n.nicknames.clone(),
-                })
-                .unwrap_or_else(|| PeopleNameGeneratorData {
-                    first_names: Vec::new(),
-                    last_names: Vec::new(),
-                    nicknames: Vec::new(),
-                });
-
-            let country_code = data
-                .countries
-                .iter()
-                .find(|c| c.id == country_id)
-                .map(|c| c.code.to_ascii_lowercase())
-                .unwrap_or_default();
-
-            let now = Local::now().date_naive();
-
-            let (min_age, max_age) = match team_type {
-                TeamType::U18 => (14, 18),
-                _ => (14, 19),
-            };
-
-            // World-init U18/U19 squads also flow through the reputation-
-            // aware academy context — the team_reputation we already have
-            // at this point used to be ignored, which is why a small club
-            // with strong facility data could mint elite prospects as
-            // freely as a top one. League-level prestige isn't surfaced
-            // here, so we use the team's own reputation as the league
-            // proxy (same correlation argument used elsewhere in the
-            // codebase). Pathway reputation seeds at 50 — a fresh academy.
-            let league_proxy = team_reputation;
-            let pathway_seed = 50;
-            let staff_youth_quality_proxy = academy_quality; // best-known proxy at world-init time
-            let gen_ctx = AcademyGenerationContext::from_components(
+            return Self::generate_academy_players(
+                country_id,
+                team_reputation,
+                country_reputation,
+                team_type,
+                data,
                 academy_level,
                 youth_quality,
                 academy_quality,
                 recruitment_quality,
-                staff_youth_quality_proxy,
-                team_reputation,
-                league_proxy,
-                country_reputation,
-                pathway_seed,
             );
-            let mut intake_state = AcademyIntakeState::new();
-
-            let (gk_range, def_range, mid_range, st_range) = ((3, 5), (4, 9), (6, 10), (3, 6));
-
-            let emit = |pos: core::PlayerPositionType,
-                        players: &mut Vec<Player>,
-                        state: &mut AcademyIntakeState| {
-                players.push(CorePlayerGenerator::generate_with_context(
-                    country_id,
-                    &country_code,
-                    now,
-                    pos,
-                    &people_names,
-                    &gen_ctx,
-                    min_age,
-                    max_age,
-                    Some(state),
-                ));
-            };
-
-            for _ in 0..IntegerUtils::random(gk_range.0, gk_range.1) {
-                emit(
-                    core::PlayerPositionType::Goalkeeper,
-                    &mut players,
-                    &mut intake_state,
-                );
-            }
-            for _ in 0..IntegerUtils::random(def_range.0, def_range.1) {
-                let pos = match IntegerUtils::random(0, 4) {
-                    0 => core::PlayerPositionType::DefenderLeft,
-                    1 => core::PlayerPositionType::DefenderRight,
-                    _ => core::PlayerPositionType::DefenderCenter,
-                };
-                emit(pos, &mut players, &mut intake_state);
-            }
-            for _ in 0..IntegerUtils::random(mid_range.0, mid_range.1) {
-                let pos = match IntegerUtils::random(0, 3) {
-                    0 => core::PlayerPositionType::DefensiveMidfielder,
-                    1 => core::PlayerPositionType::MidfielderLeft,
-                    2 => core::PlayerPositionType::MidfielderRight,
-                    _ => core::PlayerPositionType::MidfielderCenter,
-                };
-                emit(pos, &mut players, &mut intake_state);
-            }
-            for _ in 0..IntegerUtils::random(st_range.0, st_range.1) {
-                let pos = match IntegerUtils::random(0, 2) {
-                    0 => core::PlayerPositionType::Striker,
-                    1 => core::PlayerPositionType::ForwardLeft,
-                    _ => core::PlayerPositionType::ForwardRight,
-                };
-                emit(pos, &mut players, &mut intake_state);
-            }
-
-            return players;
         }
 
         // Age range based on team type
-        let (min_age, max_age) = match team_type {
-            TeamType::U20 => (16, 20),
-            TeamType::U21 => (16, 21),
-            TeamType::U23 => (17, 23),
-            TeamType::B | TeamType::Second | TeamType::Reserve => (17, 28),
-            TeamType::Main => (17, 35),
-            _ => (15, 18),
-        };
+        let (min_age, max_age) = Self::senior_age_range(team_type);
 
         // League reputation drives the new senior generator. Falls back to
         // team reputation when the team has no league (rare; covers cases
         // like satellite squads without a league_id assigned).
-        let league_reputation = league_id
-            .and_then(|lid| data.leagues.iter().find(|l| l.id == lid))
-            .map(|l| l.reputation)
-            .unwrap_or(team_reputation);
+        let league_reputation = Self::league_reputation(league_id, data, team_reputation);
 
         // Who the unmodelled squad places are filled with.
         //
@@ -312,22 +205,7 @@ impl DatabaseGenerator {
         // whole of the "foreign share drifts from the card" finding: the
         // census reported the card as wrong for 18 of 68 top divisions when
         // what was wrong was that the generated world had never read it.
-        let league_foreign: &[ForeignPlayerEntry] = league_id
-            .and_then(|lid| data.leagues.iter().find(|l| l.id == lid))
-            .map(|l| l.foreign_players.as_slice())
-            .unwrap_or(&[]);
-        let card_foreign: Vec<ForeignPlayerEntry> = if league_foreign.is_empty() {
-            CountryCardFiller::entries(data, country_id)
-        } else {
-            Vec::new()
-        };
-        let foreign_players: &[ForeignPlayerEntry] = if league_foreign.is_empty() {
-            &card_foreign
-        } else {
-            league_foreign
-        };
-
-        let total_foreign_weight: i32 = foreign_players.iter().map(|fp| fp.weight as i32).sum();
+        let foreign_players = Self::foreign_players(league_id, data, country_id);
 
         let domestic_continent_id = data
             .countries
@@ -336,95 +214,249 @@ impl DatabaseGenerator {
             .map(|c| c.continent_id)
             .unwrap_or(1);
 
-        let mut roles = PositionRoleQueue::for_team(*team_type);
+        SeniorSquadFiller {
+            player_generator,
+            data,
+            country_id,
+            domestic_continent_id,
+            team_reputation,
+            league_reputation,
+            country_reputation,
+            team_type: *team_type,
+            min_age,
+            max_age,
+            foreign_players,
+            roles: PositionRoleQueue::for_team(*team_type),
+        }
+        .fill()
+    }
 
-        let mut generate_one = |pos: PositionType| -> Player {
-            let role = roles.next(pos);
+    fn generate_academy_players(
+        country_id: u32,
+        team_reputation: u16,
+        country_reputation: u16,
+        team_type: &TeamType,
+        data: &DatabaseEntity,
+        academy_level: u8,
+        youth_quality: f32,
+        academy_quality: f32,
+        recruitment_quality: f32,
+    ) -> Vec<Player> {
+        let people_names = Self::people_names(data, country_id);
+        let country_code = data
+            .countries
+            .iter()
+            .find(|c| c.id == country_id)
+            .map(|c| c.code.to_ascii_lowercase())
+            .unwrap_or_default();
+        let now = Local::now().date_naive();
 
-            if total_foreign_weight > 0 {
-                let roll = IntegerUtils::random(0, 100);
-                if roll < total_foreign_weight {
-                    let mut acc = 0i32;
-                    for fp in foreign_players {
-                        acc += fp.weight as i32;
-                        if roll < acc {
-                            let names = data
-                                .names_by_country
-                                .iter()
-                                .find(|n| n.country_id == fp.country_id);
-                            let people_names = match names {
-                                Some(n) => PeopleNameGeneratorData {
-                                    first_names: n.first_names.clone(),
-                                    last_names: n.last_names.clone(),
-                                    nicknames: n.nicknames.clone(),
-                                },
-                                None => PeopleNameGeneratorData {
-                                    first_names: Vec::new(),
-                                    last_names: Vec::new(),
-                                    nicknames: Vec::new(),
-                                },
-                            };
-                            let foreign_gen = PlayerGenerator::with_people_names(&people_names);
-                            let foreign_country =
-                                data.countries.iter().find(|c| c.id == fp.country_id);
-                            let foreign_country_rep =
-                                foreign_country.map(|c| c.reputation).unwrap_or(3000);
-                            let foreign_continent_id =
-                                foreign_country.map(|c| c.continent_id).unwrap_or(1);
-                            return foreign_gen.generate(
-                                fp.country_id,
-                                foreign_continent_id,
-                                pos,
-                                team_reputation,
-                                league_reputation,
-                                foreign_country_rep,
-                                *team_type,
-                                role,
-                                min_age,
-                                max_age,
-                                data.role_ages(),
-                            );
-                        }
-                    }
-                }
-            }
-            player_generator.generate(
-                country_id,
-                domestic_continent_id,
-                pos,
-                team_reputation,
-                league_reputation,
-                country_reputation,
-                *team_type,
-                role,
-                min_age,
-                max_age,
-                data.role_ages(),
-            )
+        let (min_age, max_age) = match team_type {
+            TeamType::U18 => (14, 18),
+            _ => (14, 19),
         };
+
+        // World-init U18/U19 squads also flow through the reputation-
+        // aware academy context — the team_reputation we already have
+        // at this point used to be ignored, which is why a small club
+        // with strong facility data could mint elite prospects as
+        // freely as a top one. League-level prestige isn't surfaced
+        // here, so we use the team's own reputation as the league
+        // proxy (same correlation argument used elsewhere in the
+        // codebase). Pathway reputation seeds at 50 — a fresh academy.
+        let league_proxy = team_reputation;
+        let pathway_seed = 50;
+        let staff_youth_quality_proxy = academy_quality; // best-known proxy at world-init time
+        let gen_ctx = AcademyGenerationContext::from_components(
+            academy_level,
+            youth_quality,
+            academy_quality,
+            recruitment_quality,
+            staff_youth_quality_proxy,
+            team_reputation,
+            league_proxy,
+            country_reputation,
+            pathway_seed,
+        );
+        let mut intake_state = AcademyIntakeState::new();
+        let mut players = Vec::with_capacity(100);
+        AcademySquadFiller {
+            country_id,
+            country_code: &country_code,
+            now,
+            people_names: &people_names,
+            gen_ctx: &gen_ctx,
+            min_age,
+            max_age,
+        }
+        .fill(&mut players, &mut intake_state);
+        players
+    }
+
+    fn senior_age_range(team_type: &TeamType) -> (i32, i32) {
+        match team_type {
+            TeamType::U20 => (16, 20),
+            TeamType::U21 => (16, 21),
+            TeamType::U23 => (17, 23),
+            TeamType::B | TeamType::Second | TeamType::Reserve => (17, 28),
+            TeamType::Main => (17, 35),
+            _ => (15, 18),
+        }
+    }
+
+    fn league_reputation(
+        league_id: Option<u32>,
+        data: &DatabaseEntity,
+        team_reputation: u16,
+    ) -> u16 {
+        league_id
+            .and_then(|lid| data.leagues.iter().find(|l| l.id == lid))
+            .map(|l| l.reputation)
+            .unwrap_or(team_reputation)
+    }
+
+    fn foreign_players(
+        league_id: Option<u32>,
+        data: &DatabaseEntity,
+        country_id: u32,
+    ) -> Vec<ForeignPlayerEntry> {
+        let league_foreign = league_id
+            .and_then(|lid| data.leagues.iter().find(|l| l.id == lid))
+            .map(|l| l.foreign_players.clone())
+            .unwrap_or_default();
+        if league_foreign.is_empty() {
+            CountryCardFiller::entries(data, country_id)
+        } else {
+            league_foreign
+        }
+    }
+
+    fn people_names(data: &DatabaseEntity, country_id: u32) -> PeopleNameGeneratorData {
+        data.names_by_country
+            .iter()
+            .find(|n| n.country_id == country_id)
+            .map(|n| PeopleNameGeneratorData {
+                first_names: n.first_names.clone(),
+                last_names: n.last_names.clone(),
+                nicknames: n.nicknames.clone(),
+            })
+            .unwrap_or_else(|| PeopleNameGeneratorData {
+                first_names: Vec::new(),
+                last_names: Vec::new(),
+                nicknames: Vec::new(),
+            })
+    }
+}
+
+/// Fills a U18/U19 squad through the same academy context the runtime
+/// intake uses, so an opening world and a later intake speak one language.
+struct AcademySquadFiller<'a> {
+    country_id: u32,
+    country_code: &'a str,
+    now: chrono::NaiveDate,
+    people_names: &'a PeopleNameGeneratorData,
+    gen_ctx: &'a AcademyGenerationContext,
+    min_age: i32,
+    max_age: i32,
+}
+
+impl AcademySquadFiller<'_> {
+    fn fill(&self, players: &mut Vec<Player>, state: &mut AcademyIntakeState) {
+        let (gk_range, def_range, mid_range, st_range) = ((3, 5), (4, 9), (6, 10), (3, 6));
+
+        for _ in 0..IntegerUtils::random(gk_range.0, gk_range.1) {
+            self.emit(core::PlayerPositionType::Goalkeeper, players, state);
+        }
+        for _ in 0..IntegerUtils::random(def_range.0, def_range.1) {
+            let pos = match IntegerUtils::random(0, 4) {
+                0 => core::PlayerPositionType::DefenderLeft,
+                1 => core::PlayerPositionType::DefenderRight,
+                _ => core::PlayerPositionType::DefenderCenter,
+            };
+            self.emit(pos, players, state);
+        }
+        for _ in 0..IntegerUtils::random(mid_range.0, mid_range.1) {
+            let pos = match IntegerUtils::random(0, 3) {
+                0 => core::PlayerPositionType::DefensiveMidfielder,
+                1 => core::PlayerPositionType::MidfielderLeft,
+                2 => core::PlayerPositionType::MidfielderRight,
+                _ => core::PlayerPositionType::MidfielderCenter,
+            };
+            self.emit(pos, players, state);
+        }
+        for _ in 0..IntegerUtils::random(st_range.0, st_range.1) {
+            let pos = match IntegerUtils::random(0, 2) {
+                0 => core::PlayerPositionType::Striker,
+                1 => core::PlayerPositionType::ForwardLeft,
+                _ => core::PlayerPositionType::ForwardRight,
+            };
+            self.emit(pos, players, state);
+        }
+    }
+
+    fn emit(
+        &self,
+        pos: core::PlayerPositionType,
+        players: &mut Vec<Player>,
+        state: &mut AcademyIntakeState,
+    ) {
+        players.push(CorePlayerGenerator::generate_with_context(
+            self.country_id,
+            self.country_code,
+            self.now,
+            pos,
+            self.people_names,
+            self.gen_ctx,
+            self.min_age,
+            self.max_age,
+            Some(state),
+        ));
+    }
+}
+
+/// Fills a senior squad with procedural players, respecting the league's
+/// foreign-player mix and the per-position role quotas.
+struct SeniorSquadFiller<'a> {
+    player_generator: &'a PlayerGenerator,
+    data: &'a DatabaseEntity,
+    country_id: u32,
+    domestic_continent_id: u32,
+    team_reputation: u16,
+    league_reputation: u16,
+    country_reputation: u16,
+    team_type: TeamType,
+    min_age: i32,
+    max_age: i32,
+    foreign_players: Vec<ForeignPlayerEntry>,
+    roles: PositionRoleQueue,
+}
+
+impl SeniorSquadFiller<'_> {
+    fn fill(mut self) -> Vec<Player> {
+        let mut players = Vec::with_capacity(100);
 
         // Main teams need larger squads to avoid fielding fewer than 11 after
         // injuries, bans, international duty, and condition drops.
-        let (gk_range, def_range, mid_range, st_range) = match team_type {
+        let (gk_range, def_range, mid_range, st_range) = match self.team_type {
             TeamType::Main => ((3, 5), (6, 9), (7, 10), (5, 8)),
             _ => ((3, 5), (4, 9), (6, 10), (3, 6)),
         };
 
         for _ in 0..IntegerUtils::random(gk_range.0, gk_range.1) {
-            players.push(generate_one(PositionType::Goalkeeper));
+            players.push(self.generate_one(PositionType::Goalkeeper));
         }
         for _ in 0..IntegerUtils::random(def_range.0, def_range.1) {
-            players.push(generate_one(PositionType::Defender));
+            players.push(self.generate_one(PositionType::Defender));
         }
         for _ in 0..IntegerUtils::random(mid_range.0, mid_range.1) {
-            players.push(generate_one(PositionType::Midfielder));
+            players.push(self.generate_one(PositionType::Midfielder));
         }
         for _ in 0..IntegerUtils::random(st_range.0, st_range.1) {
-            players.push(generate_one(PositionType::Striker));
+            players.push(self.generate_one(PositionType::Striker));
         }
 
         // Ensure main teams always have at least 25 players
-        if *team_type == TeamType::Main {
+        if self.team_type == TeamType::Main {
             let positions = [
                 PositionType::Defender,
                 PositionType::Midfielder,
@@ -432,12 +464,68 @@ impl DatabaseGenerator {
             ];
             let mut pos_idx = 0;
             while players.len() < 25 {
-                players.push(generate_one(positions[pos_idx % positions.len()]));
+                players.push(self.generate_one(positions[pos_idx % positions.len()]));
                 pos_idx += 1;
             }
         }
 
         players
+    }
+
+    fn generate_one(&mut self, pos: PositionType) -> Player {
+        let role = self.roles.next(pos);
+
+        if !self.foreign_players.is_empty() {
+            let total_foreign_weight: i32 =
+                self.foreign_players.iter().map(|fp| fp.weight as i32).sum();
+            if total_foreign_weight > 0 {
+                let roll = IntegerUtils::random(0, 100);
+                if roll < total_foreign_weight {
+                    let mut acc = 0i32;
+                    for fp in &self.foreign_players {
+                        acc += fp.weight as i32;
+                        if roll < acc {
+                            return self.generate_foreign(fp.country_id, pos, role);
+                        }
+                    }
+                }
+            }
+        }
+
+        self.player_generator.generate(
+            self.country_id,
+            self.domestic_continent_id,
+            pos,
+            self.team_reputation,
+            self.league_reputation,
+            self.country_reputation,
+            self.team_type,
+            role,
+            self.min_age,
+            self.max_age,
+            self.data.role_ages(),
+        )
+    }
+
+    fn generate_foreign(&self, country_id: u32, pos: PositionType, role: SquadRole) -> Player {
+        let people_names = DatabaseGenerator::people_names(self.data, country_id);
+        let foreign_gen = PlayerGenerator::with_people_names(&people_names);
+        let foreign_country = self.data.countries.iter().find(|c| c.id == country_id);
+        let foreign_country_rep = foreign_country.map(|c| c.reputation).unwrap_or(3000);
+        let foreign_continent_id = foreign_country.map(|c| c.continent_id).unwrap_or(1);
+        foreign_gen.generate(
+            country_id,
+            foreign_continent_id,
+            pos,
+            self.team_reputation,
+            self.league_reputation,
+            foreign_country_rep,
+            self.team_type,
+            role,
+            self.min_age,
+            self.max_age,
+            self.data.role_ages(),
+        )
     }
 }
 

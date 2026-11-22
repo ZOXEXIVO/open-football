@@ -73,23 +73,344 @@ pub struct MidfielderSkillProfile {
     pub pressure_penalty: f32,
 }
 
-#[inline]
-fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    if (edge0 - edge1).abs() < f32::EPSILON {
-        return if x < edge0 { 0.0 } else { 1.0 };
+#[derive(Debug, Clone, Copy)]
+struct MidfielderSkillReads {
+    passing01: f32,
+    technique01: f32,
+    first_touch01: f32,
+    dribbling01: f32,
+    long_shots01: f32,
+    finishing01: f32,
+    tackling01: f32,
+    vision01: f32,
+    decisions01: f32,
+    composure01: f32,
+    concentration01: f32,
+    anticipation01: f32,
+    teamwork01: f32,
+    off_ball01: f32,
+    positioning01: f32,
+    work_rate01: f32,
+    bravery01: f32,
+    aggression01: f32,
+    flair01: f32,
+    stamina01: f32,
+    acceleration01: f32,
+    agility01: f32,
+    balance01: f32,
+    strength01: f32,
+}
+
+impl MidfielderSkillReads {
+    fn of(player: &MatchPlayer, minute: u32) -> Self {
+        let bands = SkillBands::for_player(player, minute);
+        let s = &player.skills;
+
+        let passing_eff = bands.apply(s.technical.passing, SkillCategory::Technical);
+        let technique_eff = bands.apply(s.technical.technique, SkillCategory::Technical);
+        let first_touch_eff = bands.apply(s.technical.first_touch, SkillCategory::Technical);
+        let dribbling_eff = bands.apply(s.technical.dribbling, SkillCategory::Technical);
+        let long_shots_eff = bands.apply(s.technical.long_shots, SkillCategory::Technical);
+        let finishing_eff = bands.apply(s.technical.finishing, SkillCategory::Technical);
+        let tackling_eff = bands.apply(s.technical.tackling, SkillCategory::Technical);
+
+        let vision_eff = bands.apply(s.mental.vision, SkillCategory::Mental);
+        let decisions_eff = bands.apply(s.mental.decisions, SkillCategory::Mental);
+        let composure_eff = bands.apply(s.mental.composure, SkillCategory::Mental);
+        let concentration_eff = bands.apply(s.mental.concentration, SkillCategory::Mental);
+        let anticipation_eff = bands.apply(s.mental.anticipation, SkillCategory::Mental);
+        let teamwork_eff = bands.apply(s.mental.teamwork, SkillCategory::Mental);
+        let off_ball_eff = bands.apply(s.mental.off_the_ball, SkillCategory::Mental);
+        let positioning_eff = bands.apply(s.mental.positioning, SkillCategory::Mental);
+        let work_rate_eff = bands.apply(s.mental.work_rate, SkillCategory::Mental);
+        let bravery_eff = bands.apply(s.mental.bravery, SkillCategory::Mental);
+        let aggression_eff = bands.apply(s.mental.aggression, SkillCategory::Mental);
+        let flair_eff = bands.apply(s.mental.flair, SkillCategory::Mental);
+
+        let stamina_eff = bands.apply(s.physical.stamina, SkillCategory::Explosive);
+        let acceleration_eff = bands.apply(s.physical.acceleration, SkillCategory::Explosive);
+        let agility_eff = bands.apply(s.physical.agility, SkillCategory::Explosive);
+        let balance_eff = bands.apply(s.physical.balance, SkillCategory::Technical);
+        let strength_eff = bands.apply(s.physical.strength, SkillCategory::Explosive);
+
+        // ── Normalised reads ─────────────────────────────────────────
+
+        Self {
+            passing01: MidfielderSkillProfile::norm01(passing_eff),
+            technique01: MidfielderSkillProfile::norm01(technique_eff),
+            first_touch01: MidfielderSkillProfile::norm01(first_touch_eff),
+            dribbling01: MidfielderSkillProfile::norm01(dribbling_eff),
+            long_shots01: MidfielderSkillProfile::norm01(long_shots_eff),
+            finishing01: MidfielderSkillProfile::norm01(finishing_eff),
+            tackling01: MidfielderSkillProfile::norm01(tackling_eff),
+            vision01: MidfielderSkillProfile::norm01(vision_eff),
+            decisions01: MidfielderSkillProfile::norm01(decisions_eff),
+            composure01: MidfielderSkillProfile::norm01(composure_eff),
+            concentration01: MidfielderSkillProfile::norm01(concentration_eff),
+            anticipation01: MidfielderSkillProfile::norm01(anticipation_eff),
+            teamwork01: MidfielderSkillProfile::norm01(teamwork_eff),
+            off_ball01: MidfielderSkillProfile::norm01(off_ball_eff),
+            positioning01: MidfielderSkillProfile::norm01(positioning_eff),
+            work_rate01: MidfielderSkillProfile::norm01(work_rate_eff),
+            bravery01: MidfielderSkillProfile::norm01(bravery_eff),
+            aggression01: MidfielderSkillProfile::norm01(aggression_eff),
+            flair01: MidfielderSkillProfile::norm01(flair_eff),
+            stamina01: MidfielderSkillProfile::norm01(stamina_eff),
+            acceleration01: MidfielderSkillProfile::norm01(acceleration_eff),
+            agility01: MidfielderSkillProfile::norm01(agility_eff),
+            balance01: MidfielderSkillProfile::norm01(balance_eff),
+            strength01: MidfielderSkillProfile::norm01(strength_eff),
+        }
     }
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
+
+    fn core01(&self) -> f32 {
+        let core01 = (self.passing01 * 0.30
+            + self.decisions01 * 0.25
+            + self.vision01 * 0.20
+            + self.composure01 * 0.15
+            + self.technique01 * 0.10)
+            .clamp(0.0, 1.0);
+        core01
+    }
 }
 
-#[inline]
-fn norm01(v: f32) -> f32 {
-    (v / 20.0).clamp(0.0, 1.0)
+#[derive(Debug, Clone, Copy)]
+struct MidfielderConditioning {
+    mid_condition_mult: f32,
+    passing_condition_mult: f32,
+    first_touch_condition_mult: f32,
+    pressing_condition_mult: f32,
+    tackling_condition_mult: f32,
+    off_ball_condition_mult: f32,
 }
 
-#[inline]
-fn pow_curve(skill01: f32, exp: f32) -> f32 {
-    skill01.clamp(0.0, 1.0).powf(exp)
+impl MidfielderConditioning {
+    fn of(
+        player: &MatchPlayer,
+        inputs: &MidfielderSkillInputs,
+        reads: &MidfielderSkillReads,
+        poor_penalty: f32,
+    ) -> Self {
+        let cond = inputs.condition_pct.clamp(0.0, 1.0);
+        let nat_fit01 = MidfielderSkillProfile::norm01(player.skills.physical.natural_fitness);
+        let match_readiness01 =
+            MidfielderSkillProfile::norm01(player.skills.physical.match_readiness);
+        let fitness = reads.stamina01 * 0.45 + nat_fit01 * 0.35 + match_readiness01 * 0.20;
+        let fatigue = (1.0 - cond).max(0.0).powf(1.25);
+        let jadedness = (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
+        let jadedness_penalty = jadedness * 0.18;
+        let fitness_recovery = 1.0 - fatigue * (0.16 + fitness * 0.20);
+        let mental_fatigue = 1.0 - fatigue * (0.10 + poor_penalty * 0.18);
+        let late_drop = if inputs.minute >= 65 {
+            1.0 - ((inputs.minute as f32 - 65.0) / 55.0).clamp(0.0, 1.0)
+                * (0.05 + poor_penalty * 0.12)
+        } else {
+            1.0
+        };
+        let mid_condition_mult =
+            (fitness_recovery * mental_fatigue * late_drop - jadedness_penalty).clamp(0.52, 1.03);
+
+        let stamina_curve = MidfielderSkillProfile::pow_curve(reads.stamina01, 1.20);
+        let composure_curve = MidfielderSkillProfile::pow_curve(reads.composure01, 1.30);
+        let balance_curve = MidfielderSkillProfile::pow_curve(reads.balance01, 1.20);
+        let anticipation_curve = MidfielderSkillProfile::pow_curve(reads.anticipation01, 1.20);
+
+        let passing_condition_mult = mid_condition_mult;
+        let first_touch_condition_mult =
+            mid_condition_mult * (0.92 + balance_curve * 0.08).clamp(0.85, 1.02);
+        let pressing_condition_mult =
+            mid_condition_mult * (0.82 + stamina_curve * 0.18).clamp(0.65, 1.05);
+        let tackling_condition_mult = mid_condition_mult
+            * (0.84 + composure_curve * 0.08 + balance_curve * 0.08).clamp(0.65, 1.03);
+        let off_ball_condition_mult = mid_condition_mult
+            * (0.80 + stamina_curve * 0.12 + anticipation_curve * 0.08).clamp(0.62, 1.05);
+
+        MidfielderConditioning {
+            mid_condition_mult,
+            passing_condition_mult,
+            first_touch_condition_mult,
+            pressing_condition_mult,
+            tackling_condition_mult,
+            off_ball_condition_mult,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MidfielderPassGame {
+    pass_execution: f32,
+    progressive_selection: f32,
+    long_pass_profile: f32,
+    long_pass_risk_tolerance: f32,
+    press_resistance: f32,
+}
+
+impl MidfielderSkillReads {
+    fn pass_game(
+        &self,
+        pressure_penalty: f32,
+        passing_condition_mult: f32,
+        first_touch_condition_mult: f32,
+    ) -> MidfielderPassGame {
+        // ── Pass execution ───────────────────────────────────────────
+        let pass_execution = ((MidfielderSkillProfile::pow_curve(self.passing01, 1.45) * 0.30
+            + MidfielderSkillProfile::pow_curve(self.technique01, 1.35) * 0.18
+            + MidfielderSkillProfile::pow_curve(self.vision01, 1.45) * 0.16
+            + MidfielderSkillProfile::pow_curve(self.decisions01, 1.40) * 0.14
+            + MidfielderSkillProfile::pow_curve(self.composure01, 1.35) * 0.10
+            + MidfielderSkillProfile::pow_curve(self.first_touch01, 1.25) * 0.06
+            + MidfielderSkillProfile::pow_curve(self.concentration01, 1.20) * 0.06)
+            * passing_condition_mult)
+            .clamp(0.0, 1.0);
+        // ── Progressive pass selection ───────────────────────────────
+        let progressive_selection = (MidfielderSkillProfile::pow_curve(self.vision01, 1.55) * 0.28
+            + MidfielderSkillProfile::pow_curve(self.decisions01, 1.45) * 0.24
+            + MidfielderSkillProfile::pow_curve(self.passing01, 1.45) * 0.18
+            + MidfielderSkillProfile::pow_curve(self.technique01, 1.30) * 0.10
+            + MidfielderSkillProfile::pow_curve(self.composure01, 1.35) * 0.10
+            + MidfielderSkillProfile::pow_curve(self.teamwork01, 1.20) * 0.06
+            + MidfielderSkillProfile::pow_curve(self.flair01, 1.25) * 0.04)
+            .clamp(0.0, 1.0);
+        // ── Long pass / switch ───────────────────────────────────────
+        let long_pass_profile = (MidfielderSkillProfile::pow_curve(self.passing01, 1.45) * 0.24
+            + MidfielderSkillProfile::pow_curve(self.vision01, 1.55) * 0.24
+            + MidfielderSkillProfile::pow_curve(self.technique01, 1.45) * 0.18
+            + MidfielderSkillProfile::pow_curve(self.decisions01, 1.35) * 0.12
+            + MidfielderSkillProfile::pow_curve(self.composure01, 1.25) * 0.08
+            + MidfielderSkillProfile::pow_curve(self.strength01, 1.10) * 0.06
+            + MidfielderSkillProfile::pow_curve(self.balance01, 1.15) * 0.04
+            + MidfielderSkillProfile::pow_curve(self.concentration01, 1.15) * 0.04)
+            .clamp(0.0, 1.0);
+
+        let long_pass_risk_tolerance =
+            (0.15 + long_pass_profile * 0.55 - pressure_penalty * 0.20).clamp(0.10, 0.78);
+        // ── Press resistance ─────────────────────────────────────────
+        let press_resistance = ((MidfielderSkillProfile::pow_curve(self.first_touch01, 1.40)
+            * 0.22
+            + MidfielderSkillProfile::pow_curve(self.technique01, 1.35) * 0.18
+            + MidfielderSkillProfile::pow_curve(self.composure01, 1.45) * 0.18
+            + MidfielderSkillProfile::pow_curve(self.balance01, 1.30) * 0.14
+            + MidfielderSkillProfile::pow_curve(self.agility01, 1.25) * 0.10
+            + MidfielderSkillProfile::pow_curve(self.decisions01, 1.35) * 0.10
+            + MidfielderSkillProfile::pow_curve(self.strength01, 1.10) * 0.04
+            + MidfielderSkillProfile::pow_curve(self.concentration01, 1.15) * 0.04)
+            * first_touch_condition_mult)
+            .clamp(0.0, 1.0);
+        MidfielderPassGame {
+            pass_execution,
+            progressive_selection,
+            long_pass_profile,
+            long_pass_risk_tolerance,
+            press_resistance,
+        }
+    }
+
+    fn carry_and_shot(&self) -> (f32, f32) {
+        // ── Carry / dribble selection ────────────────────────────────
+        let carry_selection = (MidfielderSkillProfile::pow_curve(self.dribbling01, 1.55) * 0.24
+            + MidfielderSkillProfile::pow_curve(self.decisions01, 1.40) * 0.18
+            + MidfielderSkillProfile::pow_curve(self.composure01, 1.35) * 0.14
+            + MidfielderSkillProfile::pow_curve(self.acceleration01, 1.25) * 0.12
+            + MidfielderSkillProfile::pow_curve(self.agility01, 1.25) * 0.10
+            + MidfielderSkillProfile::pow_curve(self.balance01, 1.25) * 0.10
+            + MidfielderSkillProfile::pow_curve(self.technique01, 1.30) * 0.08
+            + MidfielderSkillProfile::pow_curve(self.bravery01, 1.10) * 0.04)
+            .clamp(0.0, 1.0);
+        // ── Midfielder shot selection ────────────────────────────────
+        // Real football: central midfielders take ~25-30% of a team's
+        // shots (edge-of-box strikes, second-balls, late runs). The old
+        // `long_shots^1.75 * 0.28` term punished the whole composite so
+        // hard that a typical CM (long_shots ~10, finishing ~9) landed
+        // ~0.30-0.39 and failed every `>= 0.40` shot gate — so 100% of a
+        // team's shots (and goals) flowed through the two forwards. Soften
+        // the exponents (a lower exponent on a 0..1 base RAISES the value)
+        // and shift weight off raw long_shots toward the skills midfielders
+        // actually have (technique / decisions / composure / finishing) so
+        // a competent CM clears the standard-shot gate and contributes a
+        // realistic share of attempts without flattering true long-range
+        // specialists, who still separate via the top of the curve.
+        let mid_shot_selection = (MidfielderSkillProfile::pow_curve(self.long_shots01, 1.45)
+            * 0.23
+            + MidfielderSkillProfile::pow_curve(self.technique01, 1.35) * 0.19
+            + MidfielderSkillProfile::pow_curve(self.decisions01, 1.35) * 0.18
+            + MidfielderSkillProfile::pow_curve(self.composure01, 1.35) * 0.17
+            + MidfielderSkillProfile::pow_curve(self.finishing01, 1.45) * 0.13
+            + MidfielderSkillProfile::pow_curve(self.balance01, 1.20) * 0.06
+            + MidfielderSkillProfile::pow_curve(self.concentration01, 1.15) * 0.04)
+            .clamp(0.0, 1.0);
+        (carry_selection, mid_shot_selection)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MidfielderDefending {
+    pressing_profile: f32,
+    tackle_profile: f32,
+    discipline: f32,
+}
+
+impl MidfielderSkillReads {
+    fn defending(
+        &self,
+        pressing_condition_mult: f32,
+        tackling_condition_mult: f32,
+    ) -> MidfielderDefending {
+        // ── Pressing ─────────────────────────────────────────────────
+        let pressing_profile = ((MidfielderSkillProfile::pow_curve(self.work_rate01, 1.35) * 0.22
+            + MidfielderSkillProfile::pow_curve(self.stamina01, 1.25) * 0.18
+            + MidfielderSkillProfile::pow_curve(self.anticipation01, 1.35) * 0.16
+            + MidfielderSkillProfile::pow_curve(self.acceleration01, 1.25) * 0.12
+            + MidfielderSkillProfile::pow_curve(self.positioning01, 1.30) * 0.10
+            + MidfielderSkillProfile::pow_curve(self.decisions01, 1.30) * 0.10
+            + MidfielderSkillProfile::pow_curve(self.aggression01, 1.10) * 0.06
+            + MidfielderSkillProfile::pow_curve(self.teamwork01, 1.15) * 0.06)
+            * pressing_condition_mult)
+            .clamp(0.0, 1.0);
+        // ── Tackling ─────────────────────────────────────────────────
+        let tackle_profile = ((MidfielderSkillProfile::pow_curve(self.tackling01, 1.55) * 0.28
+            + MidfielderSkillProfile::pow_curve(self.positioning01, 1.35) * 0.16
+            + MidfielderSkillProfile::pow_curve(self.anticipation01, 1.35) * 0.14
+            + MidfielderSkillProfile::pow_curve(self.composure01, 1.35) * 0.12
+            + MidfielderSkillProfile::pow_curve(self.balance01, 1.25) * 0.10
+            + MidfielderSkillProfile::pow_curve(self.agility01, 1.20) * 0.08
+            + MidfielderSkillProfile::pow_curve(self.strength01, 1.15) * 0.06
+            + MidfielderSkillProfile::pow_curve(self.concentration01, 1.20) * 0.06)
+            * tackling_condition_mult)
+            .clamp(0.0, 1.0);
+        // ── Discipline ───────────────────────────────────────────────
+        // No `temperament` attribute on the player — fold it into a
+        // composure/concentration blend so the discipline curve still
+        // covers the full intended weight.
+        let aggression_inverse = 1.0 - self.aggression01;
+        let temperament_proxy = (self.composure01 + self.concentration01) * 0.5;
+        let discipline = (MidfielderSkillProfile::pow_curve(self.composure01, 1.35) * 0.26
+            + MidfielderSkillProfile::pow_curve(self.decisions01, 1.35) * 0.22
+            + MidfielderSkillProfile::pow_curve(self.tackling01, 1.30) * 0.16
+            + MidfielderSkillProfile::pow_curve(self.concentration01, 1.20) * 0.14
+            + temperament_proxy * 0.12
+            + aggression_inverse * 0.10)
+            .clamp(0.0, 1.0);
+        MidfielderDefending {
+            pressing_profile,
+            tackle_profile,
+            discipline,
+        }
+    }
+
+    fn support(&self, off_ball_condition_mult: f32) -> f32 {
+        // ── Off-ball support ─────────────────────────────────────────
+        let support_profile = ((MidfielderSkillProfile::pow_curve(self.off_ball01, 1.45) * 0.22
+            + MidfielderSkillProfile::pow_curve(self.anticipation01, 1.35) * 0.18
+            + MidfielderSkillProfile::pow_curve(self.decisions01, 1.35) * 0.18
+            + MidfielderSkillProfile::pow_curve(self.teamwork01, 1.25) * 0.12
+            + MidfielderSkillProfile::pow_curve(self.stamina01, 1.20) * 0.10
+            + MidfielderSkillProfile::pow_curve(self.acceleration01, 1.20) * 0.08
+            + MidfielderSkillProfile::pow_curve(self.composure01, 1.20) * 0.06
+            + MidfielderSkillProfile::pow_curve(self.concentration01, 1.15) * 0.06)
+            * off_ball_condition_mult)
+            .clamp(0.0, 1.0);
+        support_profile
+    }
 }
 
 impl MidfielderSkillProfile {
@@ -189,249 +510,30 @@ impl MidfielderSkillProfile {
         profile
     }
 
-    #[expect(clippy::too_many_lines)]
     pub fn from_player(player: &MatchPlayer, inputs: &MidfielderSkillInputs) -> Self {
-        let bands = SkillBands::for_player(player, inputs.minute);
-        let s = &player.skills;
+        let reads = MidfielderSkillReads::of(player, inputs.minute);
 
-        // ── Effective skill reads (factored fatigue bands; bit-identical
-        //    to per-read effective_skill — see SkillBands) ──────────────
-        let passing_eff = bands.apply(s.technical.passing, SkillCategory::Technical);
-        let technique_eff = bands.apply(s.technical.technique, SkillCategory::Technical);
-        let first_touch_eff = bands.apply(s.technical.first_touch, SkillCategory::Technical);
-        let dribbling_eff = bands.apply(s.technical.dribbling, SkillCategory::Technical);
-        let long_shots_eff = bands.apply(s.technical.long_shots, SkillCategory::Technical);
-        let finishing_eff = bands.apply(s.technical.finishing, SkillCategory::Technical);
-        let tackling_eff = bands.apply(s.technical.tackling, SkillCategory::Technical);
+        let core01 = reads.core01();
+        let poor_penalty = Self::smoothstep(0.45, 0.18, core01);
+        let elite_lift = Self::smoothstep(0.72, 0.95, core01);
 
-        let vision_eff = bands.apply(s.mental.vision, SkillCategory::Mental);
-        let decisions_eff = bands.apply(s.mental.decisions, SkillCategory::Mental);
-        let composure_eff = bands.apply(s.mental.composure, SkillCategory::Mental);
-        let concentration_eff = bands.apply(s.mental.concentration, SkillCategory::Mental);
-        let anticipation_eff = bands.apply(s.mental.anticipation, SkillCategory::Mental);
-        let teamwork_eff = bands.apply(s.mental.teamwork, SkillCategory::Mental);
-        let off_ball_eff = bands.apply(s.mental.off_the_ball, SkillCategory::Mental);
-        let positioning_eff = bands.apply(s.mental.positioning, SkillCategory::Mental);
-        let work_rate_eff = bands.apply(s.mental.work_rate, SkillCategory::Mental);
-        let bravery_eff = bands.apply(s.mental.bravery, SkillCategory::Mental);
-        let aggression_eff = bands.apply(s.mental.aggression, SkillCategory::Mental);
-        let flair_eff = bands.apply(s.mental.flair, SkillCategory::Mental);
+        let conditioning = MidfielderConditioning::of(player, inputs, &reads, poor_penalty);
 
-        let stamina_eff = bands.apply(s.physical.stamina, SkillCategory::Explosive);
-        let acceleration_eff = bands.apply(s.physical.acceleration, SkillCategory::Explosive);
-        let agility_eff = bands.apply(s.physical.agility, SkillCategory::Explosive);
-        let balance_eff = bands.apply(s.physical.balance, SkillCategory::Technical);
-        let strength_eff = bands.apply(s.physical.strength, SkillCategory::Explosive);
-
-        // ── Normalised reads ─────────────────────────────────────────
-        let passing01 = norm01(passing_eff);
-        let technique01 = norm01(technique_eff);
-        let first_touch01 = norm01(first_touch_eff);
-        let dribbling01 = norm01(dribbling_eff);
-        let long_shots01 = norm01(long_shots_eff);
-        let finishing01 = norm01(finishing_eff);
-        let tackling01 = norm01(tackling_eff);
-
-        let vision01 = norm01(vision_eff);
-        let decisions01 = norm01(decisions_eff);
-        let composure01 = norm01(composure_eff);
-        let concentration01 = norm01(concentration_eff);
-        let anticipation01 = norm01(anticipation_eff);
-        let teamwork01 = norm01(teamwork_eff);
-        let off_ball01 = norm01(off_ball_eff);
-        let positioning01 = norm01(positioning_eff);
-        let work_rate01 = norm01(work_rate_eff);
-        let bravery01 = norm01(bravery_eff);
-        let aggression01 = norm01(aggression_eff);
-        let flair01 = norm01(flair_eff);
-
-        let stamina01 = norm01(stamina_eff);
-        let acceleration01 = norm01(acceleration_eff);
-        let agility01 = norm01(agility_eff);
-        let balance01 = norm01(balance_eff);
-        let strength01 = norm01(strength_eff);
-
-        // ── Headline mappers ─────────────────────────────────────────
-        // Use a blended "midfielder skill" centred on passing/decisions/
-        // vision so the poor_penalty / elite_lift represent the core
-        // midfielder package, not a single attribute.
-        let core01 = (passing01 * 0.30
-            + decisions01 * 0.25
-            + vision01 * 0.20
-            + composure01 * 0.15
-            + technique01 * 0.10)
-            .clamp(0.0, 1.0);
-        let poor_penalty = smoothstep(0.45, 0.18, core01);
-        let elite_lift = smoothstep(0.72, 0.95, core01);
-
-        // ── Conditioning model ───────────────────────────────────────
-        let cond = inputs.condition_pct.clamp(0.0, 1.0);
-        let nat_fit01 = norm01(s.physical.natural_fitness);
-        let match_readiness01 = norm01(s.physical.match_readiness);
-        let fitness = stamina01 * 0.45 + nat_fit01 * 0.35 + match_readiness01 * 0.20;
-        let fatigue = (1.0 - cond).max(0.0).powf(1.25);
-        let jadedness = (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
-        let jadedness_penalty = jadedness * 0.18;
-        let fitness_recovery = 1.0 - fatigue * (0.16 + fitness * 0.20);
-        let mental_fatigue = 1.0 - fatigue * (0.10 + poor_penalty * 0.18);
-        let late_drop = if inputs.minute >= 65 {
-            1.0 - ((inputs.minute as f32 - 65.0) / 55.0).clamp(0.0, 1.0)
-                * (0.05 + poor_penalty * 0.12)
-        } else {
-            1.0
-        };
-        let mid_condition_mult =
-            (fitness_recovery * mental_fatigue * late_drop - jadedness_penalty).clamp(0.52, 1.03);
-
-        let stamina_curve = pow_curve(stamina01, 1.20);
-        let composure_curve = pow_curve(composure01, 1.30);
-        let balance_curve = pow_curve(balance01, 1.20);
-        let anticipation_curve = pow_curve(anticipation01, 1.20);
-
-        let passing_condition_mult = mid_condition_mult;
-        let first_touch_condition_mult =
-            mid_condition_mult * (0.92 + balance_curve * 0.08).clamp(0.85, 1.02);
-        let pressing_condition_mult =
-            mid_condition_mult * (0.82 + stamina_curve * 0.18).clamp(0.65, 1.05);
-        let tackling_condition_mult = mid_condition_mult
-            * (0.84 + composure_curve * 0.08 + balance_curve * 0.08).clamp(0.65, 1.03);
-        let off_ball_condition_mult = mid_condition_mult
-            * (0.80 + stamina_curve * 0.12 + anticipation_curve * 0.08).clamp(0.62, 1.05);
-
-        // ── Pressure penalty ─────────────────────────────────────────
         let pressure_penalty = (inputs.pressure_count_5u as f32 * 0.20
             + inputs.pressure_count_10u as f32 * 0.07)
             .clamp(0.0, 1.0);
 
-        // ── Pass execution ───────────────────────────────────────────
-        let pass_execution = ((pow_curve(passing01, 1.45) * 0.30
-            + pow_curve(technique01, 1.35) * 0.18
-            + pow_curve(vision01, 1.45) * 0.16
-            + pow_curve(decisions01, 1.40) * 0.14
-            + pow_curve(composure01, 1.35) * 0.10
-            + pow_curve(first_touch01, 1.25) * 0.06
-            + pow_curve(concentration01, 1.20) * 0.06)
-            * passing_condition_mult)
-            .clamp(0.0, 1.0);
-
-        // ── Progressive pass selection ───────────────────────────────
-        let progressive_selection = (pow_curve(vision01, 1.55) * 0.28
-            + pow_curve(decisions01, 1.45) * 0.24
-            + pow_curve(passing01, 1.45) * 0.18
-            + pow_curve(technique01, 1.30) * 0.10
-            + pow_curve(composure01, 1.35) * 0.10
-            + pow_curve(teamwork01, 1.20) * 0.06
-            + pow_curve(flair01, 1.25) * 0.04)
-            .clamp(0.0, 1.0);
-
-        // ── Long pass / switch ───────────────────────────────────────
-        let long_pass_profile = (pow_curve(passing01, 1.45) * 0.24
-            + pow_curve(vision01, 1.55) * 0.24
-            + pow_curve(technique01, 1.45) * 0.18
-            + pow_curve(decisions01, 1.35) * 0.12
-            + pow_curve(composure01, 1.25) * 0.08
-            + pow_curve(strength01, 1.10) * 0.06
-            + pow_curve(balance01, 1.15) * 0.04
-            + pow_curve(concentration01, 1.15) * 0.04)
-            .clamp(0.0, 1.0);
-
-        let long_pass_risk_tolerance =
-            (0.15 + long_pass_profile * 0.55 - pressure_penalty * 0.20).clamp(0.10, 0.78);
-
-        // ── Press resistance ─────────────────────────────────────────
-        let press_resistance = ((pow_curve(first_touch01, 1.40) * 0.22
-            + pow_curve(technique01, 1.35) * 0.18
-            + pow_curve(composure01, 1.45) * 0.18
-            + pow_curve(balance01, 1.30) * 0.14
-            + pow_curve(agility01, 1.25) * 0.10
-            + pow_curve(decisions01, 1.35) * 0.10
-            + pow_curve(strength01, 1.10) * 0.04
-            + pow_curve(concentration01, 1.15) * 0.04)
-            * first_touch_condition_mult)
-            .clamp(0.0, 1.0);
-
-        // ── Carry / dribble selection ────────────────────────────────
-        let carry_selection = (pow_curve(dribbling01, 1.55) * 0.24
-            + pow_curve(decisions01, 1.40) * 0.18
-            + pow_curve(composure01, 1.35) * 0.14
-            + pow_curve(acceleration01, 1.25) * 0.12
-            + pow_curve(agility01, 1.25) * 0.10
-            + pow_curve(balance01, 1.25) * 0.10
-            + pow_curve(technique01, 1.30) * 0.08
-            + pow_curve(bravery01, 1.10) * 0.04)
-            .clamp(0.0, 1.0);
-
-        // ── Midfielder shot selection ────────────────────────────────
-        // Real football: central midfielders take ~25-30% of a team's
-        // shots (edge-of-box strikes, second-balls, late runs). The old
-        // `long_shots^1.75 * 0.28` term punished the whole composite so
-        // hard that a typical CM (long_shots ~10, finishing ~9) landed
-        // ~0.30-0.39 and failed every `>= 0.40` shot gate — so 100% of a
-        // team's shots (and goals) flowed through the two forwards. Soften
-        // the exponents (a lower exponent on a 0..1 base RAISES the value)
-        // and shift weight off raw long_shots toward the skills midfielders
-        // actually have (technique / decisions / composure / finishing) so
-        // a competent CM clears the standard-shot gate and contributes a
-        // realistic share of attempts without flattering true long-range
-        // specialists, who still separate via the top of the curve.
-        let mid_shot_selection = (pow_curve(long_shots01, 1.45) * 0.23
-            + pow_curve(technique01, 1.35) * 0.19
-            + pow_curve(decisions01, 1.35) * 0.18
-            + pow_curve(composure01, 1.35) * 0.17
-            + pow_curve(finishing01, 1.45) * 0.13
-            + pow_curve(balance01, 1.20) * 0.06
-            + pow_curve(concentration01, 1.15) * 0.04)
-            .clamp(0.0, 1.0);
-
-        // ── Pressing ─────────────────────────────────────────────────
-        let pressing_profile = ((pow_curve(work_rate01, 1.35) * 0.22
-            + pow_curve(stamina01, 1.25) * 0.18
-            + pow_curve(anticipation01, 1.35) * 0.16
-            + pow_curve(acceleration01, 1.25) * 0.12
-            + pow_curve(positioning01, 1.30) * 0.10
-            + pow_curve(decisions01, 1.30) * 0.10
-            + pow_curve(aggression01, 1.10) * 0.06
-            + pow_curve(teamwork01, 1.15) * 0.06)
-            * pressing_condition_mult)
-            .clamp(0.0, 1.0);
-
-        // ── Tackling ─────────────────────────────────────────────────
-        let tackle_profile = ((pow_curve(tackling01, 1.55) * 0.28
-            + pow_curve(positioning01, 1.35) * 0.16
-            + pow_curve(anticipation01, 1.35) * 0.14
-            + pow_curve(composure01, 1.35) * 0.12
-            + pow_curve(balance01, 1.25) * 0.10
-            + pow_curve(agility01, 1.20) * 0.08
-            + pow_curve(strength01, 1.15) * 0.06
-            + pow_curve(concentration01, 1.20) * 0.06)
-            * tackling_condition_mult)
-            .clamp(0.0, 1.0);
-
-        // ── Discipline ───────────────────────────────────────────────
-        // No `temperament` attribute on the player — fold it into a
-        // composure/concentration blend so the discipline curve still
-        // covers the full intended weight.
-        let aggression_inverse = 1.0 - aggression01;
-        let temperament_proxy = (composure01 + concentration01) * 0.5;
-        let discipline = (pow_curve(composure01, 1.35) * 0.26
-            + pow_curve(decisions01, 1.35) * 0.22
-            + pow_curve(tackling01, 1.30) * 0.16
-            + pow_curve(concentration01, 1.20) * 0.14
-            + temperament_proxy * 0.12
-            + aggression_inverse * 0.10)
-            .clamp(0.0, 1.0);
-
-        // ── Off-ball support ─────────────────────────────────────────
-        let support_profile = ((pow_curve(off_ball01, 1.45) * 0.22
-            + pow_curve(anticipation01, 1.35) * 0.18
-            + pow_curve(decisions01, 1.35) * 0.18
-            + pow_curve(teamwork01, 1.25) * 0.12
-            + pow_curve(stamina01, 1.20) * 0.10
-            + pow_curve(acceleration01, 1.20) * 0.08
-            + pow_curve(composure01, 1.20) * 0.06
-            + pow_curve(concentration01, 1.15) * 0.06)
-            * off_ball_condition_mult)
-            .clamp(0.0, 1.0);
+        let pass_game = reads.pass_game(
+            pressure_penalty,
+            conditioning.passing_condition_mult,
+            conditioning.first_touch_condition_mult,
+        );
+        let (carry_selection, mid_shot_selection) = reads.carry_and_shot();
+        let defending = reads.defending(
+            conditioning.pressing_condition_mult,
+            conditioning.tackling_condition_mult,
+        );
+        let support_profile = reads.support(conditioning.off_ball_condition_mult);
 
         let _ = (
             inputs.distance_to_opponent_goal,
@@ -443,25 +545,44 @@ impl MidfielderSkillProfile {
         MidfielderSkillProfile {
             poor_penalty,
             elite_lift,
-            mid_condition_mult,
-            passing_condition_mult,
-            first_touch_condition_mult,
-            pressing_condition_mult,
-            tackling_condition_mult,
-            off_ball_condition_mult,
-            pass_execution,
-            progressive_selection,
-            long_pass_profile,
-            long_pass_risk_tolerance,
-            press_resistance,
+            mid_condition_mult: conditioning.mid_condition_mult,
+            passing_condition_mult: conditioning.passing_condition_mult,
+            first_touch_condition_mult: conditioning.first_touch_condition_mult,
+            pressing_condition_mult: conditioning.pressing_condition_mult,
+            tackling_condition_mult: conditioning.tackling_condition_mult,
+            off_ball_condition_mult: conditioning.off_ball_condition_mult,
+            pass_execution: pass_game.pass_execution,
+            progressive_selection: pass_game.progressive_selection,
+            long_pass_profile: pass_game.long_pass_profile,
+            long_pass_risk_tolerance: pass_game.long_pass_risk_tolerance,
+            press_resistance: pass_game.press_resistance,
             carry_selection,
             mid_shot_selection,
-            pressing_profile,
-            tackle_profile,
-            discipline,
+            pressing_profile: defending.pressing_profile,
+            tackle_profile: defending.tackle_profile,
+            discipline: defending.discipline,
             support_profile,
             pressure_penalty,
         }
+    }
+
+    #[inline]
+    fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+        if (edge0 - edge1).abs() < f32::EPSILON {
+            return if x < edge0 { 0.0 } else { 1.0 };
+        }
+        let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    #[inline]
+    fn norm01(v: f32) -> f32 {
+        (v / 20.0).clamp(0.0, 1.0)
+    }
+
+    #[inline]
+    fn pow_curve(skill01: f32, exp: f32) -> f32 {
+        skill01.clamp(0.0, 1.0).powf(exp)
     }
 
     /// True if the midfielder should attempt line-breaking through balls.

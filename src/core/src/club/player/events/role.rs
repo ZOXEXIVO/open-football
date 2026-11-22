@@ -13,7 +13,7 @@
 
 use chrono::NaiveDate;
 
-use super::scaling;
+use super::scaling::HappinessScaling;
 use super::types::{MatchOutcome, MatchParticipation};
 use crate::HappinessEventType;
 use crate::club::player::behaviour_config::HappinessConfig;
@@ -148,7 +148,7 @@ impl Player {
             Some(PlayerSquadStatus::KeyPlayer) => 0.85,
             _ => 1.0,
         };
-        let ambition_mul = scaling::ambition_amplifier(self.attributes.ambition);
+        let ambition_mul = HappinessScaling::ambition_amplifier(self.attributes.ambition);
         // Birthdate available; age unknown without a date. Use load.last
         // match-day proxy isn't ideal — fall back on `birth_date.year()`
         // delta from a reference. Simpler: skip age here; ambition is
@@ -177,8 +177,8 @@ impl Player {
             Some(PlayerSquadStatus::NotNeeded) => 0.50,
             _ => 1.0,
         };
-        let ambition_mul = scaling::ambition_amplifier(self.attributes.ambition);
-        let prof_dampen = scaling::criticism_dampener(self.attributes.professionalism);
+        let ambition_mul = HappinessScaling::ambition_amplifier(self.attributes.ambition);
+        let prof_dampen = HappinessScaling::criticism_dampener(self.attributes.professionalism);
         base * status_mul * ambition_mul * prof_dampen
     }
 
@@ -281,23 +281,24 @@ impl Player {
             // veteran feels both the league title AND the cup medal,
             // each scaled by the same ambition + age curve.
             TrophyWon | DomesticCupWon => {
-                scaling::ambition_amplifier(a) * scaling::veteran_amplifier(age)
+                HappinessScaling::ambition_amplifier(a) * HappinessScaling::veteran_amplifier(age)
             }
             // Final-day defeat — pressure / big-match sensitivity.
-            CupFinalDefeat => scaling::pressure_amplifier(im, pr),
+            CupFinalDefeat => HappinessScaling::pressure_amplifier(im, pr),
             // Promotion is a club moment — loyalty plus mild ambition lift.
             PromotionCelebration => {
-                scaling::loyalty_amplifier(l) * (0.9 + scaling::ambition_amplifier(a) * 0.1)
+                HappinessScaling::loyalty_amplifier(l)
+                    * (0.9 + HappinessScaling::ambition_amplifier(a) * 0.1)
             }
             // Relegation hurts ambitious players the most.
-            Relegated => scaling::ambition_amplifier(a),
+            Relegated => HappinessScaling::ambition_amplifier(a),
             // Late-season fear — ambition hurts, professionalism dampens.
             RelegationFear => {
-                scaling::ambition_amplifier(a)
-                    * scaling::criticism_dampener(self.attributes.professionalism)
+                HappinessScaling::ambition_amplifier(a)
+                    * HappinessScaling::criticism_dampener(self.attributes.professionalism)
             }
             // Continental qualification — pure ambition lift.
-            QualifiedForEurope => scaling::ambition_amplifier(a),
+            QualifiedForEurope => HappinessScaling::ambition_amplifier(a),
             _ => 1.0,
         }
     }

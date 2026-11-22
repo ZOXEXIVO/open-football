@@ -96,7 +96,7 @@ impl TeamBehaviour {
             // appearances_tracked give a far truer picture of "am I getting
             // starts?" than days-since-any-match alone.
             let age = DateUtils::age(player.birth_date, date);
-            let role_pressure = compute_role_pressure(player, age);
+            let role_pressure = player.role_pressure(age);
 
             // Promise track-record. promise_trust is roughly -10..+6
             // (kept promises lift, broken ones erode). Asymmetric
@@ -159,62 +159,65 @@ impl TeamBehaviour {
     }
 }
 
-/// Football-aware role-pressure signal. Returns a small negative number
-/// when the player's actual minutes/starts fall short of what their
-/// squad status implies, a small positive number for prospects who are
-/// getting role clarity, and 0 in every other case. Skips the pressure
-/// entirely when the player is unavailable (injured, banned, in recovery)
-/// — they aren't being snubbed, they're just out of action.
-fn compute_role_pressure(player: &Player, age: u8) -> f32 {
-    if player.player_attributes.is_injured
-        || player.player_attributes.is_banned
-        || player.player_attributes.is_in_recovery()
-    {
-        return 0.0;
-    }
-
-    let squad_status = match player.contract.as_ref() {
-        Some(c) => &c.squad_status,
-        None => return 0.0,
-    };
-
-    let days = player.player_attributes.days_since_last_match;
-    let starter_ratio = player.happiness.starter_ratio;
-    let apps_tracked = player.happiness.appearances_tracked;
-
-    match squad_status {
-        // Key player wants starts. Penalise only after either
-        //   * 5+ tracked apps with a starter_ratio below 0.45 (they
-        //     have a sample size and they're not starting), or
-        //   * a 3-week gap since *any* match (clear benching).
-        PlayerSquadStatus::KeyPlayer => {
-            let bad_starts = apps_tracked >= 5 && starter_ratio < 0.45;
-            if bad_starts || days > 21 { -0.35 } else { 0.0 }
-        }
-        // First-team regular tolerates rotation; complains only if
-        // starter_ratio falls below 0.30 or the gap exceeds 24 days.
-        PlayerSquadStatus::FirstTeamRegular => {
-            let bad_starts = apps_tracked >= 5 && starter_ratio < 0.30;
-            if bad_starts || days > 24 { -0.25 } else { 0.0 }
-        }
-        // Rotation player: pressure only when they're not seeing the
-        // pitch at all — a month without an appearance.
-        PlayerSquadStatus::FirstTeamSquadRotation => {
-            if days > 30 {
-                -0.12
-            } else {
-                0.0
-            }
-        }
-        // Prospects benefit from role clarity: a positive drift only
-        // when they're young, recently active, and the starter_ratio
-        // is climbing (proxy: ≥0.20).
-        PlayerSquadStatus::HotProspectForTheFuture | PlayerSquadStatus::DecentYoungster
-            if age <= 21 && days < 30 && (apps_tracked >= 1 || starter_ratio >= 0.20) =>
+impl Player {
+    /// Football-aware role-pressure signal. Returns a small negative number
+    /// when the player's actual minutes/starts fall short of what their
+    /// squad status implies, a small positive number for prospects who are
+    /// getting role clarity, and 0 in every other case. Skips the pressure
+    /// entirely when the player is unavailable (injured, banned, in
+    /// recovery) — they aren't being snubbed, they're just out of action.
+    fn role_pressure(&self, age: u8) -> f32 {
+        let player = self;
+        if player.player_attributes.is_injured
+            || player.player_attributes.is_banned
+            || player.player_attributes.is_in_recovery()
         {
-            0.04
+            return 0.0;
         }
-        _ => 0.0,
+
+        let squad_status = match player.contract.as_ref() {
+            Some(c) => &c.squad_status,
+            None => return 0.0,
+        };
+
+        let days = player.player_attributes.days_since_last_match;
+        let starter_ratio = player.happiness.starter_ratio;
+        let apps_tracked = player.happiness.appearances_tracked;
+
+        match squad_status {
+            // Key player wants starts. Penalise only after either
+            //   * 5+ tracked apps with a starter_ratio below 0.45 (they
+            //     have a sample size and they're not starting), or
+            //   * a 3-week gap since *any* match (clear benching).
+            PlayerSquadStatus::KeyPlayer => {
+                let bad_starts = apps_tracked >= 5 && starter_ratio < 0.45;
+                if bad_starts || days > 21 { -0.35 } else { 0.0 }
+            }
+            // First-team regular tolerates rotation; complains only if
+            // starter_ratio falls below 0.30 or the gap exceeds 24 days.
+            PlayerSquadStatus::FirstTeamRegular => {
+                let bad_starts = apps_tracked >= 5 && starter_ratio < 0.30;
+                if bad_starts || days > 24 { -0.25 } else { 0.0 }
+            }
+            // Rotation player: pressure only when they're not seeing the
+            // pitch at all — a month without an appearance.
+            PlayerSquadStatus::FirstTeamSquadRotation => {
+                if days > 30 {
+                    -0.12
+                } else {
+                    0.0
+                }
+            }
+            // Prospects benefit from role clarity: a positive drift only
+            // when they're young, recently active, and the starter_ratio
+            // is climbing (proxy: ≥0.20).
+            PlayerSquadStatus::HotProspectForTheFuture | PlayerSquadStatus::DecentYoungster
+                if age <= 21 && days < 30 && (apps_tracked >= 1 || starter_ratio >= 0.20) =>
+            {
+                0.04
+            }
+            _ => 0.0,
+        }
     }
 }
 
@@ -318,7 +321,7 @@ mod tests {
         player.player_attributes.is_injured = true;
         player.player_attributes.injury_days_remaining = 21;
         player.player_attributes.days_since_last_match = 30;
-        let role_pressure = compute_role_pressure(&player, 30);
+        let role_pressure = player.role_pressure(30);
         assert_eq!(
             role_pressure, 0.0,
             "injured key player should not feel role pressure"
@@ -332,7 +335,7 @@ mod tests {
         player.happiness.starter_ratio = 0.85;
         player.happiness.appearances_tracked = 10;
         player.player_attributes.days_since_last_match = 4;
-        assert_eq!(compute_role_pressure(&player, 30), 0.0);
+        assert_eq!(player.role_pressure(30), 0.0);
     }
 
     #[test]
@@ -342,7 +345,7 @@ mod tests {
         player.happiness.starter_ratio = 0.20;
         player.happiness.appearances_tracked = 8;
         player.player_attributes.days_since_last_match = 6;
-        assert!(compute_role_pressure(&player, 30) < 0.0);
+        assert!(player.role_pressure(30) < 0.0);
     }
 
     #[test]
@@ -359,7 +362,7 @@ mod tests {
         player.happiness.starter_ratio = 0.0;
         player.happiness.appearances_tracked = 0;
         player.player_attributes.days_since_last_match = 12;
-        assert_eq!(compute_role_pressure(&player, 19), 0.0);
+        assert_eq!(player.role_pressure(19), 0.0);
     }
 
     #[test]
@@ -373,6 +376,6 @@ mod tests {
         player.happiness.starter_ratio = 0.30;
         player.happiness.appearances_tracked = 3;
         player.player_attributes.days_since_last_match = 8;
-        assert!(compute_role_pressure(&player, 19) > 0.0);
+        assert!(player.role_pressure(19) > 0.0);
     }
 }

@@ -64,117 +64,135 @@ pub struct KnockoutTieDto {
     pub winner_name: Option<String>,
 }
 
-fn club_display(
-    simulator_data: &core::SimulatorData,
-    i18n: &I18n,
-    club_id: u32,
-) -> (String, String) {
-    if let Some(club) = simulator_data.club(club_id) {
-        let slug = club
-            .teams
-            .teams
-            .first()
-            .map(|t| t.slug.clone())
-            .unwrap_or_default();
-        (club.name.clone(), slug)
-    } else {
-        (i18n.t("unknown").to_string(), String::new())
+impl ChampionsLeagueGetTemplate {
+    fn club_display(
+        simulator_data: &core::SimulatorData,
+        i18n: &I18n,
+        club_id: u32,
+    ) -> (String, String) {
+        if let Some(club) = simulator_data.club(club_id) {
+            let slug = club
+                .teams
+                .teams
+                .first()
+                .map(|t| t.slug.clone())
+                .unwrap_or_default();
+            (club.name.clone(), slug)
+        } else {
+            (i18n.t("unknown").to_string(), String::new())
+        }
     }
 }
 
-pub async fn champions_league_get_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<ChampionsLeagueGetRequest>,
-) -> ApiResult<impl IntoResponse> {
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let guard = state.data.read().await;
-    let simulator_data = guard.as_ref().unwrap();
+pub struct ChampionsLeagueGet;
 
-    // Find European continent's CL data
-    let cl = simulator_data
-        .continents
-        .iter()
-        .find(|c| c.name == "Europe")
-        .map(|c| &c.continental_competitions.champions_league)
-        .filter(|cl| {
-            !cl.groups.is_empty() || !matches!(cl.current_stage, CompetitionStage::NotStarted)
-        });
+impl ChampionsLeagueGet {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<ChampionsLeagueGetRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let guard = state.data.read().await;
+        let simulator_data = guard.as_ref().unwrap();
 
-    let mut groups = Vec::new();
-    let mut knockout_ties = Vec::new();
-    let mut current_stage = CompetitionStage::NotStarted.as_i18n_key();
-
-    if let Some(cl) = cl {
-        current_stage = cl.current_stage.as_i18n_key();
-
-        // Build group DTOs
-        for (idx, group) in cl.groups.iter().enumerate() {
-            let letter = (b'A' + idx as u8) as char;
-            let rows = group
-                .rows
-                .iter()
-                .map(|row| {
-                    let (name, slug) = club_display(simulator_data, &i18n, row.team_id);
-                    ClGroupRowDto {
-                        club_name: name,
-                        club_slug: slug,
-                        played: row.played,
-                        won: row.won,
-                        drawn: row.drawn,
-                        lost: row.lost,
-                        gf: row.gf,
-                        ga: row.ga,
-                        points: row.points,
-                    }
-                })
-                .collect();
-
-            groups.push(ClGroupDto {
-                name: i18n
-                    .t("group_name")
-                    .replace("{letter}", &letter.to_string()),
-                rows,
+        // Find European continent's CL data
+        let cl = simulator_data
+            .continents
+            .iter()
+            .find(|c| c.name == "Europe")
+            .map(|c| &c.continental_competitions.champions_league)
+            .filter(|cl| {
+                !cl.groups.is_empty() || !matches!(cl.current_stage, CompetitionStage::NotStarted)
             });
-        }
 
-        // Build knockout DTOs
-        for tie in &cl.knockout_round {
-            let (home_name, home_slug) = club_display(simulator_data, &i18n, tie.home_team);
-            let (away_name, away_slug) = club_display(simulator_data, &i18n, tie.away_team);
-            let winner_name = tie.winner.map(|w| club_display(simulator_data, &i18n, w).0);
+        let (current_stage, groups, knockout_ties) = Self::build(simulator_data, &i18n, cl);
 
-            knockout_ties.push(KnockoutTieDto {
-                home_name,
-                home_slug,
-                away_name,
-                away_slug,
-                leg1_score: tie.leg1_score,
-                leg2_score: tie.leg2_score,
-                winner_name,
-            });
-        }
+        let current_path = format!("/{}/champions-league", route_params.lang);
+
+        Ok(ChampionsLeagueGetTemplate {
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
+            cpu_brand: &CPU_BRAND,
+            cores_count: *CPU_CORES,
+            title: i18n.t("champions_league").to_string(),
+            sub_title_prefix: String::new(),
+            sub_title_suffix: String::new(),
+            sub_title: "UEFA".to_string(),
+            sub_title_link: String::new(),
+            sub_title_flag: None,
+            header_color: "#1a3668".to_string(),
+            foreground_color: "#ffffff".to_string(),
+            menu_sections: views::Menus::champions_league_menu(
+                &i18n,
+                &route_params.lang,
+                &current_path,
+            ),
+            lang: route_params.lang,
+            current_stage: i18n.t(current_stage).to_string(),
+            i18n,
+            groups,
+            knockout_ties,
+        })
     }
+    fn build(
+        data: &core::SimulatorData,
+        i18n: &I18n,
+        cl: Option<&core::continent::competitions::ChampionsLeague>,
+    ) -> (&'static str, Vec<ClGroupDto>, Vec<KnockoutTieDto>) {
+        let mut groups = Vec::new();
+        let mut knockout_ties = Vec::new();
+        let mut current_stage = CompetitionStage::NotStarted.as_i18n_key();
 
-    let current_path = format!("/{}/champions-league", route_params.lang);
+        if let Some(cl) = cl {
+            current_stage = cl.current_stage.as_i18n_key();
+            for (idx, group) in cl.groups.iter().enumerate() {
+                let letter = (b'A' + idx as u8) as char;
+                let rows = group
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        let (name, slug) =
+                            ChampionsLeagueGetTemplate::club_display(data, i18n, row.team_id);
+                        ClGroupRowDto {
+                            club_name: name,
+                            club_slug: slug,
+                            played: row.played,
+                            won: row.won,
+                            drawn: row.drawn,
+                            lost: row.lost,
+                            gf: row.gf,
+                            ga: row.ga,
+                            points: row.points,
+                        }
+                    })
+                    .collect();
+                groups.push(ClGroupDto {
+                    name: i18n
+                        .t("group_name")
+                        .replace("{letter}", &letter.to_string()),
+                    rows,
+                });
+            }
+            for tie in &cl.knockout_round {
+                let (home_name, home_slug) =
+                    ChampionsLeagueGetTemplate::club_display(data, i18n, tie.home_team);
+                let (away_name, away_slug) =
+                    ChampionsLeagueGetTemplate::club_display(data, i18n, tie.away_team);
+                let winner_name = tie
+                    .winner
+                    .map(|w| ChampionsLeagueGetTemplate::club_display(data, i18n, w).0);
+                knockout_ties.push(KnockoutTieDto {
+                    home_name,
+                    home_slug,
+                    away_name,
+                    away_slug,
+                    leg1_score: tie.leg1_score,
+                    leg2_score: tie.leg2_score,
+                    winner_name,
+                });
+            }
+        }
 
-    Ok(ChampionsLeagueGetTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        title: i18n.t("champions_league").to_string(),
-        sub_title_prefix: String::new(),
-        sub_title_suffix: String::new(),
-        sub_title: "UEFA".to_string(),
-        sub_title_link: String::new(),
-        sub_title_flag: None,
-        header_color: "#1a3668".to_string(),
-        foreground_color: "#ffffff".to_string(),
-        menu_sections: views::champions_league_menu(&i18n, &route_params.lang, &current_path),
-        lang: route_params.lang,
-        current_stage: i18n.t(current_stage).to_string(),
-        i18n,
-        groups,
-        knockout_ties,
-    })
+        (current_stage, groups, knockout_ties)
+    }
 }

@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use super::compiled::compiled;
+use super::compiled::CompiledDatabase;
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct NationalCompetitionEntity {
@@ -63,6 +63,6 @@ pub struct NationalCompetitionLoader;
 
 impl NationalCompetitionLoader {
     pub fn load() -> Vec<NationalCompetitionEntity> {
-        compiled().national_competitions.clone()
+        CompiledDatabase::get().national_competitions.clone()
     }
 }

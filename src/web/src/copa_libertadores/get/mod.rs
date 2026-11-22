@@ -84,107 +84,115 @@ pub struct KnockoutTieDto {
     pub winner_name: Option<String>,
 }
 
-pub async fn copa_libertadores_get_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<CopaLibertadoresGetRequest>,
-) -> ApiResult<impl IntoResponse> {
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let guard = state.data.read().await;
-    let simulator_data = guard.as_ref().unwrap();
+pub struct CopaLibertadoresGet;
 
-    // Find South America's Copa Libertadores data
-    let copa = simulator_data
-        .continents
-        .iter()
-        .find(|c| c.name == "South America")
-        .map(|c| &c.continental_competitions.copa_libertadores)
-        .filter(|copa| {
-            !copa.groups.is_empty() || !matches!(copa.current_stage, CompetitionStage::NotStarted)
-        });
+impl CopaLibertadoresGet {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<CopaLibertadoresGetRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let guard = state.data.read().await;
+        let simulator_data = guard.as_ref().unwrap();
 
-    let mut groups = Vec::new();
-    let mut knockout_ties = Vec::new();
-    let mut current_stage = CompetitionStage::NotStarted.as_i18n_key();
-
-    if let Some(copa) = copa {
-        current_stage = copa.current_stage.as_i18n_key();
-
-        // Build group DTOs
-        for (idx, group) in copa.groups.iter().enumerate() {
-            let letter = (b'A' + idx as u8) as char;
-            let rows = group
-                .rows
-                .iter()
-                .map(|row| {
-                    let (name, slug) = CopaLibertadoresGetTemplate::club_display(
-                        simulator_data,
-                        &i18n,
-                        row.team_id,
-                    );
-                    CopaGroupRowDto {
-                        club_name: name,
-                        club_slug: slug,
-                        played: row.played,
-                        won: row.won,
-                        drawn: row.drawn,
-                        lost: row.lost,
-                        gf: row.gf,
-                        ga: row.ga,
-                        points: row.points,
-                    }
-                })
-                .collect();
-
-            groups.push(CopaGroupDto {
-                name: i18n
-                    .t("group_name")
-                    .replace("{letter}", &letter.to_string()),
-                rows,
+        // Find South America's Copa Libertadores data
+        let copa = simulator_data
+            .continents
+            .iter()
+            .find(|c| c.name == "South America")
+            .map(|c| &c.continental_competitions.copa_libertadores)
+            .filter(|copa| {
+                !copa.groups.is_empty()
+                    || !matches!(copa.current_stage, CompetitionStage::NotStarted)
             });
-        }
 
-        // Build knockout DTOs
-        for tie in &copa.knockout_round {
-            let (home_name, home_slug) =
-                CopaLibertadoresGetTemplate::club_display(simulator_data, &i18n, tie.home_team);
-            let (away_name, away_slug) =
-                CopaLibertadoresGetTemplate::club_display(simulator_data, &i18n, tie.away_team);
-            let winner_name = tie
-                .winner
-                .map(|w| CopaLibertadoresGetTemplate::club_display(simulator_data, &i18n, w).0);
+        let (current_stage, groups, knockout_ties) = Self::build(simulator_data, &i18n, copa);
+        let current_path = format!("/{}/copa-libertadores", route_params.lang);
 
-            knockout_ties.push(KnockoutTieDto {
-                home_name,
-                home_slug,
-                away_name,
-                away_slug,
-                leg1_score: tie.leg1_score,
-                leg2_score: tie.leg2_score,
-                winner_name,
-            });
-        }
+        Ok(CopaLibertadoresGetTemplate {
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
+            cpu_brand: &CPU_BRAND,
+            cores_count: *CPU_CORES,
+            title: i18n.t("copa_libertadores").to_string(),
+            sub_title_prefix: String::new(),
+            sub_title_suffix: String::new(),
+            sub_title: "CONMEBOL".to_string(),
+            sub_title_link: String::new(),
+            sub_title_flag: None,
+            header_color: "#7a1020".to_string(),
+            foreground_color: "#ffffff".to_string(),
+            menu_sections: views::Menus::copa_libertadores_menu(
+                &i18n,
+                &route_params.lang,
+                &current_path,
+            ),
+            lang: route_params.lang,
+            current_stage: i18n.t(current_stage).to_string(),
+            i18n,
+            groups,
+            knockout_ties,
+        })
     }
+    fn build(
+        data: &core::SimulatorData,
+        i18n: &I18n,
+        copa: Option<&core::continent::competitions::CopaLibertadores>,
+    ) -> (&'static str, Vec<CopaGroupDto>, Vec<KnockoutTieDto>) {
+        let mut groups = Vec::new();
+        let mut knockout_ties = Vec::new();
+        let mut current_stage = CompetitionStage::NotStarted.as_i18n_key();
 
-    let current_path = format!("/{}/copa-libertadores", route_params.lang);
+        if let Some(copa) = copa {
+            current_stage = copa.current_stage.as_i18n_key();
+            for (idx, group) in copa.groups.iter().enumerate() {
+                let letter = (b'A' + idx as u8) as char;
+                let rows = group
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        let (name, slug) =
+                            CopaLibertadoresGetTemplate::club_display(data, i18n, row.team_id);
+                        CopaGroupRowDto {
+                            club_name: name,
+                            club_slug: slug,
+                            played: row.played,
+                            won: row.won,
+                            drawn: row.drawn,
+                            lost: row.lost,
+                            gf: row.gf,
+                            ga: row.ga,
+                            points: row.points,
+                        }
+                    })
+                    .collect();
+                groups.push(CopaGroupDto {
+                    name: i18n
+                        .t("group_name")
+                        .replace("{letter}", &letter.to_string()),
+                    rows,
+                });
+            }
+            for tie in &copa.knockout_round {
+                let (home_name, home_slug) =
+                    CopaLibertadoresGetTemplate::club_display(data, i18n, tie.home_team);
+                let (away_name, away_slug) =
+                    CopaLibertadoresGetTemplate::club_display(data, i18n, tie.away_team);
+                let winner_name = tie
+                    .winner
+                    .map(|w| CopaLibertadoresGetTemplate::club_display(data, i18n, w).0);
+                knockout_ties.push(KnockoutTieDto {
+                    home_name,
+                    home_slug,
+                    away_name,
+                    away_slug,
+                    leg1_score: tie.leg1_score,
+                    leg2_score: tie.leg2_score,
+                    winner_name,
+                });
+            }
+        }
 
-    Ok(CopaLibertadoresGetTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        title: i18n.t("copa_libertadores").to_string(),
-        sub_title_prefix: String::new(),
-        sub_title_suffix: String::new(),
-        sub_title: "CONMEBOL".to_string(),
-        sub_title_link: String::new(),
-        sub_title_flag: None,
-        header_color: "#7a1020".to_string(),
-        foreground_color: "#ffffff".to_string(),
-        menu_sections: views::copa_libertadores_menu(&i18n, &route_params.lang, &current_path),
-        lang: route_params.lang,
-        current_stage: i18n.t(current_stage).to_string(),
-        i18n,
-        groups,
-        knockout_ties,
-    })
+        (current_stage, groups, knockout_ties)
+    }
 }

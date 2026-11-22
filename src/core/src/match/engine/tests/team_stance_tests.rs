@@ -10,7 +10,7 @@ use crate::r#match::defenders::states::DefenderRunningState;
 use crate::r#match::engine::result::Score;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
-use crate::r#match::player::strategies::players::ops::forward_shot_decision::evaluate_forward_shot_decision;
+use crate::r#match::player::strategies::players::ops::forward_shot_decision::ShotDecision;
 use crate::r#match::{
     CoachCard, DefensivePlan, GamePlan, GameTickContext, MatchContext, MatchField, MatchPlayer,
     MatchPlayerCollection, Outlook, ReadCounters, RollingTeamMetrics, Situation, SquadFit,
@@ -244,7 +244,7 @@ fn a_protecting_side_s_chance_is_weighed_as_at_level() {
         tick.possession.update(&field);
         format!(
             "{:?}",
-            evaluate_forward_shot_decision(&context_for(&player, &context, &tick), "TEST")
+            ShotDecision::evaluate(&context_for(&player, &context, &tick), "TEST")
         )
     };
     assert_eq!(

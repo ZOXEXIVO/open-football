@@ -4,11 +4,126 @@ use crate::r#match::engine::ball::ball::Ball;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::PassOriginRestart;
 #[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::flight_diag::StageProbe;
+#[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::goal_kick_diag;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::teleport::BallPass;
 use crate::r#match::events::EventCollection;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::keeper_census::ShotEnd;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer};
+use nalgebra::Vector3;
+
+/// What the diagnostics need to walk `update` alongside the ball: the
+/// relocation census opened at the top, and the stage probe that compares
+/// each pass's exit against the velocity it entered with. Zero-sized when
+/// `match-logs` is off, so the live path pays nothing.
+struct TickTrace {
+    #[cfg(feature = "match-logs")]
+    probe: StageProbe,
+    #[cfg(feature = "match-logs")]
+    census: BallPass,
+}
+
+impl TickTrace {
+    #[cfg(feature = "match-logs")]
+    const STAGE_BALL_NET: usize = crate::r#match::engine::ball::ball::teleport::STAGE_BALL_NET;
+    #[cfg(feature = "match-logs")]
+    const STAGE_BALL_RESTART: usize =
+        crate::r#match::engine::ball::ball::teleport::STAGE_BALL_RESTART;
+    #[cfg(feature = "match-logs")]
+    const STAGE_BALL_LIVE: usize = crate::r#match::engine::ball::ball::teleport::STAGE_BALL_LIVE;
+    #[cfg(feature = "match-logs")]
+    const STAGE_INTERCEPT: usize = crate::r#match::engine::ball::ball::flight_diag::STAGE_INTERCEPT;
+    #[cfg(feature = "match-logs")]
+    const STAGE_BLOCK: usize = crate::r#match::engine::ball::ball::flight_diag::STAGE_BLOCK;
+    #[cfg(feature = "match-logs")]
+    const STAGE_SAVE: usize = crate::r#match::engine::ball::ball::flight_diag::STAGE_SAVE;
+    #[cfg(feature = "match-logs")]
+    const STAGE_DEADLOCK: usize = crate::r#match::engine::ball::ball::flight_diag::STAGE_DEADLOCK;
+    #[cfg(feature = "match-logs")]
+    const STAGE_STALL: usize = crate::r#match::engine::ball::ball::flight_diag::STAGE_STALL;
+    #[cfg(feature = "match-logs")]
+    const STAGE_OWNERSHIP: usize = crate::r#match::engine::ball::ball::flight_diag::STAGE_OWNERSHIP;
+    #[cfg(feature = "match-logs")]
+    const STAGE_KEEPER_BODY: usize =
+        crate::r#match::engine::ball::ball::flight_diag::STAGE_KEEPER_BODY;
+    #[cfg(feature = "match-logs")]
+    const STAGE_MOVE: usize = crate::r#match::engine::ball::ball::flight_diag::STAGE_MOVE;
+    #[cfg(feature = "match-logs")]
+    const STAGE_GOAL: usize = crate::r#match::engine::ball::ball::flight_diag::STAGE_GOAL;
+    #[cfg(feature = "match-logs")]
+    const STAGE_OVER_BAR: usize = crate::r#match::engine::ball::ball::flight_diag::STAGE_OVER_BAR;
+    #[cfg(feature = "match-logs")]
+    const STAGE_WIDE: usize = crate::r#match::engine::ball::ball::flight_diag::STAGE_WIDE;
+    #[cfg(feature = "match-logs")]
+    const STAGE_THROW_IN: usize = crate::r#match::engine::ball::ball::flight_diag::STAGE_THROW_IN;
+    #[cfg(feature = "match-logs")]
+    const STAGE_BOUNDARY: usize = crate::r#match::engine::ball::ball::flight_diag::STAGE_BOUNDARY;
+
+    #[cfg(not(feature = "match-logs"))]
+    const STAGE_BALL_NET: usize = 0;
+    #[cfg(not(feature = "match-logs"))]
+    const STAGE_BALL_RESTART: usize = 0;
+    #[cfg(not(feature = "match-logs"))]
+    const STAGE_BALL_LIVE: usize = 0;
+    #[cfg(not(feature = "match-logs"))]
+    const STAGE_INTERCEPT: usize = 0;
+    #[cfg(not(feature = "match-logs"))]
+    const STAGE_BLOCK: usize = 0;
+    #[cfg(not(feature = "match-logs"))]
+    const STAGE_SAVE: usize = 0;
+    #[cfg(not(feature = "match-logs"))]
+    const STAGE_DEADLOCK: usize = 0;
+    #[cfg(not(feature = "match-logs"))]
+    const STAGE_STALL: usize = 0;
+    #[cfg(not(feature = "match-logs"))]
+    const STAGE_OWNERSHIP: usize = 0;
+    #[cfg(not(feature = "match-logs"))]
+    const STAGE_KEEPER_BODY: usize = 0;
+    #[cfg(not(feature = "match-logs"))]
+    const STAGE_MOVE: usize = 0;
+    #[cfg(not(feature = "match-logs"))]
+    const STAGE_GOAL: usize = 0;
+    #[cfg(not(feature = "match-logs"))]
+    const STAGE_OVER_BAR: usize = 0;
+    #[cfg(not(feature = "match-logs"))]
+    const STAGE_WIDE: usize = 0;
+    #[cfg(not(feature = "match-logs"))]
+    const STAGE_THROW_IN: usize = 0;
+    #[cfg(not(feature = "match-logs"))]
+    const STAGE_BOUNDARY: usize = 0;
+}
+
+impl TickTrace {
+    fn open(_ball: &Ball) -> Self {
+        Self {
+            #[cfg(feature = "match-logs")]
+            probe: StageProbe::new(_ball.position),
+            #[cfg(feature = "match-logs")]
+            census: BallPass::open(_ball),
+        }
+    }
+
+    fn note(
+        &mut self,
+        _stage: usize,
+        _position: Vector3<f32>,
+        _velocity: Vector3<f32>,
+        _allowance: f32,
+    ) {
+        #[cfg(feature = "match-logs")]
+        self.probe.note(_stage, _position, _velocity, _allowance);
+    }
+
+    fn close(&self, ball: &Ball, _stage: usize) {
+        #[cfg(feature = "match-logs")]
+        self.census.close(ball, _stage);
+        #[cfg(not(feature = "match-logs"))]
+        let _ = ball;
+    }
+}
 
 impl Ball {
     /// Update cached landing position. Call after physics changes position/velocity.
@@ -112,7 +227,6 @@ impl Ball {
         }
     }
 
-    #[expect(clippy::too_many_lines)]
     pub fn update(
         &mut self,
         context: &mut MatchContext,
@@ -142,8 +256,7 @@ impl Ball {
         // relocation census. Both early returns below sit above the point
         // `flight_diag`'s `StageProbe` starts booking, so the netting and
         // the entire restart machinery have never been in a census.
-        #[cfg(feature = "match-logs")]
-        let census = crate::r#match::engine::ball::ball::teleport::BallPass::open(self);
+        let mut trace = TickTrace::open(self);
         // **Has the goalkeeper's open knock-chain ended?** Asked before
         // anything else touches the ball, so the ending it books is the one
         // the PREVIOUS tick left behind rather than one this tick is about
@@ -171,11 +284,7 @@ impl Ball {
         // directly.
         if self.in_net.is_some() {
             self.tick_net(&context.goal_positions);
-            #[cfg(feature = "match-logs")]
-            census.close(
-                self,
-                crate::r#match::engine::ball::ball::teleport::STAGE_BALL_NET,
-            );
+            trace.close(self, TickTrace::STAGE_BALL_NET);
             return;
         }
 
@@ -203,9 +312,6 @@ impl Ball {
                 );
             }
         }
-        #[cfg(feature = "match-logs")]
-        let mut probe =
-            crate::r#match::engine::ball::ball::flight_diag::StageProbe::new(self.position);
 
         // ── A ball that is OUT OF PLAY ────────────────────────────────
         //
@@ -228,55 +334,56 @@ impl Ball {
             self.tick_awaited_restart(context, players, events);
             if self.awaiting_restart.is_some() {
                 self.update_landing_cache();
-                #[cfg(feature = "match-logs")]
-                census.close(
-                    self,
-                    crate::r#match::engine::ball::ball::teleport::STAGE_BALL_RESTART,
-                );
+                trace.close(self, TickTrace::STAGE_BALL_RESTART);
                 return;
             }
         }
 
+        self.run_live_tick(context, players, tick_context, events, &mut trace);
+        trace.close(self, TickTrace::STAGE_BALL_LIVE);
+
+        #[cfg(feature = "match-logs")]
+        self.census_live_tick(
+            context,
+            players,
+            owner_at_entry,
+            held_at_entry,
+            spell_at_entry,
+        );
+    }
+
+    /// Everything a live ball does in one tick: physics, every contest that
+    /// can touch it, the stall nets, ownership, the keeper's body and the
+    /// boundaries.
+    fn run_live_tick(
+        &mut self,
+        context: &mut MatchContext,
+        players: &[MatchPlayer],
+        tick_context: &GameTickContext,
+        events: &mut EventCollection,
+        trace: &mut TickTrace,
+    ) {
         self.update_velocity();
         self.tick_aerial_delivery(players, events);
 
         self.try_intercept(context, players, events);
         self.try_aerial_duel(context, players, events);
-        #[cfg(feature = "match-logs")]
-        probe.note(
-            crate::r#match::engine::ball::ball::flight_diag::STAGE_INTERCEPT,
+        trace.note(
+            TickTrace::STAGE_INTERCEPT,
             self.position,
             self.velocity,
             0.0,
         );
         self.try_block_shot(context, players, events);
         self.try_block_pass(context, players, events);
-        #[cfg(feature = "match-logs")]
-        probe.note(
-            crate::r#match::engine::ball::ball::flight_diag::STAGE_BLOCK,
-            self.position,
-            self.velocity,
-            0.0,
-        );
+        trace.note(TickTrace::STAGE_BLOCK, self.position, self.velocity, 0.0);
         self.try_save_shot(context, players, events);
-        #[cfg(feature = "match-logs")]
-        probe.note(
-            crate::r#match::engine::ball::ball::flight_diag::STAGE_SAVE,
-            self.position,
-            self.velocity,
-            0.0,
-        );
+        trace.note(TickTrace::STAGE_SAVE, self.position, self.velocity, 0.0);
         self.try_notify_standing_ball(players, events);
 
         // NUCLEAR OPTION: Force claiming if ball unowned and stopped for too long
         self.force_claim_if_deadlock(players, events);
-        #[cfg(feature = "match-logs")]
-        probe.note(
-            crate::r#match::engine::ball::ball::flight_diag::STAGE_DEADLOCK,
-            self.position,
-            self.velocity,
-            0.0,
-        );
+        trace.note(TickTrace::STAGE_DEADLOCK, self.position, self.velocity, 0.0);
 
         // Unconditional unowned safety net - forces nearest players to TakeBall
         self.force_takeball_if_unowned_too_long(players, events);
@@ -286,18 +393,25 @@ impl Ball {
         // hasn't moved ANYWHERE in 1000 ticks, regardless of who owns
         // it. That's a real stall.
         self.detect_position_stall(players);
-        #[cfg(feature = "match-logs")]
-        probe.note(
-            crate::r#match::engine::ball::ball::flight_diag::STAGE_STALL,
-            self.position,
-            self.velocity,
-            0.0,
-        );
+        trace.note(TickTrace::STAGE_STALL, self.position, self.velocity, 0.0);
 
+        self.run_ownership_and_body(context, players, events, trace);
+        self.run_boundaries(context, players, tick_context, events, trace);
+    }
+
+    /// Ownership, the carry tracker, and the keeper's own body — last of
+    /// everything that can touch the ball before the step it would otherwise
+    /// travel through him on.
+    fn run_ownership_and_body(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+        trace: &mut TickTrace,
+    ) {
         self.process_ownership(context, players, events);
-        #[cfg(feature = "match-logs")]
-        probe.note(
-            crate::r#match::engine::ball::ball::flight_diag::STAGE_OWNERSHIP,
+        trace.note(
+            TickTrace::STAGE_OWNERSHIP,
             self.position,
             self.velocity,
             0.0,
@@ -314,15 +428,27 @@ impl Ball {
             + self.velocity.y * self.velocity.y)
             .sqrt()
             .max(1.5);
+        #[cfg(not(feature = "match-logs"))]
+        let body_allowance = 0.0;
         self.try_keeper_body_block(context, players);
-        #[cfg(feature = "match-logs")]
-        probe.note(
-            crate::r#match::engine::ball::ball::flight_diag::STAGE_KEEPER_BODY,
+        trace.note(
+            TickTrace::STAGE_KEEPER_BODY,
             self.position,
             self.velocity,
             body_allowance,
         );
+    }
 
+    /// Move the ball, then resolve everything that could have put it out of
+    /// play on the new position.
+    fn run_boundaries(
+        &mut self,
+        context: &mut MatchContext,
+        players: &[MatchPlayer],
+        tick_context: &GameTickContext,
+        events: &mut EventCollection,
+        trace: &mut TickTrace,
+    ) {
         // Move ball FIRST, then check goal/boundary on new position
         // `move_to` is entitled to a tick of its own velocity, plus the
         // owner-tracking step it uses instead when the ball is carried.
@@ -331,14 +457,15 @@ impl Ball {
             + self.velocity.y * self.velocity.y)
             .sqrt()
             .max(1.5);
+        #[cfg(not(feature = "match-logs"))]
+        let move_allowance = 0.0;
         #[cfg(feature = "match-logs")]
         let before_move = self.position;
         self.move_to(tick_context);
         #[cfg(feature = "match-logs")]
         self.settle_arrival(before_move);
-        #[cfg(feature = "match-logs")]
-        probe.note(
-            crate::r#match::engine::ball::ball::flight_diag::STAGE_MOVE,
+        trace.note(
+            TickTrace::STAGE_MOVE,
             self.position,
             self.velocity,
             move_allowance,
@@ -348,55 +475,30 @@ impl Ball {
         // out, and each of those would otherwise claim it.
         self.check_frame_rebound(context, events);
         self.check_goal(context, events);
-        #[cfg(feature = "match-logs")]
-        probe.note(
-            crate::r#match::engine::ball::ball::flight_diag::STAGE_GOAL,
-            self.position,
-            self.velocity,
-            0.0,
-        );
+        trace.note(TickTrace::STAGE_GOAL, self.position, self.velocity, 0.0);
         self.check_over_goal(context, players, events);
-        #[cfg(feature = "match-logs")]
-        probe.note(
-            crate::r#match::engine::ball::ball::flight_diag::STAGE_OVER_BAR,
-            self.position,
-            self.velocity,
-            0.0,
-        );
+        trace.note(TickTrace::STAGE_OVER_BAR, self.position, self.velocity, 0.0);
         self.check_wide_of_goal(context, players, events);
-        #[cfg(feature = "match-logs")]
-        probe.note(
-            crate::r#match::engine::ball::ball::flight_diag::STAGE_WIDE,
-            self.position,
-            self.velocity,
-            0.0,
-        );
+        trace.note(TickTrace::STAGE_WIDE, self.position, self.velocity, 0.0);
         self.check_throw_in(context, players, events);
-        #[cfg(feature = "match-logs")]
-        probe.note(
-            crate::r#match::engine::ball::ball::flight_diag::STAGE_THROW_IN,
-            self.position,
-            self.velocity,
-            0.0,
-        );
+        trace.note(TickTrace::STAGE_THROW_IN, self.position, self.velocity, 0.0);
         self.check_boundary_collision(context);
-        #[cfg(feature = "match-logs")]
-        probe.note(
-            crate::r#match::engine::ball::ball::flight_diag::STAGE_BOUNDARY,
-            self.position,
-            self.velocity,
-            0.0,
-        );
+        trace.note(TickTrace::STAGE_BOUNDARY, self.position, self.velocity, 0.0);
         self.police_offside(context, players, events);
         self.update_landing_cache();
+    }
 
-        #[cfg(feature = "match-logs")]
-        census.close(
-            self,
-            crate::r#match::engine::ball::ball::teleport::STAGE_BALL_LIVE,
-        );
-
-        #[cfg(feature = "match-logs")]
+    /// The whole-tick censuses: what the flight did, what the carrier faced,
+    /// and who held the ball for how long.
+    #[cfg(feature = "match-logs")]
+    fn census_live_tick(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        owner_at_entry: Option<u32>,
+        held_at_entry: bool,
+        spell_at_entry: u32,
+    ) {
         {
             crate::r#match::engine::ball::ball::flight_diag::FlightDiag::note_tick(
                 self.position,
@@ -405,175 +507,203 @@ impl Ball {
             );
             self.settled_vz = self.velocity.z;
 
-            // Possession churn, sampled once per full tick around the
-            // whole ball update — so it catches every release site,
-            // including the ones inside `move_to` and the boundary
-            // checks, without a counter planted at each.
-            use crate::r#match::engine::ball::ball::stall::dead_ball_diag as dbd;
-            use std::sync::atomic::Ordering;
+            self.census_carrier_pressure(players);
+            self.census_takeball(players, owner_at_entry);
+            self.census_turnovers(players, owner_at_entry, spell_at_entry);
+        }
+        self.census_keeper_possession(context, players, owner_at_entry, held_at_entry);
+        self.census_shot_fate(context, players);
+    }
 
-            // Pressure on the man in possession — the "is anybody coming
-            // to him" number. Sampled here rather than in any state
-            // because it is a property of the SITUATION, and every state
-            // that could measure it has already decided not to engage.
-            if let Some(owner) = self
-                .current_owner
-                .and_then(|id| players.iter().find(|p| p.id == id))
-            {
-                let mut nearest = f32::MAX;
-                let mut engagers = 0u64;
-                for opp in players.iter() {
-                    if opp.team_id == owner.team_id || opp.off_pitch {
-                        continue;
-                    }
-                    let d = (opp.position - owner.position).magnitude();
-                    nearest = nearest.min(d);
-                    if d < 80.0 {
-                        engagers += 1;
-                    }
-                }
-                if nearest < f32::MAX {
-                    let m = nearest * 0.125;
-                    let bucket = if m < 2.0 {
-                        0
-                    } else if m < 5.0 {
-                        1
-                    } else if m < 10.0 {
-                        2
-                    } else if m < 20.0 {
-                        3
-                    } else {
-                        4
-                    };
-                    dbd::CARRIER_PRESSURE[bucket].fetch_add(1, Ordering::Relaxed);
-                    // Thirds from the CARRIER's point of view, so "own
-                    // third" means his own regardless of which way he
-                    // is playing.
-                    let attacking_right = owner.side == Some(crate::r#match::PlayerSide::Left);
-                    let progress = if attacking_right {
-                        self.position.x / self.field_width
-                    } else {
-                        1.0 - self.position.x / self.field_width
-                    };
-                    let third = if progress < 0.333 {
-                        0
-                    } else if progress < 0.667 {
-                        1
-                    } else {
-                        2
-                    };
-                    dbd::CARRIER_PRESSURE_BY_THIRD[third * 5 + bucket]
-                        .fetch_add(1, Ordering::Relaxed);
-                    dbd::CARRIER_NEAREST_X10.fetch_add((nearest * 10.0) as u64, Ordering::Relaxed);
-                    dbd::CARRIER_ENGAGERS.fetch_add(engagers, Ordering::Relaxed);
-                    dbd::CARRIER_SAMPLES.fetch_add(1, Ordering::Relaxed);
-                    // …and can he actually stay with him? See
-                    // `CHASE_SAMPLES` — the ceilings, not the positions.
-                    if let Some(chaser) = players
-                        .iter()
-                        .filter(|p| p.team_id != owner.team_id && !p.off_pitch)
-                        .filter(|p| {
-                            p.tactical_position.current_position.position_group()
-                                != crate::PlayerFieldPositionGroup::Goalkeeper
-                        })
-                        .min_by(|a, b| {
-                            (a.position - owner.position)
-                                .magnitude()
-                                .total_cmp(&(b.position - owner.position).magnitude())
-                        })
-                    {
-                        use crate::r#match::player::strategies::players::ops::skill_composites as sc;
-                        use crate::r#match::{ActivityIntensity, MovementEffort};
-                        let minute = sc::minute_from_ticks(self.current_tick_cached);
-                        // ⚠ THROUGH `carrier_ceiling`, NOT A COPY OF IT.
-                        // The first version of this sampler re-derived the
-                        // carry formula inline and went stale the moment
-                        // the live path changed, reporting the OLD ceiling
-                        // against the new chaser's.
-                        let carrier_cap = owner.max_speed_with_condition_cached()
-                            * MovementEffort::carrier_ceiling(
-                                owner,
-                                minute,
-                                owner.player_attributes.condition_percentage(),
-                            );
-                        let chaser_cap = chaser.max_speed_with_condition_cached()
-                            * MovementEffort::speed_fraction(
-                                chaser.last_activity_intensity,
-                                chaser.player_attributes.condition_percentage(),
-                            );
-                        dbd::CHASE_SAMPLES.fetch_add(1, Ordering::Relaxed);
-                        dbd::CHASE_CARRIER_CAP_X1000
-                            .fetch_add((carrier_cap * 1000.0) as u64, Ordering::Relaxed);
-                        dbd::CHASE_CHASER_CAP_X1000
-                            .fetch_add((chaser_cap * 1000.0) as u64, Ordering::Relaxed);
-                        dbd::CHASE_CARRIER_SPD_X1000
-                            .fetch_add((owner.velocity.norm() * 1000.0) as u64, Ordering::Relaxed);
-                        dbd::CHASE_CHASER_SPD_X1000
-                            .fetch_add((chaser.velocity.norm() * 1000.0) as u64, Ordering::Relaxed);
-                        if chaser_cap < carrier_cap {
-                            dbd::CHASE_OUTPACED.fetch_add(1, Ordering::Relaxed);
-                        }
-                        let tier = match chaser.last_activity_intensity {
-                            ActivityIntensity::VeryHigh => 0,
-                            ActivityIntensity::High => 1,
-                            ActivityIntensity::Moderate => 2,
-                            ActivityIntensity::Low => 3,
-                            ActivityIntensity::Recovery => 4,
-                        };
-                        dbd::CHASE_TIER[tier].fetch_add(1, Ordering::Relaxed);
-                    }
-                }
+    /// Possession churn, sampled once per full tick around the whole ball
+    /// update — so it catches every release site, including the ones inside
+    /// `move_to` and the boundary checks, without a counter planted at each.
+    #[cfg(feature = "match-logs")]
+    fn census_carrier_pressure(&self, players: &[MatchPlayer]) {
+        use crate::r#match::engine::ball::ball::stall::dead_ball_diag as dbd;
+        use std::sync::atomic::Ordering;
+
+        // Pressure on the man in possession — the "is anybody coming to
+        // him" number. Sampled here rather than in any state because it is a
+        // property of the SITUATION, and every state that could measure it
+        // has already decided not to engage.
+        let Some(owner) = self
+            .current_owner
+            .and_then(|id| players.iter().find(|p| p.id == id))
+        else {
+            return;
+        };
+        let mut nearest = f32::MAX;
+        let mut engagers = 0u64;
+        for opp in players.iter() {
+            if opp.team_id == owner.team_id || opp.off_pitch {
+                continue;
             }
-
-            // Whole-match TakeBall ownership, not just stalls: is this a
-            // state that holds the ball, or the state everybody is in on
-            // the tick they claim it?
-            let tb_now = self
-                .current_owner
-                .and_then(|id| players.iter().find(|p| p.id == id))
-                .is_some_and(|p| p.state.is_take_ball());
-            if tb_now {
-                dbd::TAKEBALL_OWN_TICKS.fetch_add(1, Ordering::Relaxed);
-                if !self.takeball_owned_last_tick || owner_at_entry != self.current_owner {
-                    dbd::TAKEBALL_OWN_SPELLS.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-            self.takeball_owned_last_tick = tb_now;
-
-            if owner_at_entry != self.current_owner {
-                // Turnovers that happen while the ball is already judged
-                // stuck. Cross-team means a real scramble; same-team
-                // means it is bouncing around one side, which would be a
-                // passing problem rather than a contest.
-                if self.stall_anchor_tick >= 250 && self.current_owner.is_some() {
-                    dbd::STALL_TURNOVERS.fetch_add(1, Ordering::Relaxed);
-                    let team_of = |id: Option<u32>| {
-                        id.and_then(|i| players.iter().find(|p| p.id == i))
-                            .map(|p| p.team_id)
-                    };
-                    let before = team_of(owner_at_entry);
-                    let after = team_of(self.current_owner);
-                    if before.is_some() && after.is_some() && before != after {
-                        dbd::STALL_TURNOVERS_CROSS_TEAM.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-                if owner_at_entry.is_some() {
-                    dbd::OWNERSHIP_LOST.fetch_add(1, Ordering::Relaxed);
-                    dbd::SPELL_LENGTH[dbd::spell_bucket(spell_at_entry)]
-                        .fetch_add(1, Ordering::Relaxed);
-                }
-                if self.current_owner.is_some() {
-                    dbd::OWNERSHIP_GAINED.fetch_add(1, Ordering::Relaxed);
-                    if self.current_owner == self.previous_owner {
-                        dbd::OWNERSHIP_RECLAIMED_SELF.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
+            let d = (opp.position - owner.position).magnitude();
+            nearest = nearest.min(d);
+            if d < 80.0 {
+                engagers += 1;
             }
         }
-        #[cfg(feature = "match-logs")]
-        self.census_keeper_possession(context, players, owner_at_entry, held_at_entry);
-        #[cfg(feature = "match-logs")]
-        self.census_shot_fate(context, players);
+        if !(nearest < f32::MAX) {
+            return;
+        }
+        let m = nearest * 0.125;
+        let bucket = if m < 2.0 {
+            0
+        } else if m < 5.0 {
+            1
+        } else if m < 10.0 {
+            2
+        } else if m < 20.0 {
+            3
+        } else {
+            4
+        };
+        dbd::CARRIER_PRESSURE[bucket].fetch_add(1, Ordering::Relaxed);
+        // Thirds from the CARRIER's point of view, so "own third" means his
+        // own regardless of which way he is playing.
+        let attacking_right = owner.side == Some(crate::r#match::PlayerSide::Left);
+        let progress = if attacking_right {
+            self.position.x / self.field_width
+        } else {
+            1.0 - self.position.x / self.field_width
+        };
+        let third = if progress < 0.333 {
+            0
+        } else if progress < 0.667 {
+            1
+        } else {
+            2
+        };
+        dbd::CARRIER_PRESSURE_BY_THIRD[third * 5 + bucket].fetch_add(1, Ordering::Relaxed);
+        dbd::CARRIER_NEAREST_X10.fetch_add((nearest * 10.0) as u64, Ordering::Relaxed);
+        dbd::CARRIER_ENGAGERS.fetch_add(engagers, Ordering::Relaxed);
+        dbd::CARRIER_SAMPLES.fetch_add(1, Ordering::Relaxed);
+        // …and can he actually stay with him? See `CHASE_SAMPLES` — the
+        // ceilings, not the positions.
+        if let Some(chaser) = players
+            .iter()
+            .filter(|p| p.team_id != owner.team_id && !p.off_pitch)
+            .filter(|p| {
+                p.tactical_position.current_position.position_group()
+                    != crate::PlayerFieldPositionGroup::Goalkeeper
+            })
+            .min_by(|a, b| {
+                (a.position - owner.position)
+                    .magnitude()
+                    .total_cmp(&(b.position - owner.position).magnitude())
+            })
+        {
+            self.census_chase_ceiling(owner, chaser);
+        }
+    }
+
+    /// …and can the chaser actually stay with him? See `CHASE_SAMPLES` — the
+    /// ceilings, not the positions.
+    #[cfg(feature = "match-logs")]
+    fn census_chase_ceiling(&self, owner: &MatchPlayer, chaser: &MatchPlayer) {
+        use crate::r#match::engine::ball::ball::stall::dead_ball_diag as dbd;
+        use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+        use crate::r#match::{ActivityIntensity, MovementEffort};
+        use std::sync::atomic::Ordering;
+
+        let minute = sc::minute_from_ticks(self.current_tick_cached);
+        // ⚠ THROUGH `carrier_ceiling`, NOT A COPY OF IT. The first version
+        // of this sampler re-derived the carry formula inline and went stale
+        // the moment the live path changed, reporting the OLD ceiling
+        // against the new chaser's.
+        let carrier_cap = owner.max_speed_with_condition_cached()
+            * MovementEffort::carrier_ceiling(
+                owner,
+                minute,
+                owner.player_attributes.condition_percentage(),
+            );
+        let chaser_cap = chaser.max_speed_with_condition_cached()
+            * MovementEffort::speed_fraction(
+                chaser.last_activity_intensity,
+                chaser.player_attributes.condition_percentage(),
+            );
+        dbd::CHASE_SAMPLES.fetch_add(1, Ordering::Relaxed);
+        dbd::CHASE_CARRIER_CAP_X1000.fetch_add((carrier_cap * 1000.0) as u64, Ordering::Relaxed);
+        dbd::CHASE_CHASER_CAP_X1000.fetch_add((chaser_cap * 1000.0) as u64, Ordering::Relaxed);
+        dbd::CHASE_CARRIER_SPD_X1000
+            .fetch_add((owner.velocity.norm() * 1000.0) as u64, Ordering::Relaxed);
+        dbd::CHASE_CHASER_SPD_X1000
+            .fetch_add((chaser.velocity.norm() * 1000.0) as u64, Ordering::Relaxed);
+        if chaser_cap < carrier_cap {
+            dbd::CHASE_OUTPACED.fetch_add(1, Ordering::Relaxed);
+        }
+        let tier = match chaser.last_activity_intensity {
+            ActivityIntensity::VeryHigh => 0,
+            ActivityIntensity::High => 1,
+            ActivityIntensity::Moderate => 2,
+            ActivityIntensity::Low => 3,
+            ActivityIntensity::Recovery => 4,
+        };
+        dbd::CHASE_TIER[tier].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Whole-match TakeBall ownership, not just stalls: is this a state that
+    /// holds the ball, or the state everybody is in on the tick they claim
+    /// it?
+    #[cfg(feature = "match-logs")]
+    fn census_takeball(&mut self, players: &[MatchPlayer], owner_at_entry: Option<u32>) {
+        use crate::r#match::engine::ball::ball::stall::dead_ball_diag as dbd;
+        use std::sync::atomic::Ordering;
+
+        let tb_now = self
+            .current_owner
+            .and_then(|id| players.iter().find(|p| p.id == id))
+            .is_some_and(|p| p.state.is_take_ball());
+        if tb_now {
+            dbd::TAKEBALL_OWN_TICKS.fetch_add(1, Ordering::Relaxed);
+            if !self.takeball_owned_last_tick || owner_at_entry != self.current_owner {
+                dbd::TAKEBALL_OWN_SPELLS.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        self.takeball_owned_last_tick = tb_now;
+    }
+
+    /// Turnovers that happen while the ball is already judged stuck.
+    /// Cross-team means a real scramble; same-team means it is bouncing
+    /// around one side, which would be a passing problem rather than a
+    /// contest.
+    #[cfg(feature = "match-logs")]
+    fn census_turnovers(
+        &self,
+        players: &[MatchPlayer],
+        owner_at_entry: Option<u32>,
+        spell_at_entry: u32,
+    ) {
+        use crate::r#match::engine::ball::ball::stall::dead_ball_diag as dbd;
+        use std::sync::atomic::Ordering;
+
+        if owner_at_entry == self.current_owner {
+            return;
+        }
+        if self.stall_anchor_tick >= 250 && self.current_owner.is_some() {
+            dbd::STALL_TURNOVERS.fetch_add(1, Ordering::Relaxed);
+            let team_of = |id: Option<u32>| {
+                id.and_then(|i| players.iter().find(|p| p.id == i))
+                    .map(|p| p.team_id)
+            };
+            let before = team_of(owner_at_entry);
+            let after = team_of(self.current_owner);
+            if before.is_some() && after.is_some() && before != after {
+                dbd::STALL_TURNOVERS_CROSS_TEAM.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        if owner_at_entry.is_some() {
+            dbd::OWNERSHIP_LOST.fetch_add(1, Ordering::Relaxed);
+            dbd::SPELL_LENGTH[dbd::spell_bucket(spell_at_entry)].fetch_add(1, Ordering::Relaxed);
+        }
+        if self.current_owner.is_some() {
+            dbd::OWNERSHIP_GAINED.fetch_add(1, Ordering::Relaxed);
+            if self.current_owner == self.previous_owner {
+                dbd::OWNERSHIP_RECLAIMED_SELF.fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
 
     /// One sample per tick of what the keeper is doing with the ball, and
@@ -794,10 +924,7 @@ impl Ball {
         if self.in_net.is_some() {
             self.tick_net(&context.goal_positions);
             #[cfg(feature = "match-logs")]
-            census.close(
-                self,
-                crate::r#match::engine::ball::ball::teleport::STAGE_BALL_NET,
-            );
+            census.close(self, TickTrace::STAGE_BALL_NET);
             return;
         }
 
@@ -827,10 +954,7 @@ impl Ball {
             if self.awaiting_restart.is_some() {
                 self.update_landing_cache();
                 #[cfg(feature = "match-logs")]
-                census.close(
-                    self,
-                    crate::r#match::engine::ball::ball::teleport::STAGE_BALL_RESTART,
-                );
+                census.close(self, TickTrace::STAGE_BALL_RESTART);
                 return;
             }
         }
@@ -864,10 +988,7 @@ impl Ball {
         self.update_landing_cache();
 
         #[cfg(feature = "match-logs")]
-        census.close(
-            self,
-            crate::r#match::engine::ball::ball::teleport::STAGE_BALL_LIVE,
-        );
+        census.close(self, TickTrace::STAGE_BALL_LIVE);
 
         #[cfg(feature = "match-logs")]
         {

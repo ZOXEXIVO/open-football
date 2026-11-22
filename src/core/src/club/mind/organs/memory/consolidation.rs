@@ -108,8 +108,14 @@ impl EpisodeKind {
     }
 
     /// The player reading.
-    #[expect(clippy::too_many_lines)]
     fn consolidates_for_player(self) -> Option<ConsolidationRule> {
+        self.consolidates_player_club_and_people()
+            .or_else(|| self.consolidates_player_himself())
+    }
+
+    /// What the club, its supporters, his manager and his teammates
+    /// taught him.
+    fn consolidates_player_club_and_people(self) -> Option<ConsolidationRule> {
         use ConsolidationRule as R;
 
         match self {
@@ -200,6 +206,15 @@ impl EpisodeKind {
                 Some(R::pattern(FactClaim::HeMentoredMe, FactSubject::Actor, 3))
             }
 
+            _ => None,
+        }
+    }
+
+    /// What he learned about himself.
+    fn consolidates_player_himself(self) -> Option<ConsolidationRule> {
+        use ConsolidationRule as R;
+
+        match self {
             // ── Himself ─────────────────────────────────────────
             EpisodeKind::DerbyWin | EpisodeKind::StartedBigMatch => Some(R::pattern(
                 FactClaim::BigGamesAreMine,

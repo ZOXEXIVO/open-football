@@ -74,7 +74,7 @@ impl GlobalCompetitionSimulator {
                 .map(|t| (t.short_name().to_string(), t.config.name.clone()))
                 .unwrap_or_else(|| ("INT".to_string(), "International".to_string()));
 
-            let match_result = national_world::apply_global_tournament_result(
+            let match_result = national_world::GlobalTournamentMatch::apply(
                 &mut data.continents,
                 fixture,
                 &raw_result,
@@ -127,9 +127,11 @@ impl GlobalCompetitionSimulator {
         fixture: &GlobalCompetitionFixture,
     ) -> Option<u32> {
         let home_rep =
-            national_world::world_country_reputation(continents, fixture.home_country_id) as f32;
+            national_world::WorldCountryLookup::reputation(continents, fixture.home_country_id)
+                as f32;
         let away_rep =
-            national_world::world_country_reputation(continents, fixture.away_country_id) as f32;
+            national_world::WorldCountryLookup::reputation(continents, fixture.away_country_id)
+                as f32;
         let total_rep = (home_rep + away_rep).max(1.0);
         let rep_share = home_rep / total_rep;
         let home_chance = (0.5 + (rep_share - 0.5) * 0.30).clamp(0.35, 0.65);

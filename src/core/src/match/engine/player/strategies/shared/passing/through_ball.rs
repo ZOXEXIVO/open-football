@@ -46,7 +46,7 @@
 //! per possession** — see [`Opportunity`]. A player makes his mind up
 //! about a ball; he does not re-roll it a hundred times a second.
 
-use crate::club::player::registry::has_risk_tolerant_passing_trait;
+use crate::club::player::PlayerTrait;
 use crate::r#match::engine::ball::ball::OffsideLine;
 use crate::r#match::midfielders::states::shared::Opportunity;
 use crate::r#match::player::strategies::players::ops::skill::traits_bias::passing_bias;
@@ -249,7 +249,6 @@ impl ThroughBall {
     /// him. Every rejection below is a football reason, in the order a
     /// passer would run out of patience with them.
     #[allow(clippy::too_many_arguments)]
-    #[expect(clippy::too_many_lines)]
     fn solve(
         ctx: &StateProcessingContext,
         side: PlayerSide,
@@ -262,173 +261,17 @@ impl ThroughBall {
         corridor: f32,
         keeper: Option<Vector3<f32>>,
     ) -> Option<ThroughBallDecision> {
-        let runner_pos = runner.position;
-        let to_runner = runner_pos - from;
-        let range = to_runner.magnitude();
-        if !(Self::MIN_RANGE..=Self::MAX_RANGE).contains(&range) {
-            return None;
+        ThroughBallSolve {
+            ctx,
+            side,
+            from,
+            goal,
+            my_goal_distance,
+            ball_x,
+            corridor,
+            keeper,
         }
-
-        // **Onside when it is struck.** He may run beyond the line; he
-        // may not already be beyond it. Rejecting here rather than
-        // shortening the ball is deliberate — a man who has strayed
-        // offside is not an option, he is a problem for him to solve.
-        if let Some(line_x) = offside_line
-            && OffsideLine::is_beyond(side, runner_pos.x, ball_x, line_x)
-        {
-            return None;
-        }
-
-        // He must be ahead of the passer to begin with. A through ball
-        // played backwards is a contradiction.
-        let runner_goal_distance = (goal - runner_pos).magnitude();
-        if runner_goal_distance >= my_goal_distance {
-            return None;
-        }
-
-        // ── His line ─────────────────────────────────────────────────
-        // A man at pace is running his own line and the ball is played
-        // to where that line is going. A man on the shoulder is going to
-        // run at the goal, and the ball is played into the space in
-        // front of him. Blended on his actual speed so neither case is a
-        // special case.
-        let velocity = ctx.tick_context.positions.players.velocity(runner.id);
-        let speed = velocity.magnitude();
-        let to_goal = (goal - runner_pos)
-            .try_normalize(1.0e-4)
-            .unwrap_or_else(|| Vector3::new(side.forward_dir_x(), 0.0, 0.0));
-        let run_dir = if speed > 1.0e-3 {
-            let w = (speed / Self::RUNNING).clamp(0.0, 1.0);
-            let v = velocity / speed;
-            (v * w + to_goal * (1.0 - w))
-                .try_normalize(1.0e-4)
-                .unwrap_or(to_goal)
-        } else {
-            to_goal
-        };
-        // Only a forward run is a through-ball run.
-        if run_dir.dot(&to_goal) < 0.30 {
-            return None;
-        }
-
-        // ── The meeting point ────────────────────────────────────────
-        // Two passes of the fixed point: guess the flight time to his
-        // feet, see how far he travels in it, re-time the longer ball.
-        // Converges immediately at these distances and costs two square
-        // roots.
-        let runner_pace = (ctx.player().skills(runner.id).physical.pace / 20.0).clamp(0.0, 1.0);
-        let runner_speed = Self::SPEED_SLOW + runner_pace * (Self::SPEED_FAST - Self::SPEED_SLOW);
-        let mut aim = runner_pos;
-        for _ in 0..2 {
-            let flight = Self::flight_ticks((aim - from).magnitude());
-            let lead = (runner_speed * flight).clamp(Self::MIN_LEAD, Self::MAX_LEAD);
-            aim = runner_pos + run_dir * lead;
-        }
-        // Keep it on the pitch, and off the goal line — a ball played
-        // through the back of the six-yard box is a goal kick.
-        let field_width = ctx.context.field_size.width as f32;
-        let field_height = ctx.context.field_size.height as f32;
-        let margin = 3.0 * U_PER_M;
-        aim.x = aim.x.clamp(margin, field_width - margin);
-        aim.y = aim.y.clamp(margin, field_height - margin);
-        aim.z = 0.0;
-
-        // ── Is it worth playing? ─────────────────────────────────────
-        let aim_goal_distance = (goal - aim).magnitude();
-        if runner_goal_distance - aim_goal_distance < Self::MIN_GAIN {
-            return None;
-        }
-
-        // A ball into the keeper's arms is not a through ball.
-        if let Some(gk) = keeper
-            && (aim - gk).magnitude() < Self::KEEPER_KEEPOUT
-        {
-            return None;
-        }
-
-        // ── The race ─────────────────────────────────────────────────
-        // He has to get there first, against the nearest defender who
-        // can also see it. Their speed is not read individually — this
-        // is the passer's judgement of a race, and a passer judges it
-        // off distance.
-        let runner_travel = (aim - runner_pos).magnitude() / runner_speed;
-        let mut defender_travel = f32::INFINITY;
-        let mut cut_off = 0usize;
-        for opponent in ctx.players().opponents().all() {
-            if opponent.tactical_positions.is_goalkeeper() {
-                continue;
-            }
-            let d = (aim - opponent.position).magnitude();
-            let t = d / Self::SPEED_FAST;
-            if t < defender_travel {
-                defender_travel = t;
-            }
-            // How many of them the ball takes out of the game: goal-side
-            // of the passer now, and behind the meeting point after.
-            let theirs = (goal - opponent.position).magnitude();
-            if theirs < my_goal_distance && theirs > aim_goal_distance {
-                cut_off += 1;
-            }
-        }
-        if runner_travel > defender_travel - Self::RACE_MARGIN {
-            return None;
-        }
-
-        // ── The corridor ─────────────────────────────────────────────
-        // Nobody standing in the way of it. Measured to the meeting
-        // point, not to the runner, because that is the line the ball
-        // takes.
-        let lane = aim - from;
-        let lane_len = lane.magnitude();
-        let lane_dir = lane.try_normalize(1.0e-4)?;
-        for opponent in ctx.players().opponents().all() {
-            let offset = opponent.position - from;
-            let along = offset.dot(&lane_dir);
-            if along <= 0.0 || along >= lane_len {
-                continue;
-            }
-            let lateral = (offset - lane_dir * along).magnitude();
-            // A defender only has to move a step to cut the ball out, so
-            // the corridor he blocks widens with how long the ball is in
-            // front of him.
-            let reach = corridor * (1.0 + (along / lane_len) * 0.35);
-            if lateral < reach {
-                return None;
-            }
-        }
-
-        // ── Score it ─────────────────────────────────────────────────
-        // Ground gained toward goal, defenders removed, and how much
-        // room the meeting point has around it — the three things that
-        // make one of these balls better than another.
-        let gained =
-            ((my_goal_distance - aim_goal_distance) / (field_width * 0.45)).clamp(0.0, 1.0);
-        let removed = (cut_off as f32 / 4.0).clamp(0.0, 1.0);
-        let crowding = ctx
-            .players()
-            .opponents()
-            .nearby_at(aim, 8.0 * U_PER_M)
-            .count() as f32;
-        let room = 1.0 / (1.0 + crowding);
-        // Arriving in a shooting position is what separates a good ball
-        // from a merely progressive one.
-        let arrival = 1.0 - (aim_goal_distance / (field_width * 0.32)).clamp(0.0, 1.0);
-
-        let value = (gained * 0.34 + removed * 0.26 + room * 0.22 + arrival * 0.18).clamp(0.0, 1.0);
-
-        let kind = match offside_line {
-            Some(line_x) if OffsideLine::is_beyond(side, aim.x, ball_x, line_x) => {
-                ThroughBallKind::InBehind
-            }
-            _ => ThroughBallKind::IntoSpace,
-        };
-
-        Some(ThroughBallDecision {
-            target_id: runner.id,
-            aim_point: aim,
-            kind,
-            value,
-        })
+        .run(runner, offside_line)
     }
 
     /// Ticks a ground pass of `distance` units takes to arrive.
@@ -451,7 +294,244 @@ impl ThroughBall {
     /// without re-deriving the registry lookup.
     #[inline]
     pub fn is_risk_tolerant(ctx: &StateProcessingContext) -> bool {
-        has_risk_tolerant_passing_trait(&ctx.player.traits)
+        PlayerTrait::any_risk_tolerant_passer(&ctx.player.traits)
+    }
+}
+
+/// One through-ball solve: the passer's geometry and the match state it
+/// is read against, held together while a runner's ball is priced.
+struct ThroughBallSolve<'a> {
+    ctx: &'a StateProcessingContext<'a>,
+    side: PlayerSide,
+    from: Vector3<f32>,
+    goal: Vector3<f32>,
+    my_goal_distance: f32,
+    ball_x: f32,
+    corridor: f32,
+    keeper: Option<Vector3<f32>>,
+}
+
+impl ThroughBallSolve<'_> {
+    fn run(
+        &self,
+        runner: &MatchPlayerLite,
+        offside_line: Option<f32>,
+    ) -> Option<ThroughBallDecision> {
+        let runner_pos = runner.position;
+        let range = (runner_pos - self.from).magnitude();
+        if !(ThroughBall::MIN_RANGE..=ThroughBall::MAX_RANGE).contains(&range) {
+            return None;
+        }
+
+        // **Onside when it is struck.** He may run beyond the line; he
+        // may not already be beyond it. Rejecting here rather than
+        // shortening the ball is deliberate — a man who has strayed
+        // offside is not an option, he is a problem for him to solve.
+        if let Some(line_x) = offside_line
+            && OffsideLine::is_beyond(self.side, runner_pos.x, self.ball_x, line_x)
+        {
+            return None;
+        }
+
+        // He must be ahead of the passer to begin with. A through ball
+        // played backwards is a contradiction.
+        let runner_goal_distance = (self.goal - runner_pos).magnitude();
+        if runner_goal_distance >= self.my_goal_distance {
+            return None;
+        }
+
+        let (run_dir, runner_speed) = self.runner_line(runner, runner_pos)?;
+        let aim = self.meeting_point(runner_pos, run_dir, runner_speed);
+
+        // ── Is it worth playing? ─────────────────────────────────────
+        let aim_goal_distance = (self.goal - aim).magnitude();
+        if runner_goal_distance - aim_goal_distance < ThroughBall::MIN_GAIN {
+            return None;
+        }
+
+        // A ball into the keeper's arms is not a through ball.
+        if let Some(gk) = self.keeper
+            && (aim - gk).magnitude() < ThroughBall::KEEPER_KEEPOUT
+        {
+            return None;
+        }
+
+        let cut_off = self.race(aim, aim_goal_distance, runner_pos, runner_speed)?;
+        self.corridor_clear(aim)?;
+
+        // ── Score it ─────────────────────────────────────────────────
+        let (value, kind) = self.score(aim, aim_goal_distance, cut_off, offside_line);
+        Some(ThroughBallDecision {
+            target_id: runner.id,
+            aim_point: aim,
+            kind,
+            value,
+        })
+    }
+
+    /// ── His line ─────────────────────────────────────────────────────
+    /// A man at pace is running his own line and the ball is played
+    /// to where that line is going. A man on the shoulder is going to
+    /// run at the goal, and the ball is played into the space in
+    /// front of him. Blended on his actual speed so neither case is a
+    /// special case.
+    fn runner_line(
+        &self,
+        runner: &MatchPlayerLite,
+        runner_pos: Vector3<f32>,
+    ) -> Option<(Vector3<f32>, f32)> {
+        let velocity = self.ctx.tick_context.positions.players.velocity(runner.id);
+        let speed = velocity.magnitude();
+        let to_goal = (self.goal - runner_pos)
+            .try_normalize(1.0e-4)
+            .unwrap_or_else(|| Vector3::new(self.side.forward_dir_x(), 0.0, 0.0));
+        let run_dir = if speed > 1.0e-3 {
+            let w = (speed / ThroughBall::RUNNING).clamp(0.0, 1.0);
+            let v = velocity / speed;
+            (v * w + to_goal * (1.0 - w))
+                .try_normalize(1.0e-4)
+                .unwrap_or(to_goal)
+        } else {
+            to_goal
+        };
+        // Only a forward run is a through-ball run.
+        if run_dir.dot(&to_goal) < 0.30 {
+            return None;
+        }
+
+        let runner_pace =
+            (self.ctx.player().skills(runner.id).physical.pace / 20.0).clamp(0.0, 1.0);
+        let runner_speed = ThroughBall::SPEED_SLOW
+            + runner_pace * (ThroughBall::SPEED_FAST - ThroughBall::SPEED_SLOW);
+        Some((run_dir, runner_speed))
+    }
+
+    /// ── The meeting point ────────────────────────────────────────────
+    /// Two passes of the fixed point: guess the flight time to his
+    /// feet, see how far he travels in it, re-time the longer ball.
+    /// Converges immediately at these distances and costs two square
+    /// roots.
+    fn meeting_point(
+        &self,
+        runner_pos: Vector3<f32>,
+        run_dir: Vector3<f32>,
+        runner_speed: f32,
+    ) -> Vector3<f32> {
+        let mut aim = runner_pos;
+        for _ in 0..2 {
+            let flight = ThroughBall::flight_ticks((aim - self.from).magnitude());
+            let lead = (runner_speed * flight).clamp(ThroughBall::MIN_LEAD, ThroughBall::MAX_LEAD);
+            aim = runner_pos + run_dir * lead;
+        }
+        // Keep it on the pitch, and off the goal line — a ball played
+        // through the back of the six-yard box is a goal kick.
+        let field_width = self.ctx.context.field_size.width as f32;
+        let field_height = self.ctx.context.field_size.height as f32;
+        let margin = 3.0 * U_PER_M;
+        aim.x = aim.x.clamp(margin, field_width - margin);
+        aim.y = aim.y.clamp(margin, field_height - margin);
+        aim.z = 0.0;
+        aim
+    }
+
+    /// ── The race ─────────────────────────────────────────────────────
+    /// He has to get there first, against the nearest defender who
+    /// can also see it. Their speed is not read individually — this
+    /// is the passer's judgement of a race, and a passer judges it
+    /// off distance.
+    fn race(
+        &self,
+        aim: Vector3<f32>,
+        aim_goal_distance: f32,
+        runner_pos: Vector3<f32>,
+        runner_speed: f32,
+    ) -> Option<usize> {
+        let runner_travel = (aim - runner_pos).magnitude() / runner_speed;
+        let mut defender_travel = f32::INFINITY;
+        let mut cut_off = 0usize;
+        for opponent in self.ctx.players().opponents().all() {
+            if opponent.tactical_positions.is_goalkeeper() {
+                continue;
+            }
+            let d = (aim - opponent.position).magnitude();
+            let t = d / ThroughBall::SPEED_FAST;
+            if t < defender_travel {
+                defender_travel = t;
+            }
+            // How many of them the ball takes out of the game: goal-side
+            // of the passer now, and behind the meeting point after.
+            let theirs = (self.goal - opponent.position).magnitude();
+            if theirs < self.my_goal_distance && theirs > aim_goal_distance {
+                cut_off += 1;
+            }
+        }
+        if runner_travel > defender_travel - ThroughBall::RACE_MARGIN {
+            return None;
+        }
+        Some(cut_off)
+    }
+
+    /// ── The corridor ─────────────────────────────────────────────────
+    /// Nobody standing in the way of it. Measured to the meeting
+    /// point, not to the runner, because that is the line the ball
+    /// takes.
+    fn corridor_clear(&self, aim: Vector3<f32>) -> Option<()> {
+        let lane = aim - self.from;
+        let lane_len = lane.magnitude();
+        let lane_dir = lane.try_normalize(1.0e-4)?;
+        for opponent in self.ctx.players().opponents().all() {
+            let offset = opponent.position - self.from;
+            let along = offset.dot(&lane_dir);
+            if along <= 0.0 || along >= lane_len {
+                continue;
+            }
+            let lateral = (offset - lane_dir * along).magnitude();
+            // A defender only has to move a step to cut the ball out, so
+            // the corridor he blocks widens with how long the ball is in
+            // front of him.
+            let reach = self.corridor * (1.0 + (along / lane_len) * 0.35);
+            if lateral < reach {
+                return None;
+            }
+        }
+        Some(())
+    }
+
+    /// ── Score it ─────────────────────────────────────────────────────
+    /// Ground gained toward goal, defenders removed, and how much
+    /// room the meeting point has around it — the three things that
+    /// make one of these balls better than another.
+    fn score(
+        &self,
+        aim: Vector3<f32>,
+        aim_goal_distance: f32,
+        cut_off: usize,
+        offside_line: Option<f32>,
+    ) -> (f32, ThroughBallKind) {
+        let field_width = self.ctx.context.field_size.width as f32;
+        let gained =
+            ((self.my_goal_distance - aim_goal_distance) / (field_width * 0.45)).clamp(0.0, 1.0);
+        let removed = (cut_off as f32 / 4.0).clamp(0.0, 1.0);
+        let crowding = self
+            .ctx
+            .players()
+            .opponents()
+            .nearby_at(aim, 8.0 * U_PER_M)
+            .count() as f32;
+        let room = 1.0 / (1.0 + crowding);
+        // Arriving in a shooting position is what separates a good ball
+        // from a merely progressive one.
+        let arrival = 1.0 - (aim_goal_distance / (field_width * 0.32)).clamp(0.0, 1.0);
+
+        let value = (gained * 0.34 + removed * 0.26 + room * 0.22 + arrival * 0.18).clamp(0.0, 1.0);
+
+        let kind = match offside_line {
+            Some(line_x) if OffsideLine::is_beyond(self.side, aim.x, self.ball_x, line_x) => {
+                ThroughBallKind::InBehind
+            }
+            _ => ThroughBallKind::IntoSpace,
+        };
+        (value, kind)
     }
 }
 

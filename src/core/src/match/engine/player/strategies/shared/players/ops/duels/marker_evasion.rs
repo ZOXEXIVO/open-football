@@ -41,6 +41,7 @@
 //! anticipation and concentration. A good mover beats a poor marker; a
 //! poor mover against a good marker gets nothing, which is the point.
 
+use crate::r#match::player::strategies::players::ops::effective_skill::ActionContext;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchPlayer, MatchPlayerLite, StateProcessingContext};
 use nalgebra::Vector3;
@@ -231,7 +232,7 @@ impl MarkerEvasion {
     /// never drift into two different contests wearing one name.
     pub(crate) fn mover_quality(player: &MatchPlayer, minute: u32) -> f32 {
         let s = &player.skills;
-        (sc::n(sc::eff(player, sc::EffActionContext::mental(minute), |p| {
+        (sc::n(sc::eff(player, ActionContext::mental(minute), |p| {
             p.skills.mental.off_the_ball
         })) * 0.45
             + (s.physical.acceleration / 20.0).clamp(0.0, 1.0) * 0.32

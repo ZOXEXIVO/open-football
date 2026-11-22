@@ -34,6 +34,28 @@ use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
 use crate::mid_run_diag::RestartCensus;
 use nalgebra::Vector3;
 
+/// A throw-in the touchline resolver has awarded but not staged: where it
+/// is taken from, who takes it, and who last touched it.
+struct ThrowInAward {
+    spot: Vector3<f32>,
+    throwing_side: PlayerSide,
+    #[cfg(feature = "match-logs")]
+    last_toucher_side: Option<PlayerSide>,
+}
+
+/// What one tick of a dead ball says about the taker's arrival and the
+/// restart's routine, read once and read by every phase that follows.
+struct RestartProgress {
+    now: u64,
+    range: f32,
+    waited: u64,
+    arrived: bool,
+    settled_at: Option<u64>,
+    routine_done: bool,
+    formed: bool,
+    expired: bool,
+}
+
 impl Ball {
     /// How often the taker is re-sent for a ball he has not reached yet,
     /// in engine ticks. 40 = 0.4 s: often enough that losing him to
@@ -41,24 +63,76 @@ impl Ball {
     /// not a signal every tick.
     const NUDGE_TICKS: u64 = 40;
 
+    /// How fast the ball closes the last stride onto the man picking it up,
+    /// in units per tick — the rate `Ball::move_to` brings a ball into a
+    /// keeper's gloves.
+    const PICKUP_RATE: f32 = 1.5;
+
     /// Touchline check: if the ball crossed y<=0 or y>=field_height, set
     /// up a throw-in for the team that did NOT last touch it. Routes
     /// through `pending_set_piece_teleport` like corners / goal kicks so
     /// the engine can place the thrower onto the ball after the tick.
-    #[expect(clippy::too_many_lines)]
     pub(crate) fn check_throw_in(
         &mut self,
         context: &MatchContext,
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
+        let Some(award) = self.throw_in_award(context, players) else {
+            return;
+        };
+
+        let thrower = ThrowIn::pick_thrower(players, award.throwing_side, award.spot);
+        let thrower_id = match thrower {
+            Some(id) => id,
+            None => return,
+        };
+
+        #[cfg(feature = "match-logs")]
+        self.note_throw_in_census(context, players, &award, thrower_id);
+
+        // **The ball is NOT written onto the spot.** It has just crossed
+        // the touchline and it goes on going — out across the run-off
+        // until the hoardings stop it — and the thrower fetches it from
+        // wherever that leaves it and brings it back to `throw_pos`. See
+        // [`RunOff`]; `OF_RUN_OUT=off` restores the snap.
+        let runs_out = RunOff::armed();
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(format!(
+            "check_throw_in: THROW-IN, ball ({:.1}, {:.1}, {:.2}) {} ({:.1}, {:.1}) taker {thrower_id}",
+            self.position.x,
+            self.position.y,
+            self.position.z,
+            if runs_out {
+                "runs out; taken from"
+            } else {
+                "->"
+            },
+            award.spot.x,
+            award.spot.y
+        ));
+        if !runs_out {
+            self.position = award.spot;
+            self.velocity = Vector3::zeros();
+        }
+
+        self.stage_throw_in(context, players, events, thrower_id, award.spot, runs_out);
+    }
+
+    /// Where does this ball go out, and whose throw is it? `None` when it is
+    /// not out, is held, or is already a dead ball.
+    fn throw_in_award(
+        &self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+    ) -> Option<ThrowInAward> {
         // Already resolved this tick (goal scored, etc.), or the ball is
         // still in the goal from the last one — or it is already out of
         // play and running out past the line, in which case awarding it
         // again on every tick of the run-out would keep resetting the
         // patience clock. See [`RunOff`](crate::r#match::engine::ball::ball::RunOff).
         if self.goal_scored || self.in_net.is_some() || self.awaiting_restart.is_some() {
-            return;
+            return None;
         }
 
         // ⚠ **A ball somebody is HOLDING is not a ball that has gone out.**
@@ -74,13 +148,13 @@ impl Ball {
         //
         // Same rule `check_wide_of_goal` states for the byline.
         if self.current_owner.is_some() {
-            return;
+            return None;
         }
         let field_height = context.field_size.height as f32;
         let crossed_top = self.position.y <= 0.0;
         let crossed_bottom = self.position.y >= field_height;
         if !crossed_top && !crossed_bottom {
-            return;
+            return None;
         }
 
         // Last toucher's side decides which team gets the throw-in.
@@ -94,7 +168,7 @@ impl Ball {
         let throwing_side = match last_toucher_side {
             Some(PlayerSide::Left) => PlayerSide::Right,
             Some(PlayerSide::Right) => PlayerSide::Left,
-            None => return, // Safety net: let boundary_collision handle it.
+            None => return None, // Safety net: let boundary_collision handle it.
         };
 
         // **Where it crossed, not where it now is.** Law 15 takes the throw
@@ -120,76 +194,66 @@ impl Ball {
         } else {
             field_height - inset
         };
-        let throw_pos = Vector3::new(throw_x, throw_y, 0.0);
+        Some(ThrowInAward {
+            spot: Vector3::new(throw_x, throw_y, 0.0),
+            throwing_side,
+            #[cfg(feature = "match-logs")]
+            last_toucher_side,
+        })
+    }
 
-        let thrower = ThrowIn::pick_thrower(players, throwing_side, throw_pos);
-        let thrower_id = match thrower {
-            Some(id) => id,
-            None => return,
-        };
-
-        // Sampled BEFORE the mutations below, all of which rewrite the very
-        // fields the census is asking about — `record_touch` in particular
-        // stamps this tick, which would make every gap read as zero.
-        #[cfg(feature = "match-logs")]
-        {
-            // Do the two answers to "who put it out" agree? They are the
-            // last TOUCH and the last OWNER, and when they disagree the
-            // award is decided by whichever one happens to be non-null —
-            // see the note on the fallback chain above.
-            let owner_side = self
-                .previous_owner
-                .or(self.current_owner)
-                .and_then(|pid| players.iter().find(|p| p.id == pid))
-                .and_then(|p| p.side);
-            let disagree = owner_side.is_some_and(|s| Some(s) != last_toucher_side);
-            let now = context.current_tick();
-            let since_previous = self
-                .last_throw_in_tick
-                .replace(now)
-                .map(|previous| now.saturating_sub(previous));
-            let walk = players
-                .iter()
-                .find(|p| p.id == thrower_id)
-                .map(|p| (p.position - throw_pos).magnitude())
-                .unwrap_or(0.0);
-            RestartCensus::note_throw_in(disagree, since_previous, walk);
-            self.delivery_tally.note_throw_in_gap(since_previous);
-            self.note_throw_in_source(players);
-            if let Some(census) = self.pass_block_census.take() {
-                census.close(PassBlockCensus::TOUCH);
-            }
+    /// Sampled BEFORE the throw-in mutations below, all of which rewrite the
+    /// very fields the census is asking about — `record_touch` in
+    /// particular stamps this tick, which would make every gap read as zero.
+    #[cfg(feature = "match-logs")]
+    fn note_throw_in_census(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        award: &ThrowInAward,
+        thrower_id: u32,
+    ) {
+        // Do the two answers to "who put it out" agree? They are the
+        // last TOUCH and the last OWNER, and when they disagree the
+        // award is decided by whichever one happens to be non-null —
+        // see the note on the fallback chain above.
+        let owner_side = self
+            .previous_owner
+            .or(self.current_owner)
+            .and_then(|pid| players.iter().find(|p| p.id == pid))
+            .and_then(|p| p.side);
+        let disagree = owner_side.is_some_and(|s| Some(s) != award.last_toucher_side);
+        let now = context.current_tick();
+        let since_previous = self
+            .last_throw_in_tick
+            .replace(now)
+            .map(|previous| now.saturating_sub(previous));
+        let walk = players
+            .iter()
+            .find(|p| p.id == thrower_id)
+            .map(|p| (p.position - award.spot).magnitude())
+            .unwrap_or(0.0);
+        RestartCensus::note_throw_in(disagree, since_previous, walk);
+        self.delivery_tally.note_throw_in_gap(since_previous);
+        self.note_throw_in_source(players);
+        if let Some(census) = self.pass_block_census.take() {
+            census.close(PassBlockCensus::TOUCH);
         }
+    }
 
-        // **The ball is NOT written onto the spot.** It has just crossed
-        // the touchline and it goes on going — out across the run-off
-        // until the hoardings stop it — and the thrower fetches it from
-        // wherever that leaves it and brings it back to `throw_pos`. See
-        // [`RunOff`]; `OF_RUN_OUT=off` restores the snap.
-        let runs_out = RunOff::armed();
-        #[cfg(feature = "match-logs")]
-        crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(format!(
-            "check_throw_in: THROW-IN, ball ({:.1}, {:.1}, {:.2}) {} ({:.1}, {:.1}) taker {thrower_id}",
-            self.position.x,
-            self.position.y,
-            self.position.z,
-            if runs_out {
-                "runs out; taken from"
-            } else {
-                "->"
-            },
-            throw_pos.x,
-            throw_pos.y
-        ));
-        if !runs_out {
-            self.position = throw_pos;
-            self.velocity = Vector3::zeros();
-        }
-
-        // OUT OF PLAY, and nobody's. The taker has to go and get it — see
-        // [`AwaitedRestart`]. Handing him the ball here and teleporting him
-        // onto it is what made a player appear on the touchline out of
-        // nowhere on every throw-in in the match.
+    /// Out of play, and nobody's. The taker has to go and get it — see
+    /// [`AwaitedRestart`]. Handing him the ball here and teleporting him
+    /// onto it is what made a player appear on the touchline out of
+    /// nowhere on every throw-in in the match.
+    fn stage_throw_in(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+        thrower_id: u32,
+        throw_pos: Vector3<f32>,
+        runs_out: bool,
+    ) {
         self.previous_owner = self.current_owner;
         self.current_owner = None;
         self.ownership_duration = 0;
@@ -373,7 +437,6 @@ impl Ball {
     /// A restart with an [`AwaitedRestart::take_from`] — the corner, and
     /// only the corner — runs the same thing TWICE: he fetches the ball
     /// from wherever it went out, and then carries it to the arc.
-    #[expect(clippy::too_many_lines)]
     pub(crate) fn tick_awaited_restart(
         &mut self,
         context: &mut MatchContext,
@@ -392,28 +455,7 @@ impl Ball {
             .iter()
             .find(|p| p.id == await_state.taker_id && !p.off_pitch)
         else {
-            // Substituted or sent off between the award and now. Drop the
-            // restart and let the ordinary loose-ball logic have it rather
-            // than waiting for a man who is not on the pitch.
-            //
-            // ⚠ **But not while the ball is off the pitch.** Handing a
-            // loose ball back used to be harmless because it was lying on
-            // the restart spot, two units INSIDE the line. It can now be
-            // four metres beyond the hoardings ([`RunOff`]), where the
-            // pitch clamp on every other player forbids anyone from ever
-            // reaching it — the ball would sit out there, unowned and
-            // untouchable, until a stall detector eventually kicked it
-            // away. Put it on the spot the restart was awarded at, which
-            // is the same backstop a taker who never arrives gets.
-            let spot = await_state.take_from.unwrap_or(await_state.spot);
-            if RunOff::armed() {
-                self.position.x = spot.x;
-                self.position.y = spot.y;
-                self.velocity = Vector3::zeros();
-                self.spin = Vector3::zeros();
-            }
-            self.awaiting_restart = None;
-            self.goal_kick_run_up = None;
+            self.drop_awaited_restart(await_state);
             return;
         };
         #[cfg(feature = "match-logs")]
@@ -431,67 +473,120 @@ impl Ball {
             );
         }
 
-        // ── STILL RUNNING OUT ────────────────────────────────────────
-        //
-        // The ball crossed the line on the tick the restart was awarded
-        // and it has not finished travelling. It is out of play from that
-        // instant — nobody may touch it, nothing may claim it — but it is
-        // emphatically not stationary, and pinning it here is exactly the
-        // reported *"the ball stops on the line"*. So the ordinary physics
-        // runs, the perimeter bounds it, and only when it comes to rest
-        // does the pin below take over. See [`RunOff`].
-        //
-        // The taker was sent at the award and is already on his way, so
-        // the run-out costs the restart almost nothing: he is walking
-        // across the pitch while the ball is crossing the last four
-        // metres of it.
-        if !await_state.settled {
-            let now = context.current_tick();
-            if !self.tick_run_out(&mut await_state, now) {
-                self.current_owner = None;
-                // Keep sending him — the ball is moving, so a chaser who
-                // reached where it WAS has to be told again. Same 40-tick
-                // cadence as the wait below.
-                if now.saturating_sub(await_state.awarded_tick) % Self::NUDGE_TICKS == 0 {
-                    events.add_ball_event(BallEvent::TakeMe(await_state.taker_id));
-                }
-                self.awaiting_restart = Some(await_state);
-                return;
-            }
-            // It has just stopped. The patience was set at the award
-            // against a spot the ball was never on — recompute it against
-            // the walk he actually has, or a keeper who has to come four
-            // metres further than the award assumed runs out of clock for
-            // a reason that has nothing to do with him.
-            let left = (taker.position - await_state.spot).magnitude();
-            let ceiling = AwaitedRestart::patience_for(left);
-            await_state.patience_ticks = now
-                .saturating_sub(await_state.awarded_tick)
-                .saturating_add(ceiling);
-            // ⚠ **Written back HERE, not at the end.** The pin below
-            // returns without storing `await_state` — it never had to,
-            // because nothing above it used to mutate the restart — so
-            // leaving the write to the fall-through loses both the settle
-            // and the new bound, and the ball re-settles from scratch on
-            // every subsequent tick. `settled` would never be true in the
-            // ball's own copy and the taker's arrival would never be
-            // tested.
-            self.awaiting_restart = Some(await_state);
+        if !self.tick_restart_run_out(&mut await_state, context, taker, events) {
+            return;
         }
+        self.pin_dead_ball(&mut await_state, taker);
+        let progress = self.restart_progress(&mut await_state, context, players, taker);
+        if self.tick_goal_kick_run_up(&mut await_state, taker, &progress, players, context, events)
+        {
+            return;
+        }
+        if self.restart_routine_wait(&mut await_state, taker, &progress, context, events) {
+            return;
+        }
+        if self.restart_hold(&mut await_state, taker, context, events) {
+            return;
+        }
+        self.hand_over_restart(await_state, taker, &progress, context, events);
+    }
 
-        // The ball is out of play: it does not move by itself and it is
-        // nobody's, whatever else happened this tick. On the second leg of
-        // a corner it moves with the man CARRYING it, which is the one
-        // case where a dead ball travels — and it travels at his pace,
-        // under his feet, rather than being written onto the arc.
-        //
-        // …the height settles either way. A throw-in's ball is already on
-        // the deck, but an offside is flagged the moment the receiver
-        // reaches the ball and that can be at chest height, so writing the
-        // spot's `z` in would drop it a couple of metres in one tick — the
-        // teleport this whole mechanism exists to avoid, on the one axis
-        // where it is always visible. 0.10 m/tick is a ball dying on the
-        // grass.
+    /// Substituted or sent off between the award and now. Drop the restart
+    /// and let the ordinary loose-ball logic have it rather than waiting for
+    /// a man who is not on the pitch.
+    ///
+    /// ⚠ **But not while the ball is off the pitch.** Handing a loose ball
+    /// back used to be harmless because it was lying on the restart spot,
+    /// two units INSIDE the line. It can now be four metres beyond the
+    /// hoardings ([`RunOff`]), where the pitch clamp on every other player
+    /// forbids anyone from ever reaching it — the ball would sit out there,
+    /// unowned and untouchable, until a stall detector eventually kicked it
+    /// away. Put it on the spot the restart was awarded at, which is the
+    /// same backstop a taker who never arrives gets.
+    fn drop_awaited_restart(&mut self, await_state: AwaitedRestart) {
+        let spot = await_state.take_from.unwrap_or(await_state.spot);
+        if RunOff::armed() {
+            self.position.x = spot.x;
+            self.position.y = spot.y;
+            self.velocity = Vector3::zeros();
+            self.spin = Vector3::zeros();
+        }
+        self.awaiting_restart = None;
+        self.goal_kick_run_up = None;
+    }
+
+    /// ── STILL RUNNING OUT ────────────────────────────────────────
+    ///
+    /// The ball crossed the line on the tick the restart was awarded and it
+    /// has not finished travelling. It is out of play from that instant —
+    /// nobody may touch it, nothing may claim it — but it is emphatically
+    /// not stationary, and pinning it here is exactly the reported *"the
+    /// ball stops on the line"*. So the ordinary physics runs, the perimeter
+    /// bounds it, and only when it comes to rest does the pin take over. See
+    /// [`RunOff`].
+    ///
+    /// The taker was sent at the award and is already on his way, so the
+    /// run-out costs the restart almost nothing: he is walking across the
+    /// pitch while the ball is crossing the last four metres of it.
+    ///
+    /// Returns false while the restart still waits on the run-out.
+    fn tick_restart_run_out(
+        &mut self,
+        await_state: &mut AwaitedRestart,
+        context: &MatchContext,
+        taker: &MatchPlayer,
+        events: &mut EventCollection,
+    ) -> bool {
+        if await_state.settled {
+            return true;
+        }
+        let now = context.current_tick();
+        if !self.tick_run_out(await_state, now) {
+            self.current_owner = None;
+            // Keep sending him — the ball is moving, so a chaser who
+            // reached where it WAS has to be told again. Same 40-tick
+            // cadence as the wait below.
+            if now
+                .saturating_sub(await_state.awarded_tick)
+                .is_multiple_of(Self::NUDGE_TICKS)
+            {
+                events.add_ball_event(BallEvent::TakeMe(await_state.taker_id));
+            }
+            self.awaiting_restart = Some(*await_state);
+            return false;
+        }
+        // It has just stopped. The patience was set at the award against a
+        // spot the ball was never on — recompute it against the walk he
+        // actually has, or a keeper who has to come four metres further
+        // than the award assumed runs out of clock for a reason that has
+        // nothing to do with him.
+        let left = (taker.position - await_state.spot).magnitude();
+        let ceiling = AwaitedRestart::patience_for(left);
+        await_state.patience_ticks = now
+            .saturating_sub(await_state.awarded_tick)
+            .saturating_add(ceiling);
+        // ⚠ **Written back HERE, not at the end.** The pin returns without
+        // storing `await_state` — it never had to, because nothing above it
+        // used to mutate the restart — so leaving the write to the
+        // fall-through loses both the settle and the new bound, and the
+        // ball re-settles from scratch on every subsequent tick.
+        self.awaiting_restart = Some(*await_state);
+        true
+    }
+
+    /// The ball is out of play: it does not move by itself and it is
+    /// nobody's, whatever else happened this tick. On the second leg of a
+    /// corner it moves with the man CARRYING it, which is the one case where
+    /// a dead ball travels — and it travels at his pace, under his feet,
+    /// rather than being written onto the arc.
+    ///
+    /// …the height settles either way. A throw-in's ball is already on the
+    /// deck, but an offside is flagged the moment the receiver reaches the
+    /// ball and that can be at chest height, so writing the spot's `z` in
+    /// would drop it a couple of metres in one tick — the teleport this
+    /// whole mechanism exists to avoid, on the one axis where it is always
+    /// visible. 0.10 m/tick is a ball dying on the grass.
+    fn pin_dead_ball(&mut self, await_state: &mut AwaitedRestart, taker: &MatchPlayer) {
         const SETTLE_RATE: f32 = 0.10;
         /// Where a carried dead ball rides, in metres — `Ball::carry_height`'s
         /// own figure for a ball in a player's hands.
@@ -504,17 +599,12 @@ impl Ball {
         /// one carrying — `Actors::in_his_hands` wants it between 0.85 and
         /// 1.45 m before it will put it in his arms.
         const CARRY_HEIGHT: f32 = 1.15;
-        /// How fast the ball closes the last stride onto the man picking it
-        /// up, in units per tick — the rate `Ball::move_to` brings a ball
-        /// into a keeper's gloves.
-        ///
-        /// ⚠ **The carry used to start by writing the ball onto him**, and
-        /// [`AwaitedRestart::REACH`] is 12 u, so it started with a jump of
-        /// up to a metre and a half. Caught in a recorded track: the ball
-        /// lay against the hoardings at x = −36.8 and the next sample had
-        /// it at −27.6 with the keeper. He is *bending down to pick it up*
-        /// — the last teleport in a sequence that exists to remove them.
-        const PICKUP_RATE: f32 = 1.5;
+        // ⚠ **The carry used to start by writing the ball onto him**, and
+        // [`AwaitedRestart::REACH`] is 12 u, so it started with a jump of
+        // up to a metre and a half. Caught in a recorded track: the ball
+        // lay against the hoardings at x = −36.8 and the next sample had
+        // it at −27.6 with the keeper. He is *bending down to pick it up*
+        // — the last teleport in a sequence that exists to remove them.
         let height = if await_state.carrying {
             let to_taker = Vector3::new(
                 taker.position.x - self.position.x,
@@ -522,8 +612,8 @@ impl Ball {
                 0.0,
             );
             let gap = to_taker.norm();
-            if gap > PICKUP_RATE {
-                let step = to_taker * (PICKUP_RATE / gap);
+            if gap > Self::PICKUP_RATE {
+                let step = to_taker * (Self::PICKUP_RATE / gap);
                 self.position.x += step.x;
                 self.position.y += step.y;
             } else {
@@ -539,7 +629,17 @@ impl Ball {
         self.position.z += (height - self.position.z).clamp(-SETTLE_RATE, SETTLE_RATE);
         self.velocity = Vector3::zeros();
         self.current_owner = None;
+    }
 
+    /// How far the taker still has to go, how long he has waited, and what
+    /// the restart's routine and shape say about being ready.
+    fn restart_progress(
+        &mut self,
+        await_state: &mut AwaitedRestart,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        taker: &MatchPlayer,
+    ) -> RestartProgress {
         let range = (taker.position - await_state.spot).magnitude();
         let waited = context
             .current_tick()
@@ -579,7 +679,7 @@ impl Ball {
             0.0,
         )
         .norm()
-            <= PICKUP_RATE;
+            <= Self::PICKUP_RATE;
         if settled_at.is_some()
             && await_state.carrying
             && at_his_feet
@@ -597,120 +697,177 @@ impl Ball {
         if await_state.settled_tick.is_some() {
             await_state.quiet.observe(players, taker, now);
         }
-        let (formed, ceiling) = self.set_up(&await_state, players, taker);
+        let (formed, ceiling) = self.set_up(await_state, players, taker);
         let expired = await_state
             .settled_tick
             .is_some_and(|at| now.saturating_sub(at) >= routine + ceiling);
+        RestartProgress {
+            now,
+            range,
+            waited,
+            arrived,
+            settled_at,
+            routine_done,
+            formed,
+            expired,
+        }
+    }
 
-        // **The goal kick's run-up.** He has reached the ball; if he is
-        // going long he places it, walks back to his mark, stands there
-        // until his routine is done and the set-up is formed, and runs in —
-        // and the restart holds for the whole of it, the same way the
-        // corner below holds for the box. Each leg resets the clock like the corner does: the walk
-        // back is the restart working, not the taker taking too long. See
-        // `KeeperGoalKick`.
-        //
-        // Ahead of the routine because long or short is read off the press
-        // on his box as he PLACES the ball: read at the end of it, every
-        // attacker had long since jogged out and only 2% went long.
-        if await_state.origin == PassOriginRestart::GoalKick
-            && await_state.take_from.is_none()
-            && KeeperGoalKick::armed()
+    /// **The goal kick's run-up.** He has reached the ball; if he is going
+    /// long he places it, walks back to his mark, stands there until his
+    /// routine is done and the set-up is formed, and runs in — and the
+    /// restart holds for the whole of it, the same way the corner below
+    /// holds for the box. Each leg resets the clock like the corner does:
+    /// the walk back is the restart working, not the taker taking too long.
+    /// See `KeeperGoalKick`.
+    ///
+    /// Ahead of the routine because long or short is read off the press on
+    /// his box as he PLACES the ball: read at the end of it, every attacker
+    /// had long since jogged out and only 2% went long.
+    fn tick_goal_kick_run_up(
+        &mut self,
+        await_state: &mut AwaitedRestart,
+        taker: &MatchPlayer,
+        progress: &RestartProgress,
+        players: &[MatchPlayer],
+        context: &MatchContext,
+        events: &mut EventCollection,
+    ) -> bool {
+        if await_state.origin != PassOriginRestart::GoalKick
+            || await_state.take_from.is_some()
+            || !KeeperGoalKick::armed()
         {
-            match self.goal_kick_run_up {
-                None if arrived && KeeperGoalKick::is_keeper(taker) => {
-                    let patience = context.tactical_for_team(taker.team_id).build_up_patience;
-                    if KeeperGoalKick::goes_long_at_spot(taker, await_state.spot, players, patience)
-                    {
-                        #[cfg(feature = "match-logs")]
-                        crate::mid_run_diag::KeeperActionDiag::note(19);
-                        self.goal_kick_run_up = Some(GoalKickRunUp {
-                            mark: KeeperGoalKick::mark(
-                                await_state.spot,
-                                taker.side,
-                                self.field_height,
-                            ),
-                            phase: RunUpPhase::Backing,
-                            since: now,
-                        });
-                        // PLACED. A ball he fetched from the run-off rode
-                        // on him for the carry; from here it lies on the
-                        // spot while he walks away from it, or the walk
-                        // back would take the ball with him.
-                        await_state.carrying = false;
-                        self.position.x = await_state.spot.x;
-                        self.position.y = await_state.spot.y;
-                        await_state.awarded_tick = now;
-                        self.awaiting_restart = Some(await_state);
-                        return;
-                    }
-                    // Short: rolled to a defender from where he stands,
-                    // which is the restart resolving below.
+            return false;
+        }
+        match self.goal_kick_run_up {
+            None if progress.arrived && KeeperGoalKick::is_keeper(taker) => {
+                if self.begin_goal_kick_run_up(await_state, taker, progress, players, context) {
+                    return true;
                 }
-                Some(run_up) => match run_up.phase {
-                    RunUpPhase::Backing => {
-                        let on_mark = (taker.position - run_up.mark).magnitude()
-                            <= KeeperGoalKick::MARK_REACH;
-                        let overdue =
-                            now.saturating_sub(run_up.since) > KeeperGoalKick::BACKING_CEILING;
-                        if on_mark || overdue {
-                            self.goal_kick_run_up = Some(GoalKickRunUp {
-                                phase: RunUpPhase::Set,
-                                since: now,
-                                ..run_up
-                            });
-                        }
-                        await_state.awarded_tick = now;
-                        self.awaiting_restart = Some(await_state);
-                        return;
-                    }
-                    RunUpPhase::Set => {
-                        if now.saturating_sub(run_up.since) < KeeperGoalKick::SCAN_TICKS
-                            || !routine_done
-                            || !(formed || expired)
-                        {
-                            await_state.awarded_tick = now;
-                            self.awaiting_restart = Some(await_state);
-                            return;
-                        }
-                        // Go. The patience is re-sized to the run itself
-                        // and he is sent at the ball again — `run_for_ball`
-                        // is a no-op for a man already in `TakeBall`, but
-                        // anything that pulled him out of it on the mark
-                        // gets him back.
-                        self.goal_kick_run_up = Some(GoalKickRunUp {
-                            phase: RunUpPhase::Running,
-                            since: now,
-                            ..run_up
-                        });
-                        await_state.awarded_tick = now;
-                        await_state.patience_ticks = AwaitedRestart::patience_for(range);
-                        self.awaiting_restart = Some(await_state);
-                        events.add_ball_event(BallEvent::TakeMe(await_state.taker_id));
-                        return;
-                    }
-                    // Running in: the ordinary arrival test below hands him
-                    // the ball as he reaches it — but AT the ball. `REACH`
-                    // is a metre and a half, written for a man walking up
-                    // to a dead ball; a keeper running in at pace who is
-                    // handed it a metre and a half short strikes a ball his
-                    // boot never got to. Measured on a recording: the kick
-                    // left with him 1.7 m away.
-                    RunUpPhase::Running => {
-                        if range > KeeperGoalKick::STRIKE_REACH
-                            && now.saturating_sub(run_up.since) < KeeperGoalKick::RUN_IN_CEILING
-                        {
-                            await_state.awarded_tick = now;
-                            self.awaiting_restart = Some(await_state);
-                            return;
-                        }
-                        // Overdue: the ordinary arrival below takes it.
-                    }
-                },
-                None => {}
+                // Short: rolled to a defender from where he stands,
+                // which is the restart resolving below.
+            }
+            Some(run_up) => {
+                return self.advance_goal_kick_run_up(await_state, taker, progress, run_up, events);
+            }
+            None => {}
+        }
+        false
+    }
+
+    /// He is going long: place the ball and walk back to his mark. Returns
+    /// false when he is going short instead.
+    fn begin_goal_kick_run_up(
+        &mut self,
+        await_state: &mut AwaitedRestart,
+        taker: &MatchPlayer,
+        progress: &RestartProgress,
+        players: &[MatchPlayer],
+        context: &MatchContext,
+    ) -> bool {
+        let patience = context.tactical_for_team(taker.team_id).build_up_patience;
+        if !KeeperGoalKick::goes_long_at_spot(taker, await_state.spot, players, patience) {
+            return false;
+        }
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::KeeperActionDiag::note(19);
+        self.goal_kick_run_up = Some(GoalKickRunUp {
+            mark: KeeperGoalKick::mark(await_state.spot, taker.side, self.field_height),
+            phase: RunUpPhase::Backing,
+            since: progress.now,
+        });
+        // PLACED. A ball he fetched from the run-off rode on him for the
+        // carry; from here it lies on the spot while he walks away from it,
+        // or the walk back would take the ball with him.
+        await_state.carrying = false;
+        self.position.x = await_state.spot.x;
+        self.position.y = await_state.spot.y;
+        await_state.awarded_tick = progress.now;
+        self.awaiting_restart = Some(*await_state);
+        true
+    }
+
+    /// Walk back to the mark, stand until the routine and shape are done,
+    /// then run in. Returns true while the run-up still owns the restart.
+    fn advance_goal_kick_run_up(
+        &mut self,
+        await_state: &mut AwaitedRestart,
+        taker: &MatchPlayer,
+        progress: &RestartProgress,
+        run_up: GoalKickRunUp,
+        events: &mut EventCollection,
+    ) -> bool {
+        match run_up.phase {
+            RunUpPhase::Backing => {
+                let on_mark =
+                    (taker.position - run_up.mark).magnitude() <= KeeperGoalKick::MARK_REACH;
+                let overdue =
+                    progress.now.saturating_sub(run_up.since) > KeeperGoalKick::BACKING_CEILING;
+                if on_mark || overdue {
+                    self.goal_kick_run_up = Some(GoalKickRunUp {
+                        phase: RunUpPhase::Set,
+                        since: progress.now,
+                        ..run_up
+                    });
+                }
+                await_state.awarded_tick = progress.now;
+                self.awaiting_restart = Some(*await_state);
+                true
+            }
+            RunUpPhase::Set => {
+                if progress.now.saturating_sub(run_up.since) < KeeperGoalKick::SCAN_TICKS
+                    || !progress.routine_done
+                    || !(progress.formed || progress.expired)
+                {
+                    await_state.awarded_tick = progress.now;
+                    self.awaiting_restart = Some(*await_state);
+                    return true;
+                }
+                // Go. The patience is re-sized to the run itself and he is
+                // sent at the ball again — `run_for_ball` is a no-op for a
+                // man already in `TakeBall`, but anything that pulled him
+                // out of it on the mark gets him back.
+                self.goal_kick_run_up = Some(GoalKickRunUp {
+                    phase: RunUpPhase::Running,
+                    since: progress.now,
+                    ..run_up
+                });
+                await_state.awarded_tick = progress.now;
+                await_state.patience_ticks = AwaitedRestart::patience_for(progress.range);
+                self.awaiting_restart = Some(*await_state);
+                events.add_ball_event(BallEvent::TakeMe(await_state.taker_id));
+                true
+            }
+            // Running in: the ordinary arrival test below hands him the ball
+            // as he reaches it — but AT the ball. `REACH` is a metre and a
+            // half, written for a man walking up to a dead ball; a keeper
+            // running in at pace who is handed it a metre and a half short
+            // strikes a ball his boot never got to. Measured on a recording:
+            // the kick left with him 1.7 m away.
+            RunUpPhase::Running => {
+                if progress.range > KeeperGoalKick::STRIKE_REACH
+                    && progress.now.saturating_sub(run_up.since) < KeeperGoalKick::RUN_IN_CEILING
+                {
+                    await_state.awarded_tick = progress.now;
+                    self.awaiting_restart = Some(*await_state);
+                    return true;
+                }
+                // Overdue: the ordinary arrival below takes it.
+                false
             }
         }
+    }
 
+    /// The routine and the shape are what the restart waits for once the
+    /// taker is over the ball; a corner in particular waits for the box.
+    fn restart_routine_wait(
+        &mut self,
+        await_state: &mut AwaitedRestart,
+        taker: &MatchPlayer,
+        progress: &RestartProgress,
+        context: &MatchContext,
+        events: &mut EventCollection,
+    ) -> bool {
         // **He stands over it, and a corner waits for the box, a free kick
         // or a penalty for the opponents to stand off, a goal kick for them
         // to leave the area and his side to get into shape.**
@@ -738,47 +895,59 @@ impl Ball {
         // on the spot: measured **9.5 timed-out legs a match at a mean of
         // 0.8 m still to go**, which is the signature of a bound expiring
         // under somebody standing still rather than of a walk that failed.
-        //
-        // See [`AwaitedRestart::settled_tick`].
-        if let Some(settled_at) = settled_at {
+        if let Some(settled_at) = progress.settled_at {
             // A run-up under way ends in the kick: the set-up it started
             // on is not asked again when he reaches the ball.
             let running = self
                 .goal_kick_run_up
                 .is_some_and(|run_up| run_up.phase == RunUpPhase::Running);
-            if !routine_done || (!formed && !expired && !running) {
+            if !progress.routine_done || (!progress.formed && !progress.expired && !running) {
                 // No `TakeMe`: he is standing over the ball, not
                 // running at it, and the nudge would restart a chase
                 // he has already finished.
-                await_state.awarded_tick = now;
-                self.awaiting_restart = Some(await_state);
-                return;
+                await_state.awarded_tick = progress.now;
+                self.awaiting_restart = Some(*await_state);
+                return true;
             }
             #[cfg(feature = "match-logs")]
             if await_state.origin == PassOriginRestart::Corner {
                 RestartCensus::note_corner_setup_wait(
-                    now.saturating_sub(settled_at),
-                    expired && !formed,
+                    progress.now.saturating_sub(settled_at),
+                    progress.expired && !progress.formed,
                 );
             }
             #[cfg(not(feature = "match-logs"))]
             let _ = settled_at;
         }
 
-        if !arrived && waited < await_state.patience_ticks {
+        if !progress.arrived && progress.waited < await_state.patience_ticks {
             // Keep sending him. `run_for_ball` is a no-op for a player who
             // is already chasing, so this cannot restart his chase clock;
             // what it does do is pick him up again if something else — a
             // reset, a shape recall — pulled him out of `TakeBall` on the
             // way, which would otherwise leave the ball waiting for a man
             // who has stopped coming.
-            if waited % Self::NUDGE_TICKS == 0 {
+            if progress.waited.is_multiple_of(Self::NUDGE_TICKS) {
                 events.add_ball_event(BallEvent::TakeMe(await_state.taker_id));
             }
-            return;
+            return true;
         }
 
-        if !arrived {
+        self.restart_arrival_step(await_state, taker, progress, context, events)
+    }
+
+    /// The backstop teleport when he never arrives, or the start of the
+    /// carrying leg when the restart is taken somewhere else. Returns true
+    /// when the restart is still waiting afterwards.
+    fn restart_arrival_step(
+        &mut self,
+        await_state: &mut AwaitedRestart,
+        taker: &MatchPlayer,
+        progress: &RestartProgress,
+        context: &MatchContext,
+        events: &mut EventCollection,
+    ) -> bool {
+        if !progress.arrived {
             // He never got there. The teleport is the backstop, not the
             // behaviour — a restart that never happens stalls the match.
             //
@@ -791,10 +960,10 @@ impl Ball {
                 RestartCensus::note_restart_teleport();
                 RestartCensus::note_restart_timeout_state(taker.state.compact_id());
                 if await_state.origin == PassOriginRestart::GoalKick {
-                    RestartCensus::note_goal_kick_teleport(range);
+                    RestartCensus::note_goal_kick_teleport(progress.range);
                 }
                 if await_state.origin == PassOriginRestart::Corner {
-                    RestartCensus::note_corner_leg_timeout(range);
+                    RestartCensus::note_corner_leg_timeout(progress.range);
                 }
             }
             // A run-up that never finished is not a run-up.
@@ -803,38 +972,51 @@ impl Ball {
             await_state.spot = final_spot;
             self.position.x = final_spot.x;
             self.position.y = final_spot.y;
-        } else if let Some(take_from) = await_state.take_from.take() {
-            // **He has reached the ball, and the kick is taken somewhere
-            // else.** Second leg: he picks it up and walks it to the arc,
-            // and the ball goes with him because he is holding it.
-            await_state.carrying = true;
-            await_state.spot = take_from;
-            await_state.awarded_tick = context.current_tick();
-            let carry = (taker.position - take_from).magnitude();
-            await_state.patience_ticks = AwaitedRestart::patience_for(carry);
-            self.awaiting_restart = Some(await_state);
-            // His touch, from here on. `clear_expired_corner_stations`
-            // releases the shape when anybody OTHER than the taker touches
-            // the ball, so the stamp has to be his before the walk starts.
-            self.record_touch(
-                await_state.taker_id,
-                taker.team_id,
-                context.current_tick(),
-                true,
-            );
-            // ⚠ **Nothing else can steer him now.** `run_for_ball` sends a
-            // man to the ball and the ball is at his feet, so he reads as
-            // arrived and stands still; `SetPieceHold` releases anybody
-            // within four metres of it for the same reason. The station is
-            // what walks him to the flag — see `SetPieceHold::hold_weight`.
-            self.pending_restart_station = Some((await_state.taker_id, take_from));
-            events.add_ball_event(BallEvent::TakeMe(await_state.taker_id));
-            #[cfg(feature = "match-logs")]
-            RestartCensus::note_restart_carry(carry);
-            return;
+            return false;
         }
-        // A side ahead late takes its time over its own restarts — once per
-        // restart, and the referee may run out of patience with it.
+        let Some(take_from) = await_state.take_from.take() else {
+            return false;
+        };
+        // **He has reached the ball, and the kick is taken somewhere
+        // else.** Second leg: he picks it up and walks it to the arc,
+        // and the ball goes with him because he is holding it.
+        await_state.carrying = true;
+        await_state.spot = take_from;
+        await_state.awarded_tick = context.current_tick();
+        let carry = (taker.position - take_from).magnitude();
+        await_state.patience_ticks = AwaitedRestart::patience_for(carry);
+        self.awaiting_restart = Some(*await_state);
+        // His touch, from here on. `clear_expired_corner_stations`
+        // releases the shape when anybody OTHER than the taker touches
+        // the ball, so the stamp has to be his before the walk starts.
+        self.record_touch(
+            await_state.taker_id,
+            taker.team_id,
+            context.current_tick(),
+            true,
+        );
+        // ⚠ **Nothing else can steer him now.** `run_for_ball` sends a
+        // man to the ball and the ball is at his feet, so he reads as
+        // arrived and stands still; `SetPieceHold` releases anybody
+        // within four metres of it for the same reason. The station is
+        // what walks him to the flag — see `SetPieceHold::hold_weight`.
+        self.pending_restart_station = Some((await_state.taker_id, take_from));
+        events.add_ball_event(BallEvent::TakeMe(await_state.taker_id));
+        #[cfg(feature = "match-logs")]
+        RestartCensus::note_restart_carry(carry);
+        true
+    }
+
+    /// A side ahead late takes its time over its own restarts — once per
+    /// restart, and the referee may run out of patience with it. The taker
+    /// is on the ball; somebody else is not finished.
+    fn restart_hold(
+        &mut self,
+        await_state: &mut AwaitedRestart,
+        taker: &MatchPlayer,
+        context: &mut MatchContext,
+        events: &mut EventCollection,
+    ) -> bool {
         if await_state.hold.is_none()
             && let Some(kind) = TimeWastingRestart::for_origin(await_state.origin)
         {
@@ -846,27 +1028,40 @@ impl Ball {
                 if context.time_wasting_caution(taker.team_id, delay) {
                     events.add_ball_event(BallEvent::Caution(taker.id, FoulSource::TimeWasting));
                 }
-                self.awaiting_restart = Some(await_state);
-                return;
+                self.awaiting_restart = Some(*await_state);
+                return true;
             }
         }
-        // The taker is on the ball; somebody else is not finished. Held
-        // here rather than ahead of the walk so a taker who is still
+        // Held here rather than ahead of the walk so a taker who is still
         // coming is never the reason a booking ends early, and a backstop
         // placement above cannot skip it.
         if await_state.is_held(context.current_tick()) {
-            self.awaiting_restart = Some(await_state);
-            return;
+            self.awaiting_restart = Some(*await_state);
+            return true;
         }
+        false
+    }
+
+    /// Play restarts HERE.
+    fn hand_over_restart(
+        &mut self,
+        mut await_state: AwaitedRestart,
+        taker: &MatchPlayer,
+        progress: &RestartProgress,
+        context: &mut MatchContext,
+        events: &mut EventCollection,
+    ) {
+        #[cfg(not(feature = "match-logs"))]
+        let _ = progress;
         #[cfg(feature = "match-logs")]
         {
-            RestartCensus::note_restart_taken(waited, arrived);
+            RestartCensus::note_restart_taken(progress.waited, progress.arrived);
             if await_state.origin == PassOriginRestart::GoalKick {
                 GoalKickCensus::note_handed(
                     &mut self.goal_kick_track,
                     taker,
                     context.current_tick(),
-                    arrived,
+                    true,
                 );
             }
         }
@@ -906,6 +1101,20 @@ impl Ball {
             context.current_tick(),
             true,
         );
+        self.arm_restart_possession(&mut await_state, taker, context);
+        events.add_ball_event(BallEvent::Claimed(await_state.taker_id));
+    }
+
+    /// The ball is his, and the flags that ride with it: a goal kick's
+    /// taker, a thrower's hands, a corner that only now becomes a corner.
+    fn arm_restart_possession(
+        &mut self,
+        await_state: &mut AwaitedRestart,
+        taker: &MatchPlayer,
+        context: &MatchContext,
+    ) {
+        #[cfg(not(feature = "match-logs"))]
+        let _ = taker;
         // Stamped after the pick-up touch for the throw's reason below.
         if await_state.origin == PassOriginRestart::GoalKick {
             self.goal_kick_taker = Some(await_state.taker_id);
@@ -951,7 +1160,6 @@ impl Ball {
             shape.armed_tick = context.current_tick();
             shape.live_tick = Some(context.current_tick());
         }
-        events.add_ball_event(BallEvent::Claimed(await_state.taker_id));
     }
 }
 

@@ -449,70 +449,72 @@ impl LanguageProfile {
 /// basic conversational (~40%) in about 1.5 years, functional fluency (~70%)
 /// in about 3 years, and near-fluency (~90%) in 4-5 years.
 /// Exceptionally adaptable young players may learn faster; older stars much slower.
-pub fn weekly_language_progress(
-    adaptability: f32,
-    professionalism: f32,
-    age: u8,
-    current_ability: u8,
-    current_proficiency: u8,
-) -> u8 {
-    if current_proficiency >= 100 {
-        return 0;
+impl PlayerLanguage {
+    pub fn weekly_progress(
+        adaptability: f32,
+        professionalism: f32,
+        age: u8,
+        current_ability: u8,
+        current_proficiency: u8,
+    ) -> u8 {
+        if current_proficiency >= 100 {
+            return 0;
+        }
+
+        // Base weekly rate: ~0.35% per week → ~18% per year at baseline
+        let base_rate: f32 = 0.35;
+
+        // Adaptability factor (0.3 at 0, 1.0 at 10, 1.8 at 20)
+        let adapt_factor = 0.3 + (adaptability / 20.0) * 1.5;
+
+        // Professionalism factor (0.6 at 0, 1.0 at 10, 1.3 at 20)
+        let prof_factor = 0.6 + (professionalism / 20.0) * 0.7;
+
+        // Age factor: young players learn faster
+        let age_factor = if age <= 22 {
+            1.3
+        } else if age <= 25 {
+            1.15
+        } else if age <= 28 {
+            1.0
+        } else if age <= 32 {
+            0.85
+        } else {
+            0.7
+        };
+
+        // Star penalty: top players resist learning (they have translators, etc.)
+        // CA > 160 = superstar, 140-160 = star, < 140 = normal
+        let star_factor = if current_ability > 160 {
+            0.4 // Superstars barely bother
+        } else if current_ability > 145 {
+            0.65 // Stars learn slowly
+        } else if current_ability > 130 {
+            0.85 // Good players slightly slower
+        } else {
+            1.0 // Normal players fully motivated
+        };
+
+        // Diminishing returns near fluency (harder to go from 80→100 than 0→20)
+        let progress_factor = if current_proficiency >= 85 {
+            0.4
+        } else if current_proficiency >= 70 {
+            0.6
+        } else if current_proficiency >= 50 {
+            0.8
+        } else {
+            1.0
+        };
+
+        let weekly_gain =
+            base_rate * adapt_factor * prof_factor * age_factor * star_factor * progress_factor;
+
+        // Convert to integer progress, minimum 0
+        let gain = weekly_gain.round().max(0.0) as u8;
+
+        // Clamp so we don't exceed 100
+        gain.min(100 - current_proficiency)
     }
-
-    // Base weekly rate: ~0.35% per week → ~18% per year at baseline
-    let base_rate: f32 = 0.35;
-
-    // Adaptability factor (0.3 at 0, 1.0 at 10, 1.8 at 20)
-    let adapt_factor = 0.3 + (adaptability / 20.0) * 1.5;
-
-    // Professionalism factor (0.6 at 0, 1.0 at 10, 1.3 at 20)
-    let prof_factor = 0.6 + (professionalism / 20.0) * 0.7;
-
-    // Age factor: young players learn faster
-    let age_factor = if age <= 22 {
-        1.3
-    } else if age <= 25 {
-        1.15
-    } else if age <= 28 {
-        1.0
-    } else if age <= 32 {
-        0.85
-    } else {
-        0.7
-    };
-
-    // Star penalty: top players resist learning (they have translators, etc.)
-    // CA > 160 = superstar, 140-160 = star, < 140 = normal
-    let star_factor = if current_ability > 160 {
-        0.4 // Superstars barely bother
-    } else if current_ability > 145 {
-        0.65 // Stars learn slowly
-    } else if current_ability > 130 {
-        0.85 // Good players slightly slower
-    } else {
-        1.0 // Normal players fully motivated
-    };
-
-    // Diminishing returns near fluency (harder to go from 80→100 than 0→20)
-    let progress_factor = if current_proficiency >= 85 {
-        0.4
-    } else if current_proficiency >= 70 {
-        0.6
-    } else if current_proficiency >= 50 {
-        0.8
-    } else {
-        1.0
-    };
-
-    let weekly_gain =
-        base_rate * adapt_factor * prof_factor * age_factor * star_factor * progress_factor;
-
-    // Convert to integer progress, minimum 0
-    let gain = weekly_gain.round().max(0.0) as u8;
-
-    // Clamp so we don't exceed 100
-    gain.min(100 - current_proficiency)
 }
 
 #[cfg(test)]

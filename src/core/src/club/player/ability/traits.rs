@@ -126,77 +126,72 @@ impl PlayerTrait {
     }
 }
 
-/// Roll traits for a new player based on their skills & position.
-/// Better players get more traits and skill-biased selections.
-pub fn generate_player_traits(
-    skills: &PlayerSkills,
-    positions: &[PlayerPosition],
-    current_ability: u8,
-) -> Vec<PlayerTrait> {
-    // Trait count scales with ability: avg 0.4 traits at CA 40, ~2 at CA 150, up to 4 at CA 190+.
-    let trait_count = if current_ability < 50 {
-        if FloatUtils::random(0.0, 1.0) < 0.3 {
+impl PlayerTrait {
+    /// Roll traits for a new player based on their skills & position.
+    /// Better players get more traits and skill-biased selections.
+    pub fn generate(
+        skills: &PlayerSkills,
+        positions: &[PlayerPosition],
+        current_ability: u8,
+    ) -> Vec<PlayerTrait> {
+        // Trait count scales with ability: avg 0.4 traits at CA 40, ~2 at CA 150, up to 4 at CA 190+.
+        let trait_count = if current_ability < 50 {
+            if FloatUtils::random(0.0, 1.0) < 0.3 {
+                1
+            } else {
+                0
+            }
+        } else if current_ability < 90 {
             1
-        } else {
-            0
-        }
-    } else if current_ability < 90 {
-        1
-    } else if current_ability < 140 {
-        if FloatUtils::random(0.0, 1.0) < 0.4 {
+        } else if current_ability < 140 {
+            if FloatUtils::random(0.0, 1.0) < 0.4 {
+                2
+            } else {
+                1
+            }
+        } else if current_ability < 170 {
             2
+        } else if current_ability < 190 {
+            3
         } else {
-            1
-        }
-    } else if current_ability < 170 {
-        2
-    } else if current_ability < 190 {
-        3
-    } else {
-        4
-    };
+            4
+        };
 
-    if trait_count == 0 {
-        return Vec::new();
-    }
-
-    let main_group = positions
-        .first()
-        .map(|p| p.position.position_group())
-        .unwrap_or(PlayerFieldPositionGroup::Midfielder);
-
-    let pool = PlayerTrait::candidates_for(main_group);
-    if pool.is_empty() {
-        return Vec::new();
-    }
-
-    let mut picked: Vec<PlayerTrait> = Vec::new();
-    let mut attempts = 0;
-    while picked.len() < trait_count && attempts < trait_count * 6 {
-        attempts += 1;
-        let idx = (FloatUtils::random(0.0, pool.len() as f32) as usize).min(pool.len() - 1);
-        let candidate = pool[idx];
-
-        if picked.contains(&candidate) {
-            continue;
+        if trait_count == 0 {
+            return Vec::new();
         }
 
-        // Skill-gated filter: don't hand out "Shoots from distance" to a
-        // midfielder with 5 Long Shots, or "Tries through balls" to a
-        // 6 Passing CB.
-        if !skill_supports_trait(&candidate, skills) {
-            continue;
+        let main_group = positions
+            .first()
+            .map(|p| p.position.position_group())
+            .unwrap_or(PlayerFieldPositionGroup::Midfielder);
+
+        let pool = PlayerTrait::candidates_for(main_group);
+        if pool.is_empty() {
+            return Vec::new();
         }
 
-        picked.push(candidate);
+        let mut picked: Vec<PlayerTrait> = Vec::new();
+        let mut attempts = 0;
+        while picked.len() < trait_count && attempts < trait_count * 6 {
+            attempts += 1;
+            let idx = (FloatUtils::random(0.0, pool.len() as f32) as usize).min(pool.len() - 1);
+            let candidate = pool[idx];
+
+            if picked.contains(&candidate) {
+                continue;
+            }
+
+            // Skill-gated filter: don't hand out "Shoots from distance" to a
+            // midfielder with 5 Long Shots, or "Tries through balls" to a
+            // 6 Passing CB.
+            if !candidate.skills_support(skills) {
+                continue;
+            }
+
+            picked.push(candidate);
+        }
+
+        picked
     }
-
-    picked
-}
-
-fn skill_supports_trait(tr: &PlayerTrait, skills: &PlayerSkills) -> bool {
-    // Thresholds (which skills, what minimum) live on the trait registry —
-    // see `registry::TRAIT_REGISTRY`. Adding or rebalancing a trait now
-    // means editing one row there instead of two locations.
-    tr.skills_support(skills)
 }

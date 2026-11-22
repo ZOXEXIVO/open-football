@@ -7,7 +7,7 @@
 use super::blueprint::SkillBlueprint;
 use super::skills_array::{
     SK_ACCELERATION, SK_AGILITY, SK_BALANCE, SK_JUMPING, SK_MATCH_READINESS, SK_NATURAL_FITNESS,
-    SK_PACE, SKILL_COUNT, SkillCategory, SkillKey, skill_category,
+    SK_PACE, SKILL_COUNT, SkillCategory, SkillKey,
 };
 use crate::club::player::maturation::{MaturationGroup, SkillMaturation};
 use crate::club::player::player::Player;
@@ -141,7 +141,7 @@ impl PositionalSkillCeilings {
     /// explosive split lives INSIDE `SkillCategory::Physical`: speed and
     /// leap mature years before strength and stamina do.
     pub(crate) fn maturation_group(idx: usize) -> MaturationGroup {
-        match skill_category(idx) {
+        match SkillCategory::of(idx) {
             SkillCategory::Technical => MaturationGroup::Technical,
             SkillCategory::Mental => MaturationGroup::Mental,
             SkillCategory::Goalkeeping => MaturationGroup::Goalkeeping,

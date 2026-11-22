@@ -28,7 +28,7 @@ use crate::transfers::pipeline::processor::SquadPlayerInfo;
 use crate::transfers::pipeline::trace::TransferTrace;
 use crate::transfers::pipeline::{
     LoanOutCandidate, TransferNeedPriority, TransferNeedReason, TransferRequest, Vacancy,
-    VacancyOutcome,
+    VacancyBrief, VacancyOutcome,
 };
 use crate::{
     Club, ClubPhilosophy, MatchTacticType, Person, Player, PlayerFieldPositionGroup,
@@ -454,18 +454,14 @@ impl<'a> SquadReview<'a> {
     /// STEP 3 — the formation gaps become requests, and the planner turns them
     /// into the brief everything downstream funds from. Returns the ledger the
     /// rest of the review spends.
-    #[expect(clippy::too_many_lines)]
     fn open_briefs(&self) -> ReviewLedger {
         let club = self.club;
         let date = self.date;
         let team = self.team;
         let budget = self.budget;
         let squad = self.squad.as_slice();
-        let ability_tolerance = self.ability_tolerance;
         let formation_positions = self.formation_positions;
         let position_coverage = &self.position_coverage;
-        let mut requests: Vec<TransferRequest> = Vec::new();
-        let mut next_id = self.club.transfer_plan.next_request_id;
 
         // STEP 3: Generate transfer requests from gaps
         // ──────────────────────────────────────────────────────────
@@ -473,36 +469,16 @@ impl<'a> SquadReview<'a> {
         // A shirt a departure left open is judged first: held from within,
         // filled, or to be searched for. A search keeps the money its sale
         // reserved, so that comes off the pot before anything is split.
-        let vacancies: Vec<(Vacancy, VacancyOutcome)> = club
-            .transfer_plan
-            .vacancies
-            .iter()
-            .map(|vacancy| {
-                let departed = &vacancy.departed;
-                let holder = club.shirt_holder(departed.shirt, departed.date);
-                (*vacancy, vacancy.judge(holder, date))
-            })
-            .collect();
-        let searching: Vec<Vacancy> = vacancies
-            .iter()
-            .filter(|(_, outcome)| *outcome == VacancyOutcome::Search)
-            .map(|(vacancy, _)| *vacancy)
-            .collect();
-        let reserved: f64 = searching
-            .iter()
-            .map(|vacancy| vacancy.reserve)
-            .sum::<f64>()
-            .min(budget.max(0.0));
+        let (vacancies, searching, reserved) = self.vacancy_triage();
 
         let available_budget = (budget - reserved).max(0.0) * 0.9; // Keep 10% reserve
-        let mut budget_used = 0.0;
 
         // Continuous reputation score — drives tier baselines without
         // snapping to enum boundaries. A team mid-Continental gets a
         // different threshold from a team top-of-Continental.
         let rep_score = team.reputation.overall_score();
         let quality_tolerance = TierBands::tier_quality_tolerance_score(rep_score);
-        let _ = ability_tolerance; // philosophy-driven tolerance retained
+        let _ = self.ability_tolerance; // philosophy-driven tolerance retained
         // elsewhere; tier baselines drive the
         // recruitment thresholds now.
 
@@ -524,31 +500,6 @@ impl<'a> SquadReview<'a> {
             rep_score,
             quality_tolerance,
         );
-
-        let total_needs = group_needs.len();
-        let budget_per_need = if total_needs > 0 {
-            available_budget / total_needs as f64
-        } else {
-            0.0
-        };
-        // Sizing unit for forward-looking / discretionary buys (succession,
-        // youth, experienced head, injury cover). It must NOT collapse to zero
-        // when the XI has no formation gap (total_needs == 0 → budget_per_need
-        // == 0): a well-built squad still plans succession and farms prospects.
-        // When formation needs DO exist it equals `budget_per_need` exactly (no
-        // behaviour change); with none it falls back to a slice of the overall
-        // budget, widened when the head coach is dissatisfied with the squad
-        // (the previously-inert squad-satisfaction signal now has a consumer).
-        let squad_satisfaction = club
-            .teams
-            .head_coach_decision_state()
-            .map(|state| state.squad_satisfaction)
-            .unwrap_or(0.5);
-        let discretionary_unit = if total_needs > 0 {
-            budget_per_need
-        } else {
-            available_budget * (0.20 + (1.0 - squad_satisfaction as f64) * 0.20)
-        };
 
         // ── The brief ────────────────────────────────────────────────
         //
@@ -581,13 +532,96 @@ impl<'a> SquadReview<'a> {
                 .map(|t| t.max_squad_size as usize)
                 .unwrap_or(0),
         };
-        let brief = SquadPlanner::plan(&plan_inputs);
+        let (brief, discretionary_unit) = Self::brief_terms(&plan_inputs);
 
         // The replacement searches go on the list first, each with the
         // money its own sale reserved.
         let replacements =
             SquadPlanner::vacancy_briefs(&plan_inputs, &searching, budget, self.current_window);
-        for replacement in &replacements {
+        let (requests, next_id) =
+            Self::replacement_requests(&replacements, club.transfer_plan.next_request_id);
+
+        let mut ledger = ReviewLedger {
+            brief,
+            group_needs,
+            discretionary_unit,
+            available_budget,
+            budget_used: 0.0,
+            requests,
+            next_id,
+            vacancies: vacancies
+                .iter()
+                .map(|(vacancy, outcome)| (vacancy.departed.player_id, *outcome))
+                .collect(),
+        };
+        self.briefed_slot_requests(&mut ledger, &replacements);
+        ledger
+    }
+
+    /// The shirt vacancies: how each was judged, which ones become searches,
+    /// and the money those searches reserve before anything is split.
+    fn vacancy_triage(&self) -> (Vec<(Vacancy, VacancyOutcome)>, Vec<Vacancy>, f64) {
+        let vacancies: Vec<(Vacancy, VacancyOutcome)> = self
+            .club
+            .transfer_plan
+            .vacancies
+            .iter()
+            .map(|vacancy| {
+                let departed = &vacancy.departed;
+                let holder = self.club.shirt_holder(departed.shirt, departed.date);
+                (*vacancy, vacancy.judge(holder, self.date))
+            })
+            .collect();
+        let searching: Vec<Vacancy> = vacancies
+            .iter()
+            .filter(|(_, outcome)| *outcome == VacancyOutcome::Search)
+            .map(|(vacancy, _)| *vacancy)
+            .collect();
+        let reserved: f64 = searching
+            .iter()
+            .map(|vacancy| vacancy.reserve)
+            .sum::<f64>()
+            .min(self.budget.max(0.0));
+        (vacancies, searching, reserved)
+    }
+
+    /// The brief and the sizing unit for forward-looking buys. The unit must
+    /// NOT collapse to zero when the XI has no formation gap
+    /// (`total_needs == 0` → `budget_per_need == 0`): a well-built squad
+    /// still plans succession and farms prospects. When formation needs DO
+    /// exist it equals `budget_per_need` exactly (no behaviour change); with
+    /// none it falls back to a slice of the overall budget, widened when the
+    /// head coach is dissatisfied with the squad (the previously-inert
+    /// squad-satisfaction signal now has a consumer).
+    fn brief_terms(inputs: &PlanInputs<'_>) -> (RecruitmentBrief, f64) {
+        let total_needs = inputs.group_needs.len();
+        let budget_per_need = if total_needs > 0 {
+            inputs.available_budget / total_needs as f64
+        } else {
+            0.0
+        };
+        let squad_satisfaction = inputs
+            .club
+            .teams
+            .head_coach_decision_state()
+            .map(|state| state.squad_satisfaction)
+            .unwrap_or(0.5);
+        let discretionary_unit = if total_needs > 0 {
+            budget_per_need
+        } else {
+            inputs.available_budget * (0.20 + (1.0 - squad_satisfaction as f64) * 0.20)
+        };
+        (SquadPlanner::plan(inputs), discretionary_unit)
+    }
+
+    /// The replacement searches, each with the money its own sale reserved.
+    fn replacement_requests(
+        replacements: &[VacancyBrief],
+        first_id: u32,
+    ) -> (Vec<TransferRequest>, u32) {
+        let mut requests = Vec::with_capacity(replacements.len());
+        let mut next_id = first_id;
+        for replacement in replacements {
             requests.push(
                 TransferRequest::new(
                     next_id,
@@ -602,8 +636,20 @@ impl<'a> SquadReview<'a> {
             );
             next_id += 1;
         }
+        (requests, next_id)
+    }
 
-        for slot in brief.slots.iter() {
+    /// One request per briefed shirt, funded from the same pot and escalated
+    /// by the club's memory of failed searches.
+    fn briefed_slot_requests(&self, ledger: &mut ReviewLedger, replacements: &[VacancyBrief]) {
+        let club = self.club;
+        let date = self.date;
+        let available_budget = ledger.available_budget;
+        let mut budget_used = ledger.budget_used;
+        let mut next_id = ledger.next_id;
+        let mut requests = std::mem::take(&mut ledger.requests);
+
+        for slot in ledger.brief.slots.iter() {
             // A shirt with a vacancy is searched for as the vacancy asks,
             // not a second time as a gap in the formation.
             if replacements.iter().any(|r| r.position == slot.position) {
@@ -644,19 +690,9 @@ impl<'a> SquadReview<'a> {
             budget_used += alloc.max(0.0);
         }
 
-        ReviewLedger {
-            brief,
-            group_needs,
-            discretionary_unit,
-            available_budget,
-            budget_used,
-            requests,
-            next_id,
-            vacancies: vacancies
-                .iter()
-                .map(|(vacancy, outcome)| (vacancy.departed.player_id, *outcome))
-                .collect(),
-        }
+        ledger.requests = requests;
+        ledger.budget_used = budget_used;
+        ledger.next_id = next_id;
     }
 
     /// STEP 3b — squad investment: buying to get better, not to patch.
@@ -1045,32 +1081,25 @@ impl<'a> SquadReview<'a> {
 
     /// STEP 4b — youth development signings. Elite and Continental clubs farm
     /// prospects actively; smaller ones sign the ones they can reach.
-    #[expect(clippy::too_many_lines)]
     fn youth_requests(&self, ledger: &mut ReviewLedger) {
-        let club = self.club;
-        let date = self.date;
-        let rep_level = self.rep_level;
-        let squad = self.squad.as_slice();
-        let avg_ability = self.avg_ability;
-        let philosophy = &self.club.philosophy;
-        let youth_age_max = self.youth_age_max;
-        let available_budget = ledger.available_budget;
-        let discretionary_unit = ledger.discretionary_unit;
-        let mut budget_used = ledger.budget_used;
-        let mut next_id = ledger.next_id;
-        let mut requests = std::mem::take(&mut ledger.requests);
+        if !self.wants_youth_signings() {
+            return;
+        }
+        self.outfield_youth_requests(ledger);
+        self.goalkeeper_youth_request(ledger);
+    }
 
-        // ──────────────────────────────────────────────────────────
-        // STEP 4b: Youth development signings
-        // Elite/Continental clubs actively seek young prospects with
-        // high potential — even if current ability is well below squad level.
-        // Like Juventus loaning a 19yo from Serie B who could become world class.
-        // ──────────────────────────────────────────────────────────
+    /// Whether this club's philosophy and reputation put it in the youth
+    /// market at all this week.
+    fn wants_youth_signings(&self) -> bool {
+        let club = self.club;
+        let rep_level = self.rep_level;
+        let philosophy = &self.club.philosophy;
 
         // Youth development signings: philosophy-driven.
         // DevelopAndSell clubs aggressively sign young prospects.
         // LoanFocused clubs borrow young players instead.
-        let wants_youth = match philosophy {
+        match philosophy {
             ClubPhilosophy::DevelopAndSell => true,
             ClubPhilosophy::Balanced => matches!(
                 rep_level,
@@ -1088,155 +1117,198 @@ impl<'a> SquadReview<'a> {
                     ReputationLevel::Elite | ReputationLevel::Continental
                 ) && club.finance.balance.balance >= 0
             }
+        }
+    }
+
+    /// The outfield prospect slots: a pipeline of young players in each
+    /// position group, capped per club.
+    fn outfield_youth_requests(&self, ledger: &mut ReviewLedger) {
+        let philosophy = &self.club.philosophy;
+        let rep_level = self.rep_level;
+        let squad = self.squad.as_slice();
+        let avg_ability = self.avg_ability;
+        let youth_age_max = self.youth_age_max;
+        let available_budget = ledger.available_budget;
+        let discretionary_unit = ledger.discretionary_unit;
+        let mut budget_used = ledger.budget_used;
+        let mut next_id = ledger.next_id;
+        let mut requests = std::mem::take(&mut ledger.requests);
+
+        // ──────────────────────────────────────────────────────────
+        // STEP 4b: Youth development signings
+        // Elite/Continental clubs actively seek young prospects with
+        // high potential — even if current ability is well below squad level.
+        // Like Juventus loaning a 19yo from Serie B who could become world class.
+        // ──────────────────────────────────────────────────────────
+
+        let position_groups = [
+            PlayerFieldPositionGroup::Defender,
+            PlayerFieldPositionGroup::Midfielder,
+            PlayerFieldPositionGroup::Forward,
+        ];
+
+        let max_youth_requests = match philosophy {
+            ClubPhilosophy::DevelopAndSell => 4, // aggressive youth policy
+            _ => match rep_level {
+                ReputationLevel::Elite => 3,
+                ReputationLevel::Continental => 2,
+                _ => 1,
+            },
         };
-        if wants_youth {
-            let position_groups = [
-                PlayerFieldPositionGroup::Defender,
-                PlayerFieldPositionGroup::Midfielder,
-                PlayerFieldPositionGroup::Forward,
-            ];
+        let mut youth_requests = 0u32;
 
-            let max_youth_requests = match philosophy {
-                ClubPhilosophy::DevelopAndSell => 4, // aggressive youth policy
-                _ => match rep_level {
-                    ReputationLevel::Elite => 3,
-                    ReputationLevel::Continental => 2,
-                    _ => 1,
-                },
+        for group in &position_groups {
+            if youth_requests >= max_youth_requests {
+                break;
+            }
+
+            // Count young players in this position group
+            let young_in_group = squad
+                .iter()
+                .filter(|p| p.primary_position.position_group() == *group && p.age <= youth_age_max)
+                .count();
+
+            // DevelopAndSell wants more youth pipeline depth
+            let min_young = if matches!(philosophy, ClubPhilosophy::DevelopAndSell) {
+                3
+            } else {
+                2
             };
-            let mut youth_requests = 0u32;
-
-            for group in &position_groups {
-                if youth_requests >= max_youth_requests {
+            if young_in_group < min_young {
+                let alloc = (discretionary_unit * 0.3).min(available_budget - budget_used);
+                if alloc <= 0.0 {
                     break;
                 }
 
-                // Count young players in this position group
-                let young_in_group = squad
-                    .iter()
-                    .filter(|p| {
-                        p.primary_position.position_group() == *group && p.age <= youth_age_max
-                    })
-                    .count();
-
-                // DevelopAndSell wants more youth pipeline depth
-                let min_young = if matches!(philosophy, ClubPhilosophy::DevelopAndSell) {
-                    3
-                } else {
-                    2
+                let pos = match group {
+                    PlayerFieldPositionGroup::Defender => PlayerPositionType::DefenderCenter,
+                    PlayerFieldPositionGroup::Midfielder => PlayerPositionType::MidfielderCenter,
+                    PlayerFieldPositionGroup::Forward => PlayerPositionType::Striker,
+                    _ => continue,
                 };
-                if young_in_group < min_young {
-                    let alloc = (discretionary_unit * 0.3).min(available_budget - budget_used);
-                    if alloc <= 0.0 {
-                        break;
-                    }
 
-                    let pos = match group {
-                        PlayerFieldPositionGroup::Defender => PlayerPositionType::DefenderCenter,
-                        PlayerFieldPositionGroup::Midfielder => {
-                            PlayerPositionType::MidfielderCenter
-                        }
-                        PlayerFieldPositionGroup::Forward => PlayerPositionType::Striker,
-                        _ => continue,
-                    };
-
-                    // Don't duplicate if we already have a request for this position group
-                    if !requests
-                        .iter()
-                        .any(|r| r.position.position_group() == *group)
-                    {
-                        requests.push(TransferRequest::new(
-                            next_id,
-                            pos,
-                            TransferNeedPriority::Optional,
-                            TransferNeedReason::DevelopmentSigning,
-                            // Low current ability floor — we care about potential, not now
-                            avg_ability.saturating_sub(40),
-                            avg_ability.saturating_sub(15),
-                            alloc,
-                        ));
-                        next_id += 1;
-                        budget_used += alloc;
-                        youth_requests += 1;
-                    }
-                }
-            }
-
-            // Goalkeeper development signing — handled separately from the
-            // outfield youth loop above. A club carries far fewer keepers and
-            // treats keeper succession as its own project, so GK is NOT part
-            // of the multi-slot outfield prospect budget (folding it in would
-            // crowd out outfield prospects and shift that calibration).
-            // Instead a youth-minded club with no young keeper in its
-            // first-team picture grooms a single high-upside prospect; the
-            // post-purchase pathway then typically farms him out on loan for
-            // senior minutes (see `DevelopmentLoanPathway::stage_after_purchase`)
-            // — the Chelsea / Man City model of buying a teenage keeper years
-            // before he's needed. Keepers were previously omitted from the
-            // prospect pipeline entirely, so big clubs never scouted young
-            // goalkeepers at all. The count spans EVERY club team, not just
-            // the first team: only one keeper plays, so a prospect keeper
-            // bought last window and rebalanced into the U20 the same month
-            // still IS the succession project. Counting the main roster only
-            // created a closed re-buy loop (buy → weekly rebalance demotes
-            // him → count back to zero → buy again next window) that
-            // warehoused dozens of keepers in league-less youth squads.
-            // Academy-stage keepers are naturally excluded — they live in
-            // `club.academy`, not on any team roster. The band tops out at
-            // the DevelopmentSigning request's own age ceiling so a groomed
-            // 20-year-old still suppresses the next purchase.
-            // Note this counter answers "do we run a keeper youth project
-            // at all", which is a different question from "do we have an
-            // heir for the man in possession of the shirt". The latter is
-            // STEP 4's, and is deliberately NOT gated on this count: a
-            // teenage keeper on the books satisfies the youth-project
-            // question while doing nothing about a 38-year-old number one.
-            const DEVELOPMENT_KEEPER_AGE_MAX: u8 = 21; // DevelopmentSigning band (16, 21)
-            let keeper_prospect_age_max = youth_age_max.max(DEVELOPMENT_KEEPER_AGE_MAX);
-            let young_keepers = club
-                .teams
-                .teams
-                .iter()
-                .flat_map(|t| t.players.players.iter())
-                .filter(|p| {
-                    !p.is_on_loan()
-                        && p.position().position_group() == PlayerFieldPositionGroup::Goalkeeper
-                        && p.age(date) <= keeper_prospect_age_max
-                })
-                .count();
-            // Aggressive developers keep a small keeper pool on the books;
-            // everyone else grooms one future #1 at a time.
-            let want_young_keepers = if matches!(philosophy, ClubPhilosophy::DevelopAndSell) {
-                2
-            } else {
-                1
-            };
-            // Skip if a GK request already exists (a QualityUpgrade or
-            // SuccessionPlanning keeper need from the steps above) — one GK
-            // request per window is enough.
-            let already_requesting_gk = requests
-                .iter()
-                .any(|r| r.position.position_group() == PlayerFieldPositionGroup::Goalkeeper);
-            if young_keepers < want_young_keepers && !already_requesting_gk {
-                let alloc = (discretionary_unit * 0.3).min(available_budget - budget_used);
-                if alloc > 0.0 {
+                // Don't duplicate if we already have a request for this position group
+                if !requests
+                    .iter()
+                    .any(|r| r.position.position_group() == *group)
+                {
                     requests.push(TransferRequest::new(
                         next_id,
-                        PlayerPositionType::Goalkeeper,
+                        pos,
                         TransferNeedPriority::Optional,
                         TransferNeedReason::DevelopmentSigning,
-                        // Low current-ability floor — potential over now,
-                        // same profile as the outfield prospect requests.
+                        // Low current ability floor — we care about potential, not now
                         avg_ability.saturating_sub(40),
                         avg_ability.saturating_sub(15),
                         alloc,
                     ));
                     next_id += 1;
                     budget_used += alloc;
+                    youth_requests += 1;
                 }
             }
         }
 
+        Self::store_requests(ledger, requests, budget_used, next_id);
+    }
+
+    /// The goalkeeper succession project, handled apart from the outfield
+    /// prospect slots: a club carries far fewer keepers and treats keeper
+    /// succession as its own project.
+    fn goalkeeper_youth_request(&self, ledger: &mut ReviewLedger) {
+        let club = self.club;
+        let date = self.date;
+        let philosophy = &self.club.philosophy;
+        let avg_ability = self.avg_ability;
+        let available_budget = ledger.available_budget;
+        let discretionary_unit = ledger.discretionary_unit;
+        let mut budget_used = ledger.budget_used;
+        let mut next_id = ledger.next_id;
+        let mut requests = std::mem::take(&mut ledger.requests);
+
+        // Goalkeeper development signing — handled separately from the
+        // outfield youth loop above. A club carries far fewer keepers and
+        // treats keeper succession as its own project, so GK is NOT part
+        // of the multi-slot outfield prospect budget (folding it in would
+        // crowd out outfield prospects and shift that calibration).
+        // Instead a youth-minded club with no young keeper in its
+        // first-team picture grooms a single high-upside prospect; the
+        // post-purchase pathway then typically farms him out on loan for
+        // senior minutes (see `DevelopmentLoanPathway::stage_after_purchase`)
+        // — the Chelsea / Man City model of buying a teenage keeper years
+        // before he's needed. Keepers were previously omitted from the
+        // prospect pipeline entirely, so big clubs never scouted young
+        // goalkeepers at all. The count spans EVERY club team, not just
+        // the first team: only one keeper plays, so a prospect keeper
+        // bought last window and rebalanced into the U20 the same month
+        // still IS the succession project. Counting the main roster only
+        // created a closed re-buy loop (buy → weekly rebalance demotes
+        // him → count back to zero → buy again next window) that
+        // warehoused dozens of keepers in league-less youth squads.
+        // Academy-stage keepers are naturally excluded — they live in
+        // `club.academy`, not on any team roster. The band tops out at
+        // the DevelopmentSigning request's own age ceiling so a groomed
+        // 20-year-old still suppresses the next purchase.
+        // Note this counter answers "do we run a keeper youth project
+        // at all", which is a different question from "do we have an
+        // heir for the man in possession of the shirt". The latter is
+        // STEP 4's, and is deliberately NOT gated on this count: a
+        // teenage keeper on the books satisfies the youth-project
+        // question while doing nothing about a 38-year-old number one.
+        const DEVELOPMENT_KEEPER_AGE_MAX: u8 = 21; // DevelopmentSigning band (16, 21)
+        let keeper_prospect_age_max = self.youth_age_max.max(DEVELOPMENT_KEEPER_AGE_MAX);
+        let young_keepers = club
+            .teams
+            .teams
+            .iter()
+            .flat_map(|t| t.players.players.iter())
+            .filter(|p| {
+                !p.is_on_loan()
+                    && p.position().position_group() == PlayerFieldPositionGroup::Goalkeeper
+                    && p.age(date) <= keeper_prospect_age_max
+            })
+            .count();
+        // Aggressive developers keep a small keeper pool on the books;
+        // everyone else grooms one future #1 at a time.
+        let want_young_keepers = if matches!(philosophy, ClubPhilosophy::DevelopAndSell) {
+            2
+        } else {
+            1
+        };
+        // Skip if a GK request already exists (a QualityUpgrade or
+        // SuccessionPlanning keeper need from the steps above) — one GK
+        // request per window is enough.
+        let already_requesting_gk = requests
+            .iter()
+            .any(|r| r.position.position_group() == PlayerFieldPositionGroup::Goalkeeper);
+        if young_keepers < want_young_keepers && !already_requesting_gk {
+            let alloc = (discretionary_unit * 0.3).min(available_budget - budget_used);
+            if alloc > 0.0 {
+                requests.push(TransferRequest::new(
+                    next_id,
+                    PlayerPositionType::Goalkeeper,
+                    TransferNeedPriority::Optional,
+                    TransferNeedReason::DevelopmentSigning,
+                    // Low current-ability floor — potential over now,
+                    // same profile as the outfield prospect requests.
+                    avg_ability.saturating_sub(40),
+                    avg_ability.saturating_sub(15),
+                    alloc,
+                ));
+                next_id += 1;
+                budget_used += alloc;
+            }
+        }
+
+        Self::store_requests(ledger, requests, budget_used, next_id);
+    }
+
+    fn store_requests(
+        ledger: &mut ReviewLedger,
+        requests: Vec<TransferRequest>,
+        budget_used: f64,
+        next_id: u32,
+    ) {
         ledger.requests = requests;
         ledger.budget_used = budget_used;
         ledger.next_id = next_id;

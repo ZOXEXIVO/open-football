@@ -121,65 +121,67 @@ impl WorkerRowDto {
     }
 }
 
-pub async fn workers_page_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<WorkersPageRequest>,
-) -> ApiResult<impl IntoResponse> {
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let current_path = format!("/{}/workers", route_params.lang);
-    let menu_sections = views::search_menu(&i18n, &route_params.lang, &current_path);
+impl WorkersPageTemplate {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<WorkersPageRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let current_path = format!("/{}/workers", route_params.lang);
+        let menu_sections = views::Menus::search_menu(&i18n, &route_params.lang, &current_path);
 
-    let snapshot = state.workers.snapshot().await;
-    let local_throughput_mpms = state.workers.local_throughput().await;
+        let snapshot = state.workers.snapshot().await;
+        let local_throughput_mpms = state.workers.local_throughput().await;
 
-    let total = snapshot.len();
-    let mut ready = 0usize;
-    let mut total_threads = 0usize;
-    let mut total_batches = 0u64;
-    let mut total_matches = 0u64;
-    let mut total_failures = 0u64;
-    for w in &snapshot {
-        if matches!(w.status, WorkerStatus::Ready) {
-            ready += 1;
+        let total = snapshot.len();
+        let mut ready = 0usize;
+        let mut total_threads = 0usize;
+        let mut total_batches = 0u64;
+        let mut total_matches = 0u64;
+        let mut total_failures = 0u64;
+        for w in &snapshot {
+            if matches!(w.status, WorkerStatus::Ready) {
+                ready += 1;
+            }
+            total_threads += w.threads;
+            total_batches = total_batches.saturating_add(w.stats.batches_sent);
+            total_matches = total_matches.saturating_add(w.stats.matches_completed);
+            total_failures = total_failures.saturating_add(w.stats.failures);
         }
-        total_threads += w.threads;
-        total_batches = total_batches.saturating_add(w.stats.batches_sent);
-        total_matches = total_matches.saturating_add(w.stats.matches_completed);
-        total_failures = total_failures.saturating_add(w.stats.failures);
+
+        let local_throughput_mps = local_throughput_mpms.map(|m| format!("{:.1}", m * 1000.0));
+        let local_row = WorkerRowDto::local_row(local_throughput_mps);
+        total_threads += local_row.threads;
+
+        let mut workers: Vec<WorkerRowDto> = Vec::with_capacity(snapshot.len() + 1);
+        workers.push(local_row);
+        workers.extend(snapshot.into_iter().map(WorkerRowDto::from_snapshot));
+
+        Ok(Self {
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
+            cpu_brand: &CPU_BRAND,
+            cores_count: *CPU_CORES,
+            i18n,
+            lang: route_params.lang.clone(),
+            title: "Workers".to_string(),
+            sub_title_prefix: String::new(),
+            sub_title_suffix: String::new(),
+            sub_title: String::new(),
+            sub_title_link: String::new(),
+            sub_title_flag: None,
+            header_color: String::new(),
+            foreground_color: String::new(),
+            menu_sections,
+            total,
+            ready,
+            total_threads,
+            total_batches,
+            total_matches,
+            total_failures,
+            workers,
+        })
     }
-
-    let local_throughput_mps = local_throughput_mpms.map(|m| format!("{:.1}", m * 1000.0));
-    let local_row = WorkerRowDto::local_row(local_throughput_mps);
-    total_threads += local_row.threads;
-
-    let mut workers: Vec<WorkerRowDto> = Vec::with_capacity(snapshot.len() + 1);
-    workers.push(local_row);
-    workers.extend(snapshot.into_iter().map(WorkerRowDto::from_snapshot));
-
-    Ok(WorkersPageTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        i18n,
-        lang: route_params.lang.clone(),
-        title: "Workers".to_string(),
-        sub_title_prefix: String::new(),
-        sub_title_suffix: String::new(),
-        sub_title: String::new(),
-        sub_title_link: String::new(),
-        sub_title_flag: None,
-        header_color: String::new(),
-        foreground_color: String::new(),
-        menu_sections,
-        total,
-        ready,
-        total_threads,
-        total_batches,
-        total_matches,
-        total_failures,
-        workers,
-    })
 }
 
 /// Body of the "add worker" dialog POST. `port` defaults to the worker's
@@ -191,16 +193,20 @@ pub struct AddWorkerRequest {
     pub port: u16,
 }
 
-/// Dial the worker the operator typed into the dialog, run the
-/// version-checked handshake, register it, and hand the outcome back as
-/// JSON so the dialog can show "connected — vX, N threads" or the
-/// failure reason without a page reload.
-pub async fn workers_add_action(
-    State(state): State<GameAppData>,
-    Json(body): Json<AddWorkerRequest>,
-) -> impl IntoResponse {
-    let address = format!("{}:{}", body.host.trim(), body.port);
-    Json(state.workers.add_worker(address).await)
+pub struct WorkersApi;
+
+impl WorkersApi {
+    /// Dial the worker the operator typed into the dialog, run the
+    /// version-checked handshake, register it, and hand the outcome back as
+    /// JSON so the dialog can show "connected — vX, N threads" or the
+    /// failure reason without a page reload.
+    pub async fn add(
+        State(state): State<GameAppData>,
+        Json(body): Json<AddWorkerRequest>,
+    ) -> impl IntoResponse {
+        let address = format!("{}:{}", body.host.trim(), body.port);
+        Json(state.workers.add_worker(address).await)
+    }
 }
 
 /// Live status payload polled by the workers page. Mirrors the figures the
@@ -294,10 +300,12 @@ impl WorkerStatusDto {
     }
 }
 
-/// JSON snapshot of every worker's live status, polled by the workers page.
-pub async fn workers_status_action(State(state): State<GameAppData>) -> impl IntoResponse {
-    let snapshot = state.workers.snapshot().await;
-    Json(WorkersStatusDto::from_snapshot(snapshot))
+impl WorkersApi {
+    /// JSON snapshot of every worker's live status, polled by the workers page.
+    pub async fn status(State(state): State<GameAppData>) -> impl IntoResponse {
+        let snapshot = state.workers.snapshot().await;
+        Json(WorkersStatusDto::from_snapshot(snapshot))
+    }
 }
 
 /// Body of the "remove worker" button POST — the address of the worker
@@ -314,12 +322,14 @@ pub struct RemoveWorkerResponse {
     pub removed: bool,
 }
 
-/// Drop a worker from the registry by address. The local in-process slot
-/// has no registry entry, so it can never be removed this way.
-pub async fn workers_remove_action(
-    State(state): State<GameAppData>,
-    Json(body): Json<RemoveWorkerRequest>,
-) -> impl IntoResponse {
-    let removed = state.workers.remove_worker(body.address.trim()).await;
-    Json(RemoveWorkerResponse { removed })
+impl WorkersApi {
+    /// Drop a worker from the registry by address. The local in-process slot
+    /// has no registry entry, so it can never be removed this way.
+    pub async fn remove(
+        State(state): State<GameAppData>,
+        Json(body): Json<RemoveWorkerRequest>,
+    ) -> impl IntoResponse {
+        let removed = state.workers.remove_worker(body.address.trim()).await;
+        Json(RemoveWorkerResponse { removed })
+    }
 }

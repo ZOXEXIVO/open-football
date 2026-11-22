@@ -1,10 +1,9 @@
 pub mod routes;
 
-use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::shared::slug::{PlayerPage, player_from_slug, resolve_player_page};
 use crate::leagues::address::LeagueAddress;
-use crate::player::newspaper::PlayerNewsCounter;
-use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
+use crate::player::{PlayerPageChrome, PlayerPageColors};
+use crate::shared::slug::{PlayerPage, PlayerSlug};
+use crate::views::{MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, EventI18n, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -28,7 +27,6 @@ use core::MediaFanEventContext;
 use core::NationalTeamEventContext;
 use core::PersonalAdaptationEventContext;
 use core::PlayerDecision;
-use core::PlayerStatusType;
 use core::RoleStatusEventContext;
 use core::SelectionDecisionScope;
 use core::SelectionScoreFactor;
@@ -42,37 +40,6 @@ use core::TransferInterestEvidence;
 use core::TransferInterestStage;
 use core::club::player::mind;
 use serde::Deserialize;
-
-fn get_neighbor_teams(
-    club_id: u32,
-    data: &SimulatorData,
-    i18n: &I18n,
-) -> Result<NeighborMenus, ApiError> {
-    let club = data
-        .club(club_id)
-        .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
-    let teams = views::neighbor_teams(club, i18n);
-    let mut country_leagues: Vec<(u32, String, String)> = data
-        .country_by_club(club_id)
-        .map(|country| {
-            country
-                .leagues
-                .leagues
-                .iter()
-                .filter(|l| !l.friendly)
-                .map(|l| (l.id, l.name.clone(), l.slug.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
-    country_leagues.sort_by_key(|(id, _, _)| *id);
-    Ok((
-        teams,
-        country_leagues
-            .into_iter()
-            .map(|(_, name, slug)| (name, slug))
-            .collect(),
-    ))
-}
 
 #[derive(Deserialize)]
 pub struct PlayerEventsRequest {
@@ -242,161 +209,122 @@ pub struct PlayerEventsTemplate {
     pub mood_tiles: Vec<EventFilterTile>,
 }
 
-#[expect(clippy::too_many_lines)]
-pub async fn player_events_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<PlayerEventsRequest>,
-) -> ApiResult<Response> {
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let events_i18n = state.events_i18n.for_lang(&route_params.lang);
-    let guard = state.data.read().await;
+pub struct PlayerEventsPage;
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+impl PlayerEventsPage {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<PlayerEventsRequest>,
+    ) -> ApiResult<Response> {
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let events_i18n = state.events_i18n.for_lang(&route_params.lang);
+        let guard = state.data.read().await;
 
-    let (player, team_opt, canonical) = match resolve_player_page(
-        simulator_data,
-        &route_params.player_slug,
-        &route_params.lang,
-        "/events",
-    )? {
-        PlayerPage::Found {
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+
+        let (player, team_opt, canonical) = match PlayerSlug::resolve_page(
+            simulator_data,
+            &route_params.player_slug,
+            &route_params.lang,
+            "/events",
+        )? {
+            PlayerPage::Found {
+                player,
+                team,
+                canonical_slug,
+            } => (player, team, canonical_slug),
+            PlayerPage::Redirect(r) => return Ok(r),
+        };
+
+        let league_url = team_opt
+            .and_then(|t| t.league_id)
+            .and_then(|id| simulator_data.league(id))
+            .map(|l| LeagueAddress::of(simulator_data, l).url(&route_params.lang));
+        let events = PlayerEventFeed::build(
             player,
-            team,
-            canonical_slug,
-        } => (player, team, canonical_slug),
-        PlayerPage::Redirect(r) => return Ok(r),
-    };
+            &i18n,
+            &events_i18n,
+            simulator_data,
+            &route_params.lang,
+            league_url.as_deref(),
+        );
+        let severity_tiles = EventFilter::severity_tiles(&events_i18n);
+        let mood_tiles = EventFilter::mood_tiles(&events_i18n);
+        let events_count = events.len();
+        let chrome = PlayerPageChrome::build(
+            simulator_data,
+            i18n,
+            player,
+            team_opt,
+            &route_params.lang,
+            &canonical,
+            "events",
+            PlayerPageColors::Grey,
+        )?;
 
-    let (neighbor_teams, country_leagues) = if let Some(team) = team_opt {
-        get_neighbor_teams(team.club_id, simulator_data, &i18n)?
-    } else {
-        (Vec::new(), Vec::new())
-    };
-    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-
-    let title = format!(
-        "{} {}",
-        player.full_name.display_first_name(),
-        player.full_name.display_last_name()
-    );
-
-    let league_url = team_opt
-        .and_then(|t| t.league_id)
-        .and_then(|id| simulator_data.league(id))
-        .map(|l| LeagueAddress::of(simulator_data, l).url(&route_params.lang));
-    let events = build_events(
-        player,
-        &i18n,
-        &events_i18n,
-        simulator_data,
-        &route_params.lang,
-        league_url.as_deref(),
-    );
-    let severity_tiles = EventFilter::severity_tiles(&events_i18n);
-    let mood_tiles = EventFilter::mood_tiles(&events_i18n);
-
-    Ok(PlayerEventsTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        title,
-        sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
-        sub_title_suffix: String::new(),
-        sub_title: team_opt.map(|t| t.name.clone()).unwrap_or_else(|| {
-            if player.is_retired() {
-                i18n.t("retired").to_string()
-            } else {
-                i18n.t("free_agent").to_string()
-            }
-        }),
-        sub_title_link: team_opt
-            .map(|t| format!("/{}/teams/{}", route_params.lang, t.slug))
-            .unwrap_or_default(),
-        sub_title_flag: None,
-        header_color: team_opt
-            .and_then(|t| {
-                simulator_data
-                    .club(t.club_id)
-                    .map(|c| c.colors.background.clone())
-            })
-            .unwrap_or_else(|| "#808080".to_string()),
-        foreground_color: team_opt
-            .and_then(|t| {
-                simulator_data
-                    .club(t.club_id)
-                    .map(|c| c.colors.foreground.clone())
-            })
-            .unwrap_or_else(|| "#ffffff".to_string()),
-        menu_sections: if let Some(team) = team_opt {
-            let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-            let current_path = format!("/{}/teams/{}", route_params.lang, team.slug);
-            let mp = views::MenuParams {
-                i18n: &i18n,
-                lang: &route_params.lang,
-                current_path: &current_path,
-                country_name: cn,
-                country_slug: cs,
-            };
-            views::team_menu(&mp, &neighbor_refs, &league_refs)
-        } else {
-            Vec::new()
-        },
-        i18n,
-        events_i18n,
-        lang: route_params.lang.clone(),
-        active_tab: "events",
-        player_id: player.id,
-        player_slug: canonical,
-        club_id: team_opt.map(|t| t.club_id).unwrap_or(0),
-        is_on_loan: player.is_on_loan(),
-        is_injured: player.player_attributes.is_injured,
-        is_unhappy: player.statuses.get().contains(&PlayerStatusType::Unh),
-        is_force_match_selection: player.is_force_match_selection,
-        is_on_watchlist: simulator_data.watchlist.contains(&player.id),
-        events_count: events.len(),
-        interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
-        awards_count: player.awards_count.total(),
-        news_count: PlayerNewsCounter::count(simulator_data, player),
-        events,
-        severity_tiles,
-        mood_tiles,
+        Ok(PlayerEventsTemplate {
+            css_version: chrome.css_version,
+            computer_name: chrome.computer_name,
+            cpu_brand: chrome.cpu_brand,
+            cores_count: chrome.cores_count,
+            title: chrome.title,
+            sub_title_prefix: chrome.sub_title_prefix,
+            sub_title_suffix: chrome.sub_title_suffix,
+            sub_title: chrome.sub_title,
+            sub_title_link: chrome.sub_title_link,
+            sub_title_flag: chrome.sub_title_flag,
+            header_color: chrome.header_color,
+            foreground_color: chrome.foreground_color,
+            menu_sections: chrome.menu_sections,
+            i18n: chrome.i18n,
+            events_i18n,
+            lang: chrome.lang,
+            active_tab: chrome.active_tab,
+            player_id: chrome.player_id,
+            player_slug: chrome.player_slug,
+            club_id: chrome.club_id,
+            is_on_loan: chrome.is_on_loan,
+            is_injured: chrome.is_injured,
+            is_unhappy: chrome.is_unhappy,
+            is_force_match_selection: chrome.is_force_match_selection,
+            is_on_watchlist: chrome.is_on_watchlist,
+            events_count,
+            interested_clubs_count: chrome.interested_clubs_count,
+            awards_count: chrome.awards_count,
+            news_count: chrome.news_count,
+            events,
+            severity_tiles,
+            mood_tiles,
+        }
+        .into_response())
     }
-    .into_response())
-}
 
-/// The Decisions tab folded into this feed — every register row now renders
-/// as an event card. Its URL stays reachable and answers 301 so bookmarks
-/// and outside links land on the merged page.
-///
-/// The player is resolved here instead of echoing the incoming slug back, so
-/// a stale or bare-id `/decisions` link reaches the canonical events URL in
-/// one hop rather than bouncing through the slug redirect on the way.
-pub async fn player_decisions_redirect(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<PlayerEventsRequest>,
-) -> ApiResult<Response> {
-    let guard = state.data.read().await;
+    /// The Decisions tab folded into this feed — every register row now renders
+    /// as an event card. Its URL stays reachable and answers 301 so bookmarks
+    /// and outside links land on the merged page.
+    ///
+    /// The player is resolved here instead of echoing the incoming slug back, so
+    /// a stale or bare-id `/decisions` link reaches the canonical events URL in
+    /// one hop rather than bouncing through the slug redirect on the way.
+    pub async fn decisions_redirect(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<PlayerEventsRequest>,
+    ) -> ApiResult<Response> {
+        let guard = state.data.read().await;
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let (player, _) = player_from_slug(simulator_data, &route_params.player_slug)?;
+        let (player, _) = PlayerSlug::from_slug(simulator_data, &route_params.player_slug)?;
 
-    Ok(DecisionRender::moved_to_events(
-        &route_params.lang,
-        &player.slug(),
-    ))
+        Ok(DecisionRender::moved_to_events(
+            &route_params.lang,
+            &player.slug(),
+        ))
+    }
 }
 
 /// Big events: rare, career-visible moments. The threshold is "would a
@@ -415,11 +343,14 @@ pub async fn player_decisions_redirect(
 /// - `WonStartingPlace` / `LostStartingPlace` — sticky one-shots, but
 ///   they oscillate over a career and the UI can't tell whether this is
 ///   a 19-year-old's breakthrough or a journeyman's third such event.
-fn is_big_event(event_type: &HappinessEventType) -> bool {
-    matches!(
-        event_type,
-        // ── Career / silverware ──────────────────────────────
-        HappinessEventType::TrophyWon
+struct EventImportance;
+
+impl EventImportance {
+    fn is_big(event_type: &HappinessEventType) -> bool {
+        matches!(
+            event_type,
+            // ── Career / silverware ──────────────────────────────
+            HappinessEventType::TrophyWon
             | HappinessEventType::Relegated
             | HappinessEventType::PromotionCelebration
             | HappinessEventType::CupFinalDefeat
@@ -509,223 +440,720 @@ fn is_big_event(event_type: &HappinessEventType) -> bool {
             // ambient lead-up, not the announcement itself.
             | HappinessEventType::RetirementAnnounced
             | HappinessEventType::CoachingCareerInterest
-    )
+        )
+    }
 }
 
-#[expect(clippy::too_many_lines)]
-pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
-    match event_type {
-        HappinessEventType::ManagerPraise => "event_manager_praise",
-        HappinessEventType::ManagerDiscipline => "event_manager_discipline",
-        HappinessEventType::ManagerPlayingTimePromise => "event_playing_time_promise",
-        HappinessEventType::ManagerCriticism => "event_manager_criticism",
-        HappinessEventType::ManagerEncouragement => "event_manager_encouragement",
-        HappinessEventType::ManagerTacticalInstruction => "event_manager_tactical_instruction",
-        HappinessEventType::GoodTraining => "event_good_training",
-        HappinessEventType::PoorTraining => "event_poor_training",
-        HappinessEventType::MatchDropped => "event_match_dropped",
-        HappinessEventType::ContractOffer => "event_contract_offer",
-        HappinessEventType::ContractRenewal => "event_contract_renewal",
-        HappinessEventType::InjuryReturn => "event_injury_return",
-        HappinessEventType::SquadStatusChange => "event_squad_status_change",
-        HappinessEventType::LackOfPlayingTime => "event_lack_of_playing_time",
-        HappinessEventType::LoanListingAccepted => "event_loan_listing_accepted",
-        HappinessEventType::PlayerOfTheMatch => "event_player_of_the_match",
-        HappinessEventType::PlayerOfTheWeek => "event_player_of_the_week",
-        HappinessEventType::TeammateBonding => "event_teammate_bonding",
-        HappinessEventType::ConflictWithTeammate => "event_conflict_with_teammate",
-        HappinessEventType::DressingRoomSpeech => "event_dressing_room_speech",
-        HappinessEventType::SettledIntoSquad => "event_settled_into_squad",
-        HappinessEventType::FeelingIsolated => "event_feeling_isolated",
-        HappinessEventType::SalaryGapNoticed => "event_salary_gap_noticed",
-        HappinessEventType::PromiseKept => "event_promise_kept",
-        HappinessEventType::PromiseBroken => "event_promise_broken",
-        HappinessEventType::AmbitionShock => "event_ambition_shock",
-        HappinessEventType::SalaryShock => "event_salary_shock",
-        HappinessEventType::RoleMismatch => "event_role_mismatch",
-        HappinessEventType::DreamMove => "event_dream_move",
-        HappinessEventType::DreamLoanOpportunity => "event_dream_loan_opportunity",
-        HappinessEventType::SalaryBoost => "event_salary_boost",
-        HappinessEventType::JoiningElite => "event_joining_elite",
-        HappinessEventType::ContractTerminated => "event_contract_terminated",
-        HappinessEventType::ManagerDeparture => "event_manager_departure",
-        HappinessEventType::NationalTeamCallup => "event_national_team_callup",
-        HappinessEventType::NationalTeamDropped => "event_national_team_dropped",
-        HappinessEventType::NationalTeamTriumph => "event_national_team_triumph",
-        HappinessEventType::NationalTeamHeartbreak => "event_national_team_heartbreak",
-        HappinessEventType::ShirtNumberPromotion => "event_shirt_number_promotion",
-        HappinessEventType::ControversyIncident => "event_controversy_incident",
-        HappinessEventType::FirstClubGoal => "event_first_club_goal",
-        HappinessEventType::DecisiveGoal => "event_decisive_goal",
-        HappinessEventType::SubstituteImpact => "event_substitute_impact",
-        HappinessEventType::CleanSheetPride => "event_clean_sheet_pride",
-        HappinessEventType::CostlyMistake => "event_costly_mistake",
-        HappinessEventType::RedCardFallout => "event_red_card_fallout",
-        HappinessEventType::DerbyHero => "event_derby_hero",
-        HappinessEventType::DerbyWin => "event_derby_win",
-        HappinessEventType::DerbyDefeat => "event_derby_defeat",
-        HappinessEventType::TrophyWon => "event_trophy_won",
-        HappinessEventType::DomesticCupWon => "event_domestic_cup_won",
-        HappinessEventType::CupFinalDefeat => "event_cup_final_defeat",
-        HappinessEventType::PromotionCelebration => "event_promotion_celebration",
-        HappinessEventType::RelegationFear => "event_relegation_fear",
-        HappinessEventType::Relegated => "event_relegated",
-        HappinessEventType::QualifiedForEurope => "event_qualified_for_europe",
-        HappinessEventType::WonStartingPlace => "event_won_starting_place",
-        HappinessEventType::LostStartingPlace => "event_lost_starting_place",
-        HappinessEventType::CaptaincyAwarded => "event_captaincy_awarded",
-        HappinessEventType::CaptaincyRemoved => "event_captaincy_removed",
-        HappinessEventType::YouthBreakthrough => "event_youth_breakthrough",
-        HappinessEventType::SquadRegistrationOmitted => "event_squad_registration_omitted",
-        HappinessEventType::WantedByBiggerClub => "event_wanted_by_bigger_club",
-        HappinessEventType::TransferBidRejected => "event_transfer_bid_rejected",
-        HappinessEventType::DreamMoveCollapsed => "event_dream_move_collapsed",
-        HappinessEventType::FanPraise => "event_fan_praise",
-        HappinessEventType::FanCriticism => "event_fan_criticism",
-        HappinessEventType::MediaPraise => "event_media_praise",
-        HappinessEventType::MediaCriticism => "event_media_criticism",
-        HappinessEventType::CloseFriendSold => "event_close_friend_sold",
-        HappinessEventType::CompatriotJoined => "event_compatriot_joined",
-        HappinessEventType::MentorDeparted => "event_mentor_departed",
-        HappinessEventType::LanguageProgress => "event_language_progress",
-        HappinessEventType::PlayerOfTheMonth => "event_player_of_the_month",
-        HappinessEventType::YoungPlayerOfTheMonth => "event_young_player_of_the_month",
-        HappinessEventType::YoungPlayerOfTheWeek => "event_young_player_of_the_week",
-        HappinessEventType::TeamOfTheWeekSelection => "event_team_of_the_week_selection",
-        HappinessEventType::YoungTeamOfTheWeekSelection => "event_young_team_of_the_week_selection",
-        HappinessEventType::TeamOfTheMonthSelection => "event_team_of_the_month_selection",
-        HappinessEventType::YoungTeamOfTheMonthSelection => {
-            "event_young_team_of_the_month_selection"
-        }
-        HappinessEventType::TeamOfTheSeasonSelection => "event_team_of_the_season_selection",
-        HappinessEventType::TeamOfTheYearSelection => "event_team_of_the_year_selection",
-        HappinessEventType::PlayerOfTheSeason => "event_player_of_the_season",
-        HappinessEventType::YoungPlayerOfTheSeason => "event_young_player_of_the_season",
-        HappinessEventType::LeagueTopScorer => "event_league_top_scorer",
-        HappinessEventType::LeagueTopAssists => "event_league_top_assists",
-        HappinessEventType::LeagueGoldenGlove => "event_league_golden_glove",
-        HappinessEventType::ContinentalPlayerOfYearNomination => {
-            "event_continental_player_of_year_nomination"
-        }
-        HappinessEventType::ContinentalPlayerOfYear => "event_continental_player_of_year",
-        HappinessEventType::WorldPlayerOfYearNomination => "event_world_player_of_year_nomination",
-        HappinessEventType::WorldPlayerOfYear => "event_world_player_of_year",
-        HappinessEventType::SeniorDebut => "event_senior_debut",
-        HappinessEventType::NationalTeamDebut => "event_national_team_debut",
-        HappinessEventType::HatTrick => "event_hat_trick",
-        HappinessEventType::AssistHatTrick => "event_assist_hat_trick",
-        HappinessEventType::GoalDroughtEnded => "event_goal_drought_ended",
-        HappinessEventType::ScoringDroughtConcern => "event_scoring_drought_concern",
-        HappinessEventType::AppearanceMilestone => "event_appearance_milestone",
-        HappinessEventType::GoalMilestone => "event_goal_milestone",
-        HappinessEventType::CleanSheetMilestone => "event_clean_sheet_milestone",
-        HappinessEventType::TrainingGroundBustUp => "event_training_ground_bust_up",
-        HappinessEventType::PublicApology => "event_public_apology",
-        HappinessEventType::FansChantPlayerName => "event_fans_chant_player_name",
-        HappinessEventType::MediaPressureMounting => "event_media_pressure_mounting",
-        HappinessEventType::LeadershipEmergence => "event_leadership_emergence",
-        HappinessEventType::ScoutedByClub => "event_scouted_by_club",
-        HappinessEventType::TransferRumour => "event_transfer_rumour",
-        HappinessEventType::AgentStirsInterest => "event_agent_stirs_interest",
-        HappinessEventType::InterestFromBiggerClub => "event_interest_from_bigger_club",
-        HappinessEventType::InterestFromRival => "event_interest_from_rival",
-        HappinessEventType::HomecomingRumour => "event_homecoming_rumour",
-        HappinessEventType::FormerClubInterest => "event_former_club_interest",
-        HappinessEventType::FavoriteClubInterest => "event_favorite_club_interest",
-        HappinessEventType::TransferSpeculationDistracts => "event_transfer_speculation_distracts",
-        HappinessEventType::TransferInterestDismissed => "event_transfer_interest_dismissed",
-        HappinessEventType::TransferTalksExpected => "event_transfer_talks_expected",
-        HappinessEventType::InterestCooled => "event_interest_cooled",
-        HappinessEventType::AgreedPersonalTerms => "event_agreed_personal_terms",
-        HappinessEventType::RejectedMoveOnPersonalTerms => "event_rejected_move_on_personal_terms",
-        HappinessEventType::UsedInterestForContractLeverage => {
-            "event_used_interest_for_contract_leverage"
-        }
-        HappinessEventType::FansReactToTransferRumour => "event_fans_react_to_transfer_rumour",
-        HappinessEventType::WantsReturnHome => "event_wants_return_home",
-        HappinessEventType::WantsEuropeanCompetition => "event_wants_european_competition",
-        HappinessEventType::WantsCopaLibertadores => "event_wants_copa_libertadores",
-        HappinessEventType::HomeReturnOpportunity => "event_home_return_opportunity",
-        HappinessEventType::ContinentalAmbitionSatisfied => "event_continental_ambition_satisfied",
-        HappinessEventType::LifeSimulationDesire => "event_life_simulation_desire",
-        HappinessEventType::TopClubOpportunity => "event_top_club_opportunity",
-        HappinessEventType::EliteTrainingLift => "event_elite_training_lift",
-        HappinessEventType::AdaptationBreakthrough => "event_adaptation_breakthrough",
-        HappinessEventType::TrustedAfterStepUp => "event_trusted_after_step_up",
-        HappinessEventType::ProvedLevelAfterMove => "event_proved_level_after_move",
-        HappinessEventType::SeniorMentorSupport => "event_senior_mentor_support",
-        HappinessEventType::OverawedByEliteClub => "event_overawed_by_elite_club",
-        HappinessEventType::RolePathBlockedAtEliteClub => "event_role_path_blocked_at_elite_club",
-        HappinessEventType::MediaSpotlightPressure => "event_media_spotlight_pressure",
-        HappinessEventType::DressingRoomStatusShock => "event_dressing_room_status_shock",
-        HappinessEventType::TooGoodForLevel => "event_too_good_for_level",
-        HappinessEventType::TrainingStandardFrustration => "event_training_standard_frustration",
-        HappinessEventType::FanExpectationBurden => "event_fan_expectation_burden",
-        HappinessEventType::StepDownEmbarrassment => "event_step_down_embarrassment",
-        HappinessEventType::LoanLevelMismatch => "event_loan_level_mismatch",
-        HappinessEventType::RetirementConsidering => "event_retirement_considering",
-        HappinessEventType::RetirementAnnounced => "event_retirement_announced",
-        HappinessEventType::CoachingCareerInterest => "event_coaching_career_interest",
-        HappinessEventType::WantsStrongerSquad => "event_wants_stronger_squad",
-        HappinessEventType::WantsTitleChallenge => "event_wants_title_challenge",
-        HappinessEventType::WantsStrongerLeague => "event_wants_stronger_league",
-        HappinessEventType::WantsFirstTeamFootball => "event_wants_first_team_football",
-        HappinessEventType::WantsToLeaveAfterRelegation => "event_wants_to_leave_after_relegation",
-        HappinessEventType::LoanDevelopmentConcern => "event_loan_development_concern",
-        HappinessEventType::LoanRecallRequested => "event_loan_recall_requested",
-        HappinessEventType::LoanFormConcern => "event_loan_form_concern",
-        HappinessEventType::WantsLoanMadePermanent => "event_wants_loan_made_permanent",
-        HappinessEventType::WantsToProveHimselfAtParent => "event_wants_to_prove_himself_at_parent",
-        HappinessEventType::UnsettledAfterLoanReturn => "event_unsettled_after_loan_return",
-        HappinessEventType::ReturnedFromLoanProven => "event_returned_from_loan_proven",
-        HappinessEventType::ReturnedFromLoanDeflated => "event_returned_from_loan_deflated",
-        HappinessEventType::BackedAfterLoanReturn => "event_backed_after_loan_return",
-        HappinessEventType::LoanSpellReviewed => "event_loan_spell_reviewed",
-        HappinessEventType::ThreatenedByReturningLoanee => "event_threatened_by_returning_loanee",
-        HappinessEventType::AdmiredForBigClubSpell => "event_admired_for_big_club_spell",
-        HappinessEventType::BigClubAuraFaded => "event_big_club_aura_faded",
-        HappinessEventType::LearningFromStarTeammate => "event_learning_from_star_teammate",
-        HappinessEventType::TakesReplacementUnderWing => "event_takes_replacement_under_wing",
-        HappinessEventType::LosingPatienceWithSigning => "event_losing_patience_with_signing",
-        HappinessEventType::FeelsDressingRoomPressure => "event_feels_dressing_room_pressure",
-        HappinessEventType::PathwayBlockedByLoanSigning => "event_pathway_blocked_by_loan_signing",
-        HappinessEventType::UnhappyAboutBlockedHomegrown => "event_unhappy_about_blocked_homegrown",
-        HappinessEventType::FeelsSelectionFavouritism => "event_feels_selection_favouritism",
-        HappinessEventType::ColdShoulderOverRivalPast => "event_cold_shoulder_over_rival_past",
-        HappinessEventType::ReleaseClauseDemanded => "event_release_clause_demanded",
-        HappinessEventType::ContractTalksStalled => "event_contract_talks_stalled",
-        HappinessEventType::RejectedContractOffer => "event_rejected_contract_offer",
-        HappinessEventType::ContractExpiryAnxiety => "event_contract_expiry_anxiety",
-        HappinessEventType::PlayingForNewContract => "event_playing_for_new_contract",
-        HappinessEventType::AskedForPrivateTalk => "event_asked_for_private_talk",
-        HappinessEventType::AskedClubToArrangeTransfer => "event_asked_club_to_arrange_transfer",
-        HappinessEventType::UnsoldWindowClosed => "event_unsold_window_closed",
-        HappinessEventType::MoveVetoedByClub => "event_move_vetoed_by_club",
-        HappinessEventType::ConcernedByClubDirection => "event_concerned_by_club_direction",
-        HappinessEventType::EncouragedBySquadInvestment => "event_encouraged_by_squad_investment",
-        HappinessEventType::UnhappyWithTacticalRole => "event_unhappy_with_tactical_role",
-        HappinessEventType::TrustedInBigMatch => "event_trusted_in_big_match",
-        HappinessEventType::BenchedForBigMatch => "event_benched_for_big_match",
-        HappinessEventType::SubstitutionFrustration => "event_substitution_frustration",
-        HappinessEventType::InjurySetback => "event_injury_setback",
-        HappinessEventType::ThreatenedByNewSigning => "event_threatened_by_new_signing",
-        HappinessEventType::ManagerTrustGrowing => "event_manager_trust_growing",
-        HappinessEventType::ManagerTrustEroding => "event_manager_trust_eroding",
-        HappinessEventType::NewManagerBounce => "event_new_manager_bounce",
-        HappinessEventType::ReunitedWithFormerManager => "event_reunited_with_former_manager",
-        HappinessEventType::RalliesBehindManager => "event_rallies_behind_manager",
-        HappinessEventType::SensesManagerChange => "event_senses_manager_change",
-        HappinessEventType::FormalWarningIssued => "event_formal_warning_issued",
-        HappinessEventType::FinedByClub => "event_fined_by_club",
-        HappinessEventType::DressingRoomInquest => "event_dressing_room_inquest",
-        HappinessEventType::ResiliencePraised => "event_resilience_praised",
-        HappinessEventType::ToldNotInPlans => "event_told_not_in_plans",
-        HappinessEventType::PersonalTrainingPlanSet => "event_personal_training_plan_set",
-        HappinessEventType::BannedThroughAccumulation => "event_banned_through_accumulation",
-        HappinessEventType::SuspensionServed => "event_suspension_served",
-        HappinessEventType::ScoredAgainstFormerClub => "event_scored_against_former_club",
-        HappinessEventType::ClubServantMilestone => "event_club_servant_milestone",
-        HappinessEventType::InternationalRetirement => "event_international_retirement",
+struct EventKey;
+
+impl EventKey {
+    /// The legacy headline key for every happiness event type.
+    const KEYS: &'static [(HappinessEventType, &'static str)] = &[
+        (HappinessEventType::ManagerPraise, "event_manager_praise"),
+        (
+            HappinessEventType::ManagerDiscipline,
+            "event_manager_discipline",
+        ),
+        (
+            HappinessEventType::ManagerPlayingTimePromise,
+            "event_playing_time_promise",
+        ),
+        (
+            HappinessEventType::ManagerCriticism,
+            "event_manager_criticism",
+        ),
+        (
+            HappinessEventType::ManagerEncouragement,
+            "event_manager_encouragement",
+        ),
+        (
+            HappinessEventType::ManagerTacticalInstruction,
+            "event_manager_tactical_instruction",
+        ),
+        (HappinessEventType::GoodTraining, "event_good_training"),
+        (HappinessEventType::PoorTraining, "event_poor_training"),
+        (HappinessEventType::MatchDropped, "event_match_dropped"),
+        (HappinessEventType::ContractOffer, "event_contract_offer"),
+        (
+            HappinessEventType::ContractRenewal,
+            "event_contract_renewal",
+        ),
+        (HappinessEventType::InjuryReturn, "event_injury_return"),
+        (
+            HappinessEventType::SquadStatusChange,
+            "event_squad_status_change",
+        ),
+        (
+            HappinessEventType::LackOfPlayingTime,
+            "event_lack_of_playing_time",
+        ),
+        (
+            HappinessEventType::LoanListingAccepted,
+            "event_loan_listing_accepted",
+        ),
+        (
+            HappinessEventType::PlayerOfTheMatch,
+            "event_player_of_the_match",
+        ),
+        (
+            HappinessEventType::PlayerOfTheWeek,
+            "event_player_of_the_week",
+        ),
+        (
+            HappinessEventType::TeammateBonding,
+            "event_teammate_bonding",
+        ),
+        (
+            HappinessEventType::ConflictWithTeammate,
+            "event_conflict_with_teammate",
+        ),
+        (
+            HappinessEventType::DressingRoomSpeech,
+            "event_dressing_room_speech",
+        ),
+        (
+            HappinessEventType::SettledIntoSquad,
+            "event_settled_into_squad",
+        ),
+        (
+            HappinessEventType::FeelingIsolated,
+            "event_feeling_isolated",
+        ),
+        (
+            HappinessEventType::SalaryGapNoticed,
+            "event_salary_gap_noticed",
+        ),
+        (HappinessEventType::PromiseKept, "event_promise_kept"),
+        (HappinessEventType::PromiseBroken, "event_promise_broken"),
+        (HappinessEventType::AmbitionShock, "event_ambition_shock"),
+        (HappinessEventType::SalaryShock, "event_salary_shock"),
+        (HappinessEventType::RoleMismatch, "event_role_mismatch"),
+        (HappinessEventType::DreamMove, "event_dream_move"),
+        (
+            HappinessEventType::DreamLoanOpportunity,
+            "event_dream_loan_opportunity",
+        ),
+        (HappinessEventType::SalaryBoost, "event_salary_boost"),
+        (HappinessEventType::JoiningElite, "event_joining_elite"),
+        (
+            HappinessEventType::ContractTerminated,
+            "event_contract_terminated",
+        ),
+        (
+            HappinessEventType::ManagerDeparture,
+            "event_manager_departure",
+        ),
+        (
+            HappinessEventType::NationalTeamCallup,
+            "event_national_team_callup",
+        ),
+        (
+            HappinessEventType::NationalTeamDropped,
+            "event_national_team_dropped",
+        ),
+        (
+            HappinessEventType::NationalTeamTriumph,
+            "event_national_team_triumph",
+        ),
+        (
+            HappinessEventType::NationalTeamHeartbreak,
+            "event_national_team_heartbreak",
+        ),
+        (
+            HappinessEventType::ShirtNumberPromotion,
+            "event_shirt_number_promotion",
+        ),
+        (
+            HappinessEventType::ControversyIncident,
+            "event_controversy_incident",
+        ),
+        (HappinessEventType::FirstClubGoal, "event_first_club_goal"),
+        (HappinessEventType::DecisiveGoal, "event_decisive_goal"),
+        (
+            HappinessEventType::SubstituteImpact,
+            "event_substitute_impact",
+        ),
+        (
+            HappinessEventType::CleanSheetPride,
+            "event_clean_sheet_pride",
+        ),
+        (HappinessEventType::CostlyMistake, "event_costly_mistake"),
+        (HappinessEventType::RedCardFallout, "event_red_card_fallout"),
+        (HappinessEventType::DerbyHero, "event_derby_hero"),
+        (HappinessEventType::DerbyWin, "event_derby_win"),
+        (HappinessEventType::DerbyDefeat, "event_derby_defeat"),
+        (HappinessEventType::TrophyWon, "event_trophy_won"),
+        (HappinessEventType::DomesticCupWon, "event_domestic_cup_won"),
+        (HappinessEventType::CupFinalDefeat, "event_cup_final_defeat"),
+        (
+            HappinessEventType::PromotionCelebration,
+            "event_promotion_celebration",
+        ),
+        (HappinessEventType::RelegationFear, "event_relegation_fear"),
+        (HappinessEventType::Relegated, "event_relegated"),
+        (
+            HappinessEventType::QualifiedForEurope,
+            "event_qualified_for_europe",
+        ),
+        (
+            HappinessEventType::WonStartingPlace,
+            "event_won_starting_place",
+        ),
+        (
+            HappinessEventType::LostStartingPlace,
+            "event_lost_starting_place",
+        ),
+        (
+            HappinessEventType::CaptaincyAwarded,
+            "event_captaincy_awarded",
+        ),
+        (
+            HappinessEventType::CaptaincyRemoved,
+            "event_captaincy_removed",
+        ),
+        (
+            HappinessEventType::YouthBreakthrough,
+            "event_youth_breakthrough",
+        ),
+        (
+            HappinessEventType::SquadRegistrationOmitted,
+            "event_squad_registration_omitted",
+        ),
+        (
+            HappinessEventType::WantedByBiggerClub,
+            "event_wanted_by_bigger_club",
+        ),
+        (
+            HappinessEventType::TransferBidRejected,
+            "event_transfer_bid_rejected",
+        ),
+        (
+            HappinessEventType::DreamMoveCollapsed,
+            "event_dream_move_collapsed",
+        ),
+        (HappinessEventType::FanPraise, "event_fan_praise"),
+        (HappinessEventType::FanCriticism, "event_fan_criticism"),
+        (HappinessEventType::MediaPraise, "event_media_praise"),
+        (HappinessEventType::MediaCriticism, "event_media_criticism"),
+        (
+            HappinessEventType::CloseFriendSold,
+            "event_close_friend_sold",
+        ),
+        (
+            HappinessEventType::CompatriotJoined,
+            "event_compatriot_joined",
+        ),
+        (HappinessEventType::MentorDeparted, "event_mentor_departed"),
+        (
+            HappinessEventType::LanguageProgress,
+            "event_language_progress",
+        ),
+        (
+            HappinessEventType::PlayerOfTheMonth,
+            "event_player_of_the_month",
+        ),
+        (
+            HappinessEventType::YoungPlayerOfTheMonth,
+            "event_young_player_of_the_month",
+        ),
+        (
+            HappinessEventType::YoungPlayerOfTheWeek,
+            "event_young_player_of_the_week",
+        ),
+        (
+            HappinessEventType::TeamOfTheWeekSelection,
+            "event_team_of_the_week_selection",
+        ),
+        (
+            HappinessEventType::YoungTeamOfTheWeekSelection,
+            "event_young_team_of_the_week_selection",
+        ),
+        (
+            HappinessEventType::TeamOfTheMonthSelection,
+            "event_team_of_the_month_selection",
+        ),
+        (
+            HappinessEventType::YoungTeamOfTheMonthSelection,
+            "event_young_team_of_the_month_selection",
+        ),
+        (
+            HappinessEventType::TeamOfTheSeasonSelection,
+            "event_team_of_the_season_selection",
+        ),
+        (
+            HappinessEventType::TeamOfTheYearSelection,
+            "event_team_of_the_year_selection",
+        ),
+        (
+            HappinessEventType::PlayerOfTheSeason,
+            "event_player_of_the_season",
+        ),
+        (
+            HappinessEventType::YoungPlayerOfTheSeason,
+            "event_young_player_of_the_season",
+        ),
+        (
+            HappinessEventType::LeagueTopScorer,
+            "event_league_top_scorer",
+        ),
+        (
+            HappinessEventType::LeagueTopAssists,
+            "event_league_top_assists",
+        ),
+        (
+            HappinessEventType::LeagueGoldenGlove,
+            "event_league_golden_glove",
+        ),
+        (
+            HappinessEventType::ContinentalPlayerOfYearNomination,
+            "event_continental_player_of_year_nomination",
+        ),
+        (
+            HappinessEventType::ContinentalPlayerOfYear,
+            "event_continental_player_of_year",
+        ),
+        (
+            HappinessEventType::WorldPlayerOfYearNomination,
+            "event_world_player_of_year_nomination",
+        ),
+        (
+            HappinessEventType::WorldPlayerOfYear,
+            "event_world_player_of_year",
+        ),
+        (HappinessEventType::SeniorDebut, "event_senior_debut"),
+        (
+            HappinessEventType::NationalTeamDebut,
+            "event_national_team_debut",
+        ),
+        (HappinessEventType::HatTrick, "event_hat_trick"),
+        (HappinessEventType::AssistHatTrick, "event_assist_hat_trick"),
+        (
+            HappinessEventType::GoalDroughtEnded,
+            "event_goal_drought_ended",
+        ),
+        (
+            HappinessEventType::ScoringDroughtConcern,
+            "event_scoring_drought_concern",
+        ),
+        (
+            HappinessEventType::AppearanceMilestone,
+            "event_appearance_milestone",
+        ),
+        (HappinessEventType::GoalMilestone, "event_goal_milestone"),
+        (
+            HappinessEventType::CleanSheetMilestone,
+            "event_clean_sheet_milestone",
+        ),
+        (
+            HappinessEventType::TrainingGroundBustUp,
+            "event_training_ground_bust_up",
+        ),
+        (HappinessEventType::PublicApology, "event_public_apology"),
+        (
+            HappinessEventType::FansChantPlayerName,
+            "event_fans_chant_player_name",
+        ),
+        (
+            HappinessEventType::MediaPressureMounting,
+            "event_media_pressure_mounting",
+        ),
+        (
+            HappinessEventType::LeadershipEmergence,
+            "event_leadership_emergence",
+        ),
+        (HappinessEventType::ScoutedByClub, "event_scouted_by_club"),
+        (HappinessEventType::TransferRumour, "event_transfer_rumour"),
+        (
+            HappinessEventType::AgentStirsInterest,
+            "event_agent_stirs_interest",
+        ),
+        (
+            HappinessEventType::InterestFromBiggerClub,
+            "event_interest_from_bigger_club",
+        ),
+        (
+            HappinessEventType::InterestFromRival,
+            "event_interest_from_rival",
+        ),
+        (
+            HappinessEventType::HomecomingRumour,
+            "event_homecoming_rumour",
+        ),
+        (
+            HappinessEventType::FormerClubInterest,
+            "event_former_club_interest",
+        ),
+        (
+            HappinessEventType::FavoriteClubInterest,
+            "event_favorite_club_interest",
+        ),
+        (
+            HappinessEventType::TransferSpeculationDistracts,
+            "event_transfer_speculation_distracts",
+        ),
+        (
+            HappinessEventType::TransferInterestDismissed,
+            "event_transfer_interest_dismissed",
+        ),
+        (
+            HappinessEventType::TransferTalksExpected,
+            "event_transfer_talks_expected",
+        ),
+        (HappinessEventType::InterestCooled, "event_interest_cooled"),
+        (
+            HappinessEventType::AgreedPersonalTerms,
+            "event_agreed_personal_terms",
+        ),
+        (
+            HappinessEventType::RejectedMoveOnPersonalTerms,
+            "event_rejected_move_on_personal_terms",
+        ),
+        (
+            HappinessEventType::UsedInterestForContractLeverage,
+            "event_used_interest_for_contract_leverage",
+        ),
+        (
+            HappinessEventType::FansReactToTransferRumour,
+            "event_fans_react_to_transfer_rumour",
+        ),
+        (
+            HappinessEventType::WantsReturnHome,
+            "event_wants_return_home",
+        ),
+        (
+            HappinessEventType::WantsEuropeanCompetition,
+            "event_wants_european_competition",
+        ),
+        (
+            HappinessEventType::WantsCopaLibertadores,
+            "event_wants_copa_libertadores",
+        ),
+        (
+            HappinessEventType::HomeReturnOpportunity,
+            "event_home_return_opportunity",
+        ),
+        (
+            HappinessEventType::ContinentalAmbitionSatisfied,
+            "event_continental_ambition_satisfied",
+        ),
+        (
+            HappinessEventType::LifeSimulationDesire,
+            "event_life_simulation_desire",
+        ),
+        (
+            HappinessEventType::TopClubOpportunity,
+            "event_top_club_opportunity",
+        ),
+        (
+            HappinessEventType::EliteTrainingLift,
+            "event_elite_training_lift",
+        ),
+        (
+            HappinessEventType::AdaptationBreakthrough,
+            "event_adaptation_breakthrough",
+        ),
+        (
+            HappinessEventType::TrustedAfterStepUp,
+            "event_trusted_after_step_up",
+        ),
+        (
+            HappinessEventType::ProvedLevelAfterMove,
+            "event_proved_level_after_move",
+        ),
+        (
+            HappinessEventType::SeniorMentorSupport,
+            "event_senior_mentor_support",
+        ),
+        (
+            HappinessEventType::OverawedByEliteClub,
+            "event_overawed_by_elite_club",
+        ),
+        (
+            HappinessEventType::RolePathBlockedAtEliteClub,
+            "event_role_path_blocked_at_elite_club",
+        ),
+        (
+            HappinessEventType::MediaSpotlightPressure,
+            "event_media_spotlight_pressure",
+        ),
+        (
+            HappinessEventType::DressingRoomStatusShock,
+            "event_dressing_room_status_shock",
+        ),
+        (
+            HappinessEventType::TooGoodForLevel,
+            "event_too_good_for_level",
+        ),
+        (
+            HappinessEventType::TrainingStandardFrustration,
+            "event_training_standard_frustration",
+        ),
+        (
+            HappinessEventType::FanExpectationBurden,
+            "event_fan_expectation_burden",
+        ),
+        (
+            HappinessEventType::StepDownEmbarrassment,
+            "event_step_down_embarrassment",
+        ),
+        (
+            HappinessEventType::LoanLevelMismatch,
+            "event_loan_level_mismatch",
+        ),
+        (
+            HappinessEventType::RetirementConsidering,
+            "event_retirement_considering",
+        ),
+        (
+            HappinessEventType::RetirementAnnounced,
+            "event_retirement_announced",
+        ),
+        (
+            HappinessEventType::CoachingCareerInterest,
+            "event_coaching_career_interest",
+        ),
+        (
+            HappinessEventType::WantsStrongerSquad,
+            "event_wants_stronger_squad",
+        ),
+        (
+            HappinessEventType::WantsTitleChallenge,
+            "event_wants_title_challenge",
+        ),
+        (
+            HappinessEventType::WantsStrongerLeague,
+            "event_wants_stronger_league",
+        ),
+        (
+            HappinessEventType::WantsFirstTeamFootball,
+            "event_wants_first_team_football",
+        ),
+        (
+            HappinessEventType::WantsToLeaveAfterRelegation,
+            "event_wants_to_leave_after_relegation",
+        ),
+        (
+            HappinessEventType::LoanDevelopmentConcern,
+            "event_loan_development_concern",
+        ),
+        (
+            HappinessEventType::LoanRecallRequested,
+            "event_loan_recall_requested",
+        ),
+        (
+            HappinessEventType::LoanFormConcern,
+            "event_loan_form_concern",
+        ),
+        (
+            HappinessEventType::WantsLoanMadePermanent,
+            "event_wants_loan_made_permanent",
+        ),
+        (
+            HappinessEventType::WantsToProveHimselfAtParent,
+            "event_wants_to_prove_himself_at_parent",
+        ),
+        (
+            HappinessEventType::UnsettledAfterLoanReturn,
+            "event_unsettled_after_loan_return",
+        ),
+        (
+            HappinessEventType::ReturnedFromLoanProven,
+            "event_returned_from_loan_proven",
+        ),
+        (
+            HappinessEventType::ReturnedFromLoanDeflated,
+            "event_returned_from_loan_deflated",
+        ),
+        (
+            HappinessEventType::BackedAfterLoanReturn,
+            "event_backed_after_loan_return",
+        ),
+        (
+            HappinessEventType::LoanSpellReviewed,
+            "event_loan_spell_reviewed",
+        ),
+        (
+            HappinessEventType::ThreatenedByReturningLoanee,
+            "event_threatened_by_returning_loanee",
+        ),
+        (
+            HappinessEventType::AdmiredForBigClubSpell,
+            "event_admired_for_big_club_spell",
+        ),
+        (
+            HappinessEventType::BigClubAuraFaded,
+            "event_big_club_aura_faded",
+        ),
+        (
+            HappinessEventType::LearningFromStarTeammate,
+            "event_learning_from_star_teammate",
+        ),
+        (
+            HappinessEventType::TakesReplacementUnderWing,
+            "event_takes_replacement_under_wing",
+        ),
+        (
+            HappinessEventType::LosingPatienceWithSigning,
+            "event_losing_patience_with_signing",
+        ),
+        (
+            HappinessEventType::FeelsDressingRoomPressure,
+            "event_feels_dressing_room_pressure",
+        ),
+        (
+            HappinessEventType::PathwayBlockedByLoanSigning,
+            "event_pathway_blocked_by_loan_signing",
+        ),
+        (
+            HappinessEventType::UnhappyAboutBlockedHomegrown,
+            "event_unhappy_about_blocked_homegrown",
+        ),
+        (
+            HappinessEventType::FeelsSelectionFavouritism,
+            "event_feels_selection_favouritism",
+        ),
+        (
+            HappinessEventType::ColdShoulderOverRivalPast,
+            "event_cold_shoulder_over_rival_past",
+        ),
+        (
+            HappinessEventType::ReleaseClauseDemanded,
+            "event_release_clause_demanded",
+        ),
+        (
+            HappinessEventType::ContractTalksStalled,
+            "event_contract_talks_stalled",
+        ),
+        (
+            HappinessEventType::RejectedContractOffer,
+            "event_rejected_contract_offer",
+        ),
+        (
+            HappinessEventType::ContractExpiryAnxiety,
+            "event_contract_expiry_anxiety",
+        ),
+        (
+            HappinessEventType::PlayingForNewContract,
+            "event_playing_for_new_contract",
+        ),
+        (
+            HappinessEventType::AskedForPrivateTalk,
+            "event_asked_for_private_talk",
+        ),
+        (
+            HappinessEventType::AskedClubToArrangeTransfer,
+            "event_asked_club_to_arrange_transfer",
+        ),
+        (
+            HappinessEventType::UnsoldWindowClosed,
+            "event_unsold_window_closed",
+        ),
+        (
+            HappinessEventType::MoveVetoedByClub,
+            "event_move_vetoed_by_club",
+        ),
+        (
+            HappinessEventType::ConcernedByClubDirection,
+            "event_concerned_by_club_direction",
+        ),
+        (
+            HappinessEventType::EncouragedBySquadInvestment,
+            "event_encouraged_by_squad_investment",
+        ),
+        (
+            HappinessEventType::UnhappyWithTacticalRole,
+            "event_unhappy_with_tactical_role",
+        ),
+        (
+            HappinessEventType::TrustedInBigMatch,
+            "event_trusted_in_big_match",
+        ),
+        (
+            HappinessEventType::BenchedForBigMatch,
+            "event_benched_for_big_match",
+        ),
+        (
+            HappinessEventType::SubstitutionFrustration,
+            "event_substitution_frustration",
+        ),
+        (HappinessEventType::InjurySetback, "event_injury_setback"),
+        (
+            HappinessEventType::ThreatenedByNewSigning,
+            "event_threatened_by_new_signing",
+        ),
+        (
+            HappinessEventType::ManagerTrustGrowing,
+            "event_manager_trust_growing",
+        ),
+        (
+            HappinessEventType::ManagerTrustEroding,
+            "event_manager_trust_eroding",
+        ),
+        (
+            HappinessEventType::NewManagerBounce,
+            "event_new_manager_bounce",
+        ),
+        (
+            HappinessEventType::ReunitedWithFormerManager,
+            "event_reunited_with_former_manager",
+        ),
+        (
+            HappinessEventType::RalliesBehindManager,
+            "event_rallies_behind_manager",
+        ),
+        (
+            HappinessEventType::SensesManagerChange,
+            "event_senses_manager_change",
+        ),
+        (
+            HappinessEventType::FormalWarningIssued,
+            "event_formal_warning_issued",
+        ),
+        (HappinessEventType::FinedByClub, "event_fined_by_club"),
+        (
+            HappinessEventType::DressingRoomInquest,
+            "event_dressing_room_inquest",
+        ),
+        (
+            HappinessEventType::ResiliencePraised,
+            "event_resilience_praised",
+        ),
+        (
+            HappinessEventType::ToldNotInPlans,
+            "event_told_not_in_plans",
+        ),
+        (
+            HappinessEventType::PersonalTrainingPlanSet,
+            "event_personal_training_plan_set",
+        ),
+        (
+            HappinessEventType::BannedThroughAccumulation,
+            "event_banned_through_accumulation",
+        ),
+        (
+            HappinessEventType::SuspensionServed,
+            "event_suspension_served",
+        ),
+        (
+            HappinessEventType::ScoredAgainstFormerClub,
+            "event_scored_against_former_club",
+        ),
+        (
+            HappinessEventType::ClubServantMilestone,
+            "event_club_servant_milestone",
+        ),
+        (
+            HappinessEventType::InternationalRetirement,
+            "event_international_retirement",
+        ),
+    ];
+
+    fn i18n_key(event_type: &HappinessEventType) -> &'static str {
+        Self::KEYS
+            .iter()
+            .find(|(candidate, _)| candidate == event_type)
+            .map(|(_, key)| *key)
+            .unwrap_or("event_unknown")
     }
 }
 
@@ -763,130 +1191,139 @@ impl PlayerEventsCounter {
             })
             // Suppress partner-style events that lost track of the partner:
             // showing "Bonded with a teammate" without naming who is confusing.
-            .filter(|e| !is_partner_required(&e.event_type) || e.partner_player_id.is_some())
+            .filter(|e| !EventPartner::required(&e.event_type) || e.partner_player_id.is_some())
             .take(100)
     }
 }
 
-fn build_events(
-    player: &core::Player,
-    i18n: &I18n,
-    events_i18n: &EventI18n,
-    simulator_data: &SimulatorData,
-    lang: &str,
-    league_url: Option<&str>,
-) -> Vec<PlayerEventDto> {
-    let mut events: Vec<_> = PlayerEventsCounter::visible_iter(player)
-        .map(|e| {
-            let resolved_partner = e
-                .partner_player_id
-                .and_then(|pid| resolve_partner(simulator_data, pid));
+struct PlayerEventFeed;
 
-            let description =
-                build_description(e, resolved_partner.as_ref(), events_i18n, lang, league_url);
+impl PlayerEventFeed {
+    fn build(
+        player: &core::Player,
+        i18n: &I18n,
+        events_i18n: &EventI18n,
+        simulator_data: &SimulatorData,
+        lang: &str,
+        league_url: Option<&str>,
+    ) -> Vec<PlayerEventDto> {
+        let mut events: Vec<_> = PlayerEventsCounter::visible_iter(player)
+            .map(|e| Self::event(e, events_i18n, simulator_data, lang, league_url))
+            .collect();
 
-            // When the description already names + links the partner
-            // inline, suppress the template's trailing dash-suffix so the
-            // partner doesn't appear twice in the rendered row.
-            let (partner_name, partner_slug) = if description.partner_in_headline {
-                (None, None)
-            } else {
-                resolved_partner
-                    .map(|(n, s)| (Some(n), Some(s)))
-                    .unwrap_or((None, None))
-            };
-            let (detail, follow_up, severity_label, severity_tag) =
-                EventContextRenderer::render(e, events_i18n);
-            let comparison = e
-                .context
-                .as_ref()
-                .and_then(|ctx| ctx.selection_context.as_ref())
-                .and_then(|sel| {
-                    SelectionRender::comparison(sel, simulator_data, events_i18n, lang)
-                });
-            // Context-aware headline routing. The dispatcher tries each
-            // registered renderer in order; the first whose `handles()`
-            // matches AND whose specialized context is attached produces
-            // the headline. Falls back to the legacy description when
-            // no renderer applies.
-            let dispatcher = HeadlineDispatcher {
-                event: e,
-                simulator_data,
-                events_i18n,
-                lang,
-            };
-            let (description_html, partner_in_headline) = dispatcher
-                .try_render()
-                .unwrap_or((description.html, description.partner_in_headline));
+        // The decision register joins the same feed. It is not truncated the way
+        // the happiness feed is: the register is the player's career paper trail
+        // and used to be a page of its own, so every row still shows.
+        let today = simulator_data.date.date();
+        events.extend(
+            player
+                .decision_history
+                .items
+                .iter()
+                .map(|row| DecisionRender::to_event(row, events_i18n, today)),
+        );
 
-            let (partner_name, partner_slug) = if partner_in_headline {
-                (None, None)
-            } else {
-                (partner_name, partner_slug)
-            };
+        // And so does his own head. Not truncated either — the journal is
+        // twelve slots that already shed their oldest note, so there is
+        // nothing left here for a reader to trim.
+        events.extend(
+            player
+                .mind
+                .journal()
+                .iter()
+                .map(|note| MindRender::to_event(note, simulator_data, i18n, lang, today)),
+        );
 
-            PlayerEventDto {
-                description: description_html,
-                is_positive: e.magnitude > 0.0,
-                is_negative: e.magnitude < 0.0,
-                is_big: is_big_event(&e.event_type),
-                days_ago: e.days_ago,
-                time_ago_label: EventContextRenderer::time_ago_label(e.days_ago, events_i18n),
-                partner_name,
-                partner_slug,
-                detail,
-                follow_up,
-                severity_label,
-                severity_tag,
-                comparison,
-                movement: None,
-                decided_by: None,
-                is_decision: false,
-                is_mind: false,
-                is_chapter: false,
-            }
-        })
-        .collect();
+        // And the turns his career took, which are nobody's opinion of him.
+        events.extend(
+            player
+                .mind
+                .career
+                .anchors
+                .chapters
+                .iter()
+                .map(|chapter| ChapterRender::to_event(chapter, simulator_data, i18n, lang, today)),
+        );
 
-    // The decision register joins the same feed. It is not truncated the way
-    // the happiness feed is: the register is the player's career paper trail
-    // and used to be a page of its own, so every row still shows.
-    let today = simulator_data.date.date();
-    events.extend(
-        player
-            .decision_history
-            .items
-            .iter()
-            .map(|row| DecisionRender::to_event(row, events_i18n, today)),
-    );
+        // Stable sort, so a decision, a happiness event and a note stamped the
+        // same day keep the feed's own order: what the player felt, then what
+        // the club put on paper, then what he made of it.
+        events.sort_by_key(|a| a.days_ago);
+        events
+    }
+    fn event(
+        e: &HappinessEvent,
+        events_i18n: &EventI18n,
+        simulator_data: &SimulatorData,
+        lang: &str,
+        league_url: Option<&str>,
+    ) -> PlayerEventDto {
+        let resolved_partner = e
+            .partner_player_id
+            .and_then(|pid| EventPartner::resolve(simulator_data, pid));
 
-    // And so does his own head. Not truncated either — the journal is
-    // twelve slots that already shed their oldest note, so there is
-    // nothing left here for a reader to trim.
-    events.extend(
-        player
-            .mind
-            .journal()
-            .iter()
-            .map(|note| MindRender::to_event(note, simulator_data, i18n, lang, today)),
-    );
+        let description =
+            DescriptionRender::build(e, resolved_partner.as_ref(), events_i18n, lang, league_url);
 
-    // And the turns his career took, which are nobody's opinion of him.
-    events.extend(
-        player
-            .mind
-            .career
-            .anchors
-            .chapters
-            .iter()
-            .map(|chapter| ChapterRender::to_event(chapter, simulator_data, i18n, lang, today)),
-    );
+        // When the description already names + links the partner
+        // inline, suppress the template's trailing dash-suffix so the
+        // partner doesn't appear twice in the rendered row.
+        let (partner_name, partner_slug) = if description.partner_in_headline {
+            (None, None)
+        } else {
+            resolved_partner
+                .map(|(n, s)| (Some(n), Some(s)))
+                .unwrap_or((None, None))
+        };
+        let (detail, follow_up, severity_label, severity_tag) =
+            EventContextRenderer::render(e, events_i18n);
+        let comparison = e
+            .context
+            .as_ref()
+            .and_then(|ctx| ctx.selection_context.as_ref())
+            .and_then(|sel| SelectionRender::comparison(sel, simulator_data, events_i18n, lang));
+        // Context-aware headline routing. The dispatcher tries each
+        // registered renderer in order; the first whose `handles()`
+        // matches AND whose specialized context is attached produces
+        // the headline. Falls back to the legacy description when
+        // no renderer applies.
+        let dispatcher = HeadlineDispatcher {
+            event: e,
+            simulator_data,
+            events_i18n,
+            lang,
+        };
+        let (description_html, partner_in_headline) = dispatcher
+            .try_render()
+            .unwrap_or((description.html, description.partner_in_headline));
 
-    // Stable sort, so a decision, a happiness event and a note stamped the
-    // same day keep the feed's own order: what the player felt, then what
-    // the club put on paper, then what he made of it.
-    events.sort_by_key(|a| a.days_ago);
-    events
+        let (partner_name, partner_slug) = if partner_in_headline {
+            (None, None)
+        } else {
+            (partner_name, partner_slug)
+        };
+
+        PlayerEventDto {
+            description: description_html,
+            is_positive: e.magnitude > 0.0,
+            is_negative: e.magnitude < 0.0,
+            is_big: EventImportance::is_big(&e.event_type),
+            days_ago: e.days_ago,
+            time_ago_label: EventContextRenderer::time_ago_label(e.days_ago, events_i18n),
+            partner_name,
+            partner_slug,
+            detail,
+            follow_up,
+            severity_label,
+            severity_tag,
+            comparison,
+            movement: None,
+            decided_by: None,
+            is_decision: false,
+            is_mind: false,
+            is_chapter: false,
+        }
+    }
 }
 
 /// Renders a note from the player's own head as an event card.
@@ -991,7 +1428,7 @@ impl MindRender {
         let (name, path) = match subject.kind {
             mind::ActorKind::None => return None,
             mind::ActorKind::Player => {
-                let (name, slug) = resolve_partner(data, subject.id)?;
+                let (name, slug) = EventPartner::resolve(data, subject.id)?;
                 (name, format!("players/{}", slug))
             }
             mind::ActorKind::Staff => {
@@ -1230,20 +1667,48 @@ impl EventContextRenderer {
     /// event's cause, followed by AT MOST ONE evidence sentence picked
     /// by [`EvidencePicker::pick`]. Keeps the explanation specific
     /// without dumping every evidence atom on the user.
-    #[expect(clippy::too_many_lines)]
+    /// Compose the "Cause" body: a main reason sentence pulled from the
+    /// event's cause, followed by AT MOST ONE evidence sentence picked
+    /// by [`EvidencePicker::pick`]. Keeps the explanation specific
+    /// without dumping every evidence atom on the user.
     fn detail_sentences(ctx: &HappinessEventContext, events_i18n: &EventI18n) -> Option<String> {
+        if let Some(sentence) = Self::selection_sentence(ctx, events_i18n) {
+            return sentence;
+        }
+        if let Some(sentence) = Self::training_sentence(ctx, events_i18n) {
+            return sentence;
+        }
+        if let Some(sentence) = Self::contract_sentence(ctx, events_i18n) {
+            return sentence;
+        }
+        if let Some(sentence) = Self::career_sentence(ctx, events_i18n) {
+            return sentence;
+        }
+        if let Some(sentence) = Self::club_sentence(ctx, events_i18n) {
+            return sentence;
+        }
+        Self::fallback_sentence(ctx, events_i18n)
+    }
+
+    /// Selection, support and transfer-interest events compose their own
+    /// structured sentences. An outer `Some` means the context was present
+    /// and answers the row; the inner option is the sentence itself.
+    fn selection_sentence(
+        ctx: &HappinessEventContext,
+        events_i18n: &EventI18n,
+    ) -> Option<Option<String>> {
         // Selection events override the generic relationship cause —
         // the football-specific "manager preferred a fitter teammate"
         // reads better than "tactical disagreement set this off".
         if let Some(sel) = ctx.selection_context.as_ref() {
-            return SelectionRender::reason_sentence(sel, events_i18n);
+            return Some(SelectionRender::reason_sentence(sel, events_i18n));
         }
         // Support events (manager encouragement, dressing-room speech,
         // fan praise, fans-chant) carry their own structured trigger
         // and metadata — the renderer composes a contextual sentence
         // from those rather than the generic relationship cause.
         if let Some(support) = ctx.support_context.as_ref() {
-            return SupportRender::reason_sentence(support, ctx, events_i18n);
+            return Some(SupportRender::reason_sentence(support, ctx, events_i18n));
         }
         // Transfer-interest events compose a stage / source / kind /
         // evidence sentence followed by the player's private reaction.
@@ -1255,13 +1720,17 @@ impl EventContextRenderer {
             if let Some(reaction) = TransferInterestRender::reaction_sentence(tic, events_i18n) {
                 parts.push(reaction);
             }
-            if parts.is_empty() {
-                return None;
-            }
-            return Some(parts.join(" "));
+            return Some((!parts.is_empty()).then(|| parts.join(" ")));
         }
+        None
+    }
+
+    fn training_sentence(
+        ctx: &HappinessEventContext,
+        events_i18n: &EventI18n,
+    ) -> Option<Option<String>> {
         if let Some(tc) = ctx.training_context.as_ref() {
-            return TrainingRender::reason_sentence(tc, events_i18n);
+            return Some(TrainingRender::reason_sentence(tc, events_i18n));
         }
         if let Some(conflict) = ctx.teammate_conflict_context.as_ref() {
             let mut parts: Vec<String> = Vec::new();
@@ -1273,7 +1742,7 @@ impl EventContextRenderer {
                 parts.push(evidence);
             }
             if !parts.is_empty() {
-                return Some(parts.join(" "));
+                return Some(Some(parts.join(" ")));
             }
         }
         if let Some(mc) = ctx.manager_interaction_context.as_ref() {
@@ -1284,71 +1753,93 @@ impl EventContextRenderer {
             if let Some(evidence) = ManagerInteractionRender::evidence_sentence(mc, events_i18n) {
                 parts.push(evidence);
             }
-            if !parts.is_empty() {
-                return Some(parts.join(" "));
-            }
-            return None;
+            return Some((!parts.is_empty()).then(|| parts.join(" ")));
         }
+        None
+    }
+
+    fn contract_sentence(
+        ctx: &HappinessEventContext,
+        events_i18n: &EventI18n,
+    ) -> Option<Option<String>> {
         if let Some(cc) = ctx.contract_context.as_ref() {
-            return ContractRender::reason_sentence(cc, events_i18n);
+            return Some(ContractRender::reason_sentence(cc, events_i18n));
         }
         if let Some(ic) = ctx.injury_context.as_ref() {
-            return InjuryRecoveryRender::reason_sentence(ic, events_i18n);
+            return Some(InjuryRecoveryRender::reason_sentence(ic, events_i18n));
         }
         if let Some(mp) = ctx.match_performance_context.as_ref() {
-            return MatchPerformanceRender::reason_sentence(mp, events_i18n);
+            return Some(MatchPerformanceRender::reason_sentence(mp, events_i18n));
         }
         if let Some(rc) = ctx.role_status_context.as_ref() {
-            return RoleStatusRender::reason_sentence(rc, events_i18n);
+            return Some(RoleStatusRender::reason_sentence(rc, events_i18n));
         }
         if let Some(nt) = ctx.national_team_context.as_ref() {
-            return NationalTeamRender::reason_sentence(nt, events_i18n);
+            return Some(NationalTeamRender::reason_sentence(nt, events_i18n));
         }
         if let Some(lc) = ctx.leadership_context.as_ref() {
-            return LeadershipRender::reason_sentence(lc, events_i18n);
+            return Some(LeadershipRender::reason_sentence(lc, events_i18n));
         }
+        None
+    }
+
+    fn career_sentence(
+        ctx: &HappinessEventContext,
+        events_i18n: &EventI18n,
+    ) -> Option<Option<String>> {
         if let Some(mf) = ctx.media_fan_context.as_ref() {
-            return MediaFanRender::reason_sentence(mf, events_i18n);
+            return Some(MediaFanRender::reason_sentence(mf, events_i18n));
         }
         if let Some(pa) = ctx.personal_adaptation_context.as_ref() {
-            return PersonalAdaptationRender::reason_sentence(pa, events_i18n);
+            return Some(PersonalAdaptationRender::reason_sentence(pa, events_i18n));
         }
         if let Some(cd) = ctx.career_desire_context.as_ref() {
-            return CareerDesireRender::reason_sentence(cd, events_i18n);
+            return Some(CareerDesireRender::reason_sentence(cd, events_i18n));
         }
         if let Some(cs) = ctx.career_stage_context.as_ref() {
-            return CareerStageRender::reason_sentence(cs, events_i18n);
+            return Some(CareerStageRender::reason_sentence(cs, events_i18n));
         }
         if let Some(ls) = ctx.life_simulation_desire_context.as_ref() {
-            return LifeSimulationRender::reason_sentence(ls, events_i18n);
+            return Some(LifeSimulationRender::reason_sentence(ls, events_i18n));
         }
+        None
+    }
+
+    fn club_sentence(
+        ctx: &HappinessEventContext,
+        events_i18n: &EventI18n,
+    ) -> Option<Option<String>> {
         if let Some(lc) = ctx.loan_context.as_ref() {
-            return LoanRender::reason_sentence(lc, events_i18n);
+            return Some(LoanRender::reason_sentence(lc, events_i18n));
         }
         if let Some(rc) = ctx.recognition_context.as_ref() {
-            return RecognitionRender::reason_sentence(rc, events_i18n);
+            return Some(RecognitionRender::reason_sentence(rc, events_i18n));
         }
         if let Some(sc) = ctx.season_outcome_context.as_ref() {
-            return SeasonOutcomeRender::reason_sentence(sc, events_i18n);
+            return Some(SeasonOutcomeRender::reason_sentence(sc, events_i18n));
         }
         if let Some(rc) = ctx.regulation_context.as_ref() {
-            return RegulationRender::reason_sentence(rc, events_i18n);
+            return Some(RegulationRender::reason_sentence(rc, events_i18n));
         }
         if let Some(pt) = ctx.private_talk_context.as_ref() {
-            return PrivateTalkRender::reason_sentence(pt, events_i18n);
+            return Some(PrivateTalkRender::reason_sentence(pt, events_i18n));
         }
         if let Some(cd) = ctx.club_direction_context.as_ref() {
-            return ClubDirectionRender::reason_sentence(cd, events_i18n);
+            return Some(ClubDirectionRender::reason_sentence(cd, events_i18n));
         }
         if let Some(bm) = ctx.big_match_selection_context.as_ref() {
-            return BigMatchRender::reason_sentence(bm, events_i18n);
+            return Some(BigMatchRender::reason_sentence(bm, events_i18n));
         }
         if let Some(sf) = ctx.substitution_frustration_context.as_ref() {
-            return SubFrustrationRender::reason_sentence(sf, events_i18n);
+            return Some(SubFrustrationRender::reason_sentence(sf, events_i18n));
         }
         if let Some(ns) = ctx.new_signing_threat_context.as_ref() {
-            return NewSigningThreatRender::reason_sentence(ns, events_i18n);
+            return Some(NewSigningThreatRender::reason_sentence(ns, events_i18n));
         }
+        None
+    }
+
+    fn fallback_sentence(ctx: &HappinessEventContext, events_i18n: &EventI18n) -> Option<String> {
         let cause_key = format!("reason_main_{}", Self::cause_token(ctx));
         let main = events_i18n.t(&cause_key);
         let mut out = main.to_string();
@@ -1576,7 +2067,7 @@ impl SelectionRender {
         lang: &str,
     ) -> DescriptionRender {
         if let Some(comp) = ctx.comparison.as_ref()
-            && let Some((name, slug)) = resolve_partner(data, comp.selected_player_id)
+            && let Some((name, slug)) = EventPartner::resolve(data, comp.selected_player_id)
         {
             let link = format!(r#"<a href="/{}/players/{}">{}</a>"#, lang, slug, name);
             let raw = events_i18n.t(Self::headline_key_for(ctx, true));
@@ -1644,7 +2135,7 @@ impl SelectionRender {
         lang: &str,
     ) -> Option<String> {
         let comp = ctx.comparison.as_ref()?;
-        let (name, slug) = resolve_partner(data, comp.selected_player_id)?;
+        let (name, slug) = EventPartner::resolve(data, comp.selected_player_id)?;
         let link = format!(r#"<a href="/{}/players/{}">{}</a>"#, lang, slug, name);
 
         let factor_phrase = comp
@@ -1699,9 +2190,7 @@ impl SupportRender {
         if translated == key {
             // Fallback to the legacy static line when the locale is
             // partially translated and the variant key isn't there yet.
-            events_i18n
-                .t(event_type_to_i18n_key(event_type))
-                .to_string()
+            events_i18n.t(EventKey::i18n_key(event_type)).to_string()
         } else {
             translated.to_string()
         }
@@ -1912,9 +2401,7 @@ impl TransferInterestRender {
         if raw == key {
             // Fall back to the legacy static line when the locale is
             // partially translated and the variant key isn't there yet.
-            let fallback = events_i18n
-                .t(event_type_to_i18n_key(event_type))
-                .to_string();
+            let fallback = events_i18n.t(EventKey::i18n_key(event_type)).to_string();
             return (fallback, false);
         }
         if let Some((name, slug)) = club_link {
@@ -1929,7 +2416,6 @@ impl TransferInterestRender {
         ctx: &TransferInterestContext,
         with_club: bool,
     ) -> &'static str {
-        use TransferInterestStage as S;
         match (event_type, ctx.interest_stage, with_club) {
             (HappinessEventType::ScoutedByClub, _, true) => {
                 "transfer_interest_headline_scouted_named"
@@ -1986,6 +2472,26 @@ impl TransferInterestRender {
                 "transfer_interest_headline_cooled_named"
             }
             (HappinessEventType::InterestCooled, _, false) => "transfer_interest_headline_cooled",
+            _ => Self::fallback_headline_key(event_type, ctx.interest_stage, with_club),
+        }
+    }
+
+    fn fallback_headline_key(
+        event_type: &HappinessEventType,
+        stage: TransferInterestStage,
+        with_club: bool,
+    ) -> &'static str {
+        use TransferInterestStage as S;
+        match (event_type, stage, with_club) {
+            (HappinessEventType::WantedByBiggerClub, S::ScoutWatched, _) => {
+                "transfer_interest_headline_scouted"
+            }
+            (HappinessEventType::WantedByBiggerClub, _, true) => {
+                "transfer_interest_headline_bigger_named"
+            }
+            (HappinessEventType::WantedByBiggerClub, _, false) => {
+                "transfer_interest_headline_bigger"
+            }
             (HappinessEventType::UsedInterestForContractLeverage, _, _) => {
                 "transfer_interest_headline_leverage"
             }
@@ -2012,15 +2518,6 @@ impl TransferInterestRender {
             }
             (HappinessEventType::DreamMoveCollapsed, _, false) => {
                 "transfer_interest_headline_dream_collapsed"
-            }
-            (HappinessEventType::WantedByBiggerClub, S::ScoutWatched, _) => {
-                "transfer_interest_headline_scouted"
-            }
-            (HappinessEventType::WantedByBiggerClub, _, true) => {
-                "transfer_interest_headline_bigger_named"
-            }
-            (HappinessEventType::WantedByBiggerClub, _, false) => {
-                "transfer_interest_headline_bigger"
             }
             _ => "transfer_interest_headline_speculation_distracts",
         }
@@ -2253,9 +2750,7 @@ impl ManagerInteractionRender {
         );
         let raw = events_i18n.t(&key);
         if raw == key {
-            events_i18n
-                .t(event_type_to_i18n_key(event_type))
-                .to_string()
+            events_i18n.t(EventKey::i18n_key(event_type)).to_string()
         } else {
             raw.to_string()
         }
@@ -2563,9 +3058,7 @@ impl MatchPerformanceRender {
         let key = format!("match_perf_headline_{}", Self::kind_token(ctx));
         let raw = events_i18n.t(&key);
         if raw == key {
-            events_i18n
-                .t(event_type_to_i18n_key(event_type))
-                .to_string()
+            events_i18n.t(EventKey::i18n_key(event_type)).to_string()
         } else {
             raw.to_string()
         }
@@ -3131,7 +3624,7 @@ impl LoanRender {
         } else {
             "loan_spell_apps_with_starts"
         };
-        if let Some(template) = translated(events_i18n, apps_key) {
+        if let Some(template) = EventCopy::translated(events_i18n, apps_key) {
             parts.push(
                 template
                     .replace("{apps}", &spell.appearances.to_string())
@@ -3146,10 +3639,10 @@ impl LoanRender {
         // where it was actually kept: the games nobody scored in, and
         // the goals that went past him.
         if spell.is_goalkeeper {
-            if let Some(template) = translated(events_i18n, "loan_spell_clean_sheets") {
+            if let Some(template) = EventCopy::translated(events_i18n, "loan_spell_clean_sheets") {
                 parts.push(template.replace("{clean_sheets}", &spell.clean_sheets.to_string()));
             }
-            if let Some(template) = translated(events_i18n, "loan_spell_conceded") {
+            if let Some(template) = EventCopy::translated(events_i18n, "loan_spell_conceded") {
                 parts.push(template.replace("{conceded}", &spell.conceded.to_string()));
             }
         } else {
@@ -3163,7 +3656,7 @@ impl LoanRender {
                 _ => Some("loan_spell_goals_assists"),
             };
             if let Some(key) = contribution_key
-                && let Some(template) = translated(events_i18n, key)
+                && let Some(template) = EventCopy::translated(events_i18n, key)
             {
                 parts.push(
                     template
@@ -3174,7 +3667,7 @@ impl LoanRender {
         }
 
         if let Some(rating) = spell.average_rating
-            && let Some(template) = translated(events_i18n, "loan_spell_rating")
+            && let Some(template) = EventCopy::translated(events_i18n, "loan_spell_rating")
         {
             parts.push(template.replace("{rating}", &format!("{:.2}", rating)));
         }
@@ -3182,7 +3675,8 @@ impl LoanRender {
         if parts.is_empty() {
             // No copy for any part — fall back to the verdict alone
             // rather than to a blank row.
-            return translated(events_i18n, spell.verdict.as_i18n_key()).map(str::to_string);
+            return EventCopy::translated(events_i18n, spell.verdict.as_i18n_key())
+                .map(str::to_string);
         }
         Some(parts.join(" · "))
     }
@@ -3244,9 +3738,7 @@ impl RecognitionRender {
         let key = format!("recognition_headline_{}", ctx.kind.as_token());
         let raw = events_i18n.t(&key);
         if raw == key {
-            events_i18n
-                .t(event_type_to_i18n_key(event_type))
-                .to_string()
+            events_i18n.t(EventKey::i18n_key(event_type)).to_string()
         } else {
             raw.to_string()
         }
@@ -3329,7 +3821,7 @@ impl RegulationRender {
             let slot_raw = events_i18n.t(&slot_key);
             if slot_raw == slot_key {
                 events_i18n
-                    .t(event_type_to_i18n_key(
+                    .t(EventKey::i18n_key(
                         &HappinessEventType::SquadRegistrationOmitted,
                     ))
                     .to_string()
@@ -3357,9 +3849,13 @@ impl RegulationRender {
 /// Look up a translated piece of copy or return `None` when the locale
 /// only has the fallback key. Drives the "skip-the-detail-if-missing"
 /// pattern used by every render struct in this module.
-fn translated<'a>(events_i18n: &'a EventI18n, key: &'a str) -> Option<&'a str> {
-    let raw = events_i18n.t(key);
-    if raw == key { None } else { Some(raw) }
+struct EventCopy;
+
+impl EventCopy {
+    fn translated<'a>(events_i18n: &'a EventI18n, key: &'a str) -> Option<&'a str> {
+        let raw = events_i18n.t(key);
+        if raw == key { None } else { Some(raw) }
+    }
 }
 
 struct PrivateTalkRender;
@@ -3383,7 +3879,7 @@ impl PrivateTalkRender {
         events_i18n: &EventI18n,
     ) -> Option<String> {
         let mut parts: Vec<String> = Vec::new();
-        if let Some(raw) = translated(events_i18n, ctx.reason.as_i18n_key()) {
+        if let Some(raw) = EventCopy::translated(events_i18n, ctx.reason.as_i18n_key()) {
             parts.push(raw.to_string());
         }
         if let Some(trust) = ctx.trust_in_manager {
@@ -3394,12 +3890,12 @@ impl PrivateTalkRender {
             } else {
                 "private_talk_trust_mid"
             };
-            if let Some(raw) = translated(events_i18n, bucket_key) {
+            if let Some(raw) = EventCopy::translated(events_i18n, bucket_key) {
                 parts.push(raw.to_string());
             }
         }
         if ctx.repeated_request
-            && let Some(raw) = translated(events_i18n, "private_talk_repeat_note")
+            && let Some(raw) = EventCopy::translated(events_i18n, "private_talk_repeat_note")
         {
             parts.push(raw.to_string());
         }
@@ -3440,7 +3936,7 @@ impl ClubDirectionRender {
             if picked >= 2 {
                 break;
             }
-            if let Some(raw) = translated(events_i18n, ev.as_i18n_key()) {
+            if let Some(raw) = EventCopy::translated(events_i18n, ev.as_i18n_key()) {
                 sentences.push(raw.to_string());
                 picked += 1;
             }
@@ -3453,7 +3949,7 @@ impl ClubDirectionRender {
             } else {
                 "club_direction_net_signings_flat"
             };
-            if let Some(raw) = translated(events_i18n, key) {
+            if let Some(raw) = EventCopy::translated(events_i18n, key) {
                 sentences.push(raw.to_string());
             }
         }
@@ -3479,9 +3975,7 @@ impl BigMatchRender {
         _ctx: &core::BigMatchSelectionContext,
         events_i18n: &EventI18n,
     ) -> String {
-        events_i18n
-            .t(event_type_to_i18n_key(event_type))
-            .to_string()
+        events_i18n.t(EventKey::i18n_key(event_type)).to_string()
     }
 
     /// `<decision> <fixture-fragment>` followed by an optional
@@ -3492,8 +3986,8 @@ impl BigMatchRender {
         ctx: &core::BigMatchSelectionContext,
         events_i18n: &EventI18n,
     ) -> Option<String> {
-        let decision = translated(events_i18n, ctx.decision.as_i18n_key());
-        let kind = translated(events_i18n, ctx.kind.as_i18n_key());
+        let decision = EventCopy::translated(events_i18n, ctx.decision.as_i18n_key());
+        let kind = EventCopy::translated(events_i18n, ctx.kind.as_i18n_key());
         let mut parts: Vec<String> = Vec::new();
         match (decision, kind) {
             (Some(d), Some(k)) => parts.push(format!("{} {}", d, k)),
@@ -3502,19 +3996,21 @@ impl BigMatchRender {
             _ => {}
         }
         if ctx.was_captain
-            && let Some(raw) = translated(events_i18n, "big_match_amplifier_captain")
+            && let Some(raw) = EventCopy::translated(events_i18n, "big_match_amplifier_captain")
         {
             parts.push(raw.to_string());
         }
         if ctx.recent_hot_form
             && matches!(ctx.decision, core::BigMatchDecision::BenchedUnexpectedly)
-            && let Some(raw) = translated(events_i18n, "big_match_amplifier_hot_form_dropped")
+            && let Some(raw) =
+                EventCopy::translated(events_i18n, "big_match_amplifier_hot_form_dropped")
         {
             parts.push(raw.to_string());
         }
         if ctx.is_young_or_fringe
             && matches!(ctx.decision, core::BigMatchDecision::StartedTrusted)
-            && let Some(raw) = translated(events_i18n, "big_match_amplifier_young_or_fringe")
+            && let Some(raw) =
+                EventCopy::translated(events_i18n, "big_match_amplifier_young_or_fringe")
         {
             parts.push(raw.to_string());
         }
@@ -3547,7 +4043,7 @@ impl SubFrustrationRender {
         events_i18n: &EventI18n,
     ) -> Option<String> {
         let mut parts: Vec<String> = Vec::new();
-        if let Some(raw) = translated(events_i18n, ctx.kind.as_i18n_key()) {
+        if let Some(raw) = EventCopy::translated(events_i18n, ctx.kind.as_i18n_key()) {
             parts.push(raw.to_string());
         }
         match (ctx.minute_off, ctx.match_rating_at_sub) {
@@ -3574,7 +4070,7 @@ impl SubFrustrationRender {
             _ => {}
         }
         if ctx.recent_early_hooks >= 3
-            && let Some(raw) = translated(events_i18n, "sub_frustration_repeat_note")
+            && let Some(raw) = EventCopy::translated(events_i18n, "sub_frustration_repeat_note")
         {
             parts.push(raw.to_string());
         }
@@ -3605,14 +4101,14 @@ impl NewSigningThreatRender {
         events_i18n: &EventI18n,
     ) -> Option<String> {
         let mut sentences: Vec<String> = Vec::new();
-        if let Some(raw) = translated(events_i18n, ctx.primary_reason.as_i18n_key()) {
+        if let Some(raw) = EventCopy::translated(events_i18n, ctx.primary_reason.as_i18n_key()) {
             sentences.push(raw.to_string());
         }
         for extra in ctx.all_reasons.iter().filter(|r| **r != ctx.primary_reason) {
             if sentences.len() >= 2 {
                 break;
             }
-            if let Some(raw) = translated(events_i18n, extra.as_i18n_key()) {
+            if let Some(raw) = EventCopy::translated(events_i18n, extra.as_i18n_key()) {
                 sentences.push(raw.to_string());
             }
         }
@@ -3638,11 +4134,19 @@ struct HeadlineDispatcher<'a> {
 }
 
 impl<'a> HeadlineDispatcher<'a> {
-    #[expect(clippy::too_many_lines)]
     fn try_render(&self) -> Option<(String, bool)> {
         let ctx = self.event.context.as_ref()?;
-        let ev = &self.event.event_type;
+        self.selection(ctx)
+            .or_else(|| self.support_and_interest(ctx))
+            .or_else(|| self.training_and_contract(ctx))
+            .or_else(|| self.performance_and_leadership(ctx))
+            .or_else(|| self.career(ctx))
+            .or_else(|| self.season_and_conduct(ctx))
+            .or_else(|| self.dressing_room(ctx))
+    }
 
+    fn selection(&self, ctx: &HappinessEventContext) -> Option<(String, bool)> {
+        let ev = &self.event.event_type;
         // Selection comes first: MatchDropped's selection_context is the
         // primary signal, but the event-type predicate is narrow so it
         // wouldn't accidentally catch other dropped-from-squad cousins.
@@ -3653,6 +4157,11 @@ impl<'a> HeadlineDispatcher<'a> {
                 SelectionRender::headline(sel, self.simulator_data, self.events_i18n, self.lang);
             return Some((h.html, h.partner_in_headline));
         }
+        None
+    }
+
+    fn support_and_interest(&self, ctx: &HappinessEventContext) -> Option<(String, bool)> {
+        let ev = &self.event.event_type;
         if SupportRender::handles(ev)
             && let Some(s) = ctx.support_context.as_ref()
         {
@@ -3670,6 +4179,11 @@ impl<'a> HeadlineDispatcher<'a> {
             );
             return Some((html, false));
         }
+        None
+    }
+
+    fn training_and_contract(&self, ctx: &HappinessEventContext) -> Option<(String, bool)> {
+        let ev = &self.event.event_type;
         if TrainingRender::handles(ev)
             && let Some(tc) = ctx.training_context.as_ref()
         {
@@ -3693,6 +4207,11 @@ impl<'a> HeadlineDispatcher<'a> {
         {
             return Some((InjuryRecoveryRender::headline(ic, self.events_i18n), false));
         }
+        None
+    }
+
+    fn performance_and_leadership(&self, ctx: &HappinessEventContext) -> Option<(String, bool)> {
+        let ev = &self.event.event_type;
         if MatchPerformanceRender::handles(ev)
             && let Some(mp) = ctx.match_performance_context.as_ref()
         {
@@ -3716,6 +4235,11 @@ impl<'a> HeadlineDispatcher<'a> {
         {
             return Some((LeadershipRender::headline(lc, self.events_i18n), false));
         }
+        None
+    }
+
+    fn career(&self, ctx: &HappinessEventContext) -> Option<(String, bool)> {
+        let ev = &self.event.event_type;
         if MediaFanRender::handles(ev)
             && let Some(mf) = ctx.media_fan_context.as_ref()
         {
@@ -3744,6 +4268,11 @@ impl<'a> HeadlineDispatcher<'a> {
         {
             return Some((LifeSimulationRender::headline(ls, self.events_i18n), false));
         }
+        None
+    }
+
+    fn season_and_conduct(&self, ctx: &HappinessEventContext) -> Option<(String, bool)> {
+        let ev = &self.event.event_type;
         if LoanRender::handles(ev)
             && let Some(lc) = ctx.loan_context.as_ref()
         {
@@ -3767,6 +4296,11 @@ impl<'a> HeadlineDispatcher<'a> {
         {
             return Some((RegulationRender::headline(rc, self.events_i18n), false));
         }
+        None
+    }
+
+    fn dressing_room(&self, ctx: &HappinessEventContext) -> Option<(String, bool)> {
+        let ev = &self.event.event_type;
         if PrivateTalkRender::handles(ev)
             && let Some(pt) = ctx.private_talk_context.as_ref()
         {
@@ -3805,67 +4339,77 @@ impl<'a> HeadlineDispatcher<'a> {
 /// legacy static events_i18n line otherwise. The returned string is rendered
 /// via askama's `|safe` filter, so this is the only point where event
 /// copy crosses into HTML — keep substitutions to controlled values.
-fn build_description(
-    event: &HappinessEvent,
-    partner: Option<&(String, String)>,
-    events_i18n: &EventI18n,
-    lang: &str,
-    league_url: Option<&str>,
-) -> DescriptionRender {
-    if matches!(event.event_type, HappinessEventType::TeamOfTheWeekSelection) {
-        let raw = events_i18n.t(event_type_to_i18n_key(&event.event_type));
-        let html = if let Some(league_url) = league_url {
-            let url = format!("{}/awards", league_url);
-            let link = format!(
-                r#"<a href="{}">{}</a>"#,
-                url,
-                events_i18n.t("team_of_the_week")
-            );
-            raw.replace("{tow}", &link)
-        } else {
-            raw.replace("{tow}", events_i18n.t("team_of_the_week"))
-        };
-        return DescriptionRender {
-            html,
-            partner_in_headline: false,
-        };
-    }
+impl DescriptionRender {
+    fn build(
+        event: &HappinessEvent,
+        partner: Option<&(String, String)>,
+        events_i18n: &EventI18n,
+        lang: &str,
+        league_url: Option<&str>,
+    ) -> DescriptionRender {
+        if matches!(event.event_type, HappinessEventType::TeamOfTheWeekSelection) {
+            let raw = events_i18n.t(EventKey::i18n_key(&event.event_type));
+            let html = if let Some(league_url) = league_url {
+                let url = format!("{}/awards", league_url);
+                let link = format!(
+                    r#"<a href="{}">{}</a>"#,
+                    url,
+                    events_i18n.t("team_of_the_week")
+                );
+                raw.replace("{tow}", &link)
+            } else {
+                raw.replace("{tow}", events_i18n.t("team_of_the_week"))
+            };
+            return DescriptionRender {
+                html,
+                partner_in_headline: false,
+            };
+        }
 
-    if matches!(
-        event.event_type,
-        HappinessEventType::YoungTeamOfTheWeekSelection
-    ) {
-        let raw = events_i18n.t(event_type_to_i18n_key(&event.event_type));
-        let html = if let Some(league_url) = league_url {
-            let url = format!("{}/awards", league_url);
-            let link = format!(
-                r#"<a href="{}">{}</a>"#,
-                url,
-                events_i18n.t("young_team_of_the_week")
-            );
-            raw.replace("{tow}", &link)
-        } else {
-            raw.replace("{tow}", events_i18n.t("young_team_of_the_week"))
-        };
-        return DescriptionRender {
-            html,
-            partner_in_headline: false,
-        };
-    }
+        if matches!(
+            event.event_type,
+            HappinessEventType::YoungTeamOfTheWeekSelection
+        ) {
+            let raw = events_i18n.t(EventKey::i18n_key(&event.event_type));
+            let html = if let Some(league_url) = league_url {
+                let url = format!("{}/awards", league_url);
+                let link = format!(
+                    r#"<a href="{}">{}</a>"#,
+                    url,
+                    events_i18n.t("young_team_of_the_week")
+                );
+                raw.replace("{tow}", &link)
+            } else {
+                raw.replace("{tow}", events_i18n.t("young_team_of_the_week"))
+            };
+            return DescriptionRender {
+                html,
+                partner_in_headline: false,
+            };
+        }
 
-    if let Some((name, slug)) = partner {
-        // Conflict event with a concrete reason → reach for the specific
-        // partner-aware key family ("Clashed with {partner} over training
-        // standards") before the legacy generic line.
-        if matches!(event.event_type, HappinessEventType::ConflictWithTeammate)
-            && let Some(reason_key) = event
-                .context
-                .as_ref()
-                .and_then(|c| c.teammate_conflict_context.as_ref())
-                .and_then(TeammateConflictRender::partner_named_key)
-        {
-            let raw = events_i18n.t(&reason_key);
-            if raw != reason_key {
+        if let Some((name, slug)) = partner {
+            // Conflict event with a concrete reason → reach for the specific
+            // partner-aware key family ("Clashed with {partner} over training
+            // standards") before the legacy generic line.
+            if matches!(event.event_type, HappinessEventType::ConflictWithTeammate)
+                && let Some(reason_key) = event
+                    .context
+                    .as_ref()
+                    .and_then(|c| c.teammate_conflict_context.as_ref())
+                    .and_then(TeammateConflictRender::partner_named_key)
+            {
+                let raw = events_i18n.t(&reason_key);
+                if raw != reason_key {
+                    let link = format!(r#"<a href="/{}/players/{}">{}</a>"#, lang, slug, name);
+                    return DescriptionRender {
+                        html: raw.replace("{partner}", &link),
+                        partner_in_headline: true,
+                    };
+                }
+            }
+            if let Some(named_key) = EventPartner::named_key(&event.event_type) {
+                let raw = events_i18n.t(named_key);
                 let link = format!(r#"<a href="/{}/players/{}">{}</a>"#, lang, slug, name);
                 return DescriptionRender {
                     html: raw.replace("{partner}", &link),
@@ -3873,21 +4417,13 @@ fn build_description(
                 };
             }
         }
-        if let Some(named_key) = partner_named_key(&event.event_type) {
-            let raw = events_i18n.t(named_key);
-            let link = format!(r#"<a href="/{}/players/{}">{}</a>"#, lang, slug, name);
-            return DescriptionRender {
-                html: raw.replace("{partner}", &link),
-                partner_in_headline: true,
-            };
-        }
-    }
 
-    DescriptionRender {
-        html: events_i18n
-            .t(event_type_to_i18n_key(&event.event_type))
-            .to_string(),
-        partner_in_headline: false,
+        DescriptionRender {
+            html: events_i18n
+                .t(EventKey::i18n_key(&event.event_type))
+                .to_string(),
+            partner_in_headline: false,
+        }
     }
 }
 
@@ -3896,50 +4432,59 @@ fn build_description(
 /// like "Clashed with Marcus Edwards" instead of "Had a disagreement
 /// with a teammate — Marcus Edwards". Only the upgraded event types
 /// have a named variant; everything else falls back to the legacy line.
-fn partner_named_key(event_type: &HappinessEventType) -> Option<&'static str> {
-    Some(match event_type {
-        HappinessEventType::TeammateBonding => "event_teammate_bonding_named",
-        HappinessEventType::ConflictWithTeammate => "event_conflict_with_teammate_named",
-        HappinessEventType::CloseFriendSold => "event_close_friend_sold_named",
-        HappinessEventType::MentorDeparted => "event_mentor_departed_named",
-        HappinessEventType::CompatriotJoined => "event_compatriot_joined_named",
-        _ => return None,
-    })
-}
+struct EventPartner;
 
-/// Events that don't make sense without a named partner. If the event was
-/// emitted without a partner id (legacy data, generic emit site), it gets
-/// filtered out of the player's history view. Mirrors the core
-/// `requires_partner_id` enforcement gate: every type listed here MUST be
-/// emitted with a `Some(_)` partner id at the source.
-fn is_partner_required(event_type: &HappinessEventType) -> bool {
-    matches!(
-        event_type,
-        HappinessEventType::TeammateBonding
-            | HappinessEventType::ConflictWithTeammate
-            | HappinessEventType::CloseFriendSold
-            | HappinessEventType::MentorDeparted
-            | HappinessEventType::CompatriotJoined
-    )
-}
+impl EventPartner {
+    /// Returns the `_named` events_i18n key for a partner-aware event type — one
+    /// that uses a `{partner}` placeholder so the rendered headline reads
+    /// like "Clashed with Marcus Edwards" instead of "Had a disagreement
+    /// with a teammate — Marcus Edwards". Only the upgraded event types
+    /// have a named variant; everything else falls back to the legacy line.
+    fn named_key(event_type: &HappinessEventType) -> Option<&'static str> {
+        Some(match event_type {
+            HappinessEventType::TeammateBonding => "event_teammate_bonding_named",
+            HappinessEventType::ConflictWithTeammate => "event_conflict_with_teammate_named",
+            HappinessEventType::CloseFriendSold => "event_close_friend_sold_named",
+            HappinessEventType::MentorDeparted => "event_mentor_departed_named",
+            HappinessEventType::CompatriotJoined => "event_compatriot_joined_named",
+            _ => return None,
+        })
+    }
 
-/// Resolve `(display_name, canonical_slug)` for the partner player. The
-/// slug must be the canonical `{id}-{name}` form produced by
-/// `Player::slug()` so the rendered `/players/{slug}` URL parses back to
-/// a real player id — using `FullName::slug()` here would strip the id
-/// prefix and the link would 404. Returns `None` when the partner can no
-/// longer be located (retired and aged out, or never existed); the event
-/// is then filtered out so we don't show a dangling link.
-fn resolve_partner(data: &SimulatorData, partner_id: u32) -> Option<(String, String)> {
-    let p = data
-        .player(partner_id)
-        .or_else(|| data.retired_player(partner_id))?;
-    let display = format!(
-        "{} {}",
-        p.full_name.display_first_name(),
-        p.full_name.display_last_name()
-    );
-    Some((display, p.slug()))
+    /// Events that don't make sense without a named partner. If the event was
+    /// emitted without a partner id (legacy data, generic emit site), it gets
+    /// filtered out of the player's history view. Mirrors the core
+    /// `requires_partner_id` enforcement gate: every type listed here MUST be
+    /// emitted with a `Some(_)` partner id at the source.
+    fn required(event_type: &HappinessEventType) -> bool {
+        matches!(
+            event_type,
+            HappinessEventType::TeammateBonding
+                | HappinessEventType::ConflictWithTeammate
+                | HappinessEventType::CloseFriendSold
+                | HappinessEventType::MentorDeparted
+                | HappinessEventType::CompatriotJoined
+        )
+    }
+
+    /// Resolve `(display_name, canonical_slug)` for the partner player. The
+    /// slug must be the canonical `{id}-{name}` form produced by
+    /// `Player::slug()` so the rendered `/players/{slug}` URL parses back to
+    /// a real player id — using `FullName::slug()` here would strip the id
+    /// prefix and the link would 404. Returns `None` when the partner can no
+    /// longer be located (retired and aged out, or never existed); the event
+    /// is then filtered out so we don't show a dangling link.
+    fn resolve(data: &SimulatorData, partner_id: u32) -> Option<(String, String)> {
+        let p = data
+            .player(partner_id)
+            .or_else(|| data.retired_player(partner_id))?;
+        let display = format!(
+            "{} {}",
+            p.full_name.display_first_name(),
+            p.full_name.display_last_name()
+        );
+        Some((display, p.slug()))
+    }
 }
 
 #[cfg(test)]
@@ -4102,11 +4647,11 @@ mod tests {
             HappinessEventType::CompatriotJoined,
         ] {
             assert!(
-                partner_named_key(&ev).is_some(),
+                EventPartner::named_key(&ev).is_some(),
                 "{:?} is partner-required but has no _named i18n key",
                 ev
             );
-            assert!(is_partner_required(&ev));
+            assert!(EventPartner::required(&ev));
         }
     }
 
@@ -4115,10 +4660,10 @@ mod tests {
         // Spot-check: events that aren't partner-required should not have
         // a `_named` key — the substitution machinery would inject an
         // unfilled `{partner}` placeholder otherwise.
-        assert!(partner_named_key(&HappinessEventType::PoorTraining).is_none());
-        assert!(partner_named_key(&HappinessEventType::ManagerPraise).is_none());
-        assert!(partner_named_key(&HappinessEventType::SalaryGapNoticed).is_none());
-        assert!(partner_named_key(&HappinessEventType::ControversyIncident).is_none());
+        assert!(EventPartner::named_key(&HappinessEventType::PoorTraining).is_none());
+        assert!(EventPartner::named_key(&HappinessEventType::ManagerPraise).is_none());
+        assert!(EventPartner::named_key(&HappinessEventType::SalaryGapNoticed).is_none());
+        assert!(EventPartner::named_key(&HappinessEventType::ControversyIncident).is_none());
     }
 
     #[test]
@@ -4215,12 +4760,12 @@ mod tests {
             ),
         ] {
             // Legacy headline mapping resolves to real copy, not the raw key.
-            assert_eq!(event_type_to_i18n_key(&ev), key);
+            assert_eq!(EventKey::i18n_key(&ev), key);
             assert_ne!(i18n.t(key), key, "{key} must resolve to real copy");
             // Big career moment → highlighted in the list.
-            assert!(is_big_event(&ev), "{ev:?} should be a big event");
+            assert!(EventImportance::is_big(&ev), "{ev:?} should be a big event");
             // Not partner-required → never dropped by the partner filter.
-            assert!(!is_partner_required(&ev));
+            assert!(!EventPartner::required(&ev));
         }
 
         // The context-aware leadership renderer (used when the event carries
@@ -4406,7 +4951,7 @@ mod tests {
         // with a real I18n requires the bundle and is exercised by the
         // higher-level integration tests.
         assert_eq!(
-            event_type_to_i18n_key(&HappinessEventType::ManagerEncouragement),
+            EventKey::i18n_key(&HappinessEventType::ManagerEncouragement),
             "event_manager_encouragement"
         );
     }
@@ -5666,7 +6211,7 @@ mod tests {
     #[test]
     fn transfer_environment_event_keys_map_to_unique_i18n_keys() {
         // Every new HappinessEventType must route through
-        // `event_type_to_i18n_key` to a distinct key — otherwise two
+        // `EventKey::i18n_key` to a distinct key — otherwise two
         // distinct events would render with identical copy.
         let pairs = [
             (
@@ -5732,7 +6277,7 @@ mod tests {
         ];
         let mut keys: std::collections::HashSet<&'static str> = Default::default();
         for (variant, expected) in &pairs {
-            let got = event_type_to_i18n_key(variant);
+            let got = EventKey::i18n_key(variant);
             assert_eq!(got, *expected, "{:?} routed to wrong i18n key", variant);
             assert!(
                 keys.insert(got),
@@ -5758,7 +6303,7 @@ mod tests {
             HappinessEventType::AdaptationBreakthrough,
         ];
         for ev in &big {
-            assert!(is_big_event(ev), "{:?} should be big", ev);
+            assert!(EventImportance::is_big(ev), "{:?} should be big", ev);
         }
         // AMBIENT: weekly flavour / colour, not headline.
         let small = [
@@ -5773,7 +6318,7 @@ mod tests {
             HappinessEventType::TrustedAfterStepUp,
         ];
         for ev in &small {
-            assert!(!is_big_event(ev), "{:?} should NOT be big", ev);
+            assert!(!EventImportance::is_big(ev), "{:?} should NOT be big", ev);
         }
     }
 
@@ -6059,7 +6604,7 @@ mod tests {
             HappinessEventType::ManagerTrustGrowing,
             HappinessEventType::ManagerTrustEroding,
         ];
-        let mut keys: Vec<&'static str> = new_events.iter().map(event_type_to_i18n_key).collect();
+        let mut keys: Vec<&'static str> = new_events.iter().map(EventKey::i18n_key).collect();
         keys.sort();
         let dedup_len = {
             let mut k = keys.clone();
@@ -6327,12 +6872,10 @@ mod tests {
         let (detail, follow_up, severity_label, severity_tag) =
             EventContextRenderer::render(&event, i18n);
         PlayerEventDto {
-            description: i18n
-                .t(event_type_to_i18n_key(&event.event_type))
-                .to_string(),
+            description: i18n.t(EventKey::i18n_key(&event.event_type)).to_string(),
             is_positive: event.magnitude > 0.0,
             is_negative: event.magnitude < 0.0,
-            is_big: is_big_event(&event.event_type),
+            is_big: EventImportance::is_big(&event.event_type),
             days_ago: event.days_ago,
             time_ago_label: EventContextRenderer::time_ago_label(event.days_ago, i18n),
             partner_name: None,
@@ -6392,7 +6935,7 @@ mod tests {
         let anchors = &mut player.mind.career.anchors;
         anchors.tell(chapter(mind::ChapterKind::Arrived));
         anchors.tell(chapter(mind::ChapterKind::DreamFormed));
-        let cards = build_events(
+        let cards = PlayerEventFeed::build(
             &player,
             &chapter_i18n("en"),
             &load_en_i18n(),

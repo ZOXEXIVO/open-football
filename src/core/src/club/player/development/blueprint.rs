@@ -191,7 +191,7 @@ impl SkillBlueprint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::club::player::development::skills_array::skills_to_array;
+
     use crate::utils::DateUtils;
     use crate::{PeopleNameGeneratorData, PlayerGenerator};
     use chrono::NaiveDate;
@@ -248,13 +248,13 @@ mod tests {
             let today = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
             let age = DateUtils::age_in_years(player.birth_date, today);
             let held = PositionalSkillCeilings::held_shares(&player, age);
-            let blueprint = SkillBlueprint::project(&skills_to_array(&player), &held);
+            let blueprint = SkillBlueprint::project(&player.skills_to_array(), &held);
             let targets = SkillBlueprint::targets(
                 &blueprint.weights(),
                 player.position(),
                 player.player_attributes.potential_ability,
             );
-            let values = skills_to_array(&player);
+            let values = player.skills_to_array();
             for a in 0..SKILL_COUNT {
                 for b in 0..SKILL_COUNT {
                     let same_family = PositionalSkillCeilings::maturation_group(a)

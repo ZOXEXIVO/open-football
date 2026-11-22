@@ -215,6 +215,8 @@ pub use club::{
     PlayerHappiness,
     PlayerHistoryRow,
     PlayerHistoryRowBreakdown,
+    PlayerIdSequence,
+
     PlayerLanguage,
     PlayerLiveStatsInput,
     PlayerMailbox,
@@ -384,13 +386,10 @@ pub use club::{
     handlers,
     matches,
     mood,
-    next_player_id,
-
     player_attributes_mod,
     player_builder_mod,
     player_contract_mod,
     reputation,
-    seed_player_id_sequence as seed_core_player_id_sequence,
     staff_attributes_mod,
     staff_contract_mod,
     tactics,

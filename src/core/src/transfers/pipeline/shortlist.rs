@@ -8,9 +8,10 @@ use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 
 use crate::club::BoardTransferProposal;
-use crate::club::board::mandate::{MandatePurpose, SigningMandate, TargetBelief};
+use crate::club::board::mandate::{FeeEnvelope, MandatePurpose, SigningMandate, TargetBelief};
 use crate::club::board::{BoardDossierSummary, BoardTransferEconomics};
 use crate::club::player::contract::contract::ClubLevelAnchor;
+use crate::club::staff::Staff;
 use crate::club::staff::StaffEventType;
 use crate::club::staff::perception::PotentialEstimator;
 use crate::transfers::ClubTransferPlan;
@@ -19,10 +20,11 @@ use crate::transfers::ScoutMonitoringStatus;
 use crate::transfers::gate::build::Suitor;
 use crate::transfers::gate::fit::{SquadFitSnapshot, SquadRegistrationLimits};
 use crate::transfers::gate::{MoveTerms, PursuitAction, TransferMovePlausibility};
+use crate::transfers::market::TransferListing;
 use crate::transfers::pipeline::{
-    DetailedScoutingReport, FileReading, PlayerSummary, ReportRiskFlag, ScoutingAssignment,
-    ScoutingRecommendation, ShortlistCandidate, ShortlistCandidateStatus, TransferNeedReason,
-    TransferRequest, TransferRequestStatus, TransferShortlist,
+    DetailedScoutingReport, FileReading, KnownPlayerMemory, PlayerSummary, ReportRiskFlag,
+    ScoutingAssignment, ScoutingRecommendation, ShortlistCandidate, ShortlistCandidateStatus,
+    TransferNeedReason, TransferRequest, TransferRequestStatus, TransferShortlist,
 };
 use crate::transfers::squad::plan::{MoneySlack, PlanningCadence};
 use crate::transfers::value::PlayerValuationCalculator;
@@ -156,6 +158,35 @@ struct ShortlistBuyer<'a> {
     suitor: Suitor<'a>,
     world: WorldPool<'a>,
     market_map: &'a MarketMap,
+}
+
+/// The fixed inputs of one market fallback screen: the buying club, the
+/// request being filled, and the squad-fit projection every listing is
+/// judged against.
+struct MarketScreen<'a> {
+    country: &'a Country,
+    club: &'a Club,
+    player_lookup: &'a CountryPlayerLookup,
+    date: NaiveDate,
+    buyer: &'a ShortlistBuyer<'a>,
+    request: &'a TransferRequest,
+    fee_free_only: bool,
+    fit: SquadFitSnapshot,
+}
+
+/// The fixed inputs of one assignment's report screen: everything that is
+/// resolved once for the assignment rather than once per report.
+struct ReportScreen<'a> {
+    country: &'a Country,
+    player_lookup: &'a CountryPlayerLookup,
+    date: NaiveDate,
+    plan: &'a ClubTransferPlan,
+    buyer: &'a ShortlistBuyer<'a>,
+    budget_alloc: f64,
+    depth: Option<PositionDepth>,
+    manager: Option<&'a Staff>,
+    fit: SquadFitSnapshot,
+    wanted_foot: Option<PlayerPreferredFoot>,
 }
 
 /// Turning scouting reports and market rows into a ranked list, and putting the top name to the board.
@@ -542,7 +573,6 @@ impl ShortlistPass {
     /// market listings. This keeps transfers flowing while scouts work on
     /// deeper evaluations in parallel.
     #[allow(clippy::too_many_arguments)]
-    #[expect(clippy::too_many_lines)]
     fn shortlists_from_market(
         country: &Country,
         club: &Club,
@@ -588,12 +618,22 @@ impl ShortlistPass {
                 continue;
             }
 
-            let market_fit = SquadFitSnapshot::build(
+            let fit = SquadFitSnapshot::build(
                 club,
                 request.position.position_group(),
                 date,
                 SquadRegistrationLimits::new(country.id, &country.regulations),
             );
+            let screen = MarketScreen {
+                country,
+                club,
+                player_lookup,
+                date,
+                buyer,
+                request,
+                fee_free_only,
+                fit,
+            };
             let mut market_candidates: Vec<ShortlistCandidate> = country
                 .transfer_market
                 .get_available_listings()
@@ -604,83 +644,7 @@ impl ShortlistPass {
                 // for 6 months — the market fallback used to re-insert
                 // him the week after the meeting voted him down.
                 .filter(|l| !plan.is_rejected(l.player_id, date))
-                .filter_map(|l| {
-                    player_lookup
-                        .find_summary(country, l.player_id, date)
-                        .and_then(|p| {
-                            // Squad-fit veto — same surplus-on-arrival
-                            // projection as the scouted path, with the
-                            // ceiling read the way scouts do (observable
-                            // growth estimate, never hidden PA).
-                            let growth = ScoutJudgement::estimate_growth_potential(
-                                p.age,
-                                p.determination,
-                                p.work_rate,
-                                p.composure,
-                                p.anticipation,
-                                p.skill_ability,
-                            );
-                            let est_potential = p.skill_ability.saturating_add(growth);
-                            if market_fit.would_be_surplus(
-                                p.skill_ability,
-                                est_potential,
-                                p.age,
-                            ) {
-                                return None;
-                            }
-                            if market_fit
-                                .would_be_unregistrable(p.nationality_country_id)
-                            {
-                                return None;
-                            }
-                            // The request's age band is part of the
-                            // recruitment brief — a DevelopmentSigning
-                            // request must not shortlist a veteran just
-                            // because he tops the group on current
-                            // ability. Same relaxed band as the loan
-                            // market: min strict, max + 3.
-                            if p.position_group == request.position.position_group()
-                                && p.skill_ability >= request.min_ability
-                                && p.age >= request.preferred_age_min
-                                && p.age <= request.preferred_age_max.saturating_add(3)
-                                && Self::affordable_for_request(request, &p, fee_free_only)
-                            {
-                                let reading = TransferMovePlausibility::read(
-                                    &buyer.suitor,
-                                    &p,
-                                    MoveTerms::purchase(false),
-                                    buyer.market_map,
-                                );
-                                if !reading.reaches(PursuitAction::FillNow.needs()) {
-                                    return None;
-                                }
-                                let plausibility_mult =
-                                    reading.adjustment.shortlist_score_multiplier;
-                                let rival_penalty =
-                                    if club.is_rival(l.club_id) { 0.75 } else { 1.0 };
-                                let budget_fit = if request.budget_allocation > 0.0 {
-                                    (1.0 - (p.estimated_value / request.budget_allocation)
-                                        .min(1.2)
-                                        as f32
-                                        * 0.35)
-                                        .clamp(0.55, 1.15)
-                                } else {
-                                    0.9
-                                };
-                                Some(ShortlistCandidate {
-                                    player_id: p.player_id,
-                                    score: (p.skill_ability as f32 / 200.0)
-                                        * budget_fit
-                                        * rival_penalty
-                                        * plausibility_mult,
-                                    estimated_fee: p.estimated_value,
-                                    status: ShortlistCandidateStatus::Available,
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                })
+                .filter_map(|l| screen.candidate(l))
                 .collect();
 
             market_candidates
@@ -713,7 +677,6 @@ impl ShortlistPass {
     /// runs before the scoring; everything that only shades the club's
     /// enthusiasm is a multiplier on top of the base read.
     #[allow(clippy::too_many_arguments)]
-    #[expect(clippy::too_many_lines)]
     fn score_reported_candidates(
         country: &Country,
         club: &Club,
@@ -744,168 +707,24 @@ impl ShortlistPass {
             .find(|request| request.id == assignment.transfer_request_id)
             .and_then(|request| request.preferred_foot);
 
+        let screen = ReportScreen {
+            country,
+            player_lookup,
+            date,
+            plan,
+            buyer,
+            budget_alloc,
+            depth,
+            manager,
+            fit,
+            wanted_foot,
+        };
+
         let mut candidates: Vec<ShortlistCandidate> = reports
             .iter()
             .filter(|r| r.estimated_value <= budget_alloc * 2.0)
-            .filter_map(|r| {
-                // Plausibility veto — drop HardReject candidates
-                // before scoring so they never become shortlist
-                // entries. Soft Allow adjustments dampen score.
-                // A report on a man who cannot be read shortlists nothing.
-                let summary = player_lookup
-                    .find_summary(country, r.player_id, date)
-                    .or_else(|| buyer.world.find(r.player_id))?;
-                // Squad-fit veto — the scout's own assessed numbers
-                // say this player would classify as surplus the day
-                // he arrived (below the squad-average gap, or ranked
-                // outside the rebalance depth cap in a full group).
-                if fit.would_be_surplus(r.assessed_ability, r.assessed_potential, summary.age) {
-                    return None;
-                }
-                // A club does not shortlist a player it could not
-                // register. Counting the slot AFTER the signing is
-                // what produced a champion dumping a marquee
-                // foreigner in January.
-                if fit.would_be_unregistrable(summary.nationality_country_id) {
-                    return None;
-                }
-                let reading = TransferMovePlausibility::read(
-                    &buyer.suitor,
-                    summary,
-                    MoveTerms::purchase(true),
-                    buyer.market_map,
-                );
-                if !reading.reaches(PursuitAction::Shortlist.needs()) {
-                    return None;
-                }
-                let plausibility_mult = reading.adjustment.shortlist_score_multiplier;
-                // A manager who has been let down badly enough by a player
-                // will not have him at any price, and the club does not
-                // put a name in front of him that he has already answered.
-                // An emergency overrides him — a squad that cannot field a
-                // side takes who it can get.
-                if manager.filter(|coach| coach.id != 0).is_some_and(|coach| {
-                    coach.affinity_for(r.player_id, date) <= DossierTuning::AFFINITY_VETO
-                }) && !fit.is_emergency()
-                {
-                    return None;
-                }
-                let foot_mult = match wanted_foot {
-                    Some(foot)
-                        if summary.preferred_foot == foot
-                            || summary.preferred_foot == PlayerPreferredFoot::Both =>
-                    {
-                        Self::FOOT_LIFT
-                    }
-                    _ => 1.0,
-                };
-                Some((r, plausibility_mult * foot_mult))
-            })
-            .map(|(r, plausibility_mult)| {
-                let ability_score = r.assessed_ability as f32 / 200.0;
-                let potential_score = r.assessed_potential as f32 / 200.0;
-                let value_fit = if budget_alloc > 0.0 {
-                    1.0 - (r.estimated_value / budget_alloc).min(1.0) as f32
-                } else {
-                    0.5
-                };
-                let confidence_score = r.confidence;
-
-                let base_score = ability_score * 0.3
-                    + potential_score * 0.2
-                    + value_fit * 0.25
-                    + confidence_score * 0.1
-                    + match r.recommendation {
-                        ScoutingRecommendation::StrongBuy => 0.15,
-                        ScoutingRecommendation::Buy => 0.10,
-                        ScoutingRecommendation::Consider => 0.05,
-                        ScoutingRecommendation::Pass => 0.0,
-                    };
-
-                // Risk flags dampen the score multiplicatively — serious
-                // flags (injured, bad attitude, wage demand) hurt more
-                // than softer ones (age, contract-expiring which is
-                // actually a mild positive).
-                let mut risk_multiplier: f32 = 1.0;
-                for flag in &r.risk_flags {
-                    risk_multiplier *= match flag {
-                        ReportRiskFlag::CurrentlyInjured => 0.85,
-                        ReportRiskFlag::PoorAttitude => 0.8,
-                        ReportRiskFlag::WageDemands => 0.75,
-                        ReportRiskFlag::AgeRisk => 0.9,
-                        ReportRiskFlag::ContractExpiring => 1.05,
-                    };
-                }
-
-                let depth_mult = match &depth {
-                    Some(d) => d.weight_for(r.assessed_ability),
-                    None => 1.0,
-                };
-                // role_fit is ~[0.5, 1.25]; center it around 1.0 so a perfect
-                // fit lifts score ~25% and a bad fit drops ~50%.
-                let role_mult = r.role_fit.clamp(0.5, 1.25);
-                // Meeting endorsement multiplier: candidates who
-                // were explicitly promoted by a recruitment
-                // meeting earn a small boost so they outrank
-                // raw market fallbacks at equal raw quality.
-                // Players the meeting rejected are filtered
-                // out via `rejected_players`, so the negative
-                // case is handled there.
-                let meeting_mult = if plan.scout_monitoring.iter().any(|m| {
-                    m.player_id == r.player_id
-                        && matches!(
-                            m.status,
-                            ScoutMonitoringStatus::PromotedToShortlist
-                                | ScoutMonitoringStatus::Negotiating
-                        )
-                }) {
-                    1.10
-                } else {
-                    1.0
-                };
-                // The club's own standing board. A name the
-                // recruitment department has been carrying and
-                // watching all year is not the same proposition as
-                // one a scout happened to file last week, and the
-                // shortlist is where that year of work has to
-                // show — otherwise the watchlist is knowledge that
-                // never reaches a decision. Its belief score is
-                // already the club's own, so this reads the board's
-                // ORDER rather than re-scoring the player.
-                let watchlist_mult = match plan
-                    .watchlist
-                    .iter()
-                    .position(|e| e.player_id == r.player_id)
-                {
-                    Some(_) => Self::WATCHLIST_LIFT,
-                    None => 1.0,
-                };
-                // And what the manager thinks of a man he has had before.
-                // This is the one term on the list that is not about the
-                // player at all — it is about a working relationship, and
-                // it is why managers sign the same people over and over.
-                let affinity = manager
-                    .filter(|coach| coach.id != 0)
-                    .map(|coach| coach.affinity_for(r.player_id, date))
-                    .unwrap_or(0.0);
-                let affinity_mult = 1.0 + DossierTuning::AFFINITY_SCALE * affinity;
-
-                let score = base_score
-                    * depth_mult
-                    * risk_multiplier
-                    * role_mult
-                    * meeting_mult
-                    * watchlist_mult
-                    * affinity_mult
-                    * plausibility_mult;
-
-                ShortlistCandidate {
-                    player_id: r.player_id,
-                    score,
-                    estimated_fee: r.estimated_value,
-                    status: ShortlistCandidateStatus::Available,
-                }
-            })
+            .filter_map(|r| screen.candidate(r))
+            .map(|(r, plausibility_mult)| screen.score(r, plausibility_mult))
             .collect();
 
         candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
@@ -1230,8 +1049,6 @@ impl ShortlistPass {
     /// Returns the lead scout alongside it, so the staff feed can show who
     /// took the dossier in.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
-    #[expect(clippy::too_many_lines)]
     fn board_proposal(
         club: &Club,
         req: &TransferRequest,
@@ -1244,17 +1061,82 @@ impl ShortlistPass {
         days_left_frac: f32,
     ) -> (BoardTransferProposal, Option<u32>) {
         let plan = &club.transfer_plan;
-        let remaining_transfer_budget = finances.remaining_transfer_budget;
-        let squad_avg_ability = finances.squad_avg_ability;
-        let committed_wages = finances.committed_wages;
-        let wage_budget = finances.wage_budget;
-        let league_country_id = finances.league_country_id;
 
         // Veto rules live on the board so chairman temperament,
         // confidence, and long-term vision stay in one domain.
         // Pull a dossier off the recruitment-meeting state if
         // any scouts have been monitoring this candidate; the
         // board uses it to relax/tighten tolerance.
+        let (dossier_summary, lead_scout_id) = Self::board_file(plan, req, top);
+
+        let snapshot = player_snapshots.get(&top.player_id).copied();
+        // A FOREIGN target appears on no roster in this country, so
+        // the snapshot walk above cannot see him and the board was
+        // handed a proposal with no age, no ability and no
+        // economics — precisely on the biggest and least reversible
+        // purchases a club makes. The club's own institutional
+        // memory of him is the honest substitute: it is what its
+        // scouts believe, which is all a board ever has.
+        let foreign_memory = if snapshot.is_none() {
+            plan.known_players
+                .iter()
+                .find(|m| m.player_id == top.player_id)
+        } else {
+            None
+        };
+
+        // Build the economics dossier from real data where we have
+        // it, leaving genuinely unavailable signals neutral rather
+        // than invented (a bad proxy is worse than a neutral 0).
+        let economics =
+            Self::proposal_economics(snapshot, fee, finances, dossier_summary.is_some());
+
+        // What the club says it is buying him FOR, and what its own board
+        // says that purpose is worth. A hearing that knows only the fee and
+        // the allocation cannot tell a starter from an heir, which is how a
+        // bench purpose came to carry a starter's fee.
+        let (mandate, envelope) = Self::mandate_and_envelope(
+            club,
+            req,
+            snapshot,
+            foreign_memory,
+            dossier_summary,
+            finances,
+            date,
+            alloc,
+            days_left_frac,
+        );
+
+        let proposal = BoardTransferProposal {
+            fee,
+            mandate,
+            envelope,
+            allocated_budget: alloc,
+            remaining_transfer_budget: finances.remaining_transfer_budget,
+            priority: req.priority.clone(),
+            reason: req.reason.clone(),
+            player_age: snapshot
+                .map(|s| s.age)
+                .or_else(|| foreign_memory.map(|m| m.age)),
+            player_ability: snapshot
+                .map(|s| s.ability)
+                .or_else(|| foreign_memory.map(|m| m.assessed_ability)),
+            squad_avg_ability: finances.squad_avg_ability,
+            shortlist_score: top.score,
+            dossier: dossier_summary,
+            economics,
+        };
+
+        (proposal, lead_scout_id)
+    }
+
+    /// The recruitment meeting's dossier summary and the scout who filed the
+    /// most confident observation of him.
+    fn board_file(
+        plan: &ClubTransferPlan,
+        req: &TransferRequest,
+        top: &ShortlistCandidate,
+    ) -> (Option<BoardDossierSummary>, Option<u32>) {
         let dossier = MeetingPass::build_board_dossier(plan, top.player_id, req.id);
         let lead_scout_id = plan
             .scout_monitoring
@@ -1280,32 +1162,25 @@ impl ShortlistPass {
         } else {
             None
         };
-        let snapshot = player_snapshots.get(&top.player_id).copied();
-        // A FOREIGN target appears on no roster in this country, so
-        // the snapshot walk above cannot see him and the board was
-        // handed a proposal with no age, no ability and no
-        // economics — precisely on the biggest and least reversible
-        // purchases a club makes. The club's own institutional
-        // memory of him is the honest substitute: it is what its
-        // scouts believe, which is all a board ever has.
-        let foreign_memory = if snapshot.is_none() {
-            plan.known_players
-                .iter()
-                .find(|m| m.player_id == top.player_id)
-        } else {
-            None
-        };
+        (dossier_summary, lead_scout_id)
+    }
 
-        // Build the economics dossier from real data where we have
-        // it, leaving genuinely unavailable signals neutral rather
-        // than invented (a bad proxy is worse than a neutral 0).
-        let economics = snapshot.map(|s| {
+    /// The wage, resale and homegrown economics the board weighs the fee
+    /// against. `None` when the target appears on no domestic roster.
+    fn proposal_economics(
+        snapshot: Option<PlayerApprovalSnapshot>,
+        fee: f64,
+        finances: BoardClubFinances,
+        manager_priority: bool,
+    ) -> Option<BoardTransferEconomics> {
+        snapshot.map(|s| {
             let wage_impact = s.annual_salary as f64;
             // Headroom = wage mandate − committed wages. With no
             // mandate set we leave it equal to the impact, so the
             // board's wage-breach rule stays neutral.
-            let headroom = wage_budget
-                .map(|wb| (wb - committed_wages).max(0.0))
+            let headroom = finances
+                .wage_budget
+                .map(|wb| (wb - finances.committed_wages).max(0.0))
                 .unwrap_or(wage_impact);
             BoardTransferEconomics {
                 wage_impact_annual: wage_impact,
@@ -1318,17 +1193,29 @@ impl ShortlistPass {
                 resale_projection: Self::project_resale(fee, s.age, s.ability, s.potential),
                 // No discipline/professionalism signal sourced yet.
                 professionalism_risk: 0.0,
-                homegrown_fit: s.country_id == league_country_id,
+                homegrown_fit: s.country_id == finances.league_country_id,
                 injury_risk: (s.injury_proneness as f32 / 20.0).clamp(0.0, 1.0),
                 commercial_value: (s.world_reputation as f32 / 10_000.0).clamp(0.0, 1.0),
-                manager_priority: dossier_summary.is_some(),
+                manager_priority,
             }
-        });
+        })
+    }
 
-        // What the club says it is buying him FOR, and what its own board
-        // says that purpose is worth. A hearing that knows only the fee and
-        // the allocation cannot tell a starter from an heir, which is how a
-        // bench purpose came to carry a starter's fee.
+    /// The mandate the signing is made under and the fee envelope the board
+    /// is willing to fund for that purpose.
+    #[allow(clippy::too_many_arguments)]
+    fn mandate_and_envelope(
+        club: &Club,
+        req: &TransferRequest,
+        snapshot: Option<PlayerApprovalSnapshot>,
+        foreign_memory: Option<&KnownPlayerMemory>,
+        dossier_summary: Option<BoardDossierSummary>,
+        finances: BoardClubFinances,
+        date: NaiveDate,
+        alloc: f64,
+        days_left_frac: f32,
+    ) -> (SigningMandate, FeeEnvelope) {
+        let plan = &club.transfer_plan;
         let slot = plan.brief.as_ref().and_then(|b| b.slot_for(req.position));
         let group = snapshot
             .map(|s| s.group)
@@ -1379,28 +1266,266 @@ impl ShortlistPass {
             alloc,
             days_left_frac,
         );
+        (mandate, envelope)
+    }
+}
 
-        let proposal = BoardTransferProposal {
-            fee,
-            mandate,
-            envelope,
-            allocated_budget: alloc,
-            remaining_transfer_budget,
-            priority: req.priority.clone(),
-            reason: req.reason.clone(),
-            player_age: snapshot
-                .map(|s| s.age)
-                .or_else(|| foreign_memory.map(|m| m.age)),
-            player_ability: snapshot
-                .map(|s| s.ability)
-                .or_else(|| foreign_memory.map(|m| m.assessed_ability)),
-            squad_avg_ability,
-            shortlist_score: top.score,
-            dossier: dossier_summary,
-            economics,
+impl MarketScreen<'_> {
+    /// One listing, if it survives the squad-fit, age-band, affordability and
+    /// plausibility gates, scored for this request.
+    fn candidate(&self, listing: &TransferListing) -> Option<ShortlistCandidate> {
+        let p = self
+            .player_lookup
+            .find_summary(self.country, listing.player_id, self.date)?;
+        // Squad-fit veto — same surplus-on-arrival
+        // projection as the scouted path, with the
+        // ceiling read the way scouts do (observable
+        // growth estimate, never hidden PA).
+        let growth = ScoutJudgement::estimate_growth_potential(
+            p.age,
+            p.determination,
+            p.work_rate,
+            p.composure,
+            p.anticipation,
+            p.skill_ability,
+        );
+        let est_potential = p.skill_ability.saturating_add(growth);
+        if self
+            .fit
+            .would_be_surplus(p.skill_ability, est_potential, p.age)
+        {
+            return None;
+        }
+        if self.fit.would_be_unregistrable(p.nationality_country_id) {
+            return None;
+        }
+        // The request's age band is part of the
+        // recruitment brief — a DevelopmentSigning
+        // request must not shortlist a veteran just
+        // because he tops the group on current
+        // ability. Same relaxed band as the loan
+        // market: min strict, max + 3.
+        if p.position_group != self.request.position.position_group()
+            || p.skill_ability < self.request.min_ability
+            || p.age < self.request.preferred_age_min
+            || p.age > self.request.preferred_age_max.saturating_add(3)
+            || !ShortlistPass::affordable_for_request(self.request, p, self.fee_free_only)
+        {
+            return None;
+        }
+
+        let reading = TransferMovePlausibility::read(
+            &self.buyer.suitor,
+            p,
+            MoveTerms::purchase(false),
+            self.buyer.market_map,
+        );
+        if !reading.reaches(PursuitAction::FillNow.needs()) {
+            return None;
+        }
+        let plausibility_mult = reading.adjustment.shortlist_score_multiplier;
+        let rival_penalty = if self.club.is_rival(listing.club_id) {
+            0.75
+        } else {
+            1.0
         };
+        let budget_fit = if self.request.budget_allocation > 0.0 {
+            (1.0 - (p.estimated_value / self.request.budget_allocation).min(1.2) as f32 * 0.35)
+                .clamp(0.55, 1.15)
+        } else {
+            0.9
+        };
+        Some(ShortlistCandidate {
+            player_id: p.player_id,
+            score: (p.skill_ability as f32 / 200.0)
+                * budget_fit
+                * rival_penalty
+                * plausibility_mult,
+            estimated_fee: p.estimated_value,
+            status: ShortlistCandidateStatus::Available,
+        })
+    }
+}
 
-        (proposal, lead_scout_id)
+impl ReportScreen<'_> {
+    /// One report, if it survives the plausibility, squad-fit and manager
+    /// vetoes, with the multipliers that are not part of the score itself.
+    fn candidate<'r>(
+        &self,
+        report: &'r DetailedScoutingReport,
+    ) -> Option<(&'r DetailedScoutingReport, f32)> {
+        // Plausibility veto — drop HardReject candidates
+        // before scoring so they never become shortlist
+        // entries. Soft Allow adjustments dampen score.
+        // A report on a man who cannot be read shortlists nothing.
+        let summary = self
+            .player_lookup
+            .find_summary(self.country, report.player_id, self.date)
+            .or_else(|| self.buyer.world.find(report.player_id))?;
+        // Squad-fit veto — the scout's own assessed numbers
+        // say this player would classify as surplus the day
+        // he arrived (below the squad-average gap, or ranked
+        // outside the rebalance depth cap in a full group).
+        if self.fit.would_be_surplus(
+            report.assessed_ability,
+            report.assessed_potential,
+            summary.age,
+        ) {
+            return None;
+        }
+        // A club does not shortlist a player it could not
+        // register. Counting the slot AFTER the signing is
+        // what produced a champion dumping a marquee
+        // foreigner in January.
+        if self
+            .fit
+            .would_be_unregistrable(summary.nationality_country_id)
+        {
+            return None;
+        }
+        let reading = TransferMovePlausibility::read(
+            &self.buyer.suitor,
+            summary,
+            MoveTerms::purchase(true),
+            self.buyer.market_map,
+        );
+        if !reading.reaches(PursuitAction::Shortlist.needs()) {
+            return None;
+        }
+        let plausibility_mult = reading.adjustment.shortlist_score_multiplier;
+        // A manager who has been let down badly enough by a player
+        // will not have him at any price, and the club does not
+        // put a name in front of him that he has already answered.
+        // An emergency overrides him — a squad that cannot field a
+        // side takes who it can get.
+        if self
+            .manager
+            .filter(|coach| coach.id != 0)
+            .is_some_and(|coach| {
+                coach.affinity_for(report.player_id, self.date) <= DossierTuning::AFFINITY_VETO
+            })
+            && !self.fit.is_emergency()
+        {
+            return None;
+        }
+        let foot_mult = match self.wanted_foot {
+            Some(foot)
+                if summary.preferred_foot == foot
+                    || summary.preferred_foot == PlayerPreferredFoot::Both =>
+            {
+                ShortlistPass::FOOT_LIFT
+            }
+            _ => 1.0,
+        };
+        Some((report, plausibility_mult * foot_mult))
+    }
+
+    /// The weighted score for one report that passed the screen.
+    fn score(&self, report: &DetailedScoutingReport, plausibility_mult: f32) -> ShortlistCandidate {
+        let ability_score = report.assessed_ability as f32 / 200.0;
+        let potential_score = report.assessed_potential as f32 / 200.0;
+        let value_fit = if self.budget_alloc > 0.0 {
+            1.0 - (report.estimated_value / self.budget_alloc).min(1.0) as f32
+        } else {
+            0.5
+        };
+        let confidence_score = report.confidence;
+
+        let base_score = ability_score * 0.3
+            + potential_score * 0.2
+            + value_fit * 0.25
+            + confidence_score * 0.1
+            + match report.recommendation {
+                ScoutingRecommendation::StrongBuy => 0.15,
+                ScoutingRecommendation::Buy => 0.10,
+                ScoutingRecommendation::Consider => 0.05,
+                ScoutingRecommendation::Pass => 0.0,
+            };
+
+        // Risk flags dampen the score multiplicatively — serious
+        // flags (injured, bad attitude, wage demand) hurt more
+        // than softer ones (age, contract-expiring which is
+        // actually a mild positive).
+        let mut risk_multiplier: f32 = 1.0;
+        for flag in &report.risk_flags {
+            risk_multiplier *= match flag {
+                ReportRiskFlag::CurrentlyInjured => 0.85,
+                ReportRiskFlag::PoorAttitude => 0.8,
+                ReportRiskFlag::WageDemands => 0.75,
+                ReportRiskFlag::AgeRisk => 0.9,
+                ReportRiskFlag::ContractExpiring => 1.05,
+            };
+        }
+
+        let depth_mult = match &self.depth {
+            Some(d) => d.weight_for(report.assessed_ability),
+            None => 1.0,
+        };
+        // role_fit is ~[0.5, 1.25]; center it around 1.0 so a perfect
+        // fit lifts score ~25% and a bad fit drops ~50%.
+        let role_mult = report.role_fit.clamp(0.5, 1.25);
+        // Meeting endorsement multiplier: candidates who
+        // were explicitly promoted by a recruitment
+        // meeting earn a small boost so they outrank
+        // raw market fallbacks at equal raw quality.
+        // Players the meeting rejected are filtered
+        // out via `rejected_players`, so the negative
+        // case is handled there.
+        let meeting_mult = if self.plan.scout_monitoring.iter().any(|m| {
+            m.player_id == report.player_id
+                && matches!(
+                    m.status,
+                    ScoutMonitoringStatus::PromotedToShortlist | ScoutMonitoringStatus::Negotiating
+                )
+        }) {
+            1.10
+        } else {
+            1.0
+        };
+        // The club's own standing board. A name the
+        // recruitment department has been carrying and
+        // watching all year is not the same proposition as
+        // one a scout happened to file last week, and the
+        // shortlist is where that year of work has to
+        // show — otherwise the watchlist is knowledge that
+        // never reaches a decision. Its belief score is
+        // already the club's own, so this reads the board's
+        // ORDER rather than re-scoring the player.
+        let watchlist_mult = match self
+            .plan
+            .watchlist
+            .iter()
+            .position(|e| e.player_id == report.player_id)
+        {
+            Some(_) => ShortlistPass::WATCHLIST_LIFT,
+            None => 1.0,
+        };
+        // And what the manager thinks of a man he has had before.
+        // This is the one term on the list that is not about the
+        // player at all — it is about a working relationship, and
+        // it is why managers sign the same people over and over.
+        let affinity = self
+            .manager
+            .filter(|coach| coach.id != 0)
+            .map(|coach| coach.affinity_for(report.player_id, self.date))
+            .unwrap_or(0.0);
+        let affinity_mult = 1.0 + DossierTuning::AFFINITY_SCALE * affinity;
+
+        let score = base_score
+            * depth_mult
+            * risk_multiplier
+            * role_mult
+            * meeting_mult
+            * watchlist_mult
+            * affinity_mult
+            * plausibility_mult;
+
+        ShortlistCandidate {
+            player_id: report.player_id,
+            score,
+            estimated_fee: report.estimated_value,
+            status: ShortlistCandidateStatus::Available,
+        }
     }
 }
 

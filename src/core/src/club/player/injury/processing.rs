@@ -78,10 +78,6 @@ impl Player {
         self.mind.remember(kind, ActorRef::NONE, &ctx);
     }
 
-    /// Process injury lifecycle: injured → recovery → healthy.
-    /// The medical staff quality comes from the parent ClubContext and
-    /// modulates recovery speed + spontaneous injury risk.
-    #[expect(clippy::too_many_lines)]
     pub(crate) fn process_injury(
         &mut self,
         result: &mut PlayerResult,
@@ -89,160 +85,191 @@ impl Player {
         medical: &MedicalStaffQuality,
         club_id: Option<u32>,
     ) {
-        let injury_proneness = self.player_attributes.injury_proneness;
-
-        // A serious injury is one of the handful of things that changes
-        // what a footballer wants. It is noticed here rather than at the
-        // dozen sites that can cause one, by watching the counter
-        // `set_injury` already increments — so there is one severity
-        // model rather than two that can disagree.
+        // A serious injury is one of the handful of things that changes what
+        // a footballer wants. It is noticed here rather than at the dozen
+        // sites that can cause one, by watching the counter `set_injury`
+        // already increments — so there is one severity model rather than
+        // two that can disagree.
         self.remember_new_injury(now, club_id);
 
         if self.player_attributes.is_injured {
-            // Phase 1: Injured — decrement injury days
-            let transitioned = self.player_attributes.recover_injury_day();
-            // Elite physio occasionally heals an extra day.
-            if !transitioned && medical.bonus_day() && self.player_attributes.is_injured {
-                let _ = self.player_attributes.recover_injury_day();
-            }
-
-            if self.player_attributes.injury_days_remaining == 0
-                && !self.player_attributes.is_injured
-            {
-                // Injury countdown hit 0 → transition to recovery phase
-                self.statuses.remove(PlayerStatusType::Inj);
-                self.statuses.add(now, PlayerStatusType::Lmp);
-                result.injury_recovered = true;
-
-                // Match readiness takes a hit on return — even a small
-                // injury blunts sharpness. Long-term layoffs lose more.
-                let recovery_left = self.player_attributes.recovery_days_remaining as f32;
-                let readiness_drop = (recovery_left / 30.0 * 8.0).clamp(2.0, 12.0);
-                self.skills.physical.match_readiness =
-                    (self.skills.physical.match_readiness - readiness_drop).max(0.0);
-
-                // Morale event: being cleared to play lifts morale, more so
-                // after a long absence. Recovery days remaining is our proxy
-                // for the severity of what they just went through.
-                let magnitude = if recovery_left >= 30.0 {
-                    8.0 // long-term injury — big lift, been in rehab for weeks
-                } else if recovery_left >= 14.0 {
-                    5.0
-                } else if recovery_left >= 7.0 {
-                    3.0
-                } else {
-                    1.5
-                };
-                let stage = if recovery_left >= 14.0 {
-                    InjuryRecoveryStage::ProtectedByMedicalStaff
-                } else {
-                    InjuryRecoveryStage::ReturnedToFullTraining
-                };
-                let mut ictx = InjuryRecoveryEventContext::new(
-                    stage,
-                    recovery_left as u16,
-                    self.skills.physical.match_readiness,
-                );
-                if recovery_left >= 30.0 {
-                    ictx = ictx.with_evidence(InjuryRecoveryEvidence::LongTermLayoff);
-                } else {
-                    ictx = ictx.with_evidence(InjuryRecoveryEvidence::ShortTermLayoff);
-                }
-                if self.skills.physical.match_readiness < 12.0 {
-                    ictx = ictx.with_evidence(InjuryRecoveryEvidence::MatchSharpnessLow);
-                }
-                if self.attributes.professionalism >= 15.0 {
-                    ictx = ictx.with_evidence(InjuryRecoveryEvidence::HighProfessionalism);
-                }
-                let happiness_ctx = HappinessEventContext::new(
-                    HappinessEventCause::Other,
-                    HappinessEventSeverity::from_magnitude(magnitude),
-                    HappinessEventScope::Personal,
-                )
-                .with_injury_context(ictx);
-                self.happiness.add_event_with_context(
-                    HappinessEventType::InjuryReturn,
-                    magnitude,
-                    None,
-                    happiness_ctx,
-                );
-                // Coming back from a long lay-off is its own event in a
-                // career, distinct from the injury that caused it. Short
-                // absences are not — a fortnight out and back is a
-                // fortnight nobody remembers.
-                if recovery_left >= 14.0 {
-                    let ctx = self.mind_context(now, club_id);
-                    self.mind
-                        .remember(EpisodeKind::ReturnedFromLongInjury, ActorRef::NONE, &ctx);
-                }
-            }
+            self.advance_injury(result, now, medical, club_id);
         } else if self.player_attributes.is_in_recovery() {
-            // Phase 2: Recovery — post-injury low match fitness phase.
-            // Setback risk now uses the unified recipe so workload
-            // spikes during rehab actually leak into recurrence chance.
-            let setback_chance = self.compute_injury_risk(InjuryRiskInputs {
-                base_rate: 0.001,
-                intensity: 0.5,
-                in_recovery: true,
-                medical_multiplier: medical.setback_multiplier(),
-                now,
-            });
-            if RandomEngine::gen_f32() < setback_chance
-                && let Some(body_part) =
-                    BodyPart::from_u8(self.player_attributes.last_injury_body_part)
-            {
-                let injury = Self::injury_for_body_part(body_part);
-                let age = DateUtils::age(self.birth_date, now);
-                self.player_attributes.set_injury(injury, age);
-                let new_recovery_days = self.player_attributes.recovery_days_remaining;
-                self.statuses.remove(PlayerStatusType::Lmp);
-                self.statuses.add(now, PlayerStatusType::Inj);
-                result.injury_occurred = Some(injury);
-                // Reinjury during recovery — fire the dedicated
-                // `InjurySetback` event. We treat it as
-                // `RecurrenceConcern` because the same body part
-                // broke down twice, the player and the staff have
-                // a real recurring-injury story now.
-                self.on_injury_setback(
-                    InjuryRecoveryStage::InjuryRecurrenceConcern,
-                    new_recovery_days,
-                    self.skills.physical.match_readiness,
-                    true,
-                );
-                return;
-            }
-
-            let fully_fit = self.player_attributes.recover_recovery_day();
-            // Elite physio can shave extra days off the recovery phase too.
-            if !fully_fit && medical.bonus_day() {
-                let _ = self.player_attributes.recover_recovery_day();
-            }
-            if fully_fit || self.player_attributes.recovery_days_remaining == 0 {
-                // Fully recovered — remove low match fitness status
-                self.statuses.remove(PlayerStatusType::Lmp);
-                self.player_attributes.last_injury_body_part = 0;
-            }
+            self.advance_injury_recovery(result, now, medical);
         } else {
-            // Phase 3: Healthy — daily spontaneous injury risk through the
-            // unified recipe. Base 0.0001 / day; the recipe applies age,
-            // condition, NF, jadedness, workload spike, congestion,
-            // proneness and medical multipliers consistently with the
-            // match/training paths.
-            let injury_chance = self.compute_injury_risk(InjuryRiskInputs {
-                base_rate: 0.0001,
-                intensity: 0.6,
-                in_recovery: false,
-                medical_multiplier: medical.risk_multiplier(),
-                now,
-            });
+            self.roll_spontaneous_injury(result, now, medical);
+        }
+    }
 
-            if RandomEngine::gen_f32() < injury_chance {
-                let age = DateUtils::age(self.birth_date, now);
-                let injury = InjuryType::random_spontaneous_injury(age, injury_proneness);
-                self.player_attributes.set_injury(injury, age);
-                self.statuses.add(now, PlayerStatusType::Inj);
-                result.injury_occurred = Some(injury);
-            }
+    /// Phase 1: injured — decrement injury days and cross into recovery when
+    /// the countdown reaches zero.
+    fn advance_injury(
+        &mut self,
+        result: &mut PlayerResult,
+        now: NaiveDate,
+        medical: &MedicalStaffQuality,
+        club_id: Option<u32>,
+    ) {
+        let transitioned = self.player_attributes.recover_injury_day();
+        // Elite physio occasionally heals an extra day.
+        if !transitioned && medical.bonus_day() && self.player_attributes.is_injured {
+            let _ = self.player_attributes.recover_injury_day();
+        }
+
+        if self.player_attributes.injury_days_remaining == 0 && !self.player_attributes.is_injured {
+            self.on_injury_recovery_start(result, now, club_id);
+        }
+    }
+
+    fn on_injury_recovery_start(
+        &mut self,
+        result: &mut PlayerResult,
+        now: NaiveDate,
+        club_id: Option<u32>,
+    ) {
+        // Injury countdown hit 0 → transition to recovery phase.
+        self.statuses.remove(PlayerStatusType::Inj);
+        self.statuses.add(now, PlayerStatusType::Lmp);
+        result.injury_recovered = true;
+
+        // Match readiness takes a hit on return — even a small injury blunts
+        // sharpness. Long-term layoffs lose more.
+        let recovery_left = self.player_attributes.recovery_days_remaining as f32;
+        let readiness_drop = (recovery_left / 30.0 * 8.0).clamp(2.0, 12.0);
+        self.skills.physical.match_readiness =
+            (self.skills.physical.match_readiness - readiness_drop).max(0.0);
+
+        // Morale event: being cleared to play lifts morale, more so after a
+        // long absence. Recovery days remaining is our proxy for the severity
+        // of what they just went through.
+        let magnitude = if recovery_left >= 30.0 {
+            8.0 // long-term injury — big lift, been in rehab for weeks
+        } else if recovery_left >= 14.0 {
+            5.0
+        } else if recovery_left >= 7.0 {
+            3.0
+        } else {
+            1.5
+        };
+        let stage = if recovery_left >= 14.0 {
+            InjuryRecoveryStage::ProtectedByMedicalStaff
+        } else {
+            InjuryRecoveryStage::ReturnedToFullTraining
+        };
+        let mut ictx = InjuryRecoveryEventContext::new(
+            stage,
+            recovery_left as u16,
+            self.skills.physical.match_readiness,
+        );
+        if recovery_left >= 30.0 {
+            ictx = ictx.with_evidence(InjuryRecoveryEvidence::LongTermLayoff);
+        } else {
+            ictx = ictx.with_evidence(InjuryRecoveryEvidence::ShortTermLayoff);
+        }
+        if self.skills.physical.match_readiness < 12.0 {
+            ictx = ictx.with_evidence(InjuryRecoveryEvidence::MatchSharpnessLow);
+        }
+        if self.attributes.professionalism >= 15.0 {
+            ictx = ictx.with_evidence(InjuryRecoveryEvidence::HighProfessionalism);
+        }
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::Personal,
+        )
+        .with_injury_context(ictx);
+        self.happiness.add_event_with_context(
+            HappinessEventType::InjuryReturn,
+            magnitude,
+            None,
+            happiness_ctx,
+        );
+        // Coming back from a long lay-off is its own event in a career,
+        // distinct from the injury that caused it. Short absences are not — a
+        // fortnight out and back is a fortnight nobody remembers.
+        if recovery_left >= 14.0 {
+            let ctx = self.mind_context(now, club_id);
+            self.mind
+                .remember(EpisodeKind::ReturnedFromLongInjury, ActorRef::NONE, &ctx);
+        }
+    }
+
+    /// Phase 2: recovery — post-injury low match fitness phase. Setback risk
+    /// now uses the unified recipe so workload spikes during rehab actually
+    /// leak into recurrence chance.
+    fn advance_injury_recovery(
+        &mut self,
+        result: &mut PlayerResult,
+        now: NaiveDate,
+        medical: &MedicalStaffQuality,
+    ) {
+        let setback_chance = self.compute_injury_risk(InjuryRiskInputs {
+            base_rate: 0.001,
+            intensity: 0.5,
+            in_recovery: true,
+            medical_multiplier: medical.setback_multiplier(),
+            now,
+        });
+        if RandomEngine::gen_f32() < setback_chance
+            && let Some(body_part) = BodyPart::from_u8(self.player_attributes.last_injury_body_part)
+        {
+            let injury = Self::injury_for_body_part(body_part);
+            let age = DateUtils::age(self.birth_date, now);
+            self.player_attributes.set_injury(injury, age);
+            let new_recovery_days = self.player_attributes.recovery_days_remaining;
+            self.statuses.remove(PlayerStatusType::Lmp);
+            self.statuses.add(now, PlayerStatusType::Inj);
+            result.injury_occurred = Some(injury);
+            // Reinjury during recovery — fire the dedicated `InjurySetback`
+            // event. We treat it as `RecurrenceConcern` because the same body
+            // part broke down twice, the player and the staff have a real
+            // recurring-injury story now.
+            self.on_injury_setback(
+                InjuryRecoveryStage::InjuryRecurrenceConcern,
+                new_recovery_days,
+                self.skills.physical.match_readiness,
+                true,
+            );
+            return;
+        }
+
+        let fully_fit = self.player_attributes.recover_recovery_day();
+        // Elite physio can shave extra days off the recovery phase too.
+        if !fully_fit && medical.bonus_day() {
+            let _ = self.player_attributes.recover_recovery_day();
+        }
+        if fully_fit || self.player_attributes.recovery_days_remaining == 0 {
+            // Fully recovered — remove low match fitness status.
+            self.statuses.remove(PlayerStatusType::Lmp);
+            self.player_attributes.last_injury_body_part = 0;
+        }
+    }
+
+    /// Phase 3: healthy — daily spontaneous injury risk through the unified
+    /// recipe. Base 0.0001 / day; the recipe applies age, condition, NF,
+    /// jadedness, workload spike, congestion, proneness and medical
+    /// multipliers consistently with the match/training paths.
+    fn roll_spontaneous_injury(
+        &mut self,
+        result: &mut PlayerResult,
+        now: NaiveDate,
+        medical: &MedicalStaffQuality,
+    ) {
+        let injury_proneness = self.player_attributes.injury_proneness;
+        let injury_chance = self.compute_injury_risk(InjuryRiskInputs {
+            base_rate: 0.0001,
+            intensity: 0.6,
+            in_recovery: false,
+            medical_multiplier: medical.risk_multiplier(),
+            now,
+        });
+
+        if RandomEngine::gen_f32() < injury_chance {
+            let age = DateUtils::age(self.birth_date, now);
+            let injury = InjuryType::random_spontaneous_injury(age, injury_proneness);
+            self.player_attributes.set_injury(injury, age);
+            self.statuses.add(now, PlayerStatusType::Inj);
+            result.injury_occurred = Some(injury);
         }
     }
 

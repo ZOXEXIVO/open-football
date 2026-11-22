@@ -250,7 +250,6 @@ impl ApproachBuilder {
     /// The club's opening number, priced by its own transfer strategy against
     /// what the seller is asking — and, for a loan, against the rental a loan
     /// fee actually is rather than the asset price.
-    #[expect(clippy::too_many_lines)]
     fn open_offer(
         buyer: &ApproachBuyer<'_>,
         target: &ApproachTarget<'_>,
@@ -258,60 +257,33 @@ impl ApproachBuilder {
         ctx: &ApproachContext<'_>,
         drift: &ApproachDrift,
     ) -> (CurrencyValue, CurrencyValue, TransferOffer) {
-        let club = buyer.club;
-        let plan = buyer.plan;
-        let buying_rep_score = buyer.rep_score;
-        let buying_league_reputation = buyer.league_reputation;
-        let avg_ability = buyer.avg_ability;
-        let budget = buyer.budget;
-        let price_level = ctx.price_level;
+        let (asking_price, actual_asking) = Self::asking_prices(target, ctx);
+        let offer = Self::initial_offer(buyer, target, request, ctx, drift, &actual_asking);
+        (asking_price, actual_asking, offer)
+    }
+
+    /// What the seller asks for the asset, and what the same deal costs as a
+    /// rental when the approach is a loan.
+    fn asking_prices(
+        target: &ApproachTarget<'_>,
+        ctx: &ApproachContext<'_>,
+    ) -> (CurrencyValue, CurrencyValue) {
         let player = target.player;
-        let selling_club = target.selling_club;
-        let selling_rep_score = target.selling_rep_score;
-        let player_id = player.id;
-        let is_rival = target.is_rival;
-        let monitoring = target.monitoring;
-        let scouting_report = target.scouting_report;
-        let buy_country = ctx.buy_country;
-        let sell_country = ctx.sell_country;
-        let date = ctx.date;
-        let approach = &ctx.approach;
-        let is_loan = ctx.is_loan;
-        let has_option_to_buy = ctx.has_option_to_buy;
-
-        let buying_aggressiveness =
-            BuyingAggressiveness::from_rep(buying_rep_score, selling_rep_score);
-
-        let allocated_for_move = drift.allocated_budget;
-        let strategy = ClubTransferStrategy::from_club_context(
-            club.id,
-            Some(CurrencyValue {
-                amount: allocated_for_move,
-                currency: Currency::Usd,
-            }),
-            avg_ability as u16,
-            vec![player.position()],
-            &club.philosophy,
-            &club.board.vision,
-            buying_aggressiveness,
-        )
-        .with_valuation_reputation(drift.valuation_reputation);
-
         let asking_price = AskingPrice::calculate_asking_price(
             player,
-            sell_country,
-            selling_club,
-            date,
-            price_level,
+            ctx.sell_country,
+            target.selling_club,
+            ctx.date,
+            ctx.price_level,
         );
 
-        let actual_asking = if is_loan {
+        let actual_asking = if ctx.is_loan {
             let salary_proxy = player
                 .contract
                 .as_ref()
                 .map(|c| c.salary as f64 * 0.35)
                 .unwrap_or(0.0);
-            let loan_fee_rate = if has_option_to_buy { 0.04 } else { 0.07 };
+            let loan_fee_rate = if ctx.has_option_to_buy { 0.04 } else { 0.07 };
             CurrencyValue {
                 amount: FormattingUtils::round_fee(
                     (asking_price.amount * loan_fee_rate).max(salary_proxy),
@@ -321,6 +293,54 @@ impl ApproachBuilder {
         } else {
             asking_price.clone()
         };
+
+        (asking_price, actual_asking)
+    }
+
+    /// The strategy the club prices the opening offer with, read against the
+    /// money this particular move was allocated.
+    fn buying_strategy(
+        buyer: &ApproachBuyer<'_>,
+        target: &ApproachTarget<'_>,
+        drift: &ApproachDrift,
+    ) -> ClubTransferStrategy {
+        let club = buyer.club;
+        let buying_aggressiveness =
+            BuyingAggressiveness::from_rep(buyer.rep_score, target.selling_rep_score);
+        ClubTransferStrategy::from_club_context(
+            club.id,
+            Some(CurrencyValue {
+                amount: drift.allocated_budget,
+                currency: Currency::Usd,
+            }),
+            buyer.avg_ability as u16,
+            vec![target.player.position()],
+            &club.philosophy,
+            &club.board.vision,
+            buying_aggressiveness,
+        )
+        .with_valuation_reputation(drift.valuation_reputation)
+    }
+
+    /// The opening offer, with the scout dossier and the buyer's own depth
+    /// chart folded into the strategy context.
+    fn initial_offer(
+        buyer: &ApproachBuyer<'_>,
+        target: &ApproachTarget<'_>,
+        request: Option<&TransferRequest>,
+        ctx: &ApproachContext<'_>,
+        drift: &ApproachDrift,
+        actual_asking: &CurrencyValue,
+    ) -> TransferOffer {
+        let club = buyer.club;
+        let plan = buyer.plan;
+        let player = target.player;
+        let player_id = player.id;
+        let monitoring = target.monitoring;
+        let scouting_report = target.scouting_report;
+        let date = ctx.date;
+
+        let strategy = Self::buying_strategy(buyer, target, drift);
 
         // Dossier built from the scout context hoisted above
         // — strategy uses assessed potential instead of
@@ -354,16 +374,16 @@ impl ApproachBuilder {
             date,
             request,
             board_dossier: dossier.as_ref(),
-            approach: approach.clone(),
-            buyer_reputation_score: buying_rep_score,
-            seller_reputation_score: selling_rep_score,
-            league_reputation: buying_league_reputation,
-            available_budget: budget,
-            allocated_budget: allocated_for_move,
+            approach: ctx.approach.clone(),
+            buyer_reputation_score: buyer.rep_score,
+            seller_reputation_score: target.selling_rep_score,
+            league_reputation: buyer.league_reputation,
+            available_budget: buyer.budget,
+            allocated_budget: drift.allocated_budget,
             wage_budget_headroom: None,
             buying_club_balance: club.finance.balance.balance,
-            is_january: MarketCadence::is_mid_season_window_for(&buy_country.code, date),
-            price_level,
+            is_january: MarketCadence::is_mid_season_window_for(&ctx.buy_country.code, date),
+            price_level: ctx.price_level,
             shortlist_rank: drift.shortlist_rank,
             competition_count: drift.competition_count,
             scout_assessed_ability,
@@ -373,14 +393,11 @@ impl ApproachBuilder {
             scout_confidence: monitoring
                 .map(|m| m.confidence)
                 .or_else(|| scouting_report.map(|r| r.confidence)),
-            seller_is_rival: is_rival,
+            seller_is_rival: target.is_rival,
             arrival_status,
         };
 
-        let offer =
-            strategy.calculate_initial_offer_with_context(player, &actual_asking, &strategy_ctx);
-
-        (asking_price, actual_asking, offer)
+        strategy.calculate_initial_offer_with_context(player, actual_asking, &strategy_ctx)
     }
 
     /// What this deal is worth to THIS buyer, for the purpose the board
@@ -398,7 +415,6 @@ impl ApproachBuilder {
     /// Loans are left alone: a loan fee is a rental, not an asset purchase,
     /// and the upgrade model prices assets.
     #[allow(clippy::too_many_arguments)]
-    #[expect(clippy::too_many_lines)]
     fn price_to_buyer(
         buyer: &ApproachBuyer<'_>,
         target: &ApproachTarget<'_>,
@@ -408,188 +424,217 @@ impl ApproachBuilder {
         actual_asking: &CurrencyValue,
         offer: &mut TransferOffer,
     ) -> (u32, Option<MandatedPrice>, BriefTier) {
-        let club = buyer.club;
-        let plan = buyer.plan;
-        let buying_rep_score = buyer.rep_score;
-        let buying_league_reputation = buyer.league_reputation;
-        let player = target.player;
-        let monitoring = target.monitoring;
-        let scouting_report = target.scouting_report;
-        let buy_country = ctx.buy_country;
-        let date = ctx.date;
-        let is_loan = ctx.is_loan;
-        let allocated_for_move = drift.allocated_budget;
+        let offered_annual_wage = Self::offered_annual_wage(buyer, target, ctx, offer);
+        let tier = request.map(|r| r.tier).unwrap_or(BriefTier::B);
+        let priced = Self::mandated_price(
+            buyer,
+            target,
+            request,
+            ctx,
+            drift,
+            offered_annual_wage,
+            tier,
+        );
+        Self::apply_opening_ratio(ctx, drift, actual_asking, priced.as_ref(), tier, offer);
+        (offered_annual_wage, priced, tier)
+    }
 
-        // ── What this deal is worth to THIS buyer ───────────
-        //
-        // The strategy above prices the offer off the asking
-        // price and the budget; it has no way to say that the
-        // same player is worth three times as much to a club
-        // sitting on years of income as to a break-even one, and
-        // that asymmetry is the whole reason a market has
-        // ladders. `UpgradeMath` supplies the buyer's own
-        // ceiling — the fee at which the deal stops being worth
-        // doing — and the tier supplies how boldly it opens.
-        //
-        // Loans are left alone: a loan fee is a rental, not an
-        // asset purchase, and the upgrade model prices assets.
-        //
-        // The wage is priced first because the deal valuation
-        // needs it: a fee is only half of what the buyer pays.
-        // It reflects the ROLE the buyer signs the player into —
-        // the same `ContractValuation` the player's personal-terms
-        // reservation uses, so offer and demand share one wage
-        // curve. The plain market wage (no squad-status premium)
-        // sat structurally below a KeyPlayer/FirstTeamRegular
-        // demand (market × 1.45 / 1.15), so personal terms opened
-        // −18 to −5 and seldom converged. His current standing is
-        // the best proxy for the role a suitor is buying — it
-        // mirrors the reservation side's assumed status.
-        //
-        // The package the buyer built already carries this
-        // figure (`PersonalTermsPackager` prices the same
-        // curve for the same promise), and it is the one the
-        // contract is installed on — so take it when it is
-        // there rather than computing a second number that
-        // can differ from the one he says yes to.
-        let offered_annual_wage = offer
+    /// The wage the buyer puts in the offer. It reflects the ROLE the buyer
+    /// signs the player into — the same `ContractValuation` the player's
+    /// personal-terms reservation uses, so offer and demand share one wage
+    /// curve. The plain market wage (no squad-status premium) sat structurally
+    /// below a KeyPlayer/FirstTeamRegular demand (market × 1.45 / 1.15), so
+    /// personal terms opened −18 to −5 and seldom converged. His current
+    /// standing is the best proxy for the role a suitor is buying — it mirrors
+    /// the reservation side's assumed status.
+    ///
+    /// The package the buyer built already carries this figure
+    /// (`PersonalTermsPackager` prices the same curve for the same promise),
+    /// and it is the one the contract is installed on — so take it when it is
+    /// there rather than computing a second number that can differ from the
+    /// one he says yes to.
+    fn offered_annual_wage(
+        buyer: &ApproachBuyer<'_>,
+        target: &ApproachTarget<'_>,
+        ctx: &ApproachContext<'_>,
+        offer: &TransferOffer,
+    ) -> u32 {
+        offer
             .personal_terms
             .as_ref()
             .and_then(|t| t.annual_wage)
             .filter(|w| *w > 0)
             .unwrap_or_else(|| {
                 BuyerLevelWage::evaluate(
-                    player,
-                    player.age(date),
-                    buying_rep_score,
-                    buying_league_reputation,
+                    target.player,
+                    target.player.age(ctx.date),
+                    buyer.rep_score,
+                    buyer.league_reputation,
                     offer
                         .personal_terms
                         .as_ref()
                         .and_then(|t| t.squad_status_promise),
                 )
-            });
-
-        let tier = request.map(|r| r.tier).unwrap_or(BriefTier::B);
-        let priced = if is_loan {
-            None
-        } else {
-            let group = player.position().position_group();
-            let believed_level = monitoring
-                .map(|m| m.current_assessed_ability)
-                .or_else(|| scouting_report.map(|r| r.assessed_ability))
-                .unwrap_or_else(|| PlayerView::position_evaluation_ability(player))
-                as f32;
-            let believed_ceiling = monitoring
-                .map(|m| m.current_assessed_potential)
-                .or_else(|| scouting_report.map(|r| r.assessed_potential))
-                .unwrap_or(believed_level as u8) as f32;
-            // The man he would REPLACE, not the best man in the
-            // group. The brief knows which shirt this search is
-            // for and who wears it; a club buying a second
-            // centre-back measures him against its second
-            // centre-back. Measured against the group's best,
-            // every depth, succession and cover signing read as
-            // a downgrade, was priced at nothing, and never had
-            // its bid improved — the first census showed a
-            // window's worth of ordinary business frozen at its
-            // opening offers because of exactly that.
-            let slot = request.and_then(|r| plan.brief.as_ref()?.slot_for(r.position));
-            let incumbent_level = slot
-                .map(|s| s.incumbent_level as f32)
-                .unwrap_or_else(|| UpgradeMath::incumbent_level(club, group));
-            // What a free body gives in this shirt at this club. The bottom
-            // of every contribution, and the man a bench purpose actually
-            // displaces.
-            let replacement_level =
-                ClubLevelAnchor::for_reputation(buying_rep_score).rotation_floor(group) as f32;
-            // How far the football he has played sits below the football he
-            // is being bought for. A step-up is the one thing no amount of
-            // watching resolves, so it widens the spread the board discounts
-            // and shortens the resale it counts on.
-            let league_gap = ((buying_league_reputation as f32
-                - target.selling_league_reputation as f32)
-                / 10_000.0)
-                .clamp(0.0, 1.0);
-            let confidence = monitoring
-                .map(|m| m.confidence)
-                .or_else(|| scouting_report.map(|r| r.confidence))
-                .unwrap_or(0.0);
-            let purpose = match request {
-                Some(request) => MandatePurpose::from_request(request, slot, date),
-                // Nobody raised a request for him — an unsolicited look, a
-                // broadcast, an opportunity. What the club is offering him
-                // is the only claim about minutes it has made.
-                None => MandatePurpose::from_promise(
-                    &player
-                        .contract
-                        .as_ref()
-                        .map(|c| c.squad_status.clone())
-                        .unwrap_or(PlayerSquadStatus::NotYetSet),
-                    CareerRunway::at(player.age(date)),
-                    ClubLevelAnchor::for_reputation(buying_rep_score)
-                        .is_below_rotation_band(believed_level as u8, group),
-                ),
-            };
-            let mandate = SigningMandate::new(
-                purpose,
-                group,
-                player.age(date),
-                date,
-                club.board.mandate_author(),
-            );
-            let deadline = PlanningCadence::deadline_window(buy_country, date);
-            let envelope = club.board.fee_envelope(
-                &mandate,
-                &TargetBelief {
-                    group,
-                    tier,
-                    believed_level,
-                    incumbent_level,
-                    replacement_level,
-                    believed_ceiling,
-                    league_gap,
-                    confidence,
-                    age: player.age(date),
-                    annual_wage: offered_annual_wage as f64,
-                },
-                &MoneySlack::of(club, date, 0.0, 0.0),
-                allocated_for_move,
-                deadline.days_left_fraction(),
-            );
-            (envelope.walk_away > 0.0).then(|| MandatedPrice {
-                mandate: mandate.with_money(envelope.walk_away, offered_annual_wage as f64),
-                envelope,
-                stretch: club
-                    .board
-                    .stretch(
-                        &request
-                            .map(|r| r.priority.clone())
-                            .unwrap_or(TransferNeedPriority::Optional),
-                    )
-                    .value(),
             })
-        };
+    }
 
-        // Open where the tier and the calendar say, not where
-        // the budget alone does — and never above what the deal
-        // is worth or what the club can fund. A club that opens
-        // at 60 % of the ask for the signing meant to change its
-        // season is not negotiating, it is wasting a window. A
-        // request under negotiation is by definition still
-        // unfilled, so the deadline premium reads the tier alone.
-        if let Some(priced) = priced.as_ref() {
-            let deadline = PlanningCadence::deadline_window(buy_country, date);
+    /// The board's own price for the deal, when it is an asset purchase
+    /// rather than a rental. Loans are left alone: a loan fee is a rental,
+    /// not an asset purchase, and the upgrade model prices assets. `None`
+    /// for a loan, and for a board that would not fund the move at all.
+    fn mandated_price(
+        buyer: &ApproachBuyer<'_>,
+        target: &ApproachTarget<'_>,
+        request: Option<&TransferRequest>,
+        ctx: &ApproachContext<'_>,
+        drift: &ApproachDrift,
+        offered_annual_wage: u32,
+        tier: BriefTier,
+    ) -> Option<MandatedPrice> {
+        if ctx.is_loan {
+            return None;
+        }
+
+        let club = buyer.club;
+        let plan = buyer.plan;
+        let player = target.player;
+        let date = ctx.date;
+        let group = player.position().position_group();
+        let (believed_level, believed_ceiling) =
+            Self::believed_levels(target.monitoring, target.scouting_report, player);
+
+        // The man he would REPLACE, not the best man in the
+        // group. The brief knows which shirt this search is
+        // for and who wears it; a club buying a second
+        // centre-back measures him against its second
+        // centre-back. Measured against the group's best,
+        // every depth, succession and cover signing read as
+        // a downgrade, was priced at nothing, and never had
+        // its bid improved — the first census showed a
+        // window's worth of ordinary business frozen at its
+        // opening offers because of exactly that.
+        let slot = request.and_then(|r| plan.brief.as_ref()?.slot_for(r.position));
+        let incumbent_level = slot
+            .map(|s| s.incumbent_level as f32)
+            .unwrap_or_else(|| UpgradeMath::incumbent_level(club, group));
+        // What a free body gives in this shirt at this club. The bottom
+        // of every contribution, and the man a bench purpose actually
+        // displaces.
+        let replacement_level =
+            ClubLevelAnchor::for_reputation(buyer.rep_score).rotation_floor(group) as f32;
+        // How far the football he has played sits below the football he
+        // is being bought for. A step-up is the one thing no amount of
+        // watching resolves, so it widens the spread the board discounts
+        // and shortens the resale it counts on.
+        let league_gap =
+            ((buyer.league_reputation as f32 - target.selling_league_reputation as f32) / 10_000.0)
+                .clamp(0.0, 1.0);
+        let confidence = target
+            .monitoring
+            .map(|m| m.confidence)
+            .or_else(|| target.scouting_report.map(|r| r.confidence))
+            .unwrap_or(0.0);
+        let purpose = match request {
+            Some(request) => MandatePurpose::from_request(request, slot, date),
+            // Nobody raised a request for him — an unsolicited look, a
+            // broadcast, an opportunity. What the club is offering him
+            // is the only claim about minutes it has made.
+            None => MandatePurpose::from_promise(
+                &player
+                    .contract
+                    .as_ref()
+                    .map(|c| c.squad_status.clone())
+                    .unwrap_or(PlayerSquadStatus::NotYetSet),
+                CareerRunway::at(player.age(date)),
+                ClubLevelAnchor::for_reputation(buyer.rep_score)
+                    .is_below_rotation_band(believed_level as u8, group),
+            ),
+        };
+        let mandate = SigningMandate::new(
+            purpose,
+            group,
+            player.age(date),
+            date,
+            club.board.mandate_author(),
+        );
+        let deadline = PlanningCadence::deadline_window(ctx.buy_country, date);
+        let envelope = club.board.fee_envelope(
+            &mandate,
+            &TargetBelief {
+                group,
+                tier,
+                believed_level,
+                incumbent_level,
+                replacement_level,
+                believed_ceiling,
+                league_gap,
+                confidence,
+                age: player.age(date),
+                annual_wage: offered_annual_wage as f64,
+            },
+            &MoneySlack::of(club, date, 0.0, 0.0),
+            drift.allocated_budget,
+            deadline.days_left_fraction(),
+        );
+        (envelope.walk_away > 0.0).then(|| MandatedPrice {
+            mandate: mandate.with_money(envelope.walk_away, offered_annual_wage as f64),
+            envelope,
+            stretch: club
+                .board
+                .stretch(
+                    &request
+                        .map(|r| r.priority.clone())
+                        .unwrap_or(TransferNeedPriority::Optional),
+                )
+                .value(),
+        })
+    }
+
+    /// The scout's believed current level and ceiling, falling back to the
+    /// club's own positional read when nobody has watched him.
+    fn believed_levels(
+        monitoring: Option<&ScoutPlayerMonitoring>,
+        scouting_report: Option<&DetailedScoutingReport>,
+        player: &Player,
+    ) -> (f32, f32) {
+        let level = monitoring
+            .map(|m| m.current_assessed_ability)
+            .or_else(|| scouting_report.map(|r| r.assessed_ability))
+            .unwrap_or_else(|| PlayerView::position_evaluation_ability(player))
+            as f32;
+        let ceiling = monitoring
+            .map(|m| m.current_assessed_potential)
+            .or_else(|| scouting_report.map(|r| r.assessed_potential))
+            .unwrap_or(level as u8) as f32;
+        (level, ceiling)
+    }
+
+    /// Open where the tier and the calendar say, not where the budget alone
+    /// does — and never above what the deal is worth or what the club can
+    /// fund. A club that opens at 60 % of the ask for the signing meant to
+    /// change its season is not negotiating, it is wasting a window. A
+    /// request under negotiation is by definition still unfilled, so the
+    /// deadline premium reads the tier alone.
+    fn apply_opening_ratio(
+        ctx: &ApproachContext<'_>,
+        drift: &ApproachDrift,
+        actual_asking: &CurrencyValue,
+        priced: Option<&MandatedPrice>,
+        tier: BriefTier,
+        offer: &mut TransferOffer,
+    ) {
+        if let Some(priced) = priced {
+            let deadline = PlanningCadence::deadline_window(ctx.buy_country, ctx.date);
             let open_ratio = UpgradeMath::open_ratio(tier, deadline.days_left_fraction());
             let premium = deadline.premium_for(tier, true);
             let opening = actual_asking.amount * (open_ratio + premium);
-            let capped = opening.min(priced.envelope.open).min(allocated_for_move);
+            let capped = opening
+                .min(priced.envelope.open)
+                .min(drift.allocated_budget);
             if capped > offer.base_fee.amount {
                 offer.base_fee.amount = FormattingUtils::round_fee(capped);
             }
         }
-
-        (offered_annual_wage, priced, tier)
     }
 
     /// The clauses, the negotiator, the reason, and the last plausibility
@@ -612,71 +657,36 @@ impl ApproachBuilder {
         let club = buyer.club;
         let team = buyer.team;
         let plan = buyer.plan;
-        let buying_rep_score = buyer.rep_score;
         let buying_league_reputation = buyer.league_reputation;
         let player = target.player;
         let selling_club = target.selling_club;
         let selling_club_id = target.selling_club_id;
-        let selling_rep_score = target.selling_rep_score;
         let selling_league_reputation = target.selling_league_reputation;
         let player_id = player.id;
         let is_rival = target.is_rival;
-        let sell_country = ctx.sell_country;
-        let date = ctx.date;
         let is_loan = ctx.is_loan;
-        let has_option_to_buy = ctx.has_option_to_buy;
         let is_prospect_purchase = ctx.is_prospect_purchase;
+        let has_option_to_buy = ctx.has_option_to_buy;
 
-        OfferClauses::attach_prospect_sell_on(
-            &mut offer,
-            is_prospect_purchase,
-            selling_rep_score,
-            buying_rep_score,
-        );
-
-        OfferClauses::attach_loan_duration(&mut offer, is_loan);
-        OfferClauses::attach_loan_option(&mut offer, has_option_to_buy, asking_price);
-        OfferClauses::attach_loan_appearance_fee(
-            &mut offer,
-            is_loan && drift.loan_appearance_fee,
-            ClubView::get_club_reputation_level(sell_country, selling_club_id),
-        );
+        Self::attach_clauses(&mut offer, buyer, target, ctx, drift, asking_price);
 
         // Resolve negotiator staff and build reason
         let negotiator_staff_id = team.staffs.find_negotiator().map(|s| s.id);
-
-        let scout_report = plan
-            .scouting_reports
-            .iter()
-            .find(|r| r.player_id == player_id);
-
-        let need_and_scout = TransferReasonBuilder::build_transfer_reason(request, scout_report);
-        let reason = if drift.generic_reason_fallback && need_and_scout.is_empty() {
-            if is_loan {
-                TransferReason::key("signing_reason_loan")
-            } else {
-                TransferReason::key("signing_reason_transfer")
-            }
-        } else {
-            need_and_scout
-        };
+        let reason = Self::transfer_reason(
+            plan,
+            request,
+            player_id,
+            is_loan,
+            drift.generic_reason_fallback,
+        );
 
         // Final plausibility check immediately before creating
         // the negotiation action. Rejected candidates are
         // marked unavailable here and a synthetic listing is
         // never created downstream — see Pass 2 for the
         // matching skip.
-        if let Some(estimated_fee) = drift.final_gate_fee {
-            let Some(summary) = PlayerSummaryBuilder::one(sell_country, selling_club, player, date)
-            else {
-                return ApproachOutcome::Refused;
-            };
-            let terms = MoveTerms::for_player(player, club, date, is_loan, true, estimated_fee);
-            if !TransferMovePlausibility::read(buyer.suitor, &summary, terms, ctx.market_map)
-                .reaches(PursuitAction::Negotiate.needs())
-            {
-                return ApproachOutcome::Refused;
-            }
+        if !Self::passes_final_gate(buyer, target, ctx, drift) {
+            return ApproachOutcome::Refused;
         }
 
         ApproachOutcome::Approach(Box::new(NegotiationAction {
@@ -704,7 +714,7 @@ impl ApproachBuilder {
             seller_book_floor: selling_club
                 .board
                 .book_floor(
-                    player.book_value(date),
+                    player.book_value(ctx.date),
                     &LedgerPressure::of(&LedgerContext::of(selling_club)),
                 )
                 .min(
@@ -720,6 +730,85 @@ impl ApproachBuilder {
             is_rival,
             seller_asking: actual_asking.clone(),
         }))
+    }
+
+    /// Every clause this approach adds to the headline fee.
+    fn attach_clauses(
+        offer: &mut TransferOffer,
+        buyer: &ApproachBuyer<'_>,
+        target: &ApproachTarget<'_>,
+        ctx: &ApproachContext<'_>,
+        drift: &ApproachDrift,
+        asking_price: &CurrencyValue,
+    ) {
+        OfferClauses::attach_prospect_sell_on(
+            offer,
+            ctx.is_prospect_purchase,
+            target.selling_rep_score,
+            buyer.rep_score,
+        );
+        OfferClauses::attach_loan_duration(offer, ctx.is_loan);
+        OfferClauses::attach_loan_option(offer, ctx.has_option_to_buy, asking_price);
+        OfferClauses::attach_loan_appearance_fee(
+            offer,
+            ctx.is_loan && drift.loan_appearance_fee,
+            ClubView::get_club_reputation_level(ctx.sell_country, target.selling_club_id),
+        );
+    }
+
+    /// The motive the negotiation carries: the request's need, the scout's
+    /// note, or — cross-border only — a generic signing label.
+    fn transfer_reason(
+        plan: &ClubTransferPlan,
+        request: Option<&TransferRequest>,
+        player_id: u32,
+        is_loan: bool,
+        generic_reason_fallback: bool,
+    ) -> TransferReason {
+        let scout_report = plan
+            .scouting_reports
+            .iter()
+            .find(|r| r.player_id == player_id);
+        let need_and_scout = TransferReasonBuilder::build_transfer_reason(request, scout_report);
+        if generic_reason_fallback && need_and_scout.is_empty() {
+            if is_loan {
+                TransferReason::key("signing_reason_loan")
+            } else {
+                TransferReason::key("signing_reason_transfer")
+            }
+        } else {
+            need_and_scout
+        }
+    }
+
+    /// The staged model's last word on whether this move can be made at all.
+    fn passes_final_gate(
+        buyer: &ApproachBuyer<'_>,
+        target: &ApproachTarget<'_>,
+        ctx: &ApproachContext<'_>,
+        drift: &ApproachDrift,
+    ) -> bool {
+        let Some(estimated_fee) = drift.final_gate_fee else {
+            return true;
+        };
+        let Some(summary) = PlayerSummaryBuilder::one(
+            ctx.sell_country,
+            target.selling_club,
+            target.player,
+            ctx.date,
+        ) else {
+            return false;
+        };
+        let terms = MoveTerms::for_player(
+            target.player,
+            buyer.club,
+            ctx.date,
+            ctx.is_loan,
+            true,
+            estimated_fee,
+        );
+        TransferMovePlausibility::read(buyer.suitor, &summary, terms, ctx.market_map)
+            .reaches(PursuitAction::Negotiate.needs())
     }
 }
 
@@ -1015,7 +1104,6 @@ impl ApproachPass {
     /// table. `months_remaining` stays neutral: it only widens the
     /// acceptable band, never `expected_wage`, and the leverage that
     /// matters now lives in the appraisal's money weight.
-    #[expect(clippy::too_many_lines)]
     fn determine_transfer_approach(
         rep_level: &ReputationLevel,
         budget: f64,
@@ -1029,23 +1117,69 @@ impl ApproachPass {
         philosophy: &ClubPhilosophy,
         prospect: &ProspectSigningContext,
     ) -> TransferApproach {
-        let is_january = mid_season_window;
+        if let Some(approach) =
+            Self::philosophy_approach(philosophy, player_age, budget, estimated_fee)
+        {
+            return approach;
+        }
 
-        let age = player_age;
+        if let Some(req) = request
+            && let Some(approach) = Self::requested_approach(
+                req,
+                rep_level,
+                philosophy,
+                budget,
+                estimated_fee,
+                buying_club_balance,
+                player_age,
+                prospect,
+            )
+        {
+            return approach;
+        }
 
-        // Philosophy-based overrides
+        let is_critical = request
+            .map(|r| r.priority == TransferNeedPriority::Critical)
+            .unwrap_or(false);
+
+        if let Some(approach) = Self::financing_approach(
+            rep_level,
+            budget,
+            estimated_fee,
+            mid_season_window,
+            is_critical,
+            buying_club_balance,
+            philosophy,
+        ) {
+            return approach;
+        }
+
+        Self::tier_approach(
+            rep_level,
+            Self::affordability(budget, estimated_fee),
+            estimated_fee,
+        )
+    }
+
+    /// The philosophy's own standing preference, where it has one strong
+    /// enough to settle the question before money or the brief are read.
+    fn philosophy_approach(
+        philosophy: &ClubPhilosophy,
+        age: u8,
+        budget: f64,
+        estimated_fee: f64,
+    ) -> Option<TransferApproach> {
         match philosophy {
             ClubPhilosophy::DevelopAndSell => {
                 // Develop-and-sell clubs buy young assets and avoid expensive
                 // older purchases. Loans are fallback cover, not the default
                 // strategy for prospects.
-                if age > 28 {
-                    return TransferApproach::Loan;
-                }
+                (age > 28).then_some(TransferApproach::Loan)
             }
             ClubPhilosophy::SignToCompete => {
                 // Prefer permanent transfers even at lower affordability
                 // (handled below in affordability section with relaxed thresholds)
+                None
             }
             ClubPhilosophy::LoanFocused => {
                 // Always prefer loan unless fee < 50k
@@ -1054,69 +1188,83 @@ impl ApproachPass {
                 } else {
                     10.0
                 };
-                if estimated_fee >= 50_000.0 || affordability < 0.8 {
-                    return TransferApproach::Loan;
-                }
+                (estimated_fee >= 50_000.0 || affordability < 0.8).then_some(TransferApproach::Loan)
             }
             ClubPhilosophy::Balanced => {
                 // No override — use existing logic
+                None
             }
         }
+    }
 
-        // Tier-driven approaches. The brief already decided how
-        // transformative this signing is meant to be, and that decides
-        // whether it is bought or borrowed: a club does not loan the man it
-        // has built its window around, and it does not spend a fee on the
-        // fourth centre-back when the loan market is open. Only cover
-        // switches — the tiers that buy fall through to the affordability
-        // and reason logic below exactly as before.
-        if let Some(req) = request
-            && req.tier.prefers_loan()
-            && !matches!(req.reason, TransferNeedReason::FormationGap)
+    /// The decision the brief's tier and the request's reason already imply.
+    ///
+    /// The brief already decided how transformative this signing is meant to
+    /// be, and that decides whether it is bought or borrowed: a club does not
+    /// loan the man it has built its window around, and it does not spend a
+    /// fee on the fourth centre-back when the loan market is open. Only cover
+    /// switches — the tiers that buy fall through to the affordability and
+    /// reason logic below exactly as before.
+    fn requested_approach(
+        request: &TransferRequest,
+        rep_level: &ReputationLevel,
+        philosophy: &ClubPhilosophy,
+        budget: f64,
+        estimated_fee: f64,
+        buying_club_balance: i64,
+        age: u8,
+        prospect: &ProspectSigningContext,
+    ) -> Option<TransferApproach> {
+        if request.tier.prefers_loan()
+            && !matches!(request.reason, TransferNeedReason::FormationGap)
         {
-            return TransferApproach::Loan;
+            return Some(TransferApproach::Loan);
         }
 
-        // Reason-driven approaches
-        if let Some(req) = request {
-            match req.reason {
-                TransferNeedReason::DevelopmentSigning => {
-                    // Big/wealthy clubs acquire the prospect outright and
-                    // develop them via loans; smaller or financially
-                    // stressed clubs keep the original borrow behaviour.
-                    return if Self::prefers_prospect_purchase(
-                        rep_level,
-                        philosophy,
-                        budget,
-                        estimated_fee,
-                        buying_club_balance,
-                        age,
-                        prospect,
-                    ) {
-                        TransferApproach::PermanentTransfer
-                    } else {
-                        TransferApproach::Loan
-                    };
-                }
-                TransferNeedReason::LoanToFillSquad
-                | TransferNeedReason::InjuryCoverLoan
-                | TransferNeedReason::OpportunisticLoanUpgrade
-                | TransferNeedReason::SquadPadding => {
-                    return TransferApproach::Loan;
-                }
-                TransferNeedReason::ExperiencedHead | TransferNeedReason::CheapReinforcement
-                    // Prefer loan, but allow cheap buy if very affordable
-                    if (estimated_fee > 50_000.0 || buying_club_balance < 0) => {
-                        return TransferApproach::Loan;
-                    }
-                _ => {}
+        match request.reason {
+            TransferNeedReason::DevelopmentSigning => {
+                // Big/wealthy clubs acquire the prospect outright and
+                // develop them via loans; smaller or financially
+                // stressed clubs keep the original borrow behaviour.
+                Some(if Self::prefers_prospect_purchase(
+                    rep_level,
+                    philosophy,
+                    budget,
+                    estimated_fee,
+                    buying_club_balance,
+                    age,
+                    prospect,
+                ) {
+                    TransferApproach::PermanentTransfer
+                } else {
+                    TransferApproach::Loan
+                })
             }
+            TransferNeedReason::LoanToFillSquad
+            | TransferNeedReason::InjuryCoverLoan
+            | TransferNeedReason::OpportunisticLoanUpgrade
+            | TransferNeedReason::SquadPadding => Some(TransferApproach::Loan),
+            TransferNeedReason::ExperiencedHead | TransferNeedReason::CheapReinforcement
+                // Prefer loan, but allow cheap buy if very affordable
+                if (estimated_fee > 50_000.0 || buying_club_balance < 0) =>
+            {
+                Some(TransferApproach::Loan)
+            }
+            _ => None,
         }
+    }
 
-        let is_critical = request
-            .map(|r| r.priority == TransferNeedPriority::Critical)
-            .unwrap_or(false);
-
+    /// Window, balance and affordability rules: the pressures that can force
+    /// a loan regardless of what the brief would prefer.
+    fn financing_approach(
+        rep_level: &ReputationLevel,
+        budget: f64,
+        estimated_fee: f64,
+        is_january: bool,
+        is_critical: bool,
+        buying_club_balance: i64,
+        philosophy: &ClubPhilosophy,
+    ) -> Option<TransferApproach> {
         // January + Regional/Local/Amateur → always Loan
         if is_january
             && matches!(
@@ -1124,35 +1272,49 @@ impl ApproachPass {
                 ReputationLevel::Regional | ReputationLevel::Local | ReputationLevel::Amateur
             )
         {
-            return TransferApproach::Loan;
+            return Some(TransferApproach::Loan);
         }
 
         // January + National + non-Critical request → Loan
         if is_january && *rep_level == ReputationLevel::National && !is_critical {
-            return TransferApproach::Loan;
+            return Some(TransferApproach::Loan);
         }
 
         // Negative balance + non-Elite → Loan
         if buying_club_balance < 0 && *rep_level != ReputationLevel::Elite {
-            return TransferApproach::Loan;
+            return Some(TransferApproach::Loan);
         }
-
-        // Can we even afford to buy?
-        let affordability = if estimated_fee > 0.0 {
-            budget / estimated_fee
-        } else {
-            10.0 // Free agent, always affordable
-        };
 
         // SignToCompete: accept higher fees, lower affordability thresholds
         if *philosophy == ClubPhilosophy::SignToCompete {
-            return if affordability >= 0.75 || (is_critical && affordability >= 0.55) {
-                TransferApproach::PermanentTransfer
-            } else {
-                TransferApproach::LoanWithOption
-            };
+            let affordability = Self::affordability(budget, estimated_fee);
+            return Some(
+                if affordability >= 0.75 || (is_critical && affordability >= 0.55) {
+                    TransferApproach::PermanentTransfer
+                } else {
+                    TransferApproach::LoanWithOption
+                },
+            );
         }
 
+        None
+    }
+
+    /// Can we even afford to buy? Free agents are always affordable.
+    fn affordability(budget: f64, estimated_fee: f64) -> f64 {
+        if estimated_fee > 0.0 {
+            budget / estimated_fee
+        } else {
+            10.0
+        }
+    }
+
+    /// What a club of this standing does with the affordability it has.
+    fn tier_approach(
+        rep_level: &ReputationLevel,
+        affordability: f64,
+        estimated_fee: f64,
+    ) -> TransferApproach {
         match rep_level {
             ReputationLevel::Elite => {
                 if affordability >= 0.3 {
@@ -1562,12 +1724,25 @@ impl ApproachPass {
         // already flipped Rejected (and resolved) at completion time, so
         // the Pending/Countered filter naturally selects only the
         // cross-country stragglers.
+        Self::resolve_losing_bidders(data, &signed);
+
         // A country's own market is the only thing this touches, so the
         // world fans out. It matters more than the size of the loop
         // suggests: the sweep is called once per country that placed
         // somebody this tick, and a serial walk of every OTHER country
         // inside each of those calls is the shape that made the Phase-C
         // drain quadratic in the number of countries doing business.
+        data.continents
+            .par_iter_mut()
+            .flat_map(|c| c.countries.par_iter_mut())
+            .for_each(|country| {
+                Self::clear_country_interest(country, &signed, &listing_terminal);
+            });
+    }
+
+    /// Every live negotiation for a just-signed player is lost, and resolved
+    /// as such before the shortlist rows are wiped.
+    fn resolve_losing_bidders(data: &mut SimulatorData, signed: &FxHashSet<u32>) {
         data.continents
             .par_iter_mut()
             .flat_map(|continent| continent.countries.par_iter_mut())
@@ -1589,118 +1764,133 @@ impl ApproachPass {
                     Self::on_negotiation_resolved(country, club_id, player_id, false);
                 }
             });
+    }
 
-        data.continents
+    /// One country's club plans, listings and negotiations, swept for the
+    /// signed players.
+    fn clear_country_interest(
+        country: &mut Country,
+        signed: &FxHashSet<u32>,
+        listing_terminal: &TransferListingStatus,
+    ) {
+        Self::clear_club_interest(country, signed);
+        Self::close_signed_listings(country, signed, listing_terminal);
+        Self::reject_stale_negotiations(country, signed);
+    }
+
+    /// Per-club plan and roster cleanup for the signed players.
+    fn clear_club_interest(country: &mut Country, signed: &FxHashSet<u32>) {
+        // Per-club sweep, parallel WITHIN the country too: every
+        // retain below touches only its own club's plan/rosters,
+        // and with one country task per country the biggest
+        // country's serial club walk was the drain phase's
+        // pacing straggler. `with_min_len` keeps small countries
+        // from shattering into per-club micro-tasks — the sweep
+        // per club is tiny and the fan-out churn would otherwise
+        // outweigh it.
+        country
+            .clubs
             .par_iter_mut()
-            .flat_map(|c| c.countries.par_iter_mut())
-            .for_each(|country| {
-                // Per-club sweep, parallel WITHIN the country too: every
-                // retain below touches only its own club's plan/rosters,
-                // and with one country task per country the biggest
-                // country's serial club walk was the drain phase's
-                // pacing straggler. `with_min_len` keeps small countries
-                // from shattering into per-club micro-tasks — the sweep
-                // per club is tiny and the fan-out churn would otherwise
-                // outweigh it.
-                country
-                    .clubs
-                    .par_iter_mut()
-                    .with_min_len(8)
-                    .for_each(|club| {
-                        // Signed players this club now rosters keep their
-                        // loan-out candidates — the development pathway
-                        // stages them on the buyer in the same tick this
-                        // batch sweep runs. Every other club's stale
-                        // candidates are still dropped. One roster walk with
-                        // set probes — the signed-set side of the check used
-                        // to re-walk the roster once per signed id.
-                        let owned_signed: Vec<u32> = club
-                            .teams
-                            .teams
-                            .iter()
-                            .flat_map(|t| t.players.players.iter())
-                            .map(|p| p.id)
-                            .filter(|id| signed.contains(id))
-                            .collect();
-                        let plan = &mut club.transfer_plan;
-                        plan.forget_players(&signed);
-                        plan.loan_out_candidates.retain(|c| {
-                            !signed.contains(&c.player_id) || owned_signed.contains(&c.player_id)
-                        });
-
-                        // Team-level selling lists mirror market listings
-                        // (stalemate fallback, AI transfer-list manager). A
-                        // player who moved or was released must drop off them
-                        // too, or the team-transfers page keeps rendering a
-                        // stale asking-price row for him.
-                        for team in &mut club.teams.teams {
-                            team.transfer_list.remove_all(&signed);
-                        }
-
-                        // Targeted Wnt reconciliation, folded into the same
-                        // club walk. The retains above only removed rows for
-                        // `signed` ids, so only THEIR tracked status can have
-                        // changed — and by construction none of them is still
-                        // tracked at any club. Stripping their Wnt directly
-                        // replaces the full per-country `sync_wanted_status`
-                        // rebuild that used to run here (the drain phase's
-                        // biggest straggler); every other kind of Wnt drift
-                        // (window resets, cleared interest) keeps being
-                        // reconciled by the daily per-country
-                        // `sync_wanted_status` call in the pipeline.
-                        for team in &mut club.teams.teams {
-                            for player in team.players.players.iter_mut() {
-                                if signed.contains(&player.id)
-                                    && player.statuses.has(PlayerStatusType::Wnt)
-                                {
-                                    player.statuses.remove(PlayerStatusType::Wnt);
-                                }
-                            }
-                        }
-                    });
-
-                // A signed player's open listings close — EXCEPT a Loan
-                // listing owned by the club that now rosters him: that's
-                // the same-window development-loan listing his new club
-                // just staged (young free signings stage during Phase A,
-                // before this sweep runs), and completing it here killed
-                // the dev loan before any borrower could see it.
-                let own_loan_listing_pairs: Vec<(u32, u32)> = country
-                    .clubs
+            .with_min_len(8)
+            .for_each(|club| {
+                // Signed players this club now rosters keep their
+                // loan-out candidates — the development pathway
+                // stages them on the buyer in the same tick this
+                // batch sweep runs. Every other club's stale
+                // candidates are still dropped. One roster walk with
+                // set probes — the signed-set side of the check used
+                // to re-walk the roster once per signed id.
+                let owned_signed: Vec<u32> = club
+                    .teams
+                    .teams
                     .iter()
-                    .flat_map(|c| {
-                        c.teams
-                            .teams
-                            .iter()
-                            .flat_map(|t| t.players.players.iter())
-                            .map(move |p| (p.id, c.id))
-                    })
-                    .filter(|(pid, _)| signed.contains(pid))
+                    .flat_map(|t| t.players.players.iter())
+                    .map(|p| p.id)
+                    .filter(|id| signed.contains(id))
                     .collect();
-                for listing in country.transfer_market.listings.iter_mut() {
-                    if signed.contains(&listing.player_id)
-                        && listing.status != TransferListingStatus::Completed
-                        && listing.status != TransferListingStatus::Cancelled
-                    {
-                        let is_new_owners_loan_listing = listing.listing_type
-                            == TransferListingType::Loan
-                            && own_loan_listing_pairs
-                                .contains(&(listing.player_id, listing.club_id));
-                        if !is_new_owners_loan_listing {
-                            listing.status = listing_terminal.clone();
-                        }
-                    }
+                let plan = &mut club.transfer_plan;
+                plan.forget_players(signed);
+                plan.loan_out_candidates.retain(|c| {
+                    !signed.contains(&c.player_id) || owned_signed.contains(&c.player_id)
+                });
+
+                // Team-level selling lists mirror market listings
+                // (stalemate fallback, AI transfer-list manager). A
+                // player who moved or was released must drop off them
+                // too, or the team-transfers page keeps rendering a
+                // stale asking-price row for him.
+                for team in &mut club.teams.teams {
+                    team.transfer_list.remove_all(signed);
                 }
 
-                for negotiation in country.transfer_market.negotiations.values_mut() {
-                    if signed.contains(&negotiation.player_id)
-                        && (negotiation.status == NegotiationStatus::Pending
-                            || negotiation.status == NegotiationStatus::Countered)
-                    {
-                        negotiation.status = NegotiationStatus::Rejected;
+                // Targeted Wnt reconciliation, folded into the same
+                // club walk. The retains above only removed rows for
+                // `signed` ids, so only THEIR tracked status can have
+                // changed — and by construction none of them is still
+                // tracked at any club. Stripping their Wnt directly
+                // replaces the full per-country `sync_wanted_status`
+                // rebuild that used to run here (the drain phase's
+                // biggest straggler); every other kind of Wnt drift
+                // (window resets, cleared interest) keeps being
+                // reconciled by the daily per-country
+                // `sync_wanted_status` call in the pipeline.
+                for team in &mut club.teams.teams {
+                    for player in team.players.players.iter_mut() {
+                        if signed.contains(&player.id) && player.statuses.has(PlayerStatusType::Wnt)
+                        {
+                            player.statuses.remove(PlayerStatusType::Wnt);
+                        }
                     }
                 }
             });
+    }
+
+    /// A signed player's open listings close — EXCEPT a Loan listing owned by
+    /// the club that now rosters him: that's the same-window
+    /// development-loan listing his new club just staged (young free signings
+    /// stage during Phase A, before this sweep runs), and completing it here
+    /// killed the dev loan before any borrower could see it.
+    fn close_signed_listings(
+        country: &mut Country,
+        signed: &FxHashSet<u32>,
+        listing_terminal: &TransferListingStatus,
+    ) {
+        let own_loan_listing_pairs: Vec<(u32, u32)> = country
+            .clubs
+            .iter()
+            .flat_map(|c| {
+                c.teams
+                    .teams
+                    .iter()
+                    .flat_map(|t| t.players.players.iter())
+                    .map(move |p| (p.id, c.id))
+            })
+            .filter(|(pid, _)| signed.contains(pid))
+            .collect();
+        for listing in country.transfer_market.listings.iter_mut() {
+            if signed.contains(&listing.player_id)
+                && listing.status != TransferListingStatus::Completed
+                && listing.status != TransferListingStatus::Cancelled
+            {
+                let is_new_owners_loan_listing = listing.listing_type == TransferListingType::Loan
+                    && own_loan_listing_pairs.contains(&(listing.player_id, listing.club_id));
+                if !is_new_owners_loan_listing {
+                    listing.status = listing_terminal.clone();
+                }
+            }
+        }
+    }
+
+    /// Negotiations that were still live when the player moved end rejected.
+    fn reject_stale_negotiations(country: &mut Country, signed: &FxHashSet<u32>) {
+        for negotiation in country.transfer_market.negotiations.values_mut() {
+            if signed.contains(&negotiation.player_id)
+                && (negotiation.status == NegotiationStatus::Pending
+                    || negotiation.status == NegotiationStatus::Countered)
+            {
+                negotiation.status = NegotiationStatus::Rejected;
+            }
+        }
     }
 
     /// Reconcile `Wnt` statuses with actual interest. `Wnt` is added during

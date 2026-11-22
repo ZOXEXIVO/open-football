@@ -756,7 +756,6 @@ impl ForeignLoanScan {
     }
 
     /// `None` when this club is not in the cross-border market at all.
-    #[expect(clippy::too_many_lines)]
     fn borrower<'a>(
         country: &'a Country,
         club_idx: usize,
@@ -766,8 +765,6 @@ impl ForeignLoanScan {
         market_map: &'a MarketMap,
         placement_reach: &'a PlacementReachIndex,
     ) -> Option<ForeignBorrower<'a>> {
-        let mid_season_window = board.mid_season_window;
-        let compatriots = &board.compatriots;
         let pending_loans = &load.pending_loans;
         let active_counts = &load.active_counts;
         let club = &country.clubs[club_idx];
@@ -782,44 +779,11 @@ impl ForeignLoanScan {
 
         let team = &club.teams.teams[0];
         let rep_level = team.reputation.level();
-
-        // Elite clubs buy — they don't scan loan markets.
-        // Continental only in January with negative balance.
-        // Local/Amateur don't have the scouting reach for foreign markets.
         // Who runs the ORDINARY foreign loan scan — the request path
-        // plus the proactive pickup, over the whole foreign pool.
-        let ordinary_foreign_scan = match rep_level {
-            ReputationLevel::Elite => false,
-            ReputationLevel::Continental => mid_season_window && club.finance.balance.balance < 0,
-            ReputationLevel::National | ReputationLevel::Regional => true,
-            _ => false, // Local/Amateur
-        };
-        // …and who runs the COMPATRIOT SWEEP instead.
-        //
-        // A compatriot the world has been told would come home is a
-        // different proposition from a foreign loan market. Flamengo
-        // and Palmeiras do not trawl Europe for loanees — and they do
-        // sign the boy their own league produced when his club posts
-        // him. So the sweep opens exactly that door: the proactive
-        // branch alone, over the posted-compatriot slice alone, once
-        // per club per window.
-        //
-        // Narrow on purpose. Flip `should_scan_foreign` country-wide
-        // instead and both branches walk the FULL foreign pool with no
-        // compatriot restriction — one posted English 21-year-old at
-        // Ajax has every Elite English club running the ordinary foreign
-        // scan every pass for as long as he stays posted.
-        let compatriot_sweep = !ordinary_foreign_scan
-            && !MarketSwitches::compatriot_sweep_off()
-            && matches!(
-                rep_level,
-                ReputationLevel::Elite | ReputationLevel::Continental
-            )
-            && plan.compatriot_sweeps_this_window == 0
-            && !compatriots.is_empty();
-        if !ordinary_foreign_scan && !compatriot_sweep {
-            return None;
-        }
+        // plus the proactive pickup, over the whole foreign pool — and
+        // who runs the COMPATRIOT SWEEP instead.
+        let (ordinary_foreign_scan, compatriot_sweep) =
+            Self::scan_modes(club, plan, board, rep_level)?;
         // The slice each branch actually looks at.
         let borrower_league_rep = LoanPipeline::club_league_reputation(country, club);
 
@@ -842,30 +806,13 @@ impl ForeignLoanScan {
         };
 
         // Get scout known regions for this club
-        let scout_regions: Vec<ScoutingRegion> = club
-            .teams
-            .teams
-            .iter()
-            .flat_map(|t| t.staffs.iter())
-            .flat_map(|s| s.staff_attributes.knowledge.known_regions.iter().copied())
-            .collect();
+        let scout_regions = Self::scout_regions(club);
         // …and the COUNTRY axis of the same department, which is the unit
         // market knowledge is measured in. Inverted for the reason the buy
         // side inverts it: a scout knows a handful of countries, so one
         // pass over the department answers every question the scan will
         // ask.
-        let mut scout_countries: Vec<(u32, u8)> = Vec::new();
-        for staff in club.teams.teams.iter().flat_map(|t| t.staffs.staffs.iter()) {
-            for known in &staff.staff_attributes.knowledge.known_countries {
-                match scout_countries
-                    .iter_mut()
-                    .find(|(id, _)| *id == known.country_id)
-                {
-                    Some(entry) => entry.1 = entry.1.max(known.level),
-                    None => scout_countries.push((known.country_id, known.level)),
-                }
-            }
-        }
+        let scout_countries = Self::scout_country_levels(club);
 
         // Check unfulfilled transfer requests. Emergency
         // free-agent depth requests are excluded — they're
@@ -966,6 +913,79 @@ impl ForeignLoanScan {
             date,
             open_requests,
         })
+    }
+
+    /// Which of the two cross-border branches this club runs, if any.
+    ///
+    /// Elite clubs buy — they don't scan loan markets. Continental only in
+    /// January with negative balance. Local/Amateur don't have the scouting
+    /// reach for foreign markets. A compatriot the world has been told
+    /// would come home is a different proposition from a foreign loan
+    /// market: Flamengo and Palmeiras do not trawl Europe for loanees —
+    /// and they do sign the boy their own league produced when his club
+    /// posts him. So the sweep opens exactly that door: the proactive
+    /// branch alone, over the posted-compatriot slice alone, once per club
+    /// per window.
+    ///
+    /// Narrow on purpose. Flip `should_scan_foreign` country-wide instead
+    /// and both branches walk the FULL foreign pool with no compatriot
+    /// restriction — one posted English 21-year-old at Ajax has every Elite
+    /// English club running the ordinary foreign scan every pass for as
+    /// long as he stays posted.
+    fn scan_modes(
+        club: &Club,
+        plan: &ClubTransferPlan,
+        board: &ForeignLoanBoard<'_>,
+        rep_level: ReputationLevel,
+    ) -> Option<(bool, bool)> {
+        let ordinary_foreign_scan = match rep_level {
+            ReputationLevel::Elite => false,
+            ReputationLevel::Continental => {
+                board.mid_season_window && club.finance.balance.balance < 0
+            }
+            ReputationLevel::National | ReputationLevel::Regional => true,
+            _ => false, // Local/Amateur
+        };
+        let compatriot_sweep = !ordinary_foreign_scan
+            && !MarketSwitches::compatriot_sweep_off()
+            && matches!(
+                rep_level,
+                ReputationLevel::Elite | ReputationLevel::Continental
+            )
+            && plan.compatriot_sweeps_this_window == 0
+            && !board.compatriots.is_empty();
+        if !ordinary_foreign_scan && !compatriot_sweep {
+            return None;
+        }
+        Some((ordinary_foreign_scan, compatriot_sweep))
+    }
+
+    /// The regions this club's scouts know.
+    fn scout_regions(club: &Club) -> Vec<ScoutingRegion> {
+        club.teams
+            .teams
+            .iter()
+            .flat_map(|t| t.staffs.iter())
+            .flat_map(|s| s.staff_attributes.knowledge.known_regions.iter().copied())
+            .collect()
+    }
+
+    /// The country axis of the scouts' knowledge, merged to the best level
+    /// per country.
+    fn scout_country_levels(club: &Club) -> Vec<(u32, u8)> {
+        let mut scout_countries: Vec<(u32, u8)> = Vec::new();
+        for staff in club.teams.teams.iter().flat_map(|t| t.staffs.staffs.iter()) {
+            for known in &staff.staff_attributes.knowledge.known_countries {
+                match scout_countries
+                    .iter_mut()
+                    .find(|(id, _)| *id == known.country_id)
+                {
+                    Some(entry) => entry.1 = entry.1.max(known.level),
+                    None => scout_countries.push((known.country_id, known.level)),
+                }
+            }
+        }
+        scout_countries
     }
 
     /// What this club actually wants, as opposed to what is simply available.
@@ -1221,7 +1241,6 @@ impl ForeignLoanScan {
     }
 
     /// The single writer: open a negotiation for every approach the clubs made.
-    #[expect(clippy::too_many_lines)]
     fn commit(country: &mut Country, date: NaiveDate, actions: Vec<ForeignLoanAction>) {
         if actions.is_empty() {
             return;
@@ -1232,140 +1251,181 @@ impl ForeignLoanScan {
 
         // Create listings and negotiations for foreign loan targets
         for action in actions {
-            let asking_price = CurrencyValue {
+            Self::open(country, date, action);
+        }
+    }
+
+    /// One approach: back it with a listing, price the offer, and stamp the
+    /// room with everything the borrower knows about a seller abroad.
+    fn open(country: &mut Country, date: NaiveDate, action: ForeignLoanAction) {
+        // Unsolicited foreign approaches target players their club never
+        // loan-listed: tag the backing listing synthetic so the resolver
+        // withholds the "seller-advertised" acceptance bonus. A genuinely
+        // loan-listed foreign target keeps the seller-advertised origin.
+        let is_unsolicited = !action.player.is_loan_listed;
+        country
+            .transfer_market
+            .add_listing(Self::listing(&action, date, is_unsolicited));
+
+        let buying_rep = ClubView::get_club_reputation(country, action.club_id);
+        // Use a reasonable estimate for selling club rep
+        let selling_rep = (action.player.skill_ability as f32 / 200.0).clamp(0.1, 0.9);
+
+        // A boy going home comes with a buy option. It is how these
+        // deals are actually written — Gerson, Kaio Jorge, Matheus
+        // Pereira all converted — and it is where the ~30 % conversion
+        // band in the census comes from. The option is withheld on an
+        // ordinary cold approach (a club does not price a permanent it
+        // has not asked about); a posted compatriot is not a cold
+        // approach, it is a homecoming his parent advertised.
+        let coming_home = action.player.home_return_wanted
+            && action.player.nationality_country_id != 0
+            && action.player.nationality_country_id == country.id;
+        let offer = Self::offer(country, &action, date, coming_home);
+
+        if let Some(neg_id) = country.transfer_market.start_negotiation(
+            action.player.player_id,
+            action.club_id,
+            offer,
+            date,
+            selling_rep,
+            buying_rep,
+            action.player.age,
+            action.player.determination,
+        ) {
+            Self::stamp(country, neg_id, &action, coming_home, is_unsolicited);
+
+            if let Some(buyer) = country.clubs.iter_mut().find(|c| c.id == action.club_id)
+                && action.from_compatriot_sweep
+            {
+                // One homecoming per window. The sweep is a door
+                // for the boy a league produced, not a licence to
+                // shop abroad.
+                buyer.transfer_plan.compatriot_sweeps_this_window = buyer
+                    .transfer_plan
+                    .compatriot_sweeps_this_window
+                    .saturating_add(1);
+            }
+
+            debug!(
+                "Foreign loan scan: Club {} started foreign loan negotiation for player {} from country {}",
+                action.club_id, action.player.player_id, action.player.country_id
+            );
+        }
+    }
+
+    /// The listing a foreign approach negotiates against.
+    fn listing(
+        action: &ForeignLoanAction,
+        date: NaiveDate,
+        is_unsolicited: bool,
+    ) -> TransferListing {
+        TransferListing::new_with_origin(
+            action.player.player_id,
+            action.player.club_id,
+            0, // Foreign team — no local team_id
+            CurrencyValue {
                 amount: action.offer_amount,
                 currency: Currency::Usd,
-            };
+            },
+            date,
+            TransferListingType::Loan,
+            if is_unsolicited {
+                TransferListingOrigin::SyntheticUnsolicited
+            } else {
+                TransferListingOrigin::LoanOutListed
+            },
+        )
+    }
 
-            // Unsolicited foreign approaches target players their club never
-            // loan-listed: tag the backing listing synthetic so the resolver
-            // withholds the "seller-advertised" acceptance bonus. A genuinely
-            // loan-listed foreign target keeps the seller-advertised origin.
-            let is_unsolicited = !action.player.is_loan_listed;
-            let listing = TransferListing::new_with_origin(
-                action.player.player_id,
-                action.player.club_id,
-                0, // Foreign team — no local team_id
-                asking_price.clone(),
-                date,
-                TransferListingType::Loan,
-                if is_unsolicited {
-                    TransferListingOrigin::SyntheticUnsolicited
-                } else {
-                    TransferListingOrigin::LoanOutListed
-                },
-            );
-            country.transfer_market.add_listing(listing);
-
-            let buying_rep = ClubView::get_club_reputation(country, action.club_id);
-            // Use a reasonable estimate for selling club rep
-            let selling_rep = (action.player.skill_ability as f32 / 200.0).clamp(0.1, 0.9);
-
-            // Same as the domestic loan path — explicit months-side
-            // duration so the market history record matches the actual
-            // loan length. The borrower is in the scanning country.
-            // A boy going home comes with a buy option. It is how these
-            // deals are actually written — Gerson, Kaio Jorge, Matheus
-            // Pereira all converted — and it is where the ~30 % conversion
-            // band in the census comes from. The option is withheld on an
-            // ordinary cold approach (a club does not price a permanent it
-            // has not asked about); a posted compatriot is not a cold
-            // approach, it is a homecoming his parent advertised.
-            let coming_home = action.player.home_return_wanted
-                && action.player.nationality_country_id != 0
-                && action.player.nationality_country_id == country.id;
-            let mut clauses = Vec::new();
-            if coming_home && action.player.estimated_value > 0.0 {
-                clauses.push(TransferClause::LoanOptionToBuy(CurrencyValue {
-                    amount: FormattingUtils::round_fee(
-                        action.player.estimated_value * LoanPipeline::LOAN_OPTION_VALUE_FRACTION,
-                    ),
-                    currency: Currency::Usd,
-                }));
-            }
-            let offer = TransferOffer {
-                base_fee: asking_price,
-                clauses,
-                contract_length_years: None,
-                loan_duration_months: Some(LoanPipeline::loan_duration_to_season_end(
-                    country,
-                    action.club_id,
-                    date,
-                )),
-                personal_terms: Some(PersonalTermsOffer {
-                    // A loan promises a shirt: minutes are what it is
-                    // for (B4 / [`LoanPromise`]). No wage — the borrower
-                    // picks up a share of the deal he already has.
-                    squad_status_promise: LoanPromise::for_loan(action.is_development),
-                    ..PersonalTermsOffer::default()
-                }),
-                offering_club_id: action.club_id,
-                offered_date: date,
-            };
-
-            if let Some(neg_id) = country.transfer_market.start_negotiation(
-                action.player.player_id,
+    /// The loan offer: explicit months-side duration so the market history
+    /// records the actual loan length, an option when he is coming home,
+    /// and the shirt promise the loan exists to buy.
+    fn offer(
+        country: &Country,
+        action: &ForeignLoanAction,
+        date: NaiveDate,
+        coming_home: bool,
+    ) -> TransferOffer {
+        let mut clauses = Vec::new();
+        if coming_home && action.player.estimated_value > 0.0 {
+            clauses.push(TransferClause::LoanOptionToBuy(CurrencyValue {
+                amount: FormattingUtils::round_fee(
+                    action.player.estimated_value * LoanPipeline::LOAN_OPTION_VALUE_FRACTION,
+                ),
+                currency: Currency::Usd,
+            }));
+        }
+        // Same as the domestic loan path — explicit months-side
+        // duration so the market history record matches the actual
+        // loan length. The borrower is in the scanning country.
+        TransferOffer {
+            base_fee: CurrencyValue {
+                amount: action.offer_amount,
+                currency: Currency::Usd,
+            },
+            clauses,
+            contract_length_years: None,
+            loan_duration_months: Some(LoanPipeline::loan_duration_to_season_end(
+                country,
                 action.club_id,
-                offer,
                 date,
-                selling_rep,
-                buying_rep,
-                action.player.age,
-                action.player.determination,
-            ) {
-                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation.is_loan = true;
-                    negotiation.has_option_to_buy = coming_home;
-                    negotiation.is_unsolicited = is_unsolicited;
-                    negotiation.reason = action.reason;
-                    negotiation.selling_country_id = Some(action.player.country_id);
-                    negotiation.selling_continent_id = Some(action.player.continent_id);
-                    negotiation.selling_country_code = action.player.country_code.clone();
-                    negotiation.player_name = action.player.player_name.clone();
-                    negotiation.selling_club_name = action.player.club_name.clone();
-                    // The borrower depth fold can't resolve a foreign
-                    // player in-country — the stamped profile keeps this
-                    // in-flight loan visible to the position cap.
-                    negotiation.loan_target_profile =
-                        Some((action.player.position_group, action.player.skill_ability));
-                    // The player is in another country's borrow by the time
-                    // he is asked, so his side of the appraisal is captured
-                    // here from the market summary — which is exactly what
-                    // this borrower actually knows about him. Without it a
-                    // cross-border loan fell back to the bare prestige wall
-                    // that made going home the least likely destination on
-                    // the board (L7.6).
-                    negotiation.staged_stance = Some(PlayerStanceBuilder::from_summary(
-                        &action.player,
-                        action.player_importance,
-                        action.player.region,
-                    ));
-                    negotiation.staged_sporting_drop = Some(action.sporting_drop);
-                    // The parent's own answer about this destination, and
-                    // the passport the borrower's quota has to count while
-                    // the approach is in flight.
-                    negotiation.staged_loan_verdict = action.loan_verdict;
-                    negotiation.loan_target_country = Some(action.player.nationality_country_id);
-                    negotiation.open_salary_at(action.player.salary);
-                }
+            )),
+            personal_terms: Some(PersonalTermsOffer {
+                // A loan promises a shirt: minutes are what it is
+                // for (B4 / [`LoanPromise`]). No wage — the borrower
+                // picks up a share of the deal he already has.
+                squad_status_promise: LoanPromise::for_loan(action.is_development),
+                ..PersonalTermsOffer::default()
+            }),
+            offering_club_id: action.club_id,
+            offered_date: date,
+        }
+    }
 
-                if let Some(buyer) = country.clubs.iter_mut().find(|c| c.id == action.club_id)
-                    && action.from_compatriot_sweep
-                {
-                    // One homecoming per window. The sweep is a door
-                    // for the boy a league produced, not a licence to
-                    // shop abroad.
-                    buyer.transfer_plan.compatriot_sweeps_this_window = buyer
-                        .transfer_plan
-                        .compatriot_sweeps_this_window
-                        .saturating_add(1);
-                }
-
-                debug!(
-                    "Foreign loan scan: Club {} started foreign loan negotiation for player {} from country {}",
-                    action.club_id, action.player.player_id, action.player.country_id
-                );
-            }
+    /// Stamp the open room with the seller-side facts this country can read
+    /// and a foreign seller cannot.
+    fn stamp(
+        country: &mut Country,
+        neg_id: u32,
+        action: &ForeignLoanAction,
+        coming_home: bool,
+        is_unsolicited: bool,
+    ) {
+        if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+            negotiation.is_loan = true;
+            negotiation.has_option_to_buy = coming_home;
+            negotiation.is_unsolicited = is_unsolicited;
+            negotiation.reason = action.reason.clone();
+            negotiation.selling_country_id = Some(action.player.country_id);
+            negotiation.selling_continent_id = Some(action.player.continent_id);
+            negotiation.selling_country_code = action.player.country_code.clone();
+            negotiation.player_name = action.player.player_name.clone();
+            negotiation.selling_club_name = action.player.club_name.clone();
+            // The borrower depth fold can't resolve a foreign
+            // player in-country — the stamped profile keeps this
+            // in-flight loan visible to the position cap.
+            negotiation.loan_target_profile =
+                Some((action.player.position_group, action.player.skill_ability));
+            // The player is in another country's borrow by the time
+            // he is asked, so his side of the appraisal is captured
+            // here from the market summary — which is exactly what
+            // this borrower actually knows about him. Without it a
+            // cross-border loan fell back to the bare prestige wall
+            // that made going home the least likely destination on
+            // the board (L7.6).
+            negotiation.staged_stance = Some(PlayerStanceBuilder::from_summary(
+                &action.player,
+                action.player_importance,
+                action.player.region,
+            ));
+            negotiation.staged_sporting_drop = Some(action.sporting_drop);
+            // The parent's own answer about this destination, and
+            // the passport the borrower's quota has to count while
+            // the approach is in flight.
+            negotiation.staged_loan_verdict = action.loan_verdict;
+            negotiation.loan_target_country = Some(action.player.nationality_country_id);
+            negotiation.open_salary_at(action.player.salary);
         }
     }
 }

@@ -36,7 +36,7 @@ pub use status::*;
 pub use finance::{
     ClubFinanceResult, ClubFinances, ClubFinancialBalance, ClubFinancialBalanceHistory,
     ClubSponsorship, ClubSponsorshipContract, DistressLevel, SeasonTransferFees,
-    SponsorPerformance, SponsorRenewalContext, TransferObligation, classify_distress,
+    SponsorPerformance, SponsorRenewalContext, TransferObligation,
 };
 
 // Club press exports
@@ -164,6 +164,7 @@ pub use player::{
     PlayerHappiness,
     PlayerHistoryRow,
     PlayerHistoryRowBreakdown,
+    PlayerIdSequence,
     PlayerLanguage,
     PlayerLiveStatsInput,
     PlayerMailbox,
@@ -246,8 +247,6 @@ pub use player::{
     TrophyEventContext,
     TrophyKind,
     WageCalculator,
-    next_player_id,
-    seed_player_id_sequence,
 };
 // Also export the missing types
 pub use player::mailbox::handlers::{AcceptContractHandler, ProcessContractHandler};

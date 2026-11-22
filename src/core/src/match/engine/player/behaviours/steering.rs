@@ -192,463 +192,500 @@ pub enum SteeringBehavior<'a> {
 }
 
 impl<'a> SteeringBehavior<'a> {
-    #[expect(clippy::too_many_lines)]
     pub fn calculate(&self, player: &MatchPlayer) -> SteeringOutput {
         match self {
-            SteeringBehavior::Seek { target } => {
-                let to_target = *target - player.position;
-                let max_speed = player.max_speed_with_condition_cached();
-                // `normalize()` recomputes the norm — reuse the guard's
-                // (`v / n` is exactly what normalize does).
-                let distance = to_target.norm();
-                let desired_velocity = if distance > 0.0 {
-                    (to_target / distance) * max_speed
-                } else {
-                    Vector3::zeros()
-                };
-
-                let steering = desired_velocity - player.velocity;
-
-                let max_force = player.skills.physical.acceleration / 20.0;
-                let steering = Self::limit_magnitude(steering, max_force);
-
-                // Apply steering force to get new absolute velocity
-                let new_velocity = player.velocity + steering;
-                let final_velocity = Self::limit_magnitude(new_velocity, max_speed);
-
-                SteeringOutput {
-                    velocity: final_velocity,
-                    rotation: 0.0,
-                }
-            }
+            SteeringBehavior::Seek { target } => Self::seek(*target, player),
             SteeringBehavior::Arrive {
                 target,
                 slowing_distance,
-            } => {
-                let to_target = *target - player.position;
-                let distance = to_target.norm();
-
-                // Stop if very close to target — larger deadzone prevents oscillation
-                const ARRIVAL_DEADZONE: f32 = 3.0;
-                if distance < ARRIVAL_DEADZONE {
-                    // Apply strong braking — kill velocity quickly to prevent overshoot
-                    let braking_force = -player.velocity * 0.8;
-                    let new_velocity = player.velocity + braking_force;
-                    return SteeringOutput {
-                        velocity: new_velocity,
-                        rotation: 0.0,
-                    };
-                }
-
-                let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
-
-                // Ensure slowing_distance is never zero but keep it small so players
-                // can approach balls near boundaries without crawling to a halt
-                let safe_slowing_distance = slowing_distance.max(3.0);
-
-                // Calculate desired speed based on distance (with condition factor)
-                // max_speed already incorporates pace, no additional multiplier needed
-                let max_speed = player.max_speed_with_condition_cached();
-                let desired_speed = if distance < safe_slowing_distance {
-                    // Quadratic deceleration — no minimum speed floor so player
-                    // can smoothly decelerate to zero without overshooting
-                    let ratio = (distance / safe_slowing_distance).clamp(0.0, 1.0);
-                    max_speed * ratio * ratio
-                } else {
-                    max_speed
-                };
-
-                // Calculate desired velocity direction. `to_target /
-                // distance` == `normalize()` with the norm already in hand.
-                let desired_velocity = if distance > 0.0 {
-                    (to_target / distance) * desired_speed
-                } else {
-                    Vector3::zeros()
-                };
-
-                // Calculate steering force (the change in velocity needed)
-                let steering = desired_velocity - player.velocity;
-
-                // Limit steering force based on agility (with condition).
-                // Reuses the `max_speed` computed above — same pure
-                // function, same arguments.
-                let max_force = max_speed * agility_normalized * 0.7;
-                let steering = Self::limit_magnitude(steering, max_force);
-
-                // Apply steering force to current velocity to get new absolute velocity
-                let new_velocity = player.velocity + steering;
-
-                // Clamp to max speed
-                let final_velocity = Self::limit_magnitude(new_velocity, max_speed);
-
-                SteeringOutput {
-                    velocity: final_velocity,
-                    rotation: 0.0,
-                }
-            }
+            } => Self::arrive(*target, *slowing_distance, player),
             SteeringBehavior::Pursuit {
                 target,
                 target_velocity,
-            } => {
-                // Calculate interception point by predicting where the target will be
-                let to_target = *target - player.position;
-                let distance = to_target.norm();
-
-                // Deadzone to prevent oscillation when very close
-                const PURSUIT_DEADZONE: f32 = 1.5;
-                const SLOWING_DISTANCE: f32 = 10.0;
-
-                if distance < PURSUIT_DEADZONE {
-                    // Very close to target - apply strong braking
-                    let braking_force = -player.velocity * 0.9;
-                    let new_velocity = player.velocity + braking_force;
-                    return SteeringOutput {
-                        velocity: new_velocity,
-                        rotation: 0.0,
-                    };
-                }
-
-                let acceleration_normalized =
-                    0.8 + (player.skills.physical.acceleration - 1.0) / 19.0;
-                let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
-
-                // max_speed already incorporates pace/acceleration via the skill blend
-                let max_speed = player.max_speed_with_condition_cached();
-
-                // Calculate interception point
-                let interception_point = Self::calculate_interception_point(
-                    player.position,
-                    *target,
-                    *target_velocity,
-                    max_speed,
-                );
-
-                // Calculate direction to interception point
-                let to_interception = interception_point - player.position;
-                let interception_distance = to_interception.norm();
-
-                // Calculate desired speed based on distance - slow down when approaching
-                let desired_speed = if interception_distance < SLOWING_DISTANCE {
-                    // Within slowing distance - reduce speed proportionally
-                    let speed_ratio = (interception_distance / SLOWING_DISTANCE).clamp(0.2, 1.0);
-                    max_speed * speed_ratio
-                } else {
-                    // Full speed when far away
-                    max_speed
-                };
-
-                let desired_velocity = if interception_distance > 0.0 {
-                    (to_interception / interception_distance) * desired_speed
-                } else {
-                    Vector3::zeros()
-                };
-
-                // Use direct velocity blending when close to prevent oscillation
-                let final_velocity = if interception_distance < SLOWING_DISTANCE {
-                    // Close to target - blend toward desired velocity to prevent overshoot
-                    let blend_factor = (interception_distance / SLOWING_DISTANCE).clamp(0.0, 1.0);
-                    let damping = 0.7 - (blend_factor * 0.3); // More damping when closer
-
-                    desired_velocity * (1.0 - damping) + player.velocity * damping
-                } else {
-                    // Far from target - use normal steering accumulation.
-                    // `max_speed` above is the same pure call — reuse it.
-                    let steering = desired_velocity - player.velocity;
-                    let max_acceleration = max_speed * agility_normalized * acceleration_normalized;
-                    let limited_steering = Self::limit_magnitude(steering, max_acceleration);
-
-                    let move_velocity = player.velocity + limited_steering;
-                    Self::limit_magnitude(move_velocity, max_speed)
-                };
-
-                SteeringOutput {
-                    velocity: final_velocity,
-                    rotation: 0.0,
-                }
-            }
+            } => Self::pursuit(*target, *target_velocity, player),
             SteeringBehavior::Intercept {
                 target,
                 target_velocity,
-            } => {
-                // A/B control — see `LooseBallChase::tail_chase`.
-                if LooseBallChase::tail_chase() {
-                    return SteeringBehavior::Pursuit {
-                        target: *target,
-                        target_velocity: *target_velocity,
-                    }
-                    .calculate(player);
-                }
-
-                let max_speed = player.max_speed_with_condition_cached();
-                let here = Self::flat(player.position);
-                let own_velocity = Self::flat(player.velocity);
-                let to_target = Self::flat(*target) - here;
-                let distance = to_target.norm();
-                let target_velocity = Self::flat(*target_velocity);
-
-                // Standing on it. Travel with it — for a ball at rest
-                // that is a standstill, and there is no line of sight to
-                // resolve anything against anyway.
-                const ON_IT: f32 = 0.25;
-                if distance < ON_IT {
-                    return SteeringOutput {
-                        velocity: Self::limit_magnitude(target_velocity, max_speed),
-                        rotation: 0.0,
-                    };
-                }
-                let line_of_sight = to_target / distance;
-
-                // Split the target's travel into the part that carries it
-                // ALONG our line of sight and the part that carries it
-                // ACROSS. Only the second can leave us behind, and
-                // matching it is what holds the bearing still.
-                let across = target_velocity - line_of_sight * target_velocity.dot(&line_of_sight);
-                let across_sq = across.norm_squared();
-                let speed_sq = max_speed * max_speed;
-
-                // The bearing-hold — exact while the race is winnable.
-                let hold = if across_sq >= speed_sq {
-                    // He cannot live with it across the line; everything
-                    // he has goes sideways. Kept as one END of the blend
-                    // below, never the whole answer any more.
-                    across * (max_speed / across_sq.sqrt().max(1e-4))
-                } else {
-                    // Match it across, close the gap with what is left.
-                    across + line_of_sight * (speed_sq - across_sq).sqrt()
-                };
-
-                // What holding that bearing actually shrinks the gap by,
-                // per tick: the speed left under the root, less whatever
-                // the ball takes out along the line. When this dies the
-                // bearing-hold is treading water — running a line that
-                // never converges, the reported "parallel to the ball"
-                // frame — while the ball sheds speed it will never get
-                // back. The rescue is not a better bearing, it is a
-                // different read: the first point on the decaying roll
-                // he can be at no later than the ball, straight at it,
-                // flat out. Crossed smoothly so no tick can snap the
-                // heading, and faded out over `aim`'s own height band —
-                // a flying ball's travel does not decay like a roll's,
-                // and modelling it as one is how the last attempt at
-                // this went wrong (see the history on the variant).
-                let closing =
-                    (speed_sq - across_sq).max(0.0).sqrt() - target_velocity.dot(&line_of_sight);
-                let t = ((target.z - LooseBallChase::GROUND_H)
-                    / (LooseBallChase::AERIAL_H - LooseBallChase::GROUND_H))
-                    .clamp(0.0, 1.0);
-                let grounded = 1.0 - t * t * (3.0 - 2.0 * t);
-                let lost = 1.0 - (closing / (Self::LOST_CAUSE * max_speed)).clamp(0.0, 1.0);
-                let lost = (lost * lost * (3.0 - 2.0 * lost)) * grounded;
-
-                let mut desired = if lost <= 0.0 || LooseBallChase::concede() {
-                    hold
-                } else {
-                    let (meet, _) = LooseBallChase::earliest_meeting(
-                        here,
-                        max_speed,
-                        Self::flat(*target),
-                        target_velocity,
-                    );
-                    let cut = (meet - here)
-                        .try_normalize(1e-4)
-                        .map(|d| d * max_speed)
-                        .unwrap_or(hold);
-                    hold + (cut - hold) * lost
-                };
-
-                // Arriving is travelling WITH it, not stopping next to
-                // it. Continuous, and it collapses to an ordinary braking
-                // arrival whenever the target is standing still.
-                //
-                // …but only onto something he can live with. A ball
-                // moving faster than he can run is not being collected,
-                // it is escaping, and settling in behind one is the tail
-                // chase again at a metre and a half — the band a third of
-                // the census samples sit in. So the settle fades out as
-                // the target outruns him and he keeps cutting at it.
-                let target_speed = target_velocity.norm();
-                let catchable = if target_speed <= max_speed {
-                    1.0
-                } else {
-                    max_speed / target_speed
-                };
-                let settle = 1.0 - (1.0 - (distance / Self::SETTLE).clamp(0.0, 1.0)) * catchable;
-                desired = target_velocity + (desired - target_velocity) * settle;
-
-                let acceleration_normalized =
-                    0.8 + (player.skills.physical.acceleration - 1.0) / 19.0;
-                let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
-                let max_acceleration = max_speed * agility_normalized * acceleration_normalized;
-
-                let steering = Self::limit_magnitude(desired - own_velocity, max_acceleration);
-                let velocity = Self::limit_magnitude(own_velocity + steering, max_speed);
-
-                SteeringOutput {
-                    velocity,
-                    rotation: 0.0,
-                }
-            }
-            SteeringBehavior::Evade { target } => {
-                let to_player = player.position - *target;
-                let max_speed = player.max_speed_with_condition_cached();
-
-                let flee_distance = to_player.norm();
-                let desired_velocity = if flee_distance > 0.0 {
-                    (to_player / flee_distance) * max_speed
-                } else {
-                    Vector3::zeros()
-                };
-
-                let steering = desired_velocity - player.velocity;
-
-                let max_force = player.skills.physical.acceleration / 20.0;
-                let steering = Self::limit_magnitude(steering, max_force);
-
-                // Apply steering force to get new absolute velocity
-                let new_velocity = player.velocity + steering;
-                let final_velocity = Self::limit_magnitude(new_velocity, max_speed);
-
-                SteeringOutput {
-                    velocity: final_velocity,
-                    rotation: 0.0,
-                }
-            }
+            } => Self::intercept(*target, *target_velocity, player),
+            SteeringBehavior::Evade { target } => Self::evade(*target, player),
             SteeringBehavior::Wander {
                 target: _,
                 radius,
                 jitter: _,
                 distance,
                 angle,
-            } => {
-                // The wander circle is projected in front of the player.
-                // A fully-stopped player has no facing to project from —
-                // fall back to +x so idle players still drift instead of
-                // freezing (normalize() of a zero vector is NaN, which
-                // zeroed the whole wander output).
-                let facing = player.velocity.try_normalize(1e-4).unwrap_or(Vector3::x());
-                let circle_center = player.position + facing * *distance;
-
-                // Calculate the displacement around the circle using the stored angle
-                let displacement = Vector3::new(angle.cos() * *radius, angle.sin() * *radius, 0.0);
-
-                // The wander target is on the circle's edge
-                let wander_target = circle_center + displacement;
-
-                // Calculate desired velocity toward the wander target
-                let to_target = wander_target - player.position;
-                let desired_velocity = if to_target.norm() > 0.0 {
-                    to_target.normalize() * player.max_speed_with_condition_cached() * 0.3 // Reduced speed for wandering
-                } else {
-                    Vector3::zeros()
-                };
-
-                let steering = desired_velocity - player.velocity;
-
-                // Limit steering force
-                let max_force = player.skills.physical.acceleration / 30.0; // Gentler force
-                let steering = Self::limit_magnitude(steering, max_force);
-
-                // Apply steering force to get new absolute velocity
-                let new_velocity = player.velocity + steering;
-                let wander_max_speed = player.max_speed_with_condition_cached() * 0.3; // Wandering is slower
-                let final_velocity = Self::limit_magnitude(new_velocity, wander_max_speed);
-
-                let rotation = if final_velocity.x != 0.0 || final_velocity.y != 0.0 {
-                    final_velocity.y.atan2(final_velocity.x)
-                } else {
-                    0.0
-                };
-
-                SteeringOutput {
-                    velocity: final_velocity,
-                    rotation,
-                }
-            }
-            SteeringBehavior::Flee { target } => {
-                let to_player = player.position - *target;
-                let max_speed = player.max_speed_with_condition_cached();
-                let flee_distance = to_player.norm();
-                let desired_velocity = if flee_distance > 0.0 {
-                    (to_player / flee_distance) * max_speed
-                } else {
-                    Vector3::zeros()
-                };
-
-                let steering = desired_velocity - player.velocity;
-                let max_force = player.skills.physical.acceleration / 20.0;
-                let steering = Self::limit_magnitude(steering, max_force);
-
-                // Apply steering force to get new absolute velocity
-                let new_velocity = player.velocity + steering;
-                let final_velocity = Self::limit_magnitude(new_velocity, max_speed);
-
-                SteeringOutput {
-                    velocity: final_velocity,
-                    rotation: 0.0,
-                }
-            }
-
+            } => Self::wander(*radius, *distance, *angle, player),
+            SteeringBehavior::Flee { target } => Self::flee(*target, player),
             SteeringBehavior::FollowPath {
                 waypoints,
                 current_waypoint,
                 crowd_offset,
-            } => {
-                if waypoints.is_empty() {
-                    return SteeringOutput {
-                        velocity: Vector3::zeros(),
-                        rotation: 0.0,
-                    };
-                }
+            } => Self::follow_path(waypoints, *current_waypoint, *crowd_offset, player),
+        }
+    }
 
-                // Get the current target waypoint
-                if *current_waypoint >= waypoints.len() {
-                    return SteeringOutput {
-                        velocity: Vector3::zeros(),
-                        rotation: 0.0,
-                    };
-                }
+    fn seek(target: Vector3<f32>, player: &MatchPlayer) -> SteeringOutput {
+        let to_target = target - player.position;
+        let max_speed = player.max_speed_with_condition_cached();
+        // `normalize()` recomputes the norm — reuse the guard's
+        // (`v / n` is exactly what normalize does).
+        let distance = to_target.norm();
+        let desired_velocity = if distance > 0.0 {
+            (to_target / distance) * max_speed
+        } else {
+            Vector3::zeros()
+        };
 
-                // Steer at the waypoint shifted clear of nearby players,
-                // so the arrival point itself is somewhere the player can
-                // actually come to rest.
-                let target = waypoints[*current_waypoint] + *crowd_offset;
+        let steering = desired_velocity - player.velocity;
 
-                // Calculate distance to current waypoint
-                let to_waypoint = target - player.position;
-                let distance = to_waypoint.norm();
+        let max_force = player.skills.physical.acceleration / 20.0;
+        let steering = Self::limit_magnitude(steering, max_force);
 
-                let max_speed = player.max_speed_with_condition_cached();
+        // Apply steering force to get new absolute velocity
+        let new_velocity = player.velocity + steering;
+        let final_velocity = Self::limit_magnitude(new_velocity, max_speed);
 
-                // Settle on arrival. Without this the desired velocity
-                // stayed at full speed right up to the waypoint, so the
-                // player overshot and was steered back — the same
-                // hunting-around-the-target oscillation `Arrive` avoids
-                // with its deadzone.
-                const ARRIVAL_DEADZONE: f32 = 3.0;
-                if distance < ARRIVAL_DEADZONE {
-                    return SteeringOutput {
-                        velocity: player.velocity * 0.2,
-                        rotation: 0.0,
-                    };
-                }
+        SteeringOutput {
+            velocity: final_velocity,
+            rotation: 0.0,
+        }
+    }
 
-                let direction = to_waypoint / distance;
-                let desired_velocity = direction * max_speed;
-                let steering = desired_velocity - player.velocity;
+    fn arrive(target: Vector3<f32>, slowing_distance: f32, player: &MatchPlayer) -> SteeringOutput {
+        let to_target = target - player.position;
+        let distance = to_target.norm();
 
-                // Limit steering force
-                let max_force = player.skills.physical.acceleration / 20.0;
-                let steering = Self::limit_magnitude(steering, max_force);
+        // Stop if very close to target — larger deadzone prevents oscillation
+        const ARRIVAL_DEADZONE: f32 = 3.0;
+        if distance < ARRIVAL_DEADZONE {
+            // Apply strong braking — kill velocity quickly to prevent overshoot
+            let braking_force = -player.velocity * 0.8;
+            let new_velocity = player.velocity + braking_force;
+            return SteeringOutput {
+                velocity: new_velocity,
+                rotation: 0.0,
+            };
+        }
 
-                // Apply steering force to get new absolute velocity
-                let new_velocity = player.velocity + steering;
-                let final_velocity = Self::limit_magnitude(new_velocity, max_speed);
+        let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
 
-                SteeringOutput {
-                    velocity: final_velocity,
-                    rotation: 0.0,
-                }
-            }
+        // Ensure slowing_distance is never zero but keep it small so players
+        // can approach balls near boundaries without crawling to a halt
+        let safe_slowing_distance = slowing_distance.max(3.0);
+
+        // Calculate desired speed based on distance (with condition factor)
+        // max_speed already incorporates pace, no additional multiplier needed
+        let max_speed = player.max_speed_with_condition_cached();
+        let desired_speed = if distance < safe_slowing_distance {
+            // Quadratic deceleration — no minimum speed floor so player
+            // can smoothly decelerate to zero without overshooting
+            let ratio = (distance / safe_slowing_distance).clamp(0.0, 1.0);
+            max_speed * ratio * ratio
+        } else {
+            max_speed
+        };
+
+        // Calculate desired velocity direction. `to_target /
+        // distance` == `normalize()` with the norm already in hand.
+        let desired_velocity = if distance > 0.0 {
+            (to_target / distance) * desired_speed
+        } else {
+            Vector3::zeros()
+        };
+
+        // Calculate steering force (the change in velocity needed)
+        let steering = desired_velocity - player.velocity;
+
+        // Limit steering force based on agility (with condition).
+        // Reuses the `max_speed` computed above — same pure
+        // function, same arguments.
+        let max_force = max_speed * agility_normalized * 0.7;
+        let steering = Self::limit_magnitude(steering, max_force);
+
+        // Apply steering force to current velocity to get new absolute velocity
+        let new_velocity = player.velocity + steering;
+
+        // Clamp to max speed
+        let final_velocity = Self::limit_magnitude(new_velocity, max_speed);
+
+        SteeringOutput {
+            velocity: final_velocity,
+            rotation: 0.0,
+        }
+    }
+
+    fn pursuit(
+        target: Vector3<f32>,
+        target_velocity: Vector3<f32>,
+        player: &MatchPlayer,
+    ) -> SteeringOutput {
+        // Calculate interception point by predicting where the target will be
+        let to_target = target - player.position;
+        let distance = to_target.norm();
+
+        // Deadzone to prevent oscillation when very close
+        const PURSUIT_DEADZONE: f32 = 1.5;
+        const SLOWING_DISTANCE: f32 = 10.0;
+
+        if distance < PURSUIT_DEADZONE {
+            // Very close to target - apply strong braking
+            let braking_force = -player.velocity * 0.9;
+            let new_velocity = player.velocity + braking_force;
+            return SteeringOutput {
+                velocity: new_velocity,
+                rotation: 0.0,
+            };
+        }
+
+        let acceleration_normalized = 0.8 + (player.skills.physical.acceleration - 1.0) / 19.0;
+        let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
+
+        // max_speed already incorporates pace/acceleration via the skill blend
+        let max_speed = player.max_speed_with_condition_cached();
+
+        // Calculate interception point
+        let interception_point =
+            Self::calculate_interception_point(player.position, target, target_velocity, max_speed);
+
+        // Calculate direction to interception point
+        let to_interception = interception_point - player.position;
+        let interception_distance = to_interception.norm();
+
+        // Calculate desired speed based on distance - slow down when approaching
+        let desired_speed = if interception_distance < SLOWING_DISTANCE {
+            // Within slowing distance - reduce speed proportionally
+            let speed_ratio = (interception_distance / SLOWING_DISTANCE).clamp(0.2, 1.0);
+            max_speed * speed_ratio
+        } else {
+            // Full speed when far away
+            max_speed
+        };
+
+        let desired_velocity = if interception_distance > 0.0 {
+            (to_interception / interception_distance) * desired_speed
+        } else {
+            Vector3::zeros()
+        };
+
+        // Use direct velocity blending when close to prevent oscillation
+        let final_velocity = if interception_distance < SLOWING_DISTANCE {
+            // Close to target - blend toward desired velocity to prevent overshoot
+            let blend_factor = (interception_distance / SLOWING_DISTANCE).clamp(0.0, 1.0);
+            let damping = 0.7 - (blend_factor * 0.3); // More damping when closer
+
+            desired_velocity * (1.0 - damping) + player.velocity * damping
+        } else {
+            // Far from target - use normal steering accumulation.
+            // `max_speed` above is the same pure call — reuse it.
+            let steering = desired_velocity - player.velocity;
+            let max_acceleration = max_speed * agility_normalized * acceleration_normalized;
+            let limited_steering = Self::limit_magnitude(steering, max_acceleration);
+
+            let move_velocity = player.velocity + limited_steering;
+            Self::limit_magnitude(move_velocity, max_speed)
+        };
+
+        SteeringOutput {
+            velocity: final_velocity,
+            rotation: 0.0,
+        }
+    }
+
+    fn intercept(
+        target: Vector3<f32>,
+        target_velocity: Vector3<f32>,
+        player: &MatchPlayer,
+    ) -> SteeringOutput {
+        // A/B control — see `LooseBallChase::tail_chase`.
+        if LooseBallChase::tail_chase() {
+            return Self::pursuit(target, target_velocity, player);
+        }
+
+        let max_speed = player.max_speed_with_condition_cached();
+        let here = Self::flat(player.position);
+        let own_velocity = Self::flat(player.velocity);
+        let to_target = Self::flat(target) - here;
+        let distance = to_target.norm();
+        let target_velocity = Self::flat(target_velocity);
+
+        // Standing on it. Travel with it — for a ball at rest
+        // that is a standstill, and there is no line of sight to
+        // resolve anything against anyway.
+        const ON_IT: f32 = 0.25;
+        if distance < ON_IT {
+            return SteeringOutput {
+                velocity: Self::limit_magnitude(target_velocity, max_speed),
+                rotation: 0.0,
+            };
+        }
+        let line_of_sight = to_target / distance;
+
+        // Split the target's travel into the part that carries it
+        // ALONG our line of sight and the part that carries it
+        // ACROSS. Only the second can leave us behind, and
+        // matching it is what holds the bearing still.
+        let across = target_velocity - line_of_sight * target_velocity.dot(&line_of_sight);
+        let across_sq = across.norm_squared();
+        let speed_sq = max_speed * max_speed;
+
+        // The bearing-hold — exact while the race is winnable.
+        let hold = if across_sq >= speed_sq {
+            // He cannot live with it across the line; everything
+            // he has goes sideways. Kept as one END of the blend
+            // below, never the whole answer any more.
+            across * (max_speed / across_sq.sqrt().max(1e-4))
+        } else {
+            // Match it across, close the gap with what is left.
+            across + line_of_sight * (speed_sq - across_sq).sqrt()
+        };
+
+        // What holding that bearing actually shrinks the gap by,
+        // per tick: the speed left under the root, less whatever
+        // the ball takes out along the line. When this dies the
+        // bearing-hold is treading water — running a line that
+        // never converges, the reported "parallel to the ball"
+        // frame — while the ball sheds speed it will never get
+        // back. The rescue is not a better bearing, it is a
+        // different read: the first point on the decaying roll
+        // he can be at no later than the ball, straight at it,
+        // flat out. Crossed smoothly so no tick can snap the
+        // heading, and faded out over `aim`'s own height band —
+        // a flying ball's travel does not decay like a roll's,
+        // and modelling it as one is how the last attempt at
+        // this went wrong (see the history on the variant).
+        let lost = Self::lost_cause(
+            target_velocity,
+            line_of_sight,
+            across_sq,
+            speed_sq,
+            max_speed,
+            target.z,
+        );
+
+        let mut desired = if lost <= 0.0 || LooseBallChase::concede() {
+            hold
+        } else {
+            let (meet, _) = LooseBallChase::earliest_meeting(
+                here,
+                max_speed,
+                Self::flat(target),
+                target_velocity,
+            );
+            let cut = (meet - here)
+                .try_normalize(1e-4)
+                .map(|d| d * max_speed)
+                .unwrap_or(hold);
+            hold + (cut - hold) * lost
+        };
+
+        // Arriving is travelling WITH it, not stopping next to
+        // it. Continuous, and it collapses to an ordinary braking
+        // arrival whenever the target is standing still.
+        //
+        // …but only onto something he can live with. A ball
+        // moving faster than he can run is not being collected,
+        // it is escaping, and settling in behind one is the tail
+        // chase again at a metre and a half — the band a third of
+        // the census samples sit in. So the settle fades out as
+        // the target outruns him and he keeps cutting at it.
+        let target_speed = target_velocity.norm();
+        let catchable = if target_speed <= max_speed {
+            1.0
+        } else {
+            max_speed / target_speed
+        };
+        let settle = 1.0 - (1.0 - (distance / Self::SETTLE).clamp(0.0, 1.0)) * catchable;
+        desired = target_velocity + (desired - target_velocity) * settle;
+
+        let acceleration_normalized = 0.8 + (player.skills.physical.acceleration - 1.0) / 19.0;
+        let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
+        let max_acceleration = max_speed * agility_normalized * acceleration_normalized;
+
+        let steering = Self::limit_magnitude(desired - own_velocity, max_acceleration);
+        let velocity = Self::limit_magnitude(own_velocity + steering, max_speed);
+
+        SteeringOutput {
+            velocity,
+            rotation: 0.0,
+        }
+    }
+
+    /// How much of the bearing-hold has to give way to a straight run at
+    /// the earliest reachable point on the roll: zero while the race is
+    /// winnable, one once the closing rate has died.
+    fn lost_cause(
+        target_velocity: Vector3<f32>,
+        line_of_sight: Vector3<f32>,
+        across_sq: f32,
+        speed_sq: f32,
+        max_speed: f32,
+        target_z: f32,
+    ) -> f32 {
+        let closing = (speed_sq - across_sq).max(0.0).sqrt() - target_velocity.dot(&line_of_sight);
+        let t = ((target_z - LooseBallChase::GROUND_H)
+            / (LooseBallChase::AERIAL_H - LooseBallChase::GROUND_H))
+            .clamp(0.0, 1.0);
+        let grounded = 1.0 - t * t * (3.0 - 2.0 * t);
+        let lost = 1.0 - (closing / (Self::LOST_CAUSE * max_speed)).clamp(0.0, 1.0);
+        (lost * lost * (3.0 - 2.0 * lost)) * grounded
+    }
+
+    fn evade(target: Vector3<f32>, player: &MatchPlayer) -> SteeringOutput {
+        let to_player = player.position - target;
+        let max_speed = player.max_speed_with_condition_cached();
+
+        let flee_distance = to_player.norm();
+        let desired_velocity = if flee_distance > 0.0 {
+            (to_player / flee_distance) * max_speed
+        } else {
+            Vector3::zeros()
+        };
+
+        let steering = desired_velocity - player.velocity;
+
+        let max_force = player.skills.physical.acceleration / 20.0;
+        let steering = Self::limit_magnitude(steering, max_force);
+
+        // Apply steering force to get new absolute velocity
+        let new_velocity = player.velocity + steering;
+        let final_velocity = Self::limit_magnitude(new_velocity, max_speed);
+
+        SteeringOutput {
+            velocity: final_velocity,
+            rotation: 0.0,
+        }
+    }
+
+    fn wander(radius: f32, distance: f32, angle: f32, player: &MatchPlayer) -> SteeringOutput {
+        // The wander circle is projected in front of the player.
+        // A fully-stopped player has no facing to project from —
+        // fall back to +x so idle players still drift instead of
+        // freezing (normalize() of a zero vector is NaN, which
+        // zeroed the whole wander output).
+        let facing = player.velocity.try_normalize(1e-4).unwrap_or(Vector3::x());
+        let circle_center = player.position + facing * distance;
+
+        // Calculate the displacement around the circle using the stored angle
+        let displacement = Vector3::new(angle.cos() * radius, angle.sin() * radius, 0.0);
+
+        // The wander target is on the circle's edge
+        let wander_target = circle_center + displacement;
+
+        // Calculate desired velocity toward the wander target
+        let to_target = wander_target - player.position;
+        let desired_velocity = if to_target.norm() > 0.0 {
+            to_target.normalize() * player.max_speed_with_condition_cached() * 0.3 // Reduced speed for wandering
+        } else {
+            Vector3::zeros()
+        };
+
+        let steering = desired_velocity - player.velocity;
+
+        // Limit steering force
+        let max_force = player.skills.physical.acceleration / 30.0; // Gentler force
+        let steering = Self::limit_magnitude(steering, max_force);
+
+        // Apply steering force to get new absolute velocity
+        let new_velocity = player.velocity + steering;
+        let wander_max_speed = player.max_speed_with_condition_cached() * 0.3; // Wandering is slower
+        let final_velocity = Self::limit_magnitude(new_velocity, wander_max_speed);
+
+        let rotation = if final_velocity.x != 0.0 || final_velocity.y != 0.0 {
+            final_velocity.y.atan2(final_velocity.x)
+        } else {
+            0.0
+        };
+
+        SteeringOutput {
+            velocity: final_velocity,
+            rotation,
+        }
+    }
+
+    fn flee(target: Vector3<f32>, player: &MatchPlayer) -> SteeringOutput {
+        let to_player = player.position - target;
+        let max_speed = player.max_speed_with_condition_cached();
+        let flee_distance = to_player.norm();
+        let desired_velocity = if flee_distance > 0.0 {
+            (to_player / flee_distance) * max_speed
+        } else {
+            Vector3::zeros()
+        };
+
+        let steering = desired_velocity - player.velocity;
+        let max_force = player.skills.physical.acceleration / 20.0;
+        let steering = Self::limit_magnitude(steering, max_force);
+
+        // Apply steering force to get new absolute velocity
+        let new_velocity = player.velocity + steering;
+        let final_velocity = Self::limit_magnitude(new_velocity, max_speed);
+
+        SteeringOutput {
+            velocity: final_velocity,
+            rotation: 0.0,
+        }
+    }
+
+    fn follow_path(
+        waypoints: &[Vector3<f32>],
+        current_waypoint: usize,
+        crowd_offset: Vector3<f32>,
+        player: &MatchPlayer,
+    ) -> SteeringOutput {
+        if waypoints.is_empty() {
+            return SteeringOutput {
+                velocity: Vector3::zeros(),
+                rotation: 0.0,
+            };
+        }
+
+        // Get the current target waypoint
+        if current_waypoint >= waypoints.len() {
+            return SteeringOutput {
+                velocity: Vector3::zeros(),
+                rotation: 0.0,
+            };
+        }
+
+        // Steer at the waypoint shifted clear of nearby players,
+        // so the arrival point itself is somewhere the player can
+        // actually come to rest.
+        let target = waypoints[current_waypoint] + crowd_offset;
+
+        // Calculate distance to current waypoint
+        let to_waypoint = target - player.position;
+        let distance = to_waypoint.norm();
+
+        let max_speed = player.max_speed_with_condition_cached();
+
+        // Settle on arrival. Without this the desired velocity
+        // stayed at full speed right up to the waypoint, so the
+        // player overshot and was steered back — the same
+        // hunting-around-the-target oscillation `Arrive` avoids
+        // with its deadzone.
+        const ARRIVAL_DEADZONE: f32 = 3.0;
+        if distance < ARRIVAL_DEADZONE {
+            return SteeringOutput {
+                velocity: player.velocity * 0.2,
+                rotation: 0.0,
+            };
+        }
+
+        let direction = to_waypoint / distance;
+        let desired_velocity = direction * max_speed;
+        let steering = desired_velocity - player.velocity;
+
+        // Limit steering force
+        let max_force = player.skills.physical.acceleration / 20.0;
+        let steering = Self::limit_magnitude(steering, max_force);
+
+        // Apply steering force to get new absolute velocity
+        let new_velocity = player.velocity + steering;
+        let final_velocity = Self::limit_magnitude(new_velocity, max_speed);
+
+        SteeringOutput {
+            velocity: final_velocity,
+            rotation: 0.0,
         }
     }
 

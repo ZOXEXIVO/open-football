@@ -6,14 +6,22 @@ use chrono::NaiveDate;
 use log::debug;
 
 use crate::club::player::calculators::{
-    AutomaticReleaseEligibility, FreeAgentReleaseReason, ReleaseEligibilityContext,
+    AutomaticReleaseBlock, AutomaticReleaseEligibility, FreeAgentReleaseReason,
+    ReleaseEligibilityContext,
 };
 use crate::club::staff::perception::AbilityEstimator;
 use crate::club::team::squad::SquadAssetContext;
 use crate::transfers::pipeline::TransferTrace;
-use crate::{Club, PlayerFieldPositionGroup, PlayerStatusType, TeamType};
+use crate::{Club, Player, PlayerFieldPositionGroup, PlayerStatusType, TeamType};
 
 use super::depth::SquadSize;
+
+struct TrimFacts {
+    squad_avg_ability: u8,
+    club_reputation: u16,
+    league_reputation_proxy: u16,
+    annual_wage_bill: u32,
+}
 
 impl Club {
     /// Trim excess players at over-represented positions. Caps scale
@@ -28,7 +36,6 @@ impl Club {
     /// free-agent pipeline. Everyone else is flagged for sale instead —
     /// the country listing pass picks `is_transfer_listed` up and creates
     /// the market listing with a real asking price.
-    #[expect(clippy::too_many_lines)]
     pub(in crate::club::process) fn trim_positional_surplus(&mut self, date: NaiveDate) {
         // Per-team caps. Total ~30 per team covers a realistic first-team
         // squad + cover depth; multiplied across main + reserve + U18
@@ -41,20 +48,19 @@ impl Club {
             (PlayerFieldPositionGroup::Forward, 7 * team_count),
         ];
 
-        // Club-level context for the release-eligibility gate, computed
-        // once. League reputation isn't reachable from club scope — use
-        // the main team's world reputation as the pricing proxy, the same
-        // trade-off the renewal pass documents in `simulate`.
-        let (squad_avg_ability, club_reputation, league_reputation_proxy) = match self.teams.main()
-        {
-            Some(main) => (
-                main.players.current_ability_avg(),
-                main.reputation.market_value_score(),
-                main.reputation.world,
-            ),
-            None => return,
+        // Club-level context for the release-eligibility gate, computed once.
+        // League reputation isn't reachable from club scope — use the main
+        // team's world reputation as the pricing proxy, the same trade-off the
+        // renewal pass documents in `simulate`.
+        let Some(main) = self.teams.main() else {
+            return;
         };
-        let annual_wage_bill: u32 = self.teams.iter().map(|t| t.get_annual_salary()).sum();
+        let facts = TrimFacts {
+            squad_avg_ability: main.players.current_ability_avg(),
+            club_reputation: main.reputation.market_value_score(),
+            league_reputation_proxy: main.reputation.world,
+            annual_wage_bill: self.teams.iter().map(|t| t.get_annual_salary()).sum(),
+        };
 
         // Central squad-asset classification, built once against the pre-trim
         // squad. Threaded into the release gate so a player who is core /
@@ -63,21 +69,17 @@ impl Club {
         // loop below holds no borrow on it.
         let asset_ctx = SquadAssetContext::build(self, date);
 
-        // Mandates the trim closes. Collected rather than closed in place:
-        // the board is on the club and the player is inside a mutable team
-        // borrow, so the two cannot be reached at once.
+        // Mandates the trim closes. Collected rather than closed in place: the
+        // board is on the club and the player is inside a mutable team borrow,
+        // so the two cannot be reached at once.
         let mut released: Vec<(u32, SigningMandate, f32)> = Vec::new();
 
         for (group, max_count) in &limits {
-            // Active players only: if a player has already been released
-            // (no contract, Frt) they shouldn't count against the cap, or
-            // we'd re-release them every season until someone signs.
-            // Rank by the coach-observable level (visible skill + results +
-            // training), not the hidden CA digit: who is "surplus to squad
-            // requirements" is a judgement on how a player performs and
-            // applies himself, so the worst-first order the trim walks is his
-            // assessed standing. Each candidate still passes the observable
-            // `classify` + release gate below before anything happens to him.
+            // Active players only: if a player has already been released (no
+            // contract, Frt) they shouldn't count against the cap, or we'd
+            // re-release them every season until someone signs. Rank by the
+            // coach-observable level (visible skill + results + training), not
+            // the hidden CA digit.
             let mut players_at_pos: Vec<(usize, u32, u8)> = Vec::new();
             for (ti, team) in self.teams.iter().enumerate() {
                 for p in team.players.iter() {
@@ -94,18 +96,18 @@ impl Club {
                 continue;
             }
 
-            // Sort by observable level ascending — move the worst out first
+            // Sort by observable level ascending — move the worst out first.
             players_at_pos.sort_by_key(|&(_, _, level)| level);
 
-            // Walk worst-first until enough players are actually on the
-            // market to close the overshoot. A protected candidate (youth
-            // squad at minimum size, signing still in its evaluation
-            // window) must NOT consume a trim slot — with `.take(to_trim)`
-            // every protected skip silently shrank the enforcement, so a
-            // club whose surplus sat in protected pockets never trimmed
-            // at all. Already-listed players DO count: they are actioned
-            // surplus awaiting a buyer, and counting them keeps the walk
-            // from marching past the genuine overshoot into useful players.
+            // Walk worst-first until enough players are actually on the market
+            // to close the overshoot. A protected candidate (youth squad at
+            // minimum size, signing still in its evaluation window) must NOT
+            // consume a trim slot — with `.take(to_trim)` every protected skip
+            // silently shrank the enforcement, so a club whose surplus sat in
+            // protected pockets never trimmed at all. Already-listed players
+            // DO count: they are actioned surplus awaiting a buyer, and
+            // counting them keeps the walk from marching past the genuine
+            // overshoot into useful players.
             let to_trim = players_at_pos.len() - max_count;
             let mut actioned = 0usize;
             for &(team_idx, player_id, _) in players_at_pos.iter() {
@@ -117,134 +119,15 @@ impl Club {
                 {
                     continue;
                 }
-                let team_name = self.teams.teams[team_idx].name.clone();
-                let squad_tier = self.teams.teams[team_idx].team_type;
-                if let Some(player) = self.teams.teams[team_idx]
-                    .players
-                    .players
-                    .iter_mut()
-                    .find(|p| p.id == player_id)
-                {
-                    // Already on the market from an earlier pass — the
-                    // transfer pipeline owns this player now. Counts as
-                    // actioned surplus (see the walk comment above).
-                    let already_listed = player.statuses.has(PlayerStatusType::Lst)
-                        || player
-                            .contract
-                            .as_ref()
-                            .map(|c| c.is_transfer_listed)
-                            .unwrap_or(false);
-                    if already_listed {
-                        actioned += 1;
-                        continue;
-                    }
-                    // A signing still inside its evaluation window is not
-                    // trimmable surplus — this season-start walk used to
-                    // free-release players bought weeks earlier in the same
-                    // summer window.
-                    if player.signing_protection_active(date) {
-                        continue;
-                    }
-                    // Nor is a first-team man the club is picking. The walk
-                    // ranks by level and skips the protected without
-                    // counting them, so a deep group's walk can climb all
-                    // the way to its best player.
-                    if squad_tier == TeamType::Main && player.is_picked(date) {
-                        continue;
-                    }
-                    let market_value = player.value(date, league_reputation_proxy, club_reputation);
-                    let termination_cost = player
-                        .contract
-                        .as_ref()
-                        .map(|c| c.termination_cost(date))
-                        .unwrap_or(0);
-                    let release_ctx = ReleaseEligibilityContext {
-                        date,
-                        squad_avg_ability,
-                        market_value,
-                        annual_wage_bill,
-                        asset_class: asset_ctx.classify_in_squad(player, date, squad_tier),
-                        early_season: asset_ctx.is_early_season(),
-                        squad_tier,
-                    };
-                    match AutomaticReleaseEligibility::assess(player, &release_ctx) {
-                        None => {
-                            debug!(
-                                "positional surplus release: {} (id={}, {:?}, CA={} vs avg {}, \
-                                 value={:.0}, severance={}) from {}",
-                                player.full_name,
-                                player.id,
-                                group,
-                                player.player_attributes.current_ability,
-                                squad_avg_ability,
-                                market_value,
-                                termination_cost,
-                                team_name
-                            );
-                            // A man the club paid for, leaving for nothing:
-                            // the whole unamortised book is a loss, and it
-                            // is the loss the board's own record exists to
-                            // remember.
-                            if let Some(mandate) = player.mandate().filter(|m| m.is_purchase()) {
-                                released.push((player.id, *mandate, player.delivered_minutes().0));
-                            }
-                            player.contract = None;
-                            if !player.statuses.has(PlayerStatusType::Frt) {
-                                player.statuses.add(date, PlayerStatusType::Frt);
-                            }
-                            // Stamp the explicit exit so the free-agent
-                            // sweep records a "squad surplus" free release,
-                            // distinct from a negotiated mutual termination.
-                            player.set_release_reason(FreeAgentReleaseReason::SurplusFreeRelease);
-                            player.decision_history.add(
-                                date,
-                                "dec_free_transfer_listed".to_string(),
-                                FreeAgentReleaseReason::SurplusFreeRelease
-                                    .history_reason()
-                                    .to_string(),
-                                "dec_decided_board".to_string(),
-                            );
-                        }
-                        Some(block) => {
-                            // Worth keeping under contract: flag for sale. Only
-                            // the contract flag is set — the country listing
-                            // pass turns `is_transfer_listed` into a market
-                            // listing + `Lst` status; stamping `Lst` here would
-                            // trip its already-listed guard and strand the
-                            // player off-market. This entry is the single
-                            // decision-history record for the listing — the
-                            // country pass deliberately skips writing one for
-                            // pre-flagged players.
-                            if let Some(contract) = player.contract.as_mut() {
-                                contract.is_transfer_listed = true;
-                            }
-                            TransferTrace::list(
-                                player,
-                                date,
-                                "trim_positional_surplus",
-                                "surplus_squad",
-                            );
-                            player.decision_history.add(
-                                date,
-                                "dec_transfer_listed".to_string(),
-                                "dec_reason_surplus_squad".to_string(),
-                                "dec_decided_board".to_string(),
-                            );
-                            debug!(
-                                "positional surplus listed instead of released: {} (id={}, {:?}, \
-                                 CA={} vs avg {}, value={:.0}, severance={}) from {} — blocked: {:?}",
-                                player.full_name,
-                                player.id,
-                                group,
-                                player.player_attributes.current_ability,
-                                squad_avg_ability,
-                                market_value,
-                                termination_cost,
-                                team_name,
-                                block
-                            );
-                        }
-                    }
+                if self.trim_surplus_candidate(
+                    team_idx,
+                    player_id,
+                    *group,
+                    date,
+                    &facts,
+                    &asset_ctx,
+                    &mut released,
+                ) {
                     actioned += 1;
                 }
             }
@@ -253,6 +136,181 @@ impl Club {
         for (player_id, mandate, delivered) in released {
             self.on_mandate_closed(player_id, mandate, delivered, MandateExit::Released, date);
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn trim_surplus_candidate(
+        &mut self,
+        team_idx: usize,
+        player_id: u32,
+        group: PlayerFieldPositionGroup,
+        date: NaiveDate,
+        facts: &TrimFacts,
+        asset_ctx: &SquadAssetContext,
+        released: &mut Vec<(u32, SigningMandate, f32)>,
+    ) -> bool {
+        let team_name = self.teams.teams[team_idx].name.clone();
+        let squad_tier = self.teams.teams[team_idx].team_type;
+        let Some(player) = self.teams.teams[team_idx]
+            .players
+            .players
+            .iter_mut()
+            .find(|p| p.id == player_id)
+        else {
+            return false;
+        };
+
+        // Already on the market from an earlier pass — the transfer pipeline
+        // owns this player now. Counts as actioned surplus.
+        let already_listed = player.statuses.has(PlayerStatusType::Lst)
+            || player
+                .contract
+                .as_ref()
+                .map(|c| c.is_transfer_listed)
+                .unwrap_or(false);
+        if already_listed {
+            return true;
+        }
+        // A signing still inside its evaluation window is not trimmable
+        // surplus — this season-start walk used to free-release players bought
+        // weeks earlier in the same summer window.
+        if player.signing_protection_active(date) {
+            return false;
+        }
+        // Nor is a first-team man the club is picking. The walk ranks by level
+        // and skips the protected without counting them, so a deep group's
+        // walk can climb all the way to its best player.
+        if squad_tier == TeamType::Main && player.is_picked(date) {
+            return false;
+        }
+
+        let market_value = player.value(date, facts.league_reputation_proxy, facts.club_reputation);
+        let termination_cost = player
+            .contract
+            .as_ref()
+            .map(|c| c.termination_cost(date))
+            .unwrap_or(0);
+        let release_ctx = ReleaseEligibilityContext {
+            date,
+            squad_avg_ability: facts.squad_avg_ability,
+            market_value,
+            annual_wage_bill: facts.annual_wage_bill,
+            asset_class: asset_ctx.classify_in_squad(player, date, squad_tier),
+            early_season: asset_ctx.is_early_season(),
+            squad_tier,
+        };
+        match AutomaticReleaseEligibility::assess(player, &release_ctx) {
+            None => Self::release_surplus_player(
+                player,
+                date,
+                group,
+                &team_name,
+                facts,
+                market_value,
+                termination_cost,
+                released,
+            ),
+            Some(block) => Self::list_surplus_player(
+                player,
+                date,
+                group,
+                &team_name,
+                facts,
+                market_value,
+                termination_cost,
+                block,
+            ),
+        }
+        true
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn release_surplus_player(
+        player: &mut Player,
+        date: NaiveDate,
+        group: PlayerFieldPositionGroup,
+        team_name: &str,
+        facts: &TrimFacts,
+        market_value: f64,
+        termination_cost: u32,
+        released: &mut Vec<(u32, SigningMandate, f32)>,
+    ) {
+        debug!(
+            "positional surplus release: {} (id={}, {:?}, CA={} vs avg {}, value={:.0}, \
+             severance={}) from {}",
+            player.full_name,
+            player.id,
+            group,
+            player.player_attributes.current_ability,
+            facts.squad_avg_ability,
+            market_value,
+            termination_cost,
+            team_name
+        );
+        // A man the club paid for, leaving for nothing: the whole unamortised
+        // book is a loss, and it is the loss the board's own record exists to
+        // remember.
+        if let Some(mandate) = player.mandate().filter(|m| m.is_purchase()) {
+            released.push((player.id, *mandate, player.delivered_minutes().0));
+        }
+        player.contract = None;
+        if !player.statuses.has(PlayerStatusType::Frt) {
+            player.statuses.add(date, PlayerStatusType::Frt);
+        }
+        // Stamp the explicit exit so the free-agent sweep records a "squad
+        // surplus" free release, distinct from a negotiated mutual
+        // termination.
+        player.set_release_reason(FreeAgentReleaseReason::SurplusFreeRelease);
+        player.decision_history.add(
+            date,
+            "dec_free_transfer_listed".to_string(),
+            FreeAgentReleaseReason::SurplusFreeRelease
+                .history_reason()
+                .to_string(),
+            "dec_decided_board".to_string(),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn list_surplus_player(
+        player: &mut Player,
+        date: NaiveDate,
+        group: PlayerFieldPositionGroup,
+        team_name: &str,
+        facts: &TrimFacts,
+        market_value: f64,
+        termination_cost: u32,
+        block: AutomaticReleaseBlock,
+    ) {
+        // Worth keeping under contract: flag for sale. Only the contract flag
+        // is set — the country listing pass turns `is_transfer_listed` into a
+        // market listing + `Lst` status; stamping `Lst` here would trip its
+        // already-listed guard and strand the player off-market. This entry is
+        // the single decision-history record for the listing — the country
+        // pass deliberately skips writing one for pre-flagged players.
+        if let Some(contract) = player.contract.as_mut() {
+            contract.is_transfer_listed = true;
+        }
+        TransferTrace::list(player, date, "trim_positional_surplus", "surplus_squad");
+        player.decision_history.add(
+            date,
+            "dec_transfer_listed".to_string(),
+            "dec_reason_surplus_squad".to_string(),
+            "dec_decided_board".to_string(),
+        );
+        debug!(
+            "positional surplus listed instead of released: {} (id={}, {:?}, CA={} vs avg {}, \
+             value={:.0}, severance={}) from {} — blocked: {:?}",
+            player.full_name,
+            player.id,
+            group,
+            player.player_attributes.current_ability,
+            facts.squad_avg_ability,
+            market_value,
+            termination_cost,
+            team_name,
+            block
+        );
     }
 }
 

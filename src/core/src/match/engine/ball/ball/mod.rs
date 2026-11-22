@@ -137,6 +137,7 @@ pub const KICKABLE_DISTANCE: f32 = MAX_OWNER_TRACK_DISTANCE;
 /// work; this is the backstop for a phase that never changes hands.
 pub const ASSIST_WINDOW_TICKS: u64 = 600;
 
+#[derive(Default)]
 pub struct Ball {
     pub start_position: Vector3<f32>,
     pub position: Vector3<f32>,
@@ -986,182 +987,34 @@ impl Ball {
         Self::travel_passes(ball, velocity, landing, man, LOOSE_CLAIM_DISTANCE)
     }
 
-    #[expect(clippy::too_many_lines)]
     pub fn with_coord(field_width: f32, field_height: f32) -> Self {
         let x = field_width / 2.0;
         let y = field_height / 2.0;
+        let centre = Vector3::new(x, y, 0.0);
 
-        Ball {
-            position: Vector3::new(x, y, 0.0),
-            start_position: Vector3::new(x, y, 0.0),
+        let mut ball = Ball {
             field_width,
             field_height,
-            velocity: Vector3::zeros(),
-            spin: Vector3::zeros(),
-            #[cfg(feature = "match-logs")]
-            settled_vz: 0.0,
-            #[cfg(feature = "match-logs")]
-            control_noted: false,
-            #[cfg(feature = "match-logs")]
-            knock_chain: None,
-            #[cfg(feature = "match-logs")]
-            knock_seen_touch: 0,
-            #[cfg(feature = "match-logs")]
-            lane_census: None,
-            #[cfg(feature = "match-logs")]
-            pass_block_census: None,
-            #[cfg(feature = "match-logs")]
-            strike_origin: None,
-            #[cfg(feature = "match-logs")]
-            delivery_ledger: None,
-            #[cfg(feature = "match-logs")]
-            delivery_identity: None,
-            #[cfg(feature = "match-logs")]
-            delivery_tally: delivery_diag::DeliveryTally::default(),
-            #[cfg(feature = "match-logs")]
-            touch_kind_hint: None,
-            #[cfg(feature = "match-logs")]
-            last_touch_kind: delivery_diag::TouchKind::Other,
-            #[cfg(feature = "match-logs")]
-            arrival: None,
-            #[cfg(feature = "match-logs")]
-            granted_at: 0,
-            #[cfg(feature = "match-logs")]
-            shot_timing: None,
-            #[cfg(feature = "match-logs")]
-            goal_kick_track: None,
-            #[cfg(feature = "match-logs")]
-            last_step: Vector3::zeros(),
-            center_field_position: x, // initial ball position = center field
-            flags: BallFlags::default(),
-            previous_owner: None,
-            current_owner: None,
-            controlled_by: None,
-            reception: None,
-            take_ball_notified_players: Vec::new(),
-            notification_cooldown: 0,
-            notification_timeout: 0,
-            last_boundary_position: None,
-            unowned_stopped_ticks: 0,
-            ownership_duration: 0,
-            claim_cooldown: 0,
-            pass_target_player_id: None,
-            pending_pass_passer: None,
-            pending_pass_set_tick: 0,
             recent_passers: VecDeque::with_capacity(5),
-            pass_reach: PassReach::default(),
-            possession_source: PossessionSource::Unknown,
-            possession_source_for: None,
-            intercept_rolled: 0,
-            pass_block_rolled: 0,
-            aerial_decided: false,
-            pass_blocked_by: None,
-            contested_claim_count: 0,
-            unowned_ticks: 0,
-            stall_start_snapshot: None,
-            goal_scored: false,
-            in_net: None,
-            kickoff_team_side: None,
-            cached_landing_position: Vector3::new(x, y, 0.0),
-            pending_set_piece_teleport: None,
-            awaiting_restart: None,
-            goal_kick_run_up: None,
-            goal_kick_long: false,
-            pending_restart_station: None,
-            pending_corner_teleports: Vec::new(),
-            pending_restart_stations: Vec::new(),
-            corner_shape: None,
-            pending_corner_routine: None,
-            cross_contest_resolved: true,
-            pending_cross_type: None,
-            aerial_contest_winner: None,
-            keeper_claim: None,
-            aerial_delivery: None,
-            pending_aerial_strike: None,
-            owned_stuck_ticks: 0,
-            #[cfg(feature = "match-logs")]
-            takeball_owned_last_tick: false,
-            owned_stuck_logged: false,
-            stall_anchor_pos: Vector3::new(x, y, 0.0),
-            stall_anchor_tick: 0,
-            cached_shot_target: None,
-            pending_save_credit: None,
-            pending_save_on_frame: false,
-            pending_save_spot_kick: false,
+            // 1 == the caught-save site, which is also the default the
+            // save accounting starts from.
             pending_save_site: 1,
-            last_touch_player_id: None,
-            #[cfg(feature = "match-logs")]
-            last_touch_position: Vector3::new(x, y, 0.0),
-            last_touch_team_id: None,
-            last_touch_tick: 0,
-            last_touch_was_controlled: false,
-            shot_met: None,
-            cross_in_flight: None,
-            completed_cross: None,
-            current_tick_cached: 0,
-            pass_origin_restart: PassOriginRestart::OpenPlay,
-            phase_origin: None,
-            throw_in_taker: None,
-            kickoff_taker: None,
-            kickoff_partner: None,
-            set_piece_kicker: None,
-            goal_kick_taker: None,
-            #[cfg(feature = "match-logs")]
-            throw_in_spot: Vector3::new(x, y, 0.0),
-            #[cfg(feature = "match-logs")]
-            throw_in_tick: 0,
-            #[cfg(feature = "match-logs")]
-            throw_in_team: None,
-            #[cfg(feature = "match-logs")]
-            throw_in_options: Vec::new(),
-            #[cfg(feature = "match-logs")]
-            last_throw_in_tick: None,
-            offside_snapshot: None,
-            pending_pass_origin: None,
-            pending_pass_target: None,
-            pending_pass_was_cross: false,
-            pending_pass_error: 0.0,
-            pending_pass_aim: None,
-            last_completed_pass_passer_id: None,
-            last_completed_pass_receiver_id: None,
-            last_completed_pass_tick: 0,
-            last_completed_pass_cutback: false,
-            pressers_at_pass: [0; 4],
-            pressers_at_pass_count: 0,
-            last_shot_xgot: 0.0,
-            last_shot_shooter_id: None,
-            last_shot_struck_tick: 0,
-            last_shot_on_frame: false,
-            #[cfg(feature = "match-logs")]
-            census_shot_live: false,
-            #[cfg(feature = "match-logs")]
-            census_shot_dist: 0.0,
-            #[cfg(feature = "match-logs")]
-            census_shot_side: None,
-            #[cfg(feature = "match-logs")]
-            last_shot_struck_dist: 0.0,
-            last_rebound_tick: 0,
-            last_giveaway_player_id: None,
-            last_giveaway_team_id: None,
-            last_giveaway_tick: 0,
-            giveaway_charged: false,
-            #[cfg(feature = "match-logs")]
-            last_giveaway_family: None,
-            last_giveaway_was_own_box: false,
-            pending_error_to_shot_player_id: None,
-            pending_failed_claim_gk_id: None,
-            pending_failed_claim_tick: 0,
-            pending_failed_claim_charged: false,
-            carry_owner: None,
-            carry_start_position: Vector3::new(x, y, 0.0),
-            last_release_player_id: None,
-            last_release_position: Vector3::new(x, y, 0.0),
-            last_release_tick: 0,
-            last_release_from_hands: false,
-            held_in_hands: false,
-            hands_since_tick: 0,
-            last_touch_was_deliberate_kick: false,
+            cross_contest_resolved: true,
+            ..Ball::default()
+        };
+        ball.position = centre;
+        ball.start_position = centre;
+        ball.center_field_position = x;
+        ball.cached_landing_position = centre;
+        ball.stall_anchor_pos = centre;
+        ball.carry_start_position = centre;
+        ball.last_release_position = centre;
+        #[cfg(feature = "match-logs")]
+        {
+            ball.last_touch_position = centre;
+            ball.throw_in_spot = centre;
         }
+        ball
     }
 
     /// Record that `player_id` has just released the ball into open play

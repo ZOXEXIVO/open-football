@@ -175,7 +175,6 @@ impl League {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[expect(clippy::too_many_lines)]
     fn build_match(
         scheduled_match: &LeagueMatch,
         clubs: &[Club],
@@ -200,46 +199,185 @@ impl League {
         let date = ctx.simulation.date.date();
         let home_club = lookup.club(home_team.club_id);
         let away_club = lookup.club(away_team.club_id);
-        // Either club listing the other as a rival makes the fixture a derby.
-        let is_derby = match (home_club, away_club) {
-            (Some(h), Some(a)) => h.is_rival(a.id) || a.is_rival(h.id),
-            _ => false,
-        };
-
-        // A tie with no round on it is the only one there is.
-        let bracket = knockout.then(|| {
-            let round = scheduled_match.cup_round.unwrap_or(1);
-            (round, scheduled_match.cup_total_rounds.unwrap_or(round))
-        });
+        let is_derby = Self::match_is_derby(home_club, away_club);
+        let bracket = Self::match_bracket(scheduled_match, knockout);
         let home_rep = home_team.reputation.market_value_score();
         let away_rep = away_team.reputation.market_value_score();
+        let cup_slug = (is_cup && !friendly).then_some(scheduled_match.league_slug.as_str());
 
-        // What the fixture is worth is read for each side on its own: the
-        // two clubs stand at different places in a table and face different
-        // opponents in a bracket.
-        let stakes_of = |team_id: u32, own: u16, other: u16| -> f32 {
-            if friendly {
-                return MatchdaySide::FRIENDLY_STAKES;
-            }
-            let stakes = match bracket {
-                Some((round, total_rounds)) => KnockoutStakes::of(KnockoutTieReading {
-                    round,
-                    total_rounds,
-                    opponent_ratio: other as f32 / own.max(1) as f32,
-                    aggregate_lead: None,
-                }),
-                None => table_stakes
-                    .get(&team_id)
-                    .copied()
-                    .unwrap_or(TableStakes::ROUTINE),
-            };
-            if is_derby {
-                TableStakes::with_rivalry(stakes)
-            } else {
-                stakes
-            }
+        let home_side = Self::build_match_side(
+            home_team,
+            home_club,
+            away_team,
+            true,
+            home_rep,
+            away_rep,
+            bracket,
+            friendly,
+            is_cup,
+            is_derby,
+            date,
+            table,
+            table_stakes,
+            bench_size,
+            cup_slug,
+        );
+        let away_side = Self::build_match_side(
+            away_team,
+            away_club,
+            home_team,
+            false,
+            away_rep,
+            home_rep,
+            bracket,
+            friendly,
+            is_cup,
+            is_derby,
+            date,
+            table,
+            table_stakes,
+            bench_size,
+            cup_slug,
+        );
+
+        let (home_squad, away_squad) =
+            Self::select_match_squads(&home_side, &away_side, clubs, ctx, friendly, commitments);
+
+        let competition = Self::match_competition_kind(friendly, is_cup);
+        let fixture = Self::build_match_fixture(
+            scheduled_match,
+            date,
+            competition,
+            knockout,
+            &home_side,
+            &away_side,
+            home_team,
+            is_derby,
+            ctx,
+        );
+        Match::make(
+            scheduled_match.id.clone(),
+            scheduled_match.league_id,
+            &scheduled_match.league_slug,
+            home_squad,
+            away_squad,
+            fixture,
+        )
+    }
+
+    fn match_competition_kind(friendly: bool, is_cup: bool) -> CompetitionKind {
+        if friendly {
+            CompetitionKind::Friendly
+        } else if is_cup {
+            CompetitionKind::DomesticCup
+        } else {
+            CompetitionKind::League
+        }
+    }
+
+    /// Either club listing the other as a rival makes the fixture a derby.
+    fn match_is_derby(home_club: Option<&Club>, away_club: Option<&Club>) -> bool {
+        match (home_club, away_club) {
+            (Some(h), Some(a)) => h.is_rival(a.id) || a.is_rival(h.id),
+            _ => false,
+        }
+    }
+
+    /// A tie with no round on it is the only one there is.
+    fn match_bracket(scheduled_match: &LeagueMatch, knockout: bool) -> Option<(u8, u8)> {
+        knockout.then(|| {
+            let round = scheduled_match.cup_round.unwrap_or(1);
+            (round, scheduled_match.cup_total_rounds.unwrap_or(round))
+        })
+    }
+
+    /// Build one side's selection context.
+    #[allow(clippy::too_many_arguments)]
+    fn build_match_side<'a>(
+        team: &'a Team,
+        club: Option<&'a Club>,
+        opponent: &'a Team,
+        home: bool,
+        own_rep: u16,
+        other_rep: u16,
+        bracket: Option<(u8, u8)>,
+        friendly: bool,
+        is_cup: bool,
+        is_derby: bool,
+        date: NaiveDate,
+        table: &LeagueTable,
+        table_stakes: &FxHashMap<u32, f32>,
+        bench_size: u8,
+        cup_slug: Option<&'a str>,
+    ) -> MatchdaySide<'a> {
+        MatchdaySide {
+            team,
+            club,
+            opponent,
+            home,
+            // What the fixture is worth is read for each side on its own: the
+            // two clubs stand at different places in a table and face different
+            // opponents in a bracket.
+            stakes: Self::match_stakes(
+                team.id,
+                own_rep,
+                other_rep,
+                friendly,
+                bracket,
+                is_derby,
+                table_stakes,
+            ),
+            competition: Self::match_competition(own_rep, other_rep, bracket, friendly, is_cup),
+            derby: is_derby,
+            friendly,
+            date,
+            // Exact season length per side for the development minutes plan —
+            // the busiest-player fallback under-reads in a rotated squad.
+            season_matches_played: Self::table_played(table, team.id),
+            cup_slug,
+            bench_size,
+        }
+    }
+
+    fn match_stakes(
+        team_id: u32,
+        own: u16,
+        other: u16,
+        friendly: bool,
+        bracket: Option<(u8, u8)>,
+        is_derby: bool,
+        table_stakes: &FxHashMap<u32, f32>,
+    ) -> f32 {
+        if friendly {
+            return MatchdaySide::FRIENDLY_STAKES;
+        }
+        let stakes = match bracket {
+            Some((round, total_rounds)) => KnockoutStakes::of(KnockoutTieReading {
+                round,
+                total_rounds,
+                opponent_ratio: other as f32 / own.max(1) as f32,
+                aggregate_lead: None,
+            }),
+            None => table_stakes
+                .get(&team_id)
+                .copied()
+                .unwrap_or(TableStakes::ROUTINE),
         };
-        let competition_of = |own: u16, other: u16| match bracket {
+        if is_derby {
+            TableStakes::with_rivalry(stakes)
+        } else {
+            stakes
+        }
+    }
+
+    fn match_competition(
+        own: u16,
+        other: u16,
+        bracket: Option<(u8, u8)>,
+        friendly: bool,
+        is_cup: bool,
+    ) -> SelectionCompetition {
+        match bracket {
             _ if friendly => SelectionCompetition::Friendly,
             Some((round, total_rounds)) if is_cup => SelectionCompetition::DomesticCup {
                 round,
@@ -248,138 +386,154 @@ impl League {
                 opponent_reputation: other,
             },
             _ => SelectionCompetition::League,
-        };
-        // Exact season length per side for the development minutes plan —
-        // the busiest-player fallback under-reads in a rotated squad.
-        let played_in_table = |team_id: u32| -> Option<f32> {
-            table
-                .rows
-                .iter()
-                .find(|r| r.team_id == team_id)
-                .map(|r| r.played as f32)
-        };
-        let cup_slug = (is_cup && !friendly).then_some(scheduled_match.league_slug.as_str());
-        let home_side = MatchdaySide {
-            team: home_team,
-            club: home_club,
-            opponent: away_team,
-            home: true,
-            stakes: stakes_of(home_team.id, home_rep, away_rep),
-            competition: competition_of(home_rep, away_rep),
-            derby: is_derby,
-            friendly,
-            date,
-            season_matches_played: played_in_table(home_team.id),
-            cup_slug,
-            bench_size,
-        };
-        let away_side = MatchdaySide {
-            team: away_team,
-            club: away_club,
-            opponent: home_team,
-            home: false,
-            stakes: stakes_of(away_team.id, away_rep, home_rep),
-            competition: competition_of(away_rep, home_rep),
-            derby: is_derby,
-            friendly,
-            date,
-            season_matches_played: played_in_table(away_team.id),
-            cup_slug,
-            bench_size,
-        };
+        }
+    }
+
+    fn table_played(table: &LeagueTable, team_id: u32) -> Option<f32> {
+        table
+            .rows
+            .iter()
+            .find(|r| r.team_id == team_id)
+            .map(|r| r.played as f32)
+    }
+
+    /// Pick both sides' match squads. Friendlies draw on supplementary,
+    /// overage and assigned players; competitive fixtures draw on reserves.
+    fn select_match_squads<'a>(
+        home_side: &MatchdaySide<'a>,
+        away_side: &MatchdaySide<'a>,
+        clubs: &'a [Club],
+        ctx: &GlobalContext<'_>,
+        friendly: bool,
+        commitments: &MatchdayCommitments,
+    ) -> (crate::r#match::MatchSquad, crate::r#match::MatchSquad) {
+        if friendly {
+            Self::select_friendly_match_squads(home_side, away_side, clubs, ctx, commitments)
+        } else {
+            Self::select_competitive_match_squads(home_side, away_side, clubs, ctx, commitments)
+        }
+    }
+
+    fn select_friendly_match_squads<'a>(
+        home_side: &MatchdaySide<'a>,
+        away_side: &MatchdaySide<'a>,
+        clubs: &'a [Club],
+        ctx: &GlobalContext<'_>,
+        commitments: &MatchdayCommitments,
+    ) -> (crate::r#match::MatchSquad, crate::r#match::MatchSquad) {
+        let home_team = home_side.team;
+        let away_team = away_side.team;
         let mut home_ctx = home_side.selection_context();
         let mut away_ctx = away_side.selection_context();
 
-        let (home_squad, away_squad) = if friendly {
-            let mut home_supplements = Self::collect_supplementary_players(
-                clubs,
-                home_team.club_id,
-                home_team.id,
-                friendly,
-                commitments,
-            );
-            let mut away_supplements = Self::collect_supplementary_players(
-                clubs,
-                away_team.club_id,
-                away_team.id,
-                friendly,
-                commitments,
-            );
+        let mut home_supplements = Self::collect_supplementary_players(
+            clubs,
+            home_team.club_id,
+            home_team.id,
+            true,
+            commitments,
+        );
+        let mut away_supplements = Self::collect_supplementary_players(
+            clubs,
+            away_team.club_id,
+            away_team.id,
+            true,
+            commitments,
+        );
 
-            let home_overage = Self::collect_overage_development_players(
-                clubs,
-                home_team.club_id,
-                home_team.id,
-                &home_team.team_type,
-                ctx.simulation.date.date(),
-                commitments,
-            );
-            let away_overage = Self::collect_overage_development_players(
-                clubs,
-                away_team.club_id,
-                away_team.id,
-                &away_team.team_type,
-                ctx.simulation.date.date(),
-                commitments,
-            );
-            // Flag the overage picks as development guests so the rotation
-            // selector admits them even when the roster is full — they are
-            // here for match practice, not shortfall cover.
-            // So are the men the club put with the side the day before.
-            let guests = |overage: &[&Player], club: Option<&Club>, team_id: u32| -> Vec<u32> {
-                overage
-                    .iter()
-                    .map(|p| p.id)
-                    .chain(
-                        club.into_iter()
-                            .flat_map(|club| commitments.assigned_to(club, team_id))
-                            .map(|p| p.id),
-                    )
-                    .collect()
-            };
-            home_ctx.development_guest_ids = guests(&home_overage, home_club, home_team.id);
-            away_ctx.development_guest_ids = guests(&away_overage, away_club, away_team.id);
-            home_supplements.extend(home_overage);
-            away_supplements.extend(away_overage);
-
-            (
-                home_team.get_rotation_match_squad_with_reserves(&home_supplements, &home_ctx),
-                away_team.get_rotation_match_squad_with_reserves(&away_supplements, &away_ctx),
-            )
-        } else {
-            let home_is_main = home_team.team_type == TeamType::Main;
-            let away_is_main = away_team.team_type == TeamType::Main;
-            let home_reserves = Self::collect_reserve_players(
-                clubs,
-                home_team.club_id,
-                home_team.id,
-                friendly,
-                home_is_main,
-                date,
-                commitments,
-            );
-            let away_reserves = Self::collect_reserve_players(
-                clubs,
-                away_team.club_id,
-                away_team.id,
-                friendly,
-                away_is_main,
-                date,
-                commitments,
-            );
-            (
-                home_team.get_enhanced_match_squad(&home_reserves, &home_ctx),
-                away_team.get_enhanced_match_squad(&away_reserves, &away_ctx),
-            )
+        let home_overage = Self::collect_overage_development_players(
+            clubs,
+            home_team.club_id,
+            home_team.id,
+            &home_team.team_type,
+            ctx.simulation.date.date(),
+            commitments,
+        );
+        let away_overage = Self::collect_overage_development_players(
+            clubs,
+            away_team.club_id,
+            away_team.id,
+            &away_team.team_type,
+            ctx.simulation.date.date(),
+            commitments,
+        );
+        // Flag the overage picks as development guests so the rotation
+        // selector admits them even when the roster is full — they are
+        // here for match practice, not shortfall cover.
+        // So are the men the club put with the side the day before.
+        let guests = |overage: &[&Player], club: Option<&Club>, team_id: u32| -> Vec<u32> {
+            overage
+                .iter()
+                .map(|p| p.id)
+                .chain(
+                    club.into_iter()
+                        .flat_map(|club| commitments.assigned_to(club, team_id))
+                        .map(|p| p.id),
+                )
+                .collect()
         };
+        home_ctx.development_guest_ids = guests(&home_overage, home_side.club, home_team.id);
+        away_ctx.development_guest_ids = guests(&away_overage, away_side.club, away_team.id);
+        home_supplements.extend(home_overage);
+        away_supplements.extend(away_overage);
 
-        let competition = if friendly {
-            CompetitionKind::Friendly
-        } else if is_cup {
-            CompetitionKind::DomesticCup
-        } else {
-            CompetitionKind::League
-        };
+        (
+            home_team.get_rotation_match_squad_with_reserves(&home_supplements, &home_ctx),
+            away_team.get_rotation_match_squad_with_reserves(&away_supplements, &away_ctx),
+        )
+    }
+
+    fn select_competitive_match_squads<'a>(
+        home_side: &MatchdaySide<'a>,
+        away_side: &MatchdaySide<'a>,
+        clubs: &'a [Club],
+        ctx: &GlobalContext<'_>,
+        commitments: &MatchdayCommitments,
+    ) -> (crate::r#match::MatchSquad, crate::r#match::MatchSquad) {
+        let home_team = home_side.team;
+        let away_team = away_side.team;
+        let home_ctx = home_side.selection_context();
+        let away_ctx = away_side.selection_context();
+        let date = ctx.simulation.date.date();
+
+        let home_is_main = home_team.team_type == TeamType::Main;
+        let away_is_main = away_team.team_type == TeamType::Main;
+        let home_reserves = Self::collect_reserve_players(
+            clubs,
+            home_team.club_id,
+            home_team.id,
+            false,
+            home_is_main,
+            date,
+            commitments,
+        );
+        let away_reserves = Self::collect_reserve_players(
+            clubs,
+            away_team.club_id,
+            away_team.id,
+            false,
+            away_is_main,
+            date,
+            commitments,
+        );
+        (
+            home_team.get_enhanced_match_squad(&home_reserves, &home_ctx),
+            away_team.get_enhanced_match_squad(&away_reserves, &away_ctx),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_match_fixture(
+        scheduled_match: &LeagueMatch,
+        date: NaiveDate,
+        competition: CompetitionKind,
+        knockout: bool,
+        home_side: &MatchdaySide<'_>,
+        away_side: &MatchdaySide<'_>,
+        home_team: &Team,
+        is_derby: bool,
+        ctx: &GlobalContext<'_>,
+    ) -> FixtureContext {
         let mut fixture = FixtureContext::new(&scheduled_match.id, date, competition, knockout)
             .with_importance((home_side.stakes + away_side.stakes) * 0.5)
             .with_gate(RevenueModel::utilisation(
@@ -391,14 +545,7 @@ impl League {
         if let Some(continent) = &ctx.continent {
             fixture = fixture.on_continent(continent.id());
         }
-        Match::make(
-            scheduled_match.id.clone(),
-            scheduled_match.league_id,
-            &scheduled_match.league_slug,
-            home_squad,
-            away_squad,
-            fixture,
-        )
+        fixture
     }
 
     /// Resolve the club and hand the fixture to [`MatchdayPool`].

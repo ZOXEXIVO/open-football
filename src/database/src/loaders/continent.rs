@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use super::compiled::compiled;
+use super::compiled::CompiledDatabase;
 
 #[derive(Deserialize, Clone)]
 pub struct ContinentEntity {
@@ -12,6 +12,6 @@ pub struct ContinentLoader;
 
 impl ContinentLoader {
     pub fn load() -> Vec<ContinentEntity> {
-        compiled().continents.clone()
+        CompiledDatabase::get().continents.clone()
     }
 }

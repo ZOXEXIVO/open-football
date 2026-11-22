@@ -29,14 +29,13 @@ pub mod stats;
 pub mod tournament;
 
 pub use continental::WorldNationalCompetitions;
-pub use lookups::{world_country_elo, world_country_name, world_country_reputation};
+pub use lookups::WorldCountryLookup;
 pub use squad::{EmergencyCallupMetrics, NationalSquadBuilder};
 pub use stats::{
-    InternationalAppearance, InternationalMatchContext, apply_world_elo,
-    apply_world_international_stats, apply_world_international_stats_for_level,
-    collect_international_appearances, record_world_country_schedule,
+    InternationalAppearance, InternationalAppearances, InternationalMatchContext,
+    WorldCountrySchedule, WorldElo, WorldInternationalStats,
 };
-pub use tournament::apply_global_tournament_result;
+pub use tournament::GlobalTournamentMatch;
 
 #[cfg(test)]
 mod tests;

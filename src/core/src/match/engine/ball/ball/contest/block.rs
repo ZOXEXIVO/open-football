@@ -31,6 +31,26 @@ use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
 
+/// A read shot-block: the man, the corridor, the outcome bands and the
+/// deflection the ball leaves on.
+struct ShotBlockPlan {
+    blocker_pos: Vector3<f32>,
+    blocker_carrier: Carrier,
+    blocker_team: u32,
+    blocker_side: Option<PlayerSide>,
+    #[cfg(feature = "match-logs")]
+    blocker_gap: f32,
+    shot_dir: Vector3<f32>,
+    speed: f32,
+    rev_x: f32,
+    rev_y: f32,
+    tick: u64,
+    p_controlled: f32,
+    p_corner: f32,
+    p_safe: f32,
+    p_loose: f32,
+}
+
 impl Ball {
     /// **How high a defender can get something in the way of a shot**, in
     /// metres.
@@ -97,7 +117,6 @@ impl Ball {
     /// - Block:     shot-targeted; one roll per shot, a deflection
     ///
     /// Both are scoped to unowned balls with `in_flight_state > 0`.
-    #[expect(clippy::too_many_lines)]
     pub fn try_block_shot(
         &mut self,
         context: &MatchContext,
@@ -122,24 +141,7 @@ impl Ball {
         // the ball had climbed to by the time it reached him. See
         // [`PlayerReach::block_contact`].
         if let Some((blocker_id, outcome_roll)) = shot_target.blocked_by {
-            match self.block_contact_with(
-                blocker_id,
-                players,
-                Self::BLOCK_REACH,
-                Self::MAX_BLOCK_HEIGHT,
-            ) {
-                BlockContact::Coming => {}
-                // Over his head or past him. He did not get it, and the
-                // commitment goes with him — the shot has had its one roll.
-                BlockContact::Missed => {
-                    if let Some(t) = self.cached_shot_target.as_mut() {
-                        t.blocked_by = None;
-                    }
-                }
-                BlockContact::AtTheBody => {
-                    self.resolve_block(blocker_id, outcome_roll, context, players, events, true);
-                }
-            }
+            self.await_shot_block(blocker_id, outcome_roll, context, players, events);
             return;
         }
         // One shot, one roll — see `ShotTarget::block_rolled`.
@@ -170,154 +172,13 @@ impl Ball {
         if ball_velocity_2d < 0.5 {
             return; // Ball has stopped / nearly — not a live shot.
         }
-        let shot_dir_x = self.velocity.x / ball_velocity_2d;
-        let shot_dir_y = self.velocity.y / ball_velocity_2d;
+        let shot_dir = Vector3::new(self.velocity.x, self.velocity.y, 0.0) / ball_velocity_2d;
 
-        // Block window. Widened from 30u lookahead + 4u corridor so
-        // defenders near the shot line have a real chance to get a
-        // leg/body in. Real football blocks ~18-22% of shots (2-3 per
-        // team per match from ~13 shots); the engine emits ~0.01 blocks
-        // per defender per match.
-        //
-        // ⚠ That gap is NOT this window. Measured with `block_diag`
-        // (2026-08, n=400 at L14): of 246k shot-ticks reaching the
-        // check, 28% are above blocking height and **0.1% ever find a
-        // defender in the lane at all** — so the roll below almost never
-        // gets to happen. Widening the lookahead to 120u (15m, the
-        // distance shots are really taken from) and the corridor to 16u
-        // (2m, a committed lunge rather than a standing body) moved
-        // candidates from 0.0% to 0.1% and blocks not at all. Defenders
-        // are simply not between the ball and the goal while a shot is
-        // in flight, which is a positioning property of the engine and a
-        // separate piece of work from the block model. Both constants
-        // are therefore left where they were rather than carrying an
-        // unmeasured widening for no benefit.
-        // Widened 40/7 → 90/13 once the 25cm height bar above was lifted.
-        // The earlier attempt recorded in this comment measured no gain,
-        // but it was made while that bar silently threw away every ball
-        // above ankle height, so the corridor was never the thing being
-        // tested. 90u is 11 m — the range over which a defender can still
-        // get across to a shot — and 13u is 1.6 m, a committed lunge or
-        // slide rather than a standing body.
-        const BLOCK_LOOKAHEAD: f32 = 90.0;
-        const BLOCK_CORRIDOR: f32 = 16.0;
-
-        let mut best_blocker: Option<u32> = None;
-        let mut best_chance: f32 = 0.0;
-
-        for player in players {
-            // Only opposing outfielders block (GK save pipeline handles
-            // shots that reach the line; a GK blocking a shot at 5u
-            // out is already Catching/Diving).
-            if player.team_id == shooter_team || !player.can_play_ball() {
-                continue;
-            }
-            if player.tactical_position.current_position.position_group()
-                == PlayerFieldPositionGroup::Goalkeeper
-            {
-                continue;
-            }
-
-            #[cfg(feature = "match-logs")]
-            OPP_SEEN.fetch_add(1, Ordering::Relaxed);
-
-            // Project defender position onto the shot line.
-            let dx = player.position.x - self.position.x;
-            let dy = player.position.y - self.position.y;
-            let projection = dx * shot_dir_x + dy * shot_dir_y;
-            // Must be ahead of the ball along the shot line, within
-            // the lookahead window. 1u minimum so a defender level
-            // with the ball (who's already been passed) doesn't count.
-            if projection < 1.0 {
-                #[cfg(feature = "match-logs")]
-                BEHIND_BALL.fetch_add(1, Ordering::Relaxed);
-                continue;
-            }
-            if projection > BLOCK_LOOKAHEAD {
-                #[cfg(feature = "match-logs")]
-                BEYOND_LOOKAHEAD.fetch_add(1, Ordering::Relaxed);
-                continue;
-            }
-            // Perpendicular distance to the line.
-            let perp =
-                (dx - projection * shot_dir_x).powi(2) + (dy - projection * shot_dir_y).powi(2);
-            let perp_dist = perp.sqrt();
-            #[cfg(feature = "match-logs")]
-            {
-                IN_WINDOW.fetch_add(1, Ordering::Relaxed);
-                PERP_SUM_X100.fetch_add((perp_dist * 100.0) as u64, Ordering::Relaxed);
-            }
-            // How wide he covers depends on how high the ball is when it
-            // reaches him. A slide or a stretched leg takes a ball at his
-            // feet from two metres across; at his chest or his head only
-            // the body is in the way. One corridor at every height let any
-            // of the seven defenders a corner packs into the box lunge
-            // across a header, and three in ten were blocked.
-            let reach_ticks = projection / ball_velocity_2d;
-            let height_there = (self.position.z + self.velocity.z * reach_ticks
-                - 0.5 * GRAVITY_PER_TICK * reach_ticks * reach_ticks)
-                .max(0.0);
-            let corridor = BLOCK_CORRIDOR
-                * (1.0 - Self::AIRBORNE_NARROWING * height_there / Self::MAX_BLOCK_HEIGHT)
-                    .clamp(1.0 - Self::AIRBORNE_NARROWING, 1.0);
-            if perp_dist > corridor {
-                #[cfg(feature = "match-logs")]
-                OUTSIDE_CORRIDOR.fetch_add(1, Ordering::Relaxed);
-                continue;
-            }
-
-            // Skill mix: bravery (willingness to step into shot),
-            // positioning (read the angle), anticipation (read the
-            // cue), jumping/agility (get the body in the way), plus
-            // tackling (stretching / last-ditch leg out). Weighted
-            // toward mental attributes since shot-blocking is 70%
-            // reading the shooter's body shape. Routed through
-            // `effective_skill` so a tired defender blocks worse.
-            let block_minute = sc::minute_from_ticks(self.current_tick_cached);
-            let block_tech = EffSkillCtx::technical(block_minute);
-            let block_mental = EffSkillCtx::mental(block_minute);
-            let block_expl = EffSkillCtx::explosive(block_minute);
-            let bravery = effective_skill(player, player.skills.mental.bravery, block_mental);
-            let positioning =
-                effective_skill(player, player.skills.mental.positioning, block_mental);
-            let anticipation =
-                effective_skill(player, player.skills.mental.anticipation, block_mental);
-            let agility = effective_skill(player, player.skills.physical.agility, block_expl);
-            let tackling = effective_skill(player, player.skills.technical.tackling, block_tech);
-            let skill_factor = (bravery * 0.25
-                + positioning * 0.25
-                + anticipation * 0.25
-                + agility * 0.15
-                + tackling * 0.10)
-                / 20.0;
-
-            // Line factor — closer to the ball is better because the
-            // defender's body is actually in the way. Farther along the
-            // line means the shot has had time to rise / dip / move.
-            let line_factor = 1.0 - (projection / BLOCK_LOOKAHEAD) * 0.4;
-            // Perp factor — right on the line is best. Steeper fall-off
-            // than before (0.5 from center → basically full chance;
-            // 1.0 from edge → 60% chance) so wings-of-corridor still
-            // produce blocks at meaningful rates.
-            let perp_factor = 1.0 - (perp_dist / corridor) * 0.5;
-            // Fast shots are harder to get in front of — but reaction
-            // reflexes matter too. Elite defender reads the shape and
-            // steps a tick earlier.
-            let speed_penalty = 1.0 / (1.0 + ball_velocity_2d * 0.10);
-
-            // At 0.95 the four factors above compounded to ~27% for an
-            // ordinary defender standing in the way, and the engine
-            // blocked 12% of shots against a real 18-22%. 2.0 measures
-            // ~18% (300 matches at L14) now that the corridor narrows for
-            // a ball in the air; without that narrowing the same rate
-            // blocked three set-piece headers in ten.
-            let chance = skill_factor * line_factor * perp_factor * speed_penalty * 2.0;
-
-            if chance > best_chance {
-                best_chance = chance;
-                best_blocker = Some(player.id);
-            }
-        }
+        let Some((blocker_id, best_chance)) =
+            self.best_shot_blocker(shooter_team, shot_dir, ball_velocity_2d, players)
+        else {
+            return;
+        };
 
         // RNG threshold instead of deterministic cutoff: a 30% block
         // chance still allows the shot through 70% of the time, which
@@ -326,17 +187,14 @@ impl Ball {
         // Latch BEFORE rolling so a shot that survives the best-placed
         // defender is not re-offered to him (or to a worse one) on the
         // next tick.
-        if best_blocker.is_some() {
-            #[cfg(feature = "match-logs")]
-            CANDIDATES.fetch_add(1, Ordering::Relaxed);
-            if let Some(t) = self.cached_shot_target.as_mut() {
-                t.block_rolled = true;
-            }
+        #[cfg(feature = "match-logs")]
+        CANDIDATES.fetch_add(1, Ordering::Relaxed);
+        if let Some(t) = self.cached_shot_target.as_mut() {
+            t.block_rolled = true;
         }
-        let blocker_id = match best_blocker {
-            Some(id) if context.rng.unit_f32() < best_chance.clamp(0.03, 0.70) => id,
-            _ => return,
-        };
+        if !(context.rng.unit_f32() < best_chance.clamp(0.03, 0.70)) {
+            return;
+        }
         #[cfg(feature = "match-logs")]
         FIRED.fetch_add(1, Ordering::Relaxed);
 
@@ -373,6 +231,211 @@ impl Ball {
                 }
             }
         }
+    }
+
+    /// A block already won, waiting for the ball to reach the man who won
+    /// it. The commitment is dropped when the shot has had its one roll.
+    fn await_shot_block(
+        &mut self,
+        blocker_id: u32,
+        outcome_roll: f32,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        match self.block_contact_with(
+            blocker_id,
+            players,
+            Self::BLOCK_REACH,
+            Self::MAX_BLOCK_HEIGHT,
+        ) {
+            BlockContact::Coming => {}
+            // Over his head or past him. He did not get it, and the
+            // commitment goes with him — the shot has had its one roll.
+            BlockContact::Missed => {
+                if let Some(t) = self.cached_shot_target.as_mut() {
+                    t.blocked_by = None;
+                }
+            }
+            BlockContact::AtTheBody => {
+                self.resolve_block(blocker_id, outcome_roll, context, players, events, true);
+            }
+        }
+    }
+
+    /// The best-placed opposing outfielder in the shot's corridor, with the
+    /// chance he was priced at.
+    fn best_shot_blocker(
+        &self,
+        shooter_team: u32,
+        shot_dir: Vector3<f32>,
+        ball_velocity_2d: f32,
+        players: &[MatchPlayer],
+    ) -> Option<(u32, f32)> {
+        // Block window. Widened from 30u lookahead + 4u corridor so
+        // defenders near the shot line have a real chance to get a
+        // leg/body in. Real football blocks ~18-22% of shots (2-3 per
+        // team per match from ~13 shots); the engine emits ~0.01 blocks
+        // per defender per match.
+        //
+        // ⚠ That gap is NOT this window. Measured with `block_diag`
+        // (2026-08, n=400 at L14): of 246k shot-ticks reaching the
+        // check, 28% are above blocking height and **0.1% ever find a
+        // defender in the lane at all** — so the roll below almost never
+        // gets to happen. Widening the lookahead to 120u (15m, the
+        // distance shots are really taken from) and the corridor to 16u
+        // (2m, a committed lunge rather than a standing body) moved
+        // candidates from 0.0% to 0.1% and blocks not at all. Defenders
+        // are simply not between the ball and the goal while a shot is
+        // in flight, which is a positioning property of the engine and a
+        // separate piece of work from the block model. Both constants
+        // are therefore left where they were rather than carrying an
+        // unmeasured widening for no benefit.
+        // Widened 40/7 → 90/13 once the 25cm height bar above was lifted.
+        // The earlier attempt recorded in this comment measured no gain,
+        // but it was made while that bar silently threw away every ball
+        // above ankle height, so the corridor was never the thing being
+        // tested. 90u is 11 m — the range over which a defender can still
+        // get across to a shot — and 13u is 1.6 m, a committed lunge or a
+        // slide rather than a standing body.
+        const BLOCK_LOOKAHEAD: f32 = 90.0;
+        const BLOCK_CORRIDOR: f32 = 16.0;
+
+        let mut best_blocker: Option<u32> = None;
+        let mut best_chance: f32 = 0.0;
+
+        for player in players {
+            // Only opposing outfielders block (GK save pipeline handles
+            // shots that reach the line; a GK blocking a shot at 5u
+            // out is already Catching/Diving).
+            if player.team_id == shooter_team || !player.can_play_ball() {
+                continue;
+            }
+            if player.tactical_position.current_position.position_group()
+                == PlayerFieldPositionGroup::Goalkeeper
+            {
+                continue;
+            }
+
+            #[cfg(feature = "match-logs")]
+            OPP_SEEN.fetch_add(1, Ordering::Relaxed);
+
+            let Some(chance) = self.shot_block_chance(
+                player,
+                shot_dir,
+                ball_velocity_2d,
+                BLOCK_LOOKAHEAD,
+                BLOCK_CORRIDOR,
+            ) else {
+                continue;
+            };
+            if chance > best_chance {
+                best_chance = chance;
+                best_blocker = Some(player.id);
+            }
+        }
+
+        best_blocker.map(|id| (id, best_chance))
+    }
+
+    /// What one defender's body is worth against this shot, if it is in the
+    /// corridor at all.
+    fn shot_block_chance(
+        &self,
+        player: &MatchPlayer,
+        shot_dir: Vector3<f32>,
+        ball_velocity_2d: f32,
+        lookahead: f32,
+        corridor: f32,
+    ) -> Option<f32> {
+        // Project defender position onto the shot line.
+        let dx = player.position.x - self.position.x;
+        let dy = player.position.y - self.position.y;
+        let projection = dx * shot_dir.x + dy * shot_dir.y;
+        // Must be ahead of the ball along the shot line, within
+        // the lookahead window. 1u minimum so a defender level
+        // with the ball (who's already been passed) doesn't count.
+        if projection < 1.0 {
+            #[cfg(feature = "match-logs")]
+            BEHIND_BALL.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        if projection > lookahead {
+            #[cfg(feature = "match-logs")]
+            BEYOND_LOOKAHEAD.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        // Perpendicular distance to the line.
+        let perp = (dx - projection * shot_dir.x).powi(2) + (dy - projection * shot_dir.y).powi(2);
+        let perp_dist = perp.sqrt();
+        #[cfg(feature = "match-logs")]
+        {
+            IN_WINDOW.fetch_add(1, Ordering::Relaxed);
+            PERP_SUM_X100.fetch_add((perp_dist * 100.0) as u64, Ordering::Relaxed);
+        }
+        // How wide he covers depends on how high the ball is when it
+        // reaches him. A slide or a stretched leg takes a ball at his
+        // feet from two metres across; at his chest or his head only
+        // the body is in the way. One corridor at every height let any
+        // of the seven defenders a corner packs into the box lunge
+        // across a header, and three in ten were blocked.
+        let reach_ticks = projection / ball_velocity_2d;
+        let height_there = (self.position.z + self.velocity.z * reach_ticks
+            - 0.5 * GRAVITY_PER_TICK * reach_ticks * reach_ticks)
+            .max(0.0);
+        let corridor = corridor
+            * (1.0 - Self::AIRBORNE_NARROWING * height_there / Self::MAX_BLOCK_HEIGHT)
+                .clamp(1.0 - Self::AIRBORNE_NARROWING, 1.0);
+        if perp_dist > corridor {
+            #[cfg(feature = "match-logs")]
+            OUTSIDE_CORRIDOR.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+
+        // Skill mix: bravery (willingness to step into shot),
+        // positioning (read the angle), anticipation (read the
+        // cue), jumping/agility (get the body in the way), plus
+        // tackling (stretching / last-ditch leg out). Weighted
+        // toward mental attributes since shot-blocking is 70%
+        // reading the shooter's body shape. Routed through
+        // `effective_skill` so a tired defender blocks worse.
+        let block_minute = sc::minute_from_ticks(self.current_tick_cached);
+        let block_tech = EffSkillCtx::technical(block_minute);
+        let block_mental = EffSkillCtx::mental(block_minute);
+        let block_expl = EffSkillCtx::explosive(block_minute);
+        let bravery = effective_skill(player, player.skills.mental.bravery, block_mental);
+        let positioning = effective_skill(player, player.skills.mental.positioning, block_mental);
+        let anticipation = effective_skill(player, player.skills.mental.anticipation, block_mental);
+        let agility = effective_skill(player, player.skills.physical.agility, block_expl);
+        let tackling = effective_skill(player, player.skills.technical.tackling, block_tech);
+        let skill_factor = (bravery * 0.25
+            + positioning * 0.25
+            + anticipation * 0.25
+            + agility * 0.15
+            + tackling * 0.10)
+            / 20.0;
+
+        // Line factor — closer to the ball is better because the
+        // defender's body is actually in the way. Farther along the
+        // line means the shot has had time to rise / dip / move.
+        let line_factor = 1.0 - (projection / lookahead) * 0.4;
+        // Perp factor — right on the line is best. Steeper fall-off
+        // than before (0.5 from center → basically full chance;
+        // 1.0 from edge → 60% chance) so wings-of-corridor still
+        // produce blocks at meaningful rates.
+        let perp_factor = 1.0 - (perp_dist / corridor) * 0.5;
+        // Fast shots are harder to get in front of — but reaction
+        // reflexes matter too. Elite defender reads the shape and
+        // steps a tick earlier.
+        let speed_penalty = 1.0 / (1.0 + ball_velocity_2d * 0.10);
+
+        // At 0.95 the four factors above compounded to ~27% for an
+        // ordinary defender standing in the way, and the engine
+        // blocked 12% of shots against a real 18-22%. 2.0 measures
+        // ~18% (300 matches at L14) now that the corridor narrows for
+        // a ball in the air; without that narrowing the same rate
+        // blocked three set-piece headers in ten.
+        Some(skill_factor * line_factor * perp_factor * speed_penalty * 2.0)
     }
 
     /// How much of the blocking corridor a ball at standing height loses
@@ -432,7 +495,6 @@ impl Ball {
         BallRoll::speed_to_rest_at(rest).min(arrived)
     }
 
-    #[expect(clippy::too_many_lines)]
     pub(crate) fn resolve_block(
         &mut self,
         blocker_id: u32,
@@ -442,102 +504,14 @@ impl Ball {
         events: &mut EventCollection,
         deferred: bool,
     ) {
-        let ball_velocity_2d =
-            (self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y).sqrt();
-        if ball_velocity_2d < 0.3 {
-            // It has died on the way to him — there is nothing left to
-            // deflect, and the loose-ball machinery owns it now.
-            self.cached_shot_target = None;
+        let Some(plan) = self.shot_block_plan(blocker_id, context, players, events, deferred)
+        else {
             return;
-        }
-        let shot_dir_x = self.velocity.x / ball_velocity_2d;
-        let shot_dir_y = self.velocity.y / ball_velocity_2d;
-
-        // Outcome distribution. Real blocks rarely produce clean
-        // possession — they produce loose balls, deflections wide for a
-        // corner, sideways skips, or (rarely) deflections back into
-        // danger. The previous deterministic ownership flow over-credited
-        // defenders.
-        let blocker = match players.iter().find(|p| p.id == blocker_id) {
-            Some(p) => p,
-            None => return,
         };
-        let blocker_pos = blocker.position;
-        let blocker_carrier = Carrier::of(blocker);
-        let blocker_team = blocker.team_id;
-        let blocker_side = blocker.side;
-        let composure = (blocker.skills.mental.composure / 20.0).clamp(0.0, 1.0);
-        let technique = (blocker.skills.technical.technique / 20.0).clamp(0.0, 1.0);
-        let ball_speed_low_bonus = if ball_velocity_2d < 2.0 { 0.06 } else { 0.0 };
-
-        // The ball meets him at arm height with an arm out — handball,
-        // whatever happens to the ball. A man who reads the moment keeps
-        // his arms in.
-        let arm_out = Self::handball_chance(self.position.z, blocker.skills.mental.decisions);
-        if context.rng.unit_f32() < arm_out {
-            let goal_bound = self.cached_shot_target.is_some_and(|target| {
-                (target.goal_line_y - self.field_height * 0.5).abs() < GOAL_WIDTH
-                    && target.goal_line_z < GOAL_HEIGHT
-            });
-            events.add_ball_event(BallEvent::Handball(blocker_id, goal_bound));
-        }
-        // Taking the ball cleanly off a block means having it at your
-        // feet, so it is only available to a defender the ball actually
-        // reached — see the position note below. Blocking at a stretch
-        // from range always leaves a loose ball. Without this the
-        // controlled branch could hand ownership to a man 11 m away, and
-        // `move_to` would drop it again on the next tick as an
-        // unreachable owner.
-        let blocker_gap = (blocker_pos.x - self.position.x).hypot(blocker_pos.y - self.position.y);
+        let blocker_pos = plan.blocker_pos;
         #[cfg(feature = "match-logs")]
-        BlockDiag::note_contact(
-            0,
-            self.position.z,
-            blocker_gap,
-            Self::MAX_BLOCK_HEIGHT,
-            deferred,
-        );
-        #[cfg(not(feature = "match-logs"))]
-        let _ = deferred;
-        let blocker_in_reach = blocker_gap <= CONTROL_DISTANCE;
-        let controlled_block_prob = if blocker_in_reach {
-            (0.06 + composure * 0.05 + technique * 0.04 + ball_speed_low_bonus).clamp(0.06, 0.30)
-        } else {
-            0.0
-        };
-
-        // Deflection direction: away from the shot line, with a random ±45° spread.
-        let angle: f32 = (context.rng.unit_f32() - 0.5) * 1.56;
-        let rev_x = -shot_dir_x * angle.cos() - (-shot_dir_y) * angle.sin();
-        let rev_y = -shot_dir_x * angle.sin() + (-shot_dir_y) * angle.cos();
-        let tick = self.current_tick_cached;
-
-        // ⚠ THE CORNER SHARE HERE IS DELIBERATELY FLAT, and depth-scaling
-        // it is a mistake worth documenting because the idea is tempting.
-        //
-        // A defender who HOOKS a delivery behind is choosing to, and the
-        // closer to his own line he is the less choice he has — that is
-        // why `heads_it_behind` in the cross contest scales with depth. A
-        // BLOCKED SHOT is not a choice at all: the ball keeps most of its
-        // goalward momentum through a small deflection, so it carries over
-        // the byline from sixteen metres about as readily as from six. The
-        // thing that decides is the deflection angle, which the spread
-        // above already draws.
-        //
-        // Scaling it on depth was measured against this engine's own
-        // geometry and would have made it worse, not better: blocks land
-        // at ~119u from the blocker's line (`at the strike` in the shot
-        // census), so an `urgency²` curve over the penalty area puts
-        // almost every block on the floor of the curve and would have cut
-        // block-fed corners from 0.74 a match to near zero.
-        let roll = outcome_roll;
-        let p_controlled = controlled_block_prob;
-        // A loose block is a second ball in front of goal; the share was
-        // re-fitted 0.40 → 0.20 toward the corner against goals and shots.
-        let p_corner = p_controlled + 0.43;
-        let p_safe = p_corner + 0.23;
-        let p_loose = p_safe + 0.20;
-        // remainder ~14% → unlucky deflection toward goal (slows but stays live)
+        let blocker_gap = plan.blocker_gap;
+        let tick = plan.tick;
 
         // A block happens where the BALL is, not where the defender is.
         //
@@ -574,7 +548,7 @@ impl Ball {
         {
             self.touch_kind_hint = Some(TouchKind::ShotBlock);
         }
-        self.record_touch(blocker_id, blocker_team, tick, false);
+        self.record_touch(blocker_id, plan.blocker_team, tick, false);
         self.pass_origin_restart = PassOriginRestart::OpenPlay;
         // Dedicated Blocked event so the block credit can't leak into a
         // separate Intercepted that happens to share the same tick — the
@@ -583,31 +557,15 @@ impl Ball {
         let block_position = self.position;
         events.add_ball_event(BallEvent::Blocked(blocker_id, block_position));
 
-        if roll < p_controlled {
-            // Clean block — the defender has it under his touch.
-            #[cfg(feature = "match-logs")]
-            {
-                StrikeCensus::note_grant(GrantPath::CONTEST, self.position.z);
-                self.open_arrival(GrantPath::CONTEST, blocker_pos);
-            }
-            #[cfg(feature = "match-logs")]
-            context
-                .defender_census
-                .borrow_mut()
-                .tag_take(TakeRule::ShotBlock, blocker_id, tick);
-            self.current_owner = Some(blocker_id);
-            self.touch(blocker_id, blocker_carrier);
-            self.flags.in_flight_state = 0;
-            self.claim_cooldown = 25;
-            #[cfg(feature = "match-logs")]
-            context.defender_census.borrow_mut().note_deflection(
-                DeflectionKind::BlockKept,
-                self.position,
-                self.velocity,
+        if outcome_roll < plan.p_controlled {
+            self.keep_shot_block(
+                blocker_id,
                 blocker_pos,
+                plan.blocker_carrier,
+                context,
                 tick,
+                events,
             );
-            events.add_player_event(PlayerEvent::ClaimBall(blocker_id));
             return;
         }
 
@@ -619,139 +577,380 @@ impl Ball {
         // defender who in physics terms hasn't actually picked the ball
         // up. Possession is decided by whoever claims the loose ball
         // next, not by the block itself.
-        if roll < p_corner {
+        if outcome_roll < plan.p_corner {
+            self.corner_shot_block(
+                plan.blocker_side,
+                plan.rev_y,
+                plan.speed,
+                blocker_pos,
+                tick,
+                context,
+            );
+            return;
+        }
+
+        if outcome_roll < plan.p_safe {
+            self.sideways_shot_block(plan.shot_dir, plan.speed, blocker_pos, tick, context);
+            return;
+        }
+
+        if outcome_roll < plan.p_loose {
+            self.loose_shot_block(
+                blocker_id,
+                plan.rev_x,
+                plan.rev_y,
+                plan.speed,
+                blocker_pos,
+                tick,
+                context,
+            );
+            return;
+        }
+
+        self.on_goal_shot_block(
+            blocker_id,
+            plan.shot_dir,
+            plan.speed,
+            blocker_pos,
+            tick,
+            context,
+        );
+    }
+
+    /// Read the block: the man, his reach, the outcome bands and the
+    /// deflection the ball leaves on.
+    fn shot_block_plan(
+        &mut self,
+        blocker_id: u32,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+        deferred: bool,
+    ) -> Option<ShotBlockPlan> {
+        let ball_velocity_2d =
+            (self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y).sqrt();
+        if ball_velocity_2d < 0.3 {
+            // It has died on the way to him — there is nothing left to
+            // deflect, and the loose-ball machinery owns it now.
+            self.cached_shot_target = None;
+            return None;
+        }
+        let shot_dir = Vector3::new(self.velocity.x, self.velocity.y, 0.0) / ball_velocity_2d;
+
+        // Outcome distribution. Real blocks rarely produce clean
+        // possession — they produce loose balls, deflections wide for a
+        // corner, sideways skips, or (rarely) deflections back into
+        // danger. The previous deterministic ownership flow over-credited
+        // defenders.
+        let blocker = players.iter().find(|p| p.id == blocker_id)?;
+        let blocker_pos = blocker.position;
+        let blocker_carrier = Carrier::of(blocker);
+        let blocker_team = blocker.team_id;
+        let blocker_side = blocker.side;
+        let composure = (blocker.skills.mental.composure / 20.0).clamp(0.0, 1.0);
+        let technique = (blocker.skills.technical.technique / 20.0).clamp(0.0, 1.0);
+        let ball_speed_low_bonus = if ball_velocity_2d < 2.0 { 0.06 } else { 0.0 };
+
+        self.note_block_handball(blocker, context, events);
+        // Taking the ball cleanly off a block means having it at your
+        // feet, so it is only available to a defender the ball actually
+        // reached — see the position note below. Blocking at a stretch
+        // from range always leaves a loose ball. Without this the
+        // controlled branch could hand ownership to a man 11 m away, and
+        // `move_to` would drop it again on the next tick as an
+        // unreachable owner.
+        let blocker_gap = (blocker_pos.x - self.position.x).hypot(blocker_pos.y - self.position.y);
+        #[cfg(feature = "match-logs")]
+        BlockDiag::note_contact(
+            0,
+            self.position.z,
+            blocker_gap,
+            Self::MAX_BLOCK_HEIGHT,
+            deferred,
+        );
+        #[cfg(not(feature = "match-logs"))]
+        let _ = deferred;
+        let blocker_in_reach = blocker_gap <= CONTROL_DISTANCE;
+        let controlled_block_prob = if blocker_in_reach {
+            (0.06 + composure * 0.05 + technique * 0.04 + ball_speed_low_bonus).clamp(0.06, 0.30)
+        } else {
+            0.0
+        };
+
+        // Deflection direction: away from the shot line, with a random ±45° spread.
+        let angle: f32 = (context.rng.unit_f32() - 0.5) * 1.56;
+        let rev_x = -shot_dir.x * angle.cos() - (-shot_dir.y) * angle.sin();
+        let rev_y = -shot_dir.x * angle.sin() + (-shot_dir.y) * angle.cos();
+        let tick = self.current_tick_cached;
+
+        // ⚠ THE CORNER SHARE HERE IS DELIBERATELY FLAT, and depth-scaling
+        // it is a mistake worth documenting because the idea is tempting.
+        //
+        // A defender who HOOKS a delivery behind is choosing to, and the
+        // closer to his own line he is the less choice he has — that is
+        // why `heads_it_behind` in the cross contest scales with depth. A
+        // BLOCKED SHOT is not a choice at all: the ball keeps most of its
+        // goalward momentum through a small deflection, so it carries over
+        // the byline from sixteen metres about as readily as from six. The
+        // thing that decides is the deflection angle, which the spread
+        // above already draws.
+        //
+        // Scaling it on depth was measured against this engine's own
+        // geometry and would have made it worse, not better: blocks land
+        // at ~119u from the blocker's line (`at the strike` in the shot
+        // census), so an `urgency²` curve over the penalty area puts
+        // almost every block on the floor of the curve and would have cut
+        // block-fed corners from 0.74 a match to near zero.
+        let p_controlled = controlled_block_prob;
+        // A loose block is a second ball in front of goal; the share was
+        // re-fitted 0.40 → 0.20 toward the corner against goals and shots.
+        let p_corner = p_controlled + 0.43;
+        let p_safe = p_corner + 0.23;
+        let p_loose = p_safe + 0.20;
+        // remainder ~14% → unlucky deflection toward goal (slows but stays live)
+        Some(ShotBlockPlan {
+            blocker_pos,
+            blocker_carrier,
+            blocker_team,
+            blocker_side,
             #[cfg(feature = "match-logs")]
-            crate::mid_run_diag::BLOCK_CORNER_FIRED.fetch_add(1, Ordering::Relaxed);
-            // Deflection out for a corner — push the ball past the
-            // defender's OWN byline and WIDE OF THE POST (toward the corner
-            // flag) so the endline resolver awards a corner (defender = last
-            // toucher → corner for the attackers). Aiming merely at the
-            // byline (the old ±1.2 y nudge) left a central block crossing
-            // BETWEEN the posts → goal kick / own goal, so blocks almost
-            // never became corners (engine ran ~0.5 corners/match vs ~10
-            // real). The ball must finish outside `center ± GOAL_WIDTH`.
-            let endline_x = match blocker_side {
-                Some(PlayerSide::Left) => 0.0_f32,
-                Some(PlayerSide::Right) => self.field_width,
-                None => {
-                    if self.position.x < self.field_width * 0.5 {
-                        0.0
-                    } else {
-                        self.field_width
-                    }
+            blocker_gap,
+            shot_dir,
+            speed: ball_velocity_2d,
+            rev_x,
+            rev_y,
+            tick,
+            p_controlled,
+            p_corner,
+            p_safe,
+            p_loose,
+        })
+    }
+
+    /// The ball meets him at arm height with an arm out — handball,
+    /// whatever happens to the ball. A man who reads the moment keeps his
+    /// arms in.
+    fn note_block_handball(
+        &mut self,
+        blocker: &MatchPlayer,
+        context: &MatchContext,
+        events: &mut EventCollection,
+    ) {
+        let arm_out = Self::handball_chance(self.position.z, blocker.skills.mental.decisions);
+        if context.rng.unit_f32() < arm_out {
+            let goal_bound = self.cached_shot_target.is_some_and(|target| {
+                (target.goal_line_y - self.field_height * 0.5).abs() < GOAL_WIDTH
+                    && target.goal_line_z < GOAL_HEIGHT
+            });
+            events.add_ball_event(BallEvent::Handball(blocker.id, goal_bound));
+        }
+    }
+
+    /// Clean block — the defender has it under his touch.
+    fn keep_shot_block(
+        &mut self,
+        blocker_id: u32,
+        blocker_pos: Vector3<f32>,
+        blocker_carrier: Carrier,
+        context: &MatchContext,
+        tick: u64,
+        events: &mut EventCollection,
+    ) {
+        #[cfg(not(feature = "match-logs"))]
+        let _ = (blocker_pos, context, tick);
+        #[cfg(feature = "match-logs")]
+        {
+            StrikeCensus::note_grant(GrantPath::CONTEST, self.position.z);
+            self.open_arrival(GrantPath::CONTEST, blocker_pos);
+        }
+        #[cfg(feature = "match-logs")]
+        context
+            .defender_census
+            .borrow_mut()
+            .tag_take(TakeRule::ShotBlock, blocker_id, tick);
+        self.current_owner = Some(blocker_id);
+        self.touch(blocker_id, blocker_carrier);
+        self.flags.in_flight_state = 0;
+        self.claim_cooldown = 25;
+        #[cfg(feature = "match-logs")]
+        context.defender_census.borrow_mut().note_deflection(
+            DeflectionKind::BlockKept,
+            self.position,
+            self.velocity,
+            blocker_pos,
+            tick,
+        );
+        events.add_player_event(PlayerEvent::ClaimBall(blocker_id));
+    }
+
+    /// Deflection out for a corner — push the ball past the defender's OWN
+    /// byline and WIDE OF THE POST (toward the corner flag) so the endline
+    /// resolver awards a corner (defender = last toucher → corner for the
+    /// attackers). Aiming merely at the byline (the old ±1.2 y nudge) left
+    /// a central block crossing BETWEEN the posts → goal kick / own goal,
+    /// so blocks almost never became corners (engine ran ~0.5 corners/match
+    /// vs ~10 real). The ball must finish outside `center ± GOAL_WIDTH`.
+    fn corner_shot_block(
+        &mut self,
+        blocker_side: Option<PlayerSide>,
+        rev_y: f32,
+        ball_velocity_2d: f32,
+        blocker_pos: Vector3<f32>,
+        tick: u64,
+        context: &MatchContext,
+    ) {
+        #[cfg(not(feature = "match-logs"))]
+        let _ = (blocker_pos, tick, context);
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::BLOCK_CORNER_FIRED.fetch_add(1, Ordering::Relaxed);
+        let endline_x = match blocker_side {
+            Some(PlayerSide::Left) => 0.0_f32,
+            Some(PlayerSide::Right) => self.field_width,
+            None => {
+                if self.position.x < self.field_width * 0.5 {
+                    0.0
+                } else {
+                    self.field_width
                 }
-            };
-            let center_y = self.field_height * 0.5;
-            // Deflect toward the touchline the ball is already drifting to
-            // (sign of the reverse-deflection y), past the post.
-            let to_top = if rev_y.abs() > 0.01 {
-                rev_y < 0.0
-            } else {
-                self.position.y < center_y
-            };
-            let wide_y = if to_top {
-                (center_y - GOAL_WIDTH - self.field_height * 0.05).max(2.0)
-            } else {
-                (center_y + GOAL_WIDTH + self.field_height * 0.05).min(self.field_height - 2.0)
-            };
-            let dx = endline_x - self.position.x;
-            let dy = wide_y - self.position.y;
-            let dist = (dx * dx + dy * dy).sqrt().max(1.0);
-            // Solved to the line alone it would leave at a walking pace and
-            // be collected by the men around the block: it goes out because
-            // it leaves them, never faster than it came.
-            let speed = (ball_velocity_2d * 0.6)
-                .clamp(3.0, 6.0)
-                .min(ball_velocity_2d);
-            self.velocity.x = (dx / dist) * speed;
-            self.velocity.y = (dy / dist) * speed;
-            self.sink_to_ground();
-            self.current_owner = None;
-            self.flags.in_flight_state = 30;
-            // Hold off re-claims so the deflection crosses the byline before
-            // a covering defender grabs it back (else it never becomes a
-            // corner — the whole point of this branch).
-            self.claim_cooldown = 16;
-            #[cfg(feature = "match-logs")]
-            context.defender_census.borrow_mut().note_deflection(
-                DeflectionKind::BlockBehind,
-                self.position,
-                self.velocity,
-                blocker_pos,
-                tick,
-            );
-            return;
-        }
+            }
+        };
+        let center_y = self.field_height * 0.5;
+        // Deflect toward the touchline the ball is already drifting to
+        // (sign of the reverse-deflection y), past the post.
+        let to_top = if rev_y.abs() > 0.01 {
+            rev_y < 0.0
+        } else {
+            self.position.y < center_y
+        };
+        let wide_y = if to_top {
+            (center_y - GOAL_WIDTH - self.field_height * 0.05).max(2.0)
+        } else {
+            (center_y + GOAL_WIDTH + self.field_height * 0.05).min(self.field_height - 2.0)
+        };
+        let dx = endline_x - self.position.x;
+        let dy = wide_y - self.position.y;
+        let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+        // Solved to the line alone it would leave at a walking pace and
+        // be collected by the men around the block: it goes out because
+        // it leaves them, never faster than it came.
+        let speed = (ball_velocity_2d * 0.6)
+            .clamp(3.0, 6.0)
+            .min(ball_velocity_2d);
+        self.velocity.x = (dx / dist) * speed;
+        self.velocity.y = (dy / dist) * speed;
+        self.sink_to_ground();
+        self.current_owner = None;
+        self.flags.in_flight_state = 30;
+        // Hold off re-claims so the deflection crosses the byline before
+        // a covering defender grabs it back (else it never becomes a
+        // corner — the whole point of this branch).
+        self.claim_cooldown = 16;
+        #[cfg(feature = "match-logs")]
+        context.defender_census.borrow_mut().note_deflection(
+            DeflectionKind::BlockBehind,
+            self.position,
+            self.velocity,
+            blocker_pos,
+            tick,
+        );
+    }
 
-        if roll < p_safe {
-            // Safe sideways deflection — perpendicular skip away from
-            // both goals. Loose ball; either team can recover.
-            let safe_speed = Self::rest_speed(Self::SIDEWAYS_REST, ball_velocity_2d, &context.rng);
-            // Rotate shot direction 90° (sign chosen by random) to skip sideways.
-            let sign = if context.rng.unit_f32() < 0.5 {
-                -1.0
-            } else {
-                1.0
-            };
-            self.velocity.x = -shot_dir_y * sign * safe_speed;
-            self.velocity.y = shot_dir_x * sign * safe_speed;
-            self.sink_to_ground();
-            self.current_owner = None;
-            self.flags.in_flight_state = 25;
-            self.claim_cooldown = 0;
-            #[cfg(feature = "match-logs")]
-            context.defender_census.borrow_mut().note_deflection(
-                DeflectionKind::BlockSideways,
-                self.position,
-                self.velocity,
-                blocker_pos,
-                tick,
-            );
-            return;
-        }
+    /// Safe sideways deflection — perpendicular skip away from both goals.
+    /// Loose ball; either team can recover.
+    fn sideways_shot_block(
+        &mut self,
+        shot_dir: Vector3<f32>,
+        ball_velocity_2d: f32,
+        blocker_pos: Vector3<f32>,
+        tick: u64,
+        context: &MatchContext,
+    ) {
+        #[cfg(not(feature = "match-logs"))]
+        let _ = (blocker_pos, tick);
+        let safe_speed = Self::rest_speed(Self::SIDEWAYS_REST, ball_velocity_2d, &context.rng);
+        // Rotate shot direction 90° (sign chosen by random) to skip sideways.
+        let sign = if context.rng.unit_f32() < 0.5 {
+            -1.0
+        } else {
+            1.0
+        };
+        self.velocity.x = -shot_dir.y * sign * safe_speed;
+        self.velocity.y = shot_dir.x * sign * safe_speed;
+        self.sink_to_ground();
+        self.current_owner = None;
+        self.flags.in_flight_state = 25;
+        self.claim_cooldown = 0;
+        #[cfg(feature = "match-logs")]
+        context.defender_census.borrow_mut().note_deflection(
+            DeflectionKind::BlockSideways,
+            self.position,
+            self.velocity,
+            blocker_pos,
+            tick,
+        );
+    }
 
-        if roll < p_loose {
-            // Loose central rebound — ball trickles in front of the
-            // defender, often producing a second-ball contest. Arms the
-            // rebound window (team shot-spacing exemption) so the
-            // second ball can actually be struck. The blocker is the
-            // last player the ball came off — recording him as previous
-            // owner makes the ATTACKERS the intercept-eligible side
-            // during the flight window (the spill is the defender's
-            // touch, not the shooter's pass), restoring the two-sided
-            // second-ball race.
-            self.last_rebound_tick = tick;
-            self.previous_owner = Some(blocker_id);
-            let loose_speed = Self::rest_speed(Self::LOOSE_REST, ball_velocity_2d, &context.rng);
-            self.velocity.x = rev_x * loose_speed;
-            self.velocity.y = rev_y * loose_speed;
-            self.sink_to_ground();
-            self.current_owner = None;
-            self.flags.in_flight_state = 20;
-            self.claim_cooldown = 0;
-            #[cfg(feature = "match-logs")]
-            context.defender_census.borrow_mut().note_deflection(
-                DeflectionKind::BlockLoose,
-                self.position,
-                self.velocity,
-                blocker_pos,
-                tick,
-            );
-            return;
-        }
+    /// Loose central rebound — ball trickles in front of the defender, often
+    /// producing a second-ball contest. Arms the rebound window (team
+    /// shot-spacing exemption) so the second ball can actually be struck.
+    /// The blocker is the last player the ball came off — recording him as
+    /// previous owner makes the ATTACKERS the intercept-eligible side during
+    /// the flight window (the spill is the defender's touch, not the
+    /// shooter's pass), restoring the two-sided second-ball race.
+    fn loose_shot_block(
+        &mut self,
+        blocker_id: u32,
+        rev_x: f32,
+        rev_y: f32,
+        ball_velocity_2d: f32,
+        blocker_pos: Vector3<f32>,
+        tick: u64,
+        context: &MatchContext,
+    ) {
+        #[cfg(not(feature = "match-logs"))]
+        let _ = (blocker_pos, tick);
+        self.last_rebound_tick = tick;
+        self.previous_owner = Some(blocker_id);
+        let loose_speed = Self::rest_speed(Self::LOOSE_REST, ball_velocity_2d, &context.rng);
+        self.velocity.x = rev_x * loose_speed;
+        self.velocity.y = rev_y * loose_speed;
+        self.sink_to_ground();
+        self.current_owner = None;
+        self.flags.in_flight_state = 20;
+        self.claim_cooldown = 0;
+        #[cfg(feature = "match-logs")]
+        context.defender_census.borrow_mut().note_deflection(
+            DeflectionKind::BlockLoose,
+            self.position,
+            self.velocity,
+            blocker_pos,
+            tick,
+        );
+    }
 
-        // Unlucky deflection: ball loses pace but keeps drifting toward
-        // goal. The shot flag is already cleared, so the keeper save
-        // pipeline won't credit a phantom save — but the ball is still
-        // live and can be a tap-in opportunity. Arms the rebound window;
-        // blocker booked as previous owner (see the loose branch above).
+    /// Unlucky deflection: ball loses pace but keeps drifting toward goal.
+    /// The shot flag is already cleared, so the keeper save pipeline won't
+    /// credit a phantom save — but the ball is still live and can be a
+    /// tap-in opportunity. Arms the rebound window; blocker booked as
+    /// previous owner (see the loose branch above).
+    fn on_goal_shot_block(
+        &mut self,
+        blocker_id: u32,
+        shot_dir: Vector3<f32>,
+        ball_velocity_2d: f32,
+        blocker_pos: Vector3<f32>,
+        tick: u64,
+        context: &MatchContext,
+    ) {
+        #[cfg(not(feature = "match-logs"))]
+        let _ = (blocker_pos, tick, context);
         self.last_rebound_tick = tick;
         self.previous_owner = Some(blocker_id);
         let unlucky_speed = (ball_velocity_2d * 0.50)
             .clamp(1.5, 3.5)
             .min(ball_velocity_2d);
-        self.velocity.x = shot_dir_x * unlucky_speed * 0.7;
-        self.velocity.y = shot_dir_y * unlucky_speed * 0.7;
+        self.velocity.x = shot_dir.x * unlucky_speed * 0.7;
+        self.velocity.y = shot_dir.y * unlucky_speed * 0.7;
         self.sink_to_ground();
         self.current_owner = None;
         self.flags.in_flight_state = 25;

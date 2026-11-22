@@ -2,9 +2,13 @@ use crate::GameAppData;
 use axum::Router;
 use axum::routing::get;
 
-pub fn routes() -> Router<GameAppData> {
-    Router::new().route(
-        "/{lang}/players/{player_slug}/newspaper",
-        get(super::player_newspaper_action),
-    )
+pub struct PlayerNewspaperRoutes;
+
+impl PlayerNewspaperRoutes {
+    pub fn create() -> Router<GameAppData> {
+        Router::new().route(
+            "/{lang}/players/{player_slug}/newspaper",
+            get(super::PlayerNewspaperPage::action),
+        )
+    }
 }

@@ -123,6 +123,22 @@ impl DistressLevel {
             DistressLevel::Insolvency => (0.08, 0.90),
         }
     }
+
+    /// Classify the club's distress from cash balance and trailing wage
+    /// scale. Wealth-relative — a small club is distressed at smaller
+    /// absolute debt than a Premier League side.
+    pub fn classify(balance: i64, avg_monthly_wages: i64) -> Self {
+        let scale = avg_monthly_wages.max(1);
+        if balance < -(scale.saturating_mul(12)) {
+            DistressLevel::Insolvency
+        } else if balance < -(scale.saturating_mul(6)) {
+            DistressLevel::Severe
+        } else if balance < -(scale.saturating_mul(3)) {
+            DistressLevel::Distress
+        } else {
+            DistressLevel::None
+        }
+    }
 }
 
 impl ClubFinances {
@@ -176,7 +192,7 @@ impl ClubFinances {
             // post-clear `expense_player_wages` is zero and every club
             // looks one dollar from administration.
             let avg_wages = self.trailing_avg_monthly_wages(ctx.simulation.date.date());
-            let level = classify_distress(self.balance.balance, avg_wages);
+            let level = DistressLevel::classify(self.balance.balance, avg_wages);
             result.is_in_distress = !matches!(level, DistressLevel::None);
             result.distress_level = level;
             // Persist for the board's budget recompute. See the field docs
@@ -653,22 +669,6 @@ impl ClubFinances {
     }
 }
 
-/// Classify the club's distress from cash balance and trailing wage scale.
-/// Wealth-relative — a small club is distressed at smaller absolute debt
-/// than a Premier League side.
-pub fn classify_distress(balance: i64, avg_monthly_wages: i64) -> DistressLevel {
-    let scale = avg_monthly_wages.max(1);
-    if balance < -(scale.saturating_mul(12)) {
-        DistressLevel::Insolvency
-    } else if balance < -(scale.saturating_mul(6)) {
-        DistressLevel::Severe
-    } else if balance < -(scale.saturating_mul(3)) {
-        DistressLevel::Distress
-    } else {
-        DistressLevel::None
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct ClubFinancialBalance {
     pub balance: i64,
@@ -1037,13 +1037,13 @@ mod finance_tests {
 
         let avg = f.trailing_avg_monthly_wages(d(2026, 4));
         assert_eq!(avg, 5_000_000);
-        let level = classify_distress(f.balance.balance, avg);
+        let level = DistressLevel::classify(f.balance.balance, avg);
         // -$2M < -3 * $5M? No (since 3*5M=15M, -2M is not below -15M).
         assert_eq!(level, DistressLevel::None);
 
         // Now drop the cash deeper.
         f.balance.balance = -50_000_000;
-        let level = classify_distress(f.balance.balance, avg);
+        let level = DistressLevel::classify(f.balance.balance, avg);
         // -50M < -3 * 5M=-15M (yes); < -6*5M=-30M (yes); < -12*5M=-60M (no)
         assert_eq!(level, DistressLevel::Severe);
     }
@@ -1126,22 +1126,22 @@ mod finance_tests {
 
     #[test]
     fn classify_distress_thresholds() {
-        assert_eq!(classify_distress(0, 1_000_000), DistressLevel::None);
+        assert_eq!(DistressLevel::classify(0, 1_000_000), DistressLevel::None);
         // Just above the distress line: -3 * 1M = -3M cutoff.
         assert_eq!(
-            classify_distress(-2_999_999, 1_000_000),
+            DistressLevel::classify(-2_999_999, 1_000_000),
             DistressLevel::None
         );
         assert_eq!(
-            classify_distress(-3_500_000, 1_000_000),
+            DistressLevel::classify(-3_500_000, 1_000_000),
             DistressLevel::Distress
         );
         assert_eq!(
-            classify_distress(-7_000_000, 1_000_000),
+            DistressLevel::classify(-7_000_000, 1_000_000),
             DistressLevel::Severe
         );
         assert_eq!(
-            classify_distress(-13_000_000, 1_000_000),
+            DistressLevel::classify(-13_000_000, 1_000_000),
             DistressLevel::Insolvency
         );
     }

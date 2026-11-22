@@ -75,28 +75,372 @@ pub struct DefenderSkillProfile {
     pub pressure_penalty: f32,
 }
 
-#[inline]
-fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    if (edge0 - edge1).abs() < f32::EPSILON {
-        return if x < edge0 { 0.0 } else { 1.0 };
+#[derive(Debug, Clone, Copy)]
+struct DefenderSkillReads {
+    tackling01: f32,
+    marking01: f32,
+    passing01: f32,
+    technique01: f32,
+    first_touch01: f32,
+    crossing01: f32,
+    positioning01: f32,
+    anticipation01: f32,
+    concentration01: f32,
+    decisions01: f32,
+    composure01: f32,
+    bravery01: f32,
+    aggression01: f32,
+    teamwork01: f32,
+    work_rate01: f32,
+    leadership01: f32,
+    vision01: f32,
+    off_ball01: f32,
+    strength01: f32,
+    pace01: f32,
+    acceleration01: f32,
+    agility01: f32,
+    balance01: f32,
+    stamina01: f32,
+}
+
+impl DefenderSkillReads {
+    fn of(player: &MatchPlayer, minute: u32) -> Self {
+        let bands = SkillBands::for_player(player, minute);
+        let s = &player.skills;
+
+        let tackling_eff = bands.apply(s.technical.tackling, SkillCategory::Technical);
+        let marking_eff = bands.apply(s.technical.marking, SkillCategory::Technical);
+        let passing_eff = bands.apply(s.technical.passing, SkillCategory::Technical);
+        let technique_eff = bands.apply(s.technical.technique, SkillCategory::Technical);
+        let first_touch_eff = bands.apply(s.technical.first_touch, SkillCategory::Technical);
+        let crossing_eff = bands.apply(s.technical.crossing, SkillCategory::Technical);
+
+        let positioning_eff = bands.apply(s.mental.positioning, SkillCategory::Mental);
+        let anticipation_eff = bands.apply(s.mental.anticipation, SkillCategory::Mental);
+        let concentration_eff = bands.apply(s.mental.concentration, SkillCategory::Mental);
+        let decisions_eff = bands.apply(s.mental.decisions, SkillCategory::Mental);
+        let composure_eff = bands.apply(s.mental.composure, SkillCategory::Mental);
+        let bravery_eff = bands.apply(s.mental.bravery, SkillCategory::Mental);
+        let aggression_eff = bands.apply(s.mental.aggression, SkillCategory::Mental);
+        let teamwork_eff = bands.apply(s.mental.teamwork, SkillCategory::Mental);
+        let work_rate_eff = bands.apply(s.mental.work_rate, SkillCategory::Mental);
+        let leadership_eff = bands.apply(s.mental.leadership, SkillCategory::Mental);
+        let vision_eff = bands.apply(s.mental.vision, SkillCategory::Mental);
+        let off_ball_eff = bands.apply(s.mental.off_the_ball, SkillCategory::Mental);
+
+        let strength_eff = bands.apply(s.physical.strength, SkillCategory::Explosive);
+        let pace_eff = bands.apply(s.physical.pace, SkillCategory::Explosive);
+        let acceleration_eff = bands.apply(s.physical.acceleration, SkillCategory::Explosive);
+        let agility_eff = bands.apply(s.physical.agility, SkillCategory::Explosive);
+        let balance_eff = bands.apply(s.physical.balance, SkillCategory::Technical);
+        let stamina_eff = bands.apply(s.physical.stamina, SkillCategory::Explosive);
+
+        // ── Normalised reads ─────────────────────────────────────────
+
+        Self {
+            tackling01: DefenderSkillProfile::norm01(tackling_eff),
+            marking01: DefenderSkillProfile::norm01(marking_eff),
+            passing01: DefenderSkillProfile::norm01(passing_eff),
+            technique01: DefenderSkillProfile::norm01(technique_eff),
+            first_touch01: DefenderSkillProfile::norm01(first_touch_eff),
+            crossing01: DefenderSkillProfile::norm01(crossing_eff),
+            positioning01: DefenderSkillProfile::norm01(positioning_eff),
+            anticipation01: DefenderSkillProfile::norm01(anticipation_eff),
+            concentration01: DefenderSkillProfile::norm01(concentration_eff),
+            decisions01: DefenderSkillProfile::norm01(decisions_eff),
+            composure01: DefenderSkillProfile::norm01(composure_eff),
+            bravery01: DefenderSkillProfile::norm01(bravery_eff),
+            aggression01: DefenderSkillProfile::norm01(aggression_eff),
+            teamwork01: DefenderSkillProfile::norm01(teamwork_eff),
+            work_rate01: DefenderSkillProfile::norm01(work_rate_eff),
+            leadership01: DefenderSkillProfile::norm01(leadership_eff),
+            vision01: DefenderSkillProfile::norm01(vision_eff),
+            off_ball01: DefenderSkillProfile::norm01(off_ball_eff),
+            strength01: DefenderSkillProfile::norm01(strength_eff),
+            pace01: DefenderSkillProfile::norm01(pace_eff),
+            acceleration01: DefenderSkillProfile::norm01(acceleration_eff),
+            agility01: DefenderSkillProfile::norm01(agility_eff),
+            balance01: DefenderSkillProfile::norm01(balance_eff),
+            stamina01: DefenderSkillProfile::norm01(stamina_eff),
+        }
     }
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
+
+    fn core01(&self) -> f32 {
+        let core01 = (self.positioning01 * 0.28
+            + self.tackling01 * 0.22
+            + self.marking01 * 0.20
+            + self.anticipation01 * 0.18
+            + self.concentration01 * 0.12)
+            .clamp(0.0, 1.0);
+        core01
+    }
+
+    fn defensive_reading(&self, fatigue: f32) -> (f32, f32) {
+        // ── Defensive reading ────────────────────────────────────────
+        // No `communication` mental attribute on outfield players —
+        // proxy with leadership/teamwork average so the slot still loads.
+        let communication_proxy = (self.leadership01 + self.teamwork01) * 0.5;
+        let defensive_reading = (DefenderSkillProfile::pow_curve(self.positioning01, 1.45) * 0.24
+            + DefenderSkillProfile::pow_curve(self.anticipation01, 1.45) * 0.22
+            + DefenderSkillProfile::pow_curve(self.concentration01, 1.35) * 0.14
+            + DefenderSkillProfile::pow_curve(self.decisions01, 1.35) * 0.12
+            + DefenderSkillProfile::pow_curve(self.vision01, 1.35) * 0.08
+            + DefenderSkillProfile::pow_curve(self.teamwork01, 1.25) * 0.08
+            + DefenderSkillProfile::pow_curve(self.composure01, 1.25) * 0.08
+            + DefenderSkillProfile::pow_curve(self.leadership01, 1.15) * 0.02
+            + communication_proxy * 0.02)
+            .clamp(0.0, 1.0);
+
+        let reaction_delay_ticks =
+            (30.0 - defensive_reading * 22.0 + fatigue * 12.0).clamp(4.0, 40.0);
+
+        (defensive_reading, reaction_delay_ticks)
+    }
+
+    fn marking(
+        &self,
+        fatigue: f32,
+        poor_penalty: f32,
+        marking_condition_mult: f32,
+    ) -> (f32, f32, f32, f32) {
+        // ── Marking ──────────────────────────────────────────────────
+        let marking_profile = ((DefenderSkillProfile::pow_curve(self.marking01, 1.55) * 0.24
+            + DefenderSkillProfile::pow_curve(self.positioning01, 1.45) * 0.20
+            + DefenderSkillProfile::pow_curve(self.concentration01, 1.35) * 0.16
+            + DefenderSkillProfile::pow_curve(self.anticipation01, 1.35) * 0.14
+            + DefenderSkillProfile::pow_curve(self.strength01, 1.20) * 0.08
+            + DefenderSkillProfile::pow_curve(self.agility01, 1.20) * 0.08
+            + DefenderSkillProfile::pow_curve(self.pace01, 1.15) * 0.05
+            + DefenderSkillProfile::pow_curve(self.bravery01, 1.10) * 0.05)
+            * marking_condition_mult)
+            .clamp(0.0, 1.0);
+        let ideal_marking_distance = DefenderSkillProfile::lerp(14.0, 7.0, marking_profile);
+        let lost_runner_chance =
+            (0.22 - marking_profile * 0.18 + fatigue * 0.12 + poor_penalty * 0.10)
+                .clamp(0.02, 0.35);
+        let goal_side_weight = (0.45
+            + DefenderSkillProfile::pow_curve(self.positioning01, 1.30) * 0.30
+            + DefenderSkillProfile::pow_curve(self.decisions01, 1.30) * 0.15)
+            .clamp(0.45, 0.85);
+
+        (
+            marking_profile,
+            ideal_marking_distance,
+            lost_runner_chance,
+            goal_side_weight,
+        )
+    }
+
+    fn tackle(&self, tackling_condition_mult: f32) -> f32 {
+        // ── Tackle ───────────────────────────────────────────────────
+        let tackle_profile = ((DefenderSkillProfile::pow_curve(self.tackling01, 1.65) * 0.28
+            + DefenderSkillProfile::pow_curve(self.positioning01, 1.45) * 0.16
+            + DefenderSkillProfile::pow_curve(self.anticipation01, 1.40) * 0.14
+            + DefenderSkillProfile::pow_curve(self.composure01, 1.35) * 0.12
+            + DefenderSkillProfile::pow_curve(self.strength01, 1.25) * 0.10
+            + DefenderSkillProfile::pow_curve(self.balance01, 1.25) * 0.08
+            + DefenderSkillProfile::pow_curve(self.agility01, 1.20) * 0.06
+            + DefenderSkillProfile::pow_curve(self.concentration01, 1.20) * 0.06)
+            * tackling_condition_mult)
+            .clamp(0.0, 1.0);
+
+        tackle_profile
+    }
+
+    fn discipline(&self) -> f32 {
+        // ── Discipline ───────────────────────────────────────────────
+        // No `temperament` attribute — proxy with composure+concentration.
+        let temperament_proxy = (self.composure01 + self.concentration01) * 0.5;
+        let aggression_inverse = 1.0 - self.aggression01;
+        let discipline = (DefenderSkillProfile::pow_curve(self.composure01, 1.35) * 0.24
+            + DefenderSkillProfile::pow_curve(self.decisions01, 1.35) * 0.22
+            + DefenderSkillProfile::pow_curve(self.tackling01, 1.35) * 0.18
+            + DefenderSkillProfile::pow_curve(self.concentration01, 1.20) * 0.12
+            + temperament_proxy * 0.10
+            + aggression_inverse * 0.10
+            + DefenderSkillProfile::pow_curve(self.bravery01, 1.10) * 0.04)
+            .clamp(0.0, 1.0);
+
+        discipline
+    }
+
+    fn press(&self, pressing_condition_mult: f32) -> f32 {
+        // ── Press ────────────────────────────────────────────────────
+        let press_profile = ((DefenderSkillProfile::pow_curve(self.work_rate01, 1.35) * 0.20
+            + DefenderSkillProfile::pow_curve(self.acceleration01, 1.25) * 0.16
+            + DefenderSkillProfile::pow_curve(self.stamina01, 1.25) * 0.14
+            + DefenderSkillProfile::pow_curve(self.anticipation01, 1.35) * 0.14
+            + DefenderSkillProfile::pow_curve(self.aggression01, 1.15) * 0.10
+            + DefenderSkillProfile::pow_curve(self.positioning01, 1.30) * 0.10
+            + DefenderSkillProfile::pow_curve(self.decisions01, 1.25) * 0.08
+            + DefenderSkillProfile::pow_curve(self.teamwork01, 1.15) * 0.08)
+            * pressing_condition_mult)
+            .clamp(0.0, 1.0);
+        press_profile
+    }
+
+    fn clearance(
+        &self,
+        clearance_condition_mult: f32,
+        pressure_penalty: f32,
+        fatigue: f32,
+    ) -> (f32, f32) {
+        // ── Clearance ────────────────────────────────────────────────
+        let clearance_profile = ((DefenderSkillProfile::pow_curve(self.technique01, 1.35) * 0.18
+            + DefenderSkillProfile::pow_curve(self.passing01, 1.25) * 0.14
+            + DefenderSkillProfile::pow_curve(self.decisions01, 1.35) * 0.16
+            + DefenderSkillProfile::pow_curve(self.composure01, 1.35) * 0.16
+            + DefenderSkillProfile::pow_curve(self.strength01, 1.20) * 0.14
+            + DefenderSkillProfile::pow_curve(self.balance01, 1.15) * 0.08
+            + DefenderSkillProfile::pow_curve(self.concentration01, 1.20) * 0.08
+            + DefenderSkillProfile::pow_curve(self.vision01, 1.15) * 0.06)
+            * clearance_condition_mult)
+            .clamp(0.0, 1.0);
+        let poor_clearance_chance =
+            (0.18 - clearance_profile * 0.12 + pressure_penalty * 0.08 + fatigue * 0.08)
+                .clamp(0.03, 0.35);
+
+        (clearance_profile, poor_clearance_chance)
+    }
+
+    fn buildup(&self, def_condition_mult: f32) -> f32 {
+        // ── Build-up ─────────────────────────────────────────────────
+        let buildup_profile = ((DefenderSkillProfile::pow_curve(self.passing01, 1.45) * 0.24
+            + DefenderSkillProfile::pow_curve(self.technique01, 1.35) * 0.16
+            + DefenderSkillProfile::pow_curve(self.first_touch01, 1.35) * 0.14
+            + DefenderSkillProfile::pow_curve(self.composure01, 1.45) * 0.14
+            + DefenderSkillProfile::pow_curve(self.decisions01, 1.40) * 0.14
+            + DefenderSkillProfile::pow_curve(self.vision01, 1.35) * 0.10
+            + DefenderSkillProfile::pow_curve(self.concentration01, 1.20) * 0.04
+            + DefenderSkillProfile::pow_curve(self.teamwork01, 1.15) * 0.04)
+            * def_condition_mult)
+            .clamp(0.0, 1.0);
+
+        // Press resistance — same shape as midfielder profile (scaled
+        // for defenders): first_touch + technique + composure + balance.
+
+        buildup_profile
+    }
+
+    fn press_resistance(&self) -> f32 {
+        let press_resistance = (DefenderSkillProfile::pow_curve(self.first_touch01, 1.40) * 0.24
+            + DefenderSkillProfile::pow_curve(self.technique01, 1.35) * 0.18
+            + DefenderSkillProfile::pow_curve(self.composure01, 1.45) * 0.18
+            + DefenderSkillProfile::pow_curve(self.balance01, 1.30) * 0.14
+            + DefenderSkillProfile::pow_curve(self.strength01, 1.10) * 0.10
+            + DefenderSkillProfile::pow_curve(self.decisions01, 1.30) * 0.10
+            + DefenderSkillProfile::pow_curve(self.concentration01, 1.15) * 0.06)
+            .clamp(0.0, 1.0);
+
+        press_resistance
+    }
+
+    fn defender_switch_profile(&self) -> f32 {
+        let defender_switch_profile = (DefenderSkillProfile::pow_curve(self.passing01, 1.45)
+            * 0.24
+            + DefenderSkillProfile::pow_curve(self.vision01, 1.50) * 0.24
+            + DefenderSkillProfile::pow_curve(self.technique01, 1.40) * 0.18
+            + DefenderSkillProfile::pow_curve(self.decisions01, 1.35) * 0.14
+            + DefenderSkillProfile::pow_curve(self.composure01, 1.30) * 0.10
+            + DefenderSkillProfile::pow_curve(self.strength01, 1.10) * 0.05
+            + DefenderSkillProfile::pow_curve(self.concentration01, 1.15) * 0.05)
+            .clamp(0.0, 1.0);
+
+        defender_switch_profile
+    }
+
+    fn overlap(&self, recovery_run_mult: f32) -> f32 {
+        // ── Overlap (fullback) ───────────────────────────────────────
+        let overlap_profile = ((DefenderSkillProfile::pow_curve(self.stamina01, 1.25) * 0.18
+            + DefenderSkillProfile::pow_curve(self.work_rate01, 1.30) * 0.18
+            + DefenderSkillProfile::pow_curve(self.pace01, 1.20) * 0.14
+            + DefenderSkillProfile::pow_curve(self.acceleration01, 1.20) * 0.12
+            + DefenderSkillProfile::pow_curve(self.off_ball01, 1.35) * 0.12
+            + DefenderSkillProfile::pow_curve(self.decisions01, 1.30) * 0.10
+            + DefenderSkillProfile::pow_curve(self.crossing01, 1.35) * 0.08
+            + DefenderSkillProfile::pow_curve(self.teamwork01, 1.15) * 0.08)
+            * recovery_run_mult)
+            .clamp(0.0, 1.0);
+
+        overlap_profile
+    }
 }
 
-#[inline]
-fn norm01(v: f32) -> f32 {
-    (v / 20.0).clamp(0.0, 1.0)
+#[derive(Debug, Clone, Copy)]
+struct DefenderConditioning {
+    fatigue: f32,
+    def_condition_mult: f32,
+    line_holding_mult: f32,
+    marking_condition_mult: f32,
+    tackling_condition_mult: f32,
+    pressing_condition_mult: f32,
+    recovery_run_mult: f32,
+    clearance_condition_mult: f32,
 }
 
-#[inline]
-fn pow_curve(skill01: f32, exp: f32) -> f32 {
-    skill01.clamp(0.0, 1.0).powf(exp)
-}
+impl DefenderConditioning {
+    fn of(
+        player: &MatchPlayer,
+        inputs: &DefenderSkillInputs,
+        reads: &DefenderSkillReads,
+        poor_penalty: f32,
+    ) -> Self {
+        let cond = inputs.condition_pct.clamp(0.0, 1.0);
+        let nat_fit01 = DefenderSkillProfile::norm01(player.skills.physical.natural_fitness);
+        let match_readiness01 =
+            DefenderSkillProfile::norm01(player.skills.physical.match_readiness);
+        let determination01 = DefenderSkillProfile::norm01(player.skills.mental.determination);
+        let fitness = reads.stamina01 * 0.40
+            + nat_fit01 * 0.30
+            + match_readiness01 * 0.20
+            + determination01 * 0.10;
+        let fatigue = (1.0 - cond).max(0.0).powf(1.30);
+        let jadedness = (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
+        let jadedness_penalty = jadedness * 0.16;
+        let fitness_recovery = 1.0 - fatigue * (0.17 + (1.0 - fitness) * 0.22);
+        let mental_fatigue = 1.0 - fatigue * (0.08 + poor_penalty * 0.20);
+        let late_drop = if inputs.minute >= 70 {
+            1.0 - ((inputs.minute as f32 - 70.0) / 50.0).clamp(0.0, 1.0)
+                * (0.05 + poor_penalty * 0.12)
+        } else {
+            1.0
+        };
+        let def_condition_mult =
+            (fitness_recovery * mental_fatigue * late_drop - jadedness_penalty).clamp(0.50, 1.03);
 
-#[inline]
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t.clamp(0.0, 1.0)
+        let stamina_curve = DefenderSkillProfile::pow_curve(reads.stamina01, 1.20);
+        let composure_curve = DefenderSkillProfile::pow_curve(reads.composure01, 1.30);
+        let balance_curve = DefenderSkillProfile::pow_curve(reads.balance01, 1.20);
+        let concentration_curve = DefenderSkillProfile::pow_curve(reads.concentration01, 1.20);
+        let work_rate_curve = DefenderSkillProfile::pow_curve(reads.work_rate01, 1.20);
+        let pace_curve = DefenderSkillProfile::pow_curve(reads.pace01, 1.20);
+        let technique_curve = DefenderSkillProfile::pow_curve(reads.technique01, 1.30);
+        let strength_curve = DefenderSkillProfile::pow_curve(reads.strength01, 1.20);
+
+        let line_holding_mult =
+            def_condition_mult * (0.90 + concentration_curve * 0.10).clamp(0.75, 1.03);
+        let marking_condition_mult = def_condition_mult
+            * (0.85 + stamina_curve * 0.08 + concentration_curve * 0.07).clamp(0.68, 1.04);
+        let tackling_condition_mult = def_condition_mult
+            * (0.82 + balance_curve * 0.08 + composure_curve * 0.10).clamp(0.62, 1.04);
+        let pressing_condition_mult = def_condition_mult
+            * (0.80 + stamina_curve * 0.12 + work_rate_curve * 0.08).clamp(0.60, 1.05);
+        let recovery_run_mult = def_condition_mult
+            * (0.78 + pace_curve * 0.10 + stamina_curve * 0.12).clamp(0.58, 1.05);
+        let clearance_condition_mult = def_condition_mult
+            * (0.88 + technique_curve * 0.07 + strength_curve * 0.05).clamp(0.70, 1.03);
+
+        DefenderConditioning {
+            fatigue,
+            def_condition_mult,
+            line_holding_mult,
+            marking_condition_mult,
+            tackling_condition_mult,
+            pressing_condition_mult,
+            recovery_run_mult,
+            clearance_condition_mult,
+        }
+    }
 }
 
 impl DefenderSkillProfile {
@@ -280,123 +624,20 @@ impl DefenderSkillProfile {
         profile
     }
 
-    #[expect(clippy::too_many_lines)]
     pub fn from_player(player: &MatchPlayer, inputs: &DefenderSkillInputs) -> Self {
-        let bands = SkillBands::for_player(player, inputs.minute);
-        let s = &player.skills;
-
-        // ── Effective skill reads (factored fatigue bands; bit-identical
-        //    to per-read effective_skill — see SkillBands) ──────────────
-        let tackling_eff = bands.apply(s.technical.tackling, SkillCategory::Technical);
-        let marking_eff = bands.apply(s.technical.marking, SkillCategory::Technical);
-        let passing_eff = bands.apply(s.technical.passing, SkillCategory::Technical);
-        let technique_eff = bands.apply(s.technical.technique, SkillCategory::Technical);
-        let first_touch_eff = bands.apply(s.technical.first_touch, SkillCategory::Technical);
-        let crossing_eff = bands.apply(s.technical.crossing, SkillCategory::Technical);
-
-        let positioning_eff = bands.apply(s.mental.positioning, SkillCategory::Mental);
-        let anticipation_eff = bands.apply(s.mental.anticipation, SkillCategory::Mental);
-        let concentration_eff = bands.apply(s.mental.concentration, SkillCategory::Mental);
-        let decisions_eff = bands.apply(s.mental.decisions, SkillCategory::Mental);
-        let composure_eff = bands.apply(s.mental.composure, SkillCategory::Mental);
-        let bravery_eff = bands.apply(s.mental.bravery, SkillCategory::Mental);
-        let aggression_eff = bands.apply(s.mental.aggression, SkillCategory::Mental);
-        let teamwork_eff = bands.apply(s.mental.teamwork, SkillCategory::Mental);
-        let work_rate_eff = bands.apply(s.mental.work_rate, SkillCategory::Mental);
-        let leadership_eff = bands.apply(s.mental.leadership, SkillCategory::Mental);
-        let vision_eff = bands.apply(s.mental.vision, SkillCategory::Mental);
-        let off_ball_eff = bands.apply(s.mental.off_the_ball, SkillCategory::Mental);
-
-        let strength_eff = bands.apply(s.physical.strength, SkillCategory::Explosive);
-        let pace_eff = bands.apply(s.physical.pace, SkillCategory::Explosive);
-        let acceleration_eff = bands.apply(s.physical.acceleration, SkillCategory::Explosive);
-        let agility_eff = bands.apply(s.physical.agility, SkillCategory::Explosive);
-        let balance_eff = bands.apply(s.physical.balance, SkillCategory::Technical);
-        let stamina_eff = bands.apply(s.physical.stamina, SkillCategory::Explosive);
-
-        // ── Normalised reads ─────────────────────────────────────────
-        let tackling01 = norm01(tackling_eff);
-        let marking01 = norm01(marking_eff);
-        let passing01 = norm01(passing_eff);
-        let technique01 = norm01(technique_eff);
-        let first_touch01 = norm01(first_touch_eff);
-        let crossing01 = norm01(crossing_eff);
-
-        let positioning01 = norm01(positioning_eff);
-        let anticipation01 = norm01(anticipation_eff);
-        let concentration01 = norm01(concentration_eff);
-        let decisions01 = norm01(decisions_eff);
-        let composure01 = norm01(composure_eff);
-        let bravery01 = norm01(bravery_eff);
-        let aggression01 = norm01(aggression_eff);
-        let teamwork01 = norm01(teamwork_eff);
-        let work_rate01 = norm01(work_rate_eff);
-        let leadership01 = norm01(leadership_eff);
-        let vision01 = norm01(vision_eff);
-        let off_ball01 = norm01(off_ball_eff);
-
-        let strength01 = norm01(strength_eff);
-        let pace01 = norm01(pace_eff);
-        let acceleration01 = norm01(acceleration_eff);
-        let agility01 = norm01(agility_eff);
-        let balance01 = norm01(balance_eff);
-        let stamina01 = norm01(stamina_eff);
+        let reads = DefenderSkillReads::of(player, inputs.minute);
 
         // ── Headline mappers ─────────────────────────────────────────
         // Defender "core" centres on positioning / tackling / marking /
         // anticipation — the four attributes that separate good CBs from
         // weak ones.
-        let core01 = (positioning01 * 0.28
-            + tackling01 * 0.22
-            + marking01 * 0.20
-            + anticipation01 * 0.18
-            + concentration01 * 0.12)
-            .clamp(0.0, 1.0);
-        let poor_penalty = smoothstep(0.45, 0.18, core01);
-        let elite_lift = smoothstep(0.72, 0.95, core01);
+        let core01 = reads.core01();
+        let poor_penalty = Self::smoothstep(0.45, 0.18, core01);
+        let elite_lift = Self::smoothstep(0.72, 0.95, core01);
 
         // ── Conditioning model ───────────────────────────────────────
-        let cond = inputs.condition_pct.clamp(0.0, 1.0);
-        let nat_fit01 = norm01(s.physical.natural_fitness);
-        let match_readiness01 = norm01(s.physical.match_readiness);
-        let determination01 = norm01(s.mental.determination);
-        let fitness =
-            stamina01 * 0.40 + nat_fit01 * 0.30 + match_readiness01 * 0.20 + determination01 * 0.10;
-        let fatigue = (1.0 - cond).max(0.0).powf(1.30);
-        let jadedness = (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
-        let jadedness_penalty = jadedness * 0.16;
-        let fitness_recovery = 1.0 - fatigue * (0.17 + (1.0 - fitness) * 0.22);
-        let mental_fatigue = 1.0 - fatigue * (0.08 + poor_penalty * 0.20);
-        let late_drop = if inputs.minute >= 70 {
-            1.0 - ((inputs.minute as f32 - 70.0) / 50.0).clamp(0.0, 1.0)
-                * (0.05 + poor_penalty * 0.12)
-        } else {
-            1.0
-        };
-        let def_condition_mult =
-            (fitness_recovery * mental_fatigue * late_drop - jadedness_penalty).clamp(0.50, 1.03);
-
-        let stamina_curve = pow_curve(stamina01, 1.20);
-        let composure_curve = pow_curve(composure01, 1.30);
-        let balance_curve = pow_curve(balance01, 1.20);
-        let concentration_curve = pow_curve(concentration01, 1.20);
-        let work_rate_curve = pow_curve(work_rate01, 1.20);
-        let pace_curve = pow_curve(pace01, 1.20);
-        let technique_curve = pow_curve(technique01, 1.30);
-        let strength_curve = pow_curve(strength01, 1.20);
-
-        let line_holding_mult =
-            def_condition_mult * (0.90 + concentration_curve * 0.10).clamp(0.75, 1.03);
-        let marking_condition_mult = def_condition_mult
-            * (0.85 + stamina_curve * 0.08 + concentration_curve * 0.07).clamp(0.68, 1.04);
-        let tackling_condition_mult = def_condition_mult
-            * (0.82 + balance_curve * 0.08 + composure_curve * 0.10).clamp(0.62, 1.04);
-        let pressing_condition_mult = def_condition_mult
-            * (0.80 + stamina_curve * 0.12 + work_rate_curve * 0.08).clamp(0.60, 1.05);
-        let recovery_run_mult = def_condition_mult
-            * (0.78 + pace_curve * 0.10 + stamina_curve * 0.12).clamp(0.58, 1.05);
-        let clearance_condition_mult = def_condition_mult
-            * (0.88 + technique_curve * 0.07 + strength_curve * 0.05).clamp(0.70, 1.03);
+        let conditioning = DefenderConditioning::of(player, inputs, &reads, poor_penalty);
+        let fatigue = conditioning.fatigue;
 
         // ── Pressure penalty ─────────────────────────────────────────
         let pressure_penalty = (inputs.pressure_count_5u as f32 * 0.20
@@ -404,137 +645,36 @@ impl DefenderSkillProfile {
             .clamp(0.0, 1.0);
 
         // ── Defensive reading ────────────────────────────────────────
-        // No `communication` mental attribute on outfield players —
-        // proxy with leadership/teamwork average so the slot still loads.
-        let communication_proxy = (leadership01 + teamwork01) * 0.5;
-        let defensive_reading = (pow_curve(positioning01, 1.45) * 0.24
-            + pow_curve(anticipation01, 1.45) * 0.22
-            + pow_curve(concentration01, 1.35) * 0.14
-            + pow_curve(decisions01, 1.35) * 0.12
-            + pow_curve(vision01, 1.35) * 0.08
-            + pow_curve(teamwork01, 1.25) * 0.08
-            + pow_curve(composure01, 1.25) * 0.08
-            + pow_curve(leadership01, 1.15) * 0.02
-            + communication_proxy * 0.02)
-            .clamp(0.0, 1.0);
-
-        let reaction_delay_ticks =
-            (30.0 - defensive_reading * 22.0 + fatigue * 12.0).clamp(4.0, 40.0);
+        let (defensive_reading, reaction_delay_ticks) = reads.defensive_reading(fatigue);
 
         // ── Marking ──────────────────────────────────────────────────
-        let marking_profile = ((pow_curve(marking01, 1.55) * 0.24
-            + pow_curve(positioning01, 1.45) * 0.20
-            + pow_curve(concentration01, 1.35) * 0.16
-            + pow_curve(anticipation01, 1.35) * 0.14
-            + pow_curve(strength01, 1.20) * 0.08
-            + pow_curve(agility01, 1.20) * 0.08
-            + pow_curve(pace01, 1.15) * 0.05
-            + pow_curve(bravery01, 1.10) * 0.05)
-            * marking_condition_mult)
-            .clamp(0.0, 1.0);
-        let ideal_marking_distance = lerp(14.0, 7.0, marking_profile);
-        let lost_runner_chance =
-            (0.22 - marking_profile * 0.18 + fatigue * 0.12 + poor_penalty * 0.10)
-                .clamp(0.02, 0.35);
-        let goal_side_weight =
-            (0.45 + pow_curve(positioning01, 1.30) * 0.30 + pow_curve(decisions01, 1.30) * 0.15)
-                .clamp(0.45, 0.85);
+        let (marking_profile, ideal_marking_distance, lost_runner_chance, goal_side_weight) =
+            reads.marking(fatigue, poor_penalty, conditioning.marking_condition_mult);
 
         // ── Tackle ───────────────────────────────────────────────────
-        let tackle_profile = ((pow_curve(tackling01, 1.65) * 0.28
-            + pow_curve(positioning01, 1.45) * 0.16
-            + pow_curve(anticipation01, 1.40) * 0.14
-            + pow_curve(composure01, 1.35) * 0.12
-            + pow_curve(strength01, 1.25) * 0.10
-            + pow_curve(balance01, 1.25) * 0.08
-            + pow_curve(agility01, 1.20) * 0.06
-            + pow_curve(concentration01, 1.20) * 0.06)
-            * tackling_condition_mult)
-            .clamp(0.0, 1.0);
+        let tackle_profile = reads.tackle(conditioning.tackling_condition_mult);
 
         // ── Discipline ───────────────────────────────────────────────
-        // No `temperament` attribute — proxy with composure+concentration.
-        let temperament_proxy = (composure01 + concentration01) * 0.5;
-        let aggression_inverse = 1.0 - aggression01;
-        let discipline = (pow_curve(composure01, 1.35) * 0.24
-            + pow_curve(decisions01, 1.35) * 0.22
-            + pow_curve(tackling01, 1.35) * 0.18
-            + pow_curve(concentration01, 1.20) * 0.12
-            + temperament_proxy * 0.10
-            + aggression_inverse * 0.10
-            + pow_curve(bravery01, 1.10) * 0.04)
-            .clamp(0.0, 1.0);
+        let discipline = reads.discipline();
 
         // ── Press ────────────────────────────────────────────────────
-        let press_profile = ((pow_curve(work_rate01, 1.35) * 0.20
-            + pow_curve(acceleration01, 1.25) * 0.16
-            + pow_curve(stamina01, 1.25) * 0.14
-            + pow_curve(anticipation01, 1.35) * 0.14
-            + pow_curve(aggression01, 1.15) * 0.10
-            + pow_curve(positioning01, 1.30) * 0.10
-            + pow_curve(decisions01, 1.25) * 0.08
-            + pow_curve(teamwork01, 1.15) * 0.08)
-            * pressing_condition_mult)
-            .clamp(0.0, 1.0);
+        let press_profile = reads.press(conditioning.pressing_condition_mult);
 
         // ── Clearance ────────────────────────────────────────────────
-        let clearance_profile = ((pow_curve(technique01, 1.35) * 0.18
-            + pow_curve(passing01, 1.25) * 0.14
-            + pow_curve(decisions01, 1.35) * 0.16
-            + pow_curve(composure01, 1.35) * 0.16
-            + pow_curve(strength01, 1.20) * 0.14
-            + pow_curve(balance01, 1.15) * 0.08
-            + pow_curve(concentration01, 1.20) * 0.08
-            + pow_curve(vision01, 1.15) * 0.06)
-            * clearance_condition_mult)
-            .clamp(0.0, 1.0);
-        let poor_clearance_chance =
-            (0.18 - clearance_profile * 0.12 + pressure_penalty * 0.08 + fatigue * 0.08)
-                .clamp(0.03, 0.35);
+        let (clearance_profile, poor_clearance_chance) = reads.clearance(
+            conditioning.clearance_condition_mult,
+            pressure_penalty,
+            fatigue,
+        );
 
         // ── Build-up ─────────────────────────────────────────────────
-        let buildup_profile = ((pow_curve(passing01, 1.45) * 0.24
-            + pow_curve(technique01, 1.35) * 0.16
-            + pow_curve(first_touch01, 1.35) * 0.14
-            + pow_curve(composure01, 1.45) * 0.14
-            + pow_curve(decisions01, 1.40) * 0.14
-            + pow_curve(vision01, 1.35) * 0.10
-            + pow_curve(concentration01, 1.20) * 0.04
-            + pow_curve(teamwork01, 1.15) * 0.04)
-            * def_condition_mult)
-            .clamp(0.0, 1.0);
+        let buildup_profile = reads.buildup(conditioning.def_condition_mult);
 
-        // Press resistance — same shape as midfielder profile (scaled
-        // for defenders): first_touch + technique + composure + balance.
-        let press_resistance = (pow_curve(first_touch01, 1.40) * 0.24
-            + pow_curve(technique01, 1.35) * 0.18
-            + pow_curve(composure01, 1.45) * 0.18
-            + pow_curve(balance01, 1.30) * 0.14
-            + pow_curve(strength01, 1.10) * 0.10
-            + pow_curve(decisions01, 1.30) * 0.10
-            + pow_curve(concentration01, 1.15) * 0.06)
-            .clamp(0.0, 1.0);
-
-        let defender_switch_profile = (pow_curve(passing01, 1.45) * 0.24
-            + pow_curve(vision01, 1.50) * 0.24
-            + pow_curve(technique01, 1.40) * 0.18
-            + pow_curve(decisions01, 1.35) * 0.14
-            + pow_curve(composure01, 1.30) * 0.10
-            + pow_curve(strength01, 1.10) * 0.05
-            + pow_curve(concentration01, 1.15) * 0.05)
-            .clamp(0.0, 1.0);
+        let press_resistance = reads.press_resistance();
+        let defender_switch_profile = reads.defender_switch_profile();
 
         // ── Overlap (fullback) ───────────────────────────────────────
-        let overlap_profile = ((pow_curve(stamina01, 1.25) * 0.18
-            + pow_curve(work_rate01, 1.30) * 0.18
-            + pow_curve(pace01, 1.20) * 0.14
-            + pow_curve(acceleration01, 1.20) * 0.12
-            + pow_curve(off_ball01, 1.35) * 0.12
-            + pow_curve(decisions01, 1.30) * 0.10
-            + pow_curve(crossing01, 1.35) * 0.08
-            + pow_curve(teamwork01, 1.15) * 0.08)
-            * recovery_run_mult)
-            .clamp(0.0, 1.0);
+        let overlap_profile = reads.overlap(conditioning.recovery_run_mult);
 
         let _ = (
             inputs.distance_to_own_goal,
@@ -545,13 +685,13 @@ impl DefenderSkillProfile {
         DefenderSkillProfile {
             poor_penalty,
             elite_lift,
-            def_condition_mult,
-            line_holding_mult,
-            marking_condition_mult,
-            tackling_condition_mult,
-            pressing_condition_mult,
-            recovery_run_mult,
-            clearance_condition_mult,
+            def_condition_mult: conditioning.def_condition_mult,
+            line_holding_mult: conditioning.line_holding_mult,
+            marking_condition_mult: conditioning.marking_condition_mult,
+            tackling_condition_mult: conditioning.tackling_condition_mult,
+            pressing_condition_mult: conditioning.pressing_condition_mult,
+            recovery_run_mult: conditioning.recovery_run_mult,
+            clearance_condition_mult: conditioning.clearance_condition_mult,
             defensive_reading,
             reaction_delay_ticks,
             marking_profile,
@@ -569,6 +709,30 @@ impl DefenderSkillProfile {
             overlap_profile,
             pressure_penalty,
         }
+    }
+
+    #[inline]
+    fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+        if (edge0 - edge1).abs() < f32::EPSILON {
+            return if x < edge0 { 0.0 } else { 1.0 };
+        }
+        let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    #[inline]
+    fn norm01(v: f32) -> f32 {
+        (v / 20.0).clamp(0.0, 1.0)
+    }
+
+    #[inline]
+    fn pow_curve(skill01: f32, exp: f32) -> f32 {
+        skill01.clamp(0.0, 1.0).powf(exp)
+    }
+
+    #[inline]
+    fn lerp(a: f32, b: f32, t: f32) -> f32 {
+        a + (b - a) * t.clamp(0.0, 1.0)
     }
 
     /// Whether the defender should attempt a switch-of-play pass.

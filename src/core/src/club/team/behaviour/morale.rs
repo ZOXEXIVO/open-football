@@ -6,9 +6,7 @@ use super::TeamBehaviour;
 use crate::PlayerHappiness;
 use crate::club::person::Person;
 use crate::club::player::behaviour_config::HappinessConfig;
-use crate::club::player::calculators::{
-    ContractValuation, ValuationContext, expected_annual_value, package_inputs_from_contract,
-};
+use crate::club::player::calculators::{ContractValuation, PackageInputs, ValuationContext};
 use crate::club::player::contract::stalemate::{AffordabilityInput, ContractStalemate};
 use crate::club::player::happiness::PlayingTimeFrustrationConfig;
 use crate::club::player::lifecycle::CareerStageDetector;
@@ -294,14 +292,6 @@ impl TeamBehaviour {
         }
     }
 
-    /// Monthly development audit for loaned youngsters. Where the
-    /// minutes-concern / recall audit above is about *action* (open the
-    /// recall window), this is about *progress* — a loan can fail even
-    /// with some minutes if the player is misused, at the wrong level, in
-    /// a weak training environment, or simply not developing. Several weak
-    /// signals are aggregated into one warning so it stays meaningful
-    /// rather than firing after one quiet month. Runs on day 1 only.
-    #[expect(clippy::too_many_lines)]
     pub(super) fn process_loan_development_audit(
         players: &mut PlayerCollection,
         ctx: &GlobalContext<'_>,
@@ -312,170 +302,198 @@ impl TeamBehaviour {
         }
 
         for player in players.players.iter_mut() {
-            if !player.is_on_loan() {
+            let Some(concern) = player.loan_development_concern(today) else {
                 continue;
-            }
-            let loan_start = match player.contract_loan.as_ref().and_then(|l| l.started) {
-                Some(s) => s,
-                None => continue,
             };
-            let loan_days_elapsed = (today - loan_start).num_days();
-            if loan_days_elapsed < 60 {
-                continue;
-            }
-
-            let age = player.age(today);
-            let status = player.contract.as_ref().map(|c| c.squad_status.clone());
-            let is_prospect = matches!(
-                status,
-                Some(PlayerSquadStatus::HotProspectForTheFuture)
-                    | Some(PlayerSquadStatus::DecentYoungster)
-            );
-            // Development loans are for youngsters and flagged prospects;
-            // an established senior on loan is judged by the recall audit.
-            if age > 23 && !is_prospect {
-                continue;
-            }
-            if player
-                .happiness
-                .has_recent_event(&HappinessEventType::LoanDevelopmentConcern, 60)
-            {
-                continue;
-            }
-
-            // Opportunity gate — same as the minutes audit. Enforces the
-            // grace window, status sample, and the zero-official-match
-            // invariant, so an injured / break-stranded loanee is never
-            // unfairly judged as a failed development.
-            let opp = player.playing_time_opportunity(today);
-            let cfg = PlayingTimeFrustrationConfig::default();
-            if opp.can_judge(status.as_ref(), &cfg, None).is_none() {
-                continue;
-            }
-
-            let eligible = opp.eligible_official_matches_since_join;
-            let starts = opp.player_starts_since_join;
-            let minutes_share = if eligible > 0 {
-                (starts as f32) / (eligible as f32)
-            } else {
-                0.0
-            };
-
-            let mut score = 0i32;
-            let mut reasons: Vec<LoanDevelopmentConcernReason> = Vec::new();
-
-            // Insufficient minutes — the loanee isn't starting often enough.
-            if eligible >= 4 && minutes_share < 0.4 {
-                score += 2;
-                reasons.push(LoanDevelopmentConcernReason::InsufficientMinutes);
-            }
-            // An active loan-tier mismatch is a strong development signal.
-            if player
-                .happiness
-                .has_recent_event(&HappinessEventType::LoanLevelMismatch, 90)
-            {
-                score += 2;
-                reasons.push(LoanDevelopmentConcernReason::LevelMismatch);
-            }
-            // Played out of position.
-            if player
-                .happiness
-                .has_recent_event(&HappinessEventType::RoleMismatch, 90)
-            {
-                score += 2;
-                reasons.push(LoanDevelopmentConcernReason::WrongRole);
-            }
-            // Repeated poor training environment.
-            let poor_training = player
-                .happiness
-                .recent_events
-                .iter()
-                .filter(|e| e.event_type == HappinessEventType::PoorTraining && e.days_ago <= 90)
-                .count();
-            if poor_training >= 2 {
-                score += 1;
-                reasons.push(LoanDevelopmentConcernReason::PoorTrainingEnvironment);
-            }
-            // Poor match performances despite featuring.
-            let apps = player.statistics.played + player.statistics.played_subs;
-            if apps >= 3
-                && player.statistics.average_rating > 0.0
-                && player.statistics.average_rating < 6.5
-            {
-                score += 1;
-                reasons.push(LoanDevelopmentConcernReason::PoorMatchPerformance);
-            }
-
-            if score < 3 {
-                continue;
-            }
-
-            // Base -2.5, escalating with the number of failing signals.
-            let mut magnitude = if score >= 6 {
-                -4.5
-            } else if score >= 4 {
-                -3.5
-            } else {
-                HappinessConfig::default().catalog.loan_development_concern
-            };
-            // A high-professional still getting some starts is coping —
-            // dampen. Elite parent-club prospects feel a wasted loan more.
-            if player.attributes.professionalism >= 15.0 && starts >= 1 {
-                magnitude *= 0.75;
-            }
-            if matches!(status, Some(PlayerSquadStatus::HotProspectForTheFuture)) {
-                magnitude *= 1.20;
-            }
-
-            let (parent_club_id, loan_club_id, permanent_option) = player
-                .contract_loan
-                .as_ref()
-                .map(|l| {
-                    (
-                        l.loan_from_club_id,
-                        l.loan_to_club_id,
-                        l.loan_future_fee.is_some(),
-                    )
-                })
-                .unwrap_or((None, None, false));
-
-            let mut lctx = LoanEventContext::new(LoanEventKind::LoanDevelopmentConcern)
-                .with_minutes_share(minutes_share)
-                .with_permanent_option(permanent_option)
-                .with_loan_days_elapsed(loan_days_elapsed.clamp(0, u16::MAX as i64) as u16);
-            if let Some(pid) = parent_club_id {
-                lctx = lctx.with_parent_club(pid);
-            }
-            if let Some(lid) = loan_club_id {
-                lctx = lctx.with_loan_club(lid);
-            }
-            for reason in reasons {
-                lctx = lctx.with_development_reason(reason);
-            }
-
-            let happiness_ctx = HappinessEventContext::new(
-                HappinessEventCause::Other,
-                HappinessEventSeverity::from_magnitude(magnitude),
-                HappinessEventScope::Boardroom,
-            )
-            .with_loan_context(lctx)
-            .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
-            player.happiness.add_event_with_context(
-                HappinessEventType::LoanDevelopmentConcern,
-                magnitude,
-                None,
-                happiness_ctx,
-            );
+            player.emit_loan_development_concern(concern);
         }
     }
+}
 
-    /// Monthly controversy roll — high-controversy players with poor
-    /// temperament occasionally find themselves in incidents: a dressing-
-    /// room row, a media storm, a training-ground scrap. Fires a morale
-    /// hit on the player + a relationship drag against a random teammate.
-    /// Scaled so a calm, sportsmanlike star ~never triggers, while a hot-
-    /// head with controversy >15 and temperament <8 fires frequently.
-    #[expect(clippy::too_many_lines)]
+struct LoanDevelopmentConcern {
+    loan_days_elapsed: i64,
+    minutes_share: f32,
+    starts: u16,
+    score: i32,
+    reasons: Vec<LoanDevelopmentConcernReason>,
+    status: Option<PlayerSquadStatus>,
+}
+
+impl Player {
+    fn loan_development_concern(&self, today: NaiveDate) -> Option<LoanDevelopmentConcern> {
+        if !self.is_on_loan() {
+            return None;
+        }
+        let loan_start = self.contract_loan.as_ref().and_then(|l| l.started)?;
+        let loan_days_elapsed = (today - loan_start).num_days();
+        if loan_days_elapsed < 60 {
+            return None;
+        }
+
+        let age = self.age(today);
+        let status = self.contract.as_ref().map(|c| c.squad_status.clone());
+        let is_prospect = matches!(
+            status,
+            Some(PlayerSquadStatus::HotProspectForTheFuture)
+                | Some(PlayerSquadStatus::DecentYoungster)
+        );
+        // Development loans are for youngsters and flagged prospects; an
+        // established senior on loan is judged by the recall audit.
+        if age > 23 && !is_prospect {
+            return None;
+        }
+        if self
+            .happiness
+            .has_recent_event(&HappinessEventType::LoanDevelopmentConcern, 60)
+        {
+            return None;
+        }
+
+        // Opportunity gate — same as the minutes audit. Enforces the grace
+        // window, status sample, and the zero-official-match invariant, so an
+        // injured / break-stranded loanee is never unfairly judged as a
+        // failed development.
+        let opp = self.playing_time_opportunity(today);
+        let cfg = PlayingTimeFrustrationConfig::default();
+        opp.can_judge(status.as_ref(), &cfg, None)?;
+
+        let eligible = opp.eligible_official_matches_since_join;
+        let starts = opp.player_starts_since_join;
+        let minutes_share = if eligible > 0 {
+            starts as f32 / eligible as f32
+        } else {
+            0.0
+        };
+        let (score, reasons) = self.loan_development_signals(eligible, minutes_share);
+        if score < 3 {
+            return None;
+        }
+
+        Some(LoanDevelopmentConcern {
+            loan_days_elapsed,
+            minutes_share,
+            starts,
+            score,
+            reasons,
+            status,
+        })
+    }
+
+    fn loan_development_signals(
+        &self,
+        eligible: u16,
+        minutes_share: f32,
+    ) -> (i32, Vec<LoanDevelopmentConcernReason>) {
+        let mut score = 0i32;
+        let mut reasons = Vec::new();
+
+        // Insufficient minutes — the loanee isn't starting often enough.
+        if eligible >= 4 && minutes_share < 0.4 {
+            score += 2;
+            reasons.push(LoanDevelopmentConcernReason::InsufficientMinutes);
+        }
+        // An active loan-tier mismatch is a strong development signal.
+        if self
+            .happiness
+            .has_recent_event(&HappinessEventType::LoanLevelMismatch, 90)
+        {
+            score += 2;
+            reasons.push(LoanDevelopmentConcernReason::LevelMismatch);
+        }
+        // Played out of position.
+        if self
+            .happiness
+            .has_recent_event(&HappinessEventType::RoleMismatch, 90)
+        {
+            score += 2;
+            reasons.push(LoanDevelopmentConcernReason::WrongRole);
+        }
+        // Repeated poor training environment.
+        let poor_training = self
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::PoorTraining && e.days_ago <= 90)
+            .count();
+        if poor_training >= 2 {
+            score += 1;
+            reasons.push(LoanDevelopmentConcernReason::PoorTrainingEnvironment);
+        }
+        // Poor match performances despite featuring.
+        let apps = self.statistics.played + self.statistics.played_subs;
+        if apps >= 3 && self.statistics.average_rating > 0.0 && self.statistics.average_rating < 6.5
+        {
+            score += 1;
+            reasons.push(LoanDevelopmentConcernReason::PoorMatchPerformance);
+        }
+
+        (score, reasons)
+    }
+
+    fn emit_loan_development_concern(&mut self, concern: LoanDevelopmentConcern) {
+        // Base -2.5, escalating with the number of failing signals.
+        let mut magnitude = if concern.score >= 6 {
+            -4.5
+        } else if concern.score >= 4 {
+            -3.5
+        } else {
+            HappinessConfig::default().catalog.loan_development_concern
+        };
+        // A high-professional still getting some starts is coping — dampen.
+        // Elite parent-club prospects feel a wasted loan more.
+        if self.attributes.professionalism >= 15.0 && concern.starts >= 1 {
+            magnitude *= 0.75;
+        }
+        if matches!(
+            concern.status,
+            Some(PlayerSquadStatus::HotProspectForTheFuture)
+        ) {
+            magnitude *= 1.20;
+        }
+
+        let (parent_club_id, loan_club_id, permanent_option) = self
+            .contract_loan
+            .as_ref()
+            .map(|l| {
+                (
+                    l.loan_from_club_id,
+                    l.loan_to_club_id,
+                    l.loan_future_fee.is_some(),
+                )
+            })
+            .unwrap_or((None, None, false));
+
+        let mut lctx = LoanEventContext::new(LoanEventKind::LoanDevelopmentConcern)
+            .with_minutes_share(concern.minutes_share)
+            .with_permanent_option(permanent_option)
+            .with_loan_days_elapsed(concern.loan_days_elapsed.clamp(0, u16::MAX as i64) as u16);
+        if let Some(pid) = parent_club_id {
+            lctx = lctx.with_parent_club(pid);
+        }
+        if let Some(lid) = loan_club_id {
+            lctx = lctx.with_loan_club(lid);
+        }
+        for reason in concern.reasons {
+            lctx = lctx.with_development_reason(reason);
+        }
+
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::Boardroom,
+        )
+        .with_loan_context(lctx)
+        .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+        self.happiness.add_event_with_context(
+            HappinessEventType::LoanDevelopmentConcern,
+            magnitude,
+            None,
+            happiness_ctx,
+        );
+    }
+}
+
+impl TeamBehaviour {
     pub(super) fn process_controversy_incidents(
         players: &mut PlayerCollection,
         ctx: &GlobalContext<'_>,
@@ -485,8 +503,30 @@ impl TeamBehaviour {
             return; // Monthly cadence
         }
 
-        // Collect potential troublemakers (immutable pass).
-        let candidates: Vec<(u32, u32, f32)> = players
+        let candidates = Self::controversy_candidates(players);
+        if candidates.is_empty() {
+            return;
+        }
+        let all_ids: Vec<u32> = players.players.iter().map(|p| p.id).collect();
+
+        for (offender_id, _, controversy) in candidates {
+            let victim_id = players
+                .find(offender_id)
+                .and_then(|offender| offender.controversy_victim(&all_ids));
+
+            if let Some(offender) = players.players.iter_mut().find(|p| p.id == offender_id) {
+                offender.apply_controversy_incident(controversy);
+            }
+            if let Some(vid) = victim_id
+                && let Some(victim) = players.players.iter_mut().find(|p| p.id == vid)
+            {
+                victim.apply_controversy_ripple(offender_id);
+            }
+        }
+    }
+
+    fn controversy_candidates(players: &PlayerCollection) -> Vec<(u32, u32, f32)> {
+        players
             .players
             .iter()
             .filter_map(|p| {
@@ -496,7 +536,8 @@ impl TeamBehaviour {
                 if controversy < 12.0 {
                     return None;
                 }
-                // Risk score: big when controversial + hot-tempered + unsporting
+                // Risk score: big when controversial + hot-tempered +
+                // unsporting.
                 let risk = controversy + (20.0 - temperament) * 0.6 + (20.0 - sportsmanship) * 0.4;
                 if risk < 35.0 {
                     return None;
@@ -509,190 +550,170 @@ impl TeamBehaviour {
                 }
                 Some((p.id, 0u32, controversy))
             })
-            .collect();
+            .collect()
+    }
+}
 
-        if candidates.is_empty() {
-            return;
+impl Player {
+    fn controversy_victim(&self, all_ids: &[u32]) -> Option<u32> {
+        for tid in all_ids {
+            if *tid == self.id {
+                continue;
+            }
+            let friendship = self
+                .relations
+                .get_player(*tid)
+                .map(|r| r.friendship)
+                .unwrap_or(30.0);
+            if friendship < 35.0 {
+                return Some(*tid);
+            }
+        }
+        None
+    }
+
+    fn apply_controversy_incident(&mut self, controversy: f32) {
+        let magnitude = -(3.0 + ((controversy - 12.0) * 0.3).clamp(0.0, 4.0));
+        let bust_up_eligible = controversy >= 15.0 && self.attributes.temperament <= 8.0;
+        // Hot-tempered offenders → training-ground scope; calmer
+        // controversies still surface as media noise.
+        let scope = if bust_up_eligible {
+            HappinessEventScope::TrainingGround
+        } else {
+            HappinessEventScope::Media
+        };
+        let cause = if bust_up_eligible {
+            HappinessEventCause::PersonalityClash
+        } else {
+            HappinessEventCause::MediaPressure
+        };
+
+        // Personality-shaped evidence — the user reads "high controversy +
+        // low temperament" as the why, not the catch-all "controversy
+        // incident".
+        let mut offender_evidence: Vec<HappinessEventEvidence> = Vec::new();
+        if controversy >= 12.0 {
+            offender_evidence.push(HappinessEventEvidence::HighControversy);
+        }
+        if self.attributes.temperament <= 8.0 {
+            offender_evidence.push(HappinessEventEvidence::LowTemperament);
+        }
+        if self.attributes.sportsmanship <= 8.0 {
+            offender_evidence.push(HappinessEventEvidence::LowSportsmanship);
+        }
+        offender_evidence.push(if bust_up_eligible {
+            HappinessEventEvidence::TrainingGroundIncident
+        } else {
+            HappinessEventEvidence::MediaIncident
+        });
+
+        let incident_ctx = HappinessEventContext::new(
+            cause,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            scope,
+        )
+        .with_evidence_iter(offender_evidence.iter().copied())
+        .with_follow_up(HappinessEventFollowUp::DressingRoomDamageRisk);
+        self.happiness.add_event_with_context(
+            HappinessEventType::ControversyIncident,
+            magnitude,
+            None,
+            incident_ctx,
+        );
+
+        // Bigger incidents (training-ground bust-ups) — only the hottest
+        // combinations trigger them, never every routine controversy.
+        // Cooldown 60d so a recurring offender's history is layered, not
+        // flooded.
+        if bust_up_eligible {
+            let prof_dampen =
+                crate::club::player::events::scaling::HappinessScaling::criticism_dampener(
+                    self.attributes.professionalism,
+                );
+            let cfg = HappinessConfig::default();
+            let mag = cfg.catalog.training_ground_bust_up * prof_dampen;
+            let bust_up_ctx = HappinessEventContext::new(
+                HappinessEventCause::PersonalityClash,
+                HappinessEventSeverity::from_magnitude(mag),
+                HappinessEventScope::TrainingGround,
+            )
+            .with_evidence(HappinessEventEvidence::TrainingGroundIncident)
+            .with_evidence(HappinessEventEvidence::HighControversy)
+            .with_evidence(HappinessEventEvidence::LowTemperament)
+            .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk);
+            self.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::TrainingGroundBustUp,
+                mag,
+                None,
+                bust_up_ctx,
+                60,
+            );
         }
 
-        // Pick a nearby teammate (low-friendship, different age bracket) to
-        // be involved in the spat. Only one per incident.
-        let all_ids: Vec<u32> = players.players.iter().map(|p| p.id).collect();
-
-        for (offender_id, _, controversy) in candidates {
-            // Find a candidate teammate — scan for low-friendship relation.
-            let victim_id = {
-                let offender = match players.find(offender_id) {
-                    Some(p) => p,
-                    None => continue,
-                };
-                let mut picked: Option<u32> = None;
-                for tid in &all_ids {
-                    if *tid == offender_id {
-                        continue;
-                    }
-                    let friendship = offender
-                        .relations
-                        .get_player(*tid)
-                        .map(|r| r.friendship)
-                        .unwrap_or(30.0);
-                    if friendship < 35.0 {
-                        picked = Some(*tid);
-                        break;
-                    }
-                }
-                picked
-            };
-
-            // Fire the incident event on the offender.
-            if let Some(offender) = players.players.iter_mut().find(|p| p.id == offender_id) {
-                let magnitude = -(3.0 + ((controversy - 12.0) * 0.3).clamp(0.0, 4.0));
-                let bust_up_eligible =
-                    controversy >= 15.0 && offender.attributes.temperament <= 8.0;
-                // Hot-tempered offenders → training-ground scope; calmer
-                // controversies still surface as media noise.
-                let scope = if bust_up_eligible {
-                    HappinessEventScope::TrainingGround
-                } else {
-                    HappinessEventScope::Media
-                };
-                let cause = if bust_up_eligible {
-                    HappinessEventCause::PersonalityClash
-                } else {
-                    HappinessEventCause::MediaPressure
-                };
-
-                // Personality-shaped evidence — the user reads "high
-                // controversy + low temperament" as the why, not the
-                // catch-all "controversy incident".
-                let mut offender_evidence: Vec<HappinessEventEvidence> = Vec::new();
-                if controversy >= 12.0 {
-                    offender_evidence.push(HappinessEventEvidence::HighControversy);
-                }
-                if offender.attributes.temperament <= 8.0 {
-                    offender_evidence.push(HappinessEventEvidence::LowTemperament);
-                }
-                if offender.attributes.sportsmanship <= 8.0 {
-                    offender_evidence.push(HappinessEventEvidence::LowSportsmanship);
-                }
-                offender_evidence.push(if bust_up_eligible {
-                    HappinessEventEvidence::TrainingGroundIncident
-                } else {
-                    HappinessEventEvidence::MediaIncident
-                });
-
-                let incident_ctx = HappinessEventContext::new(
-                    cause,
-                    HappinessEventSeverity::from_magnitude(magnitude),
-                    scope,
-                )
-                .with_evidence_iter(offender_evidence.iter().copied())
-                .with_follow_up(HappinessEventFollowUp::DressingRoomDamageRisk);
-                offender.happiness.add_event_with_context(
-                    HappinessEventType::ControversyIncident,
-                    magnitude,
-                    None,
-                    incident_ctx,
-                );
-
-                // Bigger incidents (training-ground bust-ups) — only the
-                // hottest combinations trigger them, never every routine
-                // controversy. Cooldown 60d so a recurring offender's
-                // history is layered, not flooded.
-                if bust_up_eligible {
-                    let prof_dampen = crate::club::player::events::scaling::criticism_dampener(
-                        offender.attributes.professionalism,
-                    );
-                    let cfg = HappinessConfig::default();
-                    let mag = cfg.catalog.training_ground_bust_up * prof_dampen;
-                    let bust_up_ctx = HappinessEventContext::new(
-                        HappinessEventCause::PersonalityClash,
-                        HappinessEventSeverity::from_magnitude(mag),
-                        HappinessEventScope::TrainingGround,
-                    )
-                    .with_evidence(HappinessEventEvidence::TrainingGroundIncident)
-                    .with_evidence(HappinessEventEvidence::HighControversy)
-                    .with_evidence(HappinessEventEvidence::LowTemperament)
-                    .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk);
-                    offender.happiness.add_event_with_context_and_cooldown(
-                        HappinessEventType::TrainingGroundBustUp,
-                        mag,
-                        None,
-                        bust_up_ctx,
-                        60,
-                    );
-                }
-
-                // Public apology — well-adjusted controversial players walk
-                // back the worst of the fallout. Soft positive (+1.0).
-                if offender.attributes.professionalism >= 14.0 && controversy <= 12.0 {
-                    offender
-                        .happiness
-                        .add_event_default_with_cooldown(HappinessEventType::PublicApology, 90);
-                }
-            }
-            // Ripple on the teammate (if one was found). The victim was
-            // picked precisely because friendship was low — surface that
-            // as evidence so the UI explains why this teammate, not the
-            // generic "argued with a teammate".
-            if let Some(vid) = victim_id
-                && let Some(victim) = players.players.iter_mut().find(|p| p.id == vid)
-            {
-                let snapshot = victim
-                    .relations
-                    .get_player(offender_id)
-                    .map(|r| (r.level, r.trust, r.friendship, r.professional_respect));
-                let mut victim_evidence: Vec<HappinessEventEvidence> =
-                    vec![HappinessEventEvidence::DressingRoomRow];
-                if let Some((level, trust, friendship, prof)) = snapshot {
-                    if friendship <= 35.0 {
-                        victim_evidence.push(HappinessEventEvidence::LowFriendship);
-                    }
-                    if trust <= 35.0 {
-                        victim_evidence.push(HappinessEventEvidence::LowTrust);
-                    }
-                    if prof <= 35.0 {
-                        victim_evidence.push(HappinessEventEvidence::LowProfessionalRespect);
-                    }
-                    if level <= -25.0 {
-                        victim_evidence.push(HappinessEventEvidence::AlreadyStrainedRelationship);
-                    }
-                }
-                let mut conflict_ctx = HappinessEventContext::new(
-                    HappinessEventCause::PersonalityClash,
-                    HappinessEventSeverity::from_magnitude(-2.0),
-                    HappinessEventScope::DressingRoom,
-                )
-                .with_evidence_iter(victim_evidence.iter().copied())
-                .with_follow_up(HappinessEventFollowUp::DressingRoomDamageRisk)
-                .with_teammate_conflict_context(TeammateConflictContext::new(
-                    TeammateConflictReason::PersonalityClash,
-                    ConflictLocation::DressingRoom,
-                ));
-                if let Some((level, trust, friendship, prof)) = snapshot {
-                    conflict_ctx = conflict_ctx
-                        .with_relationship_levels(level, level)
-                        .with_relationship_axes(trust, friendship, prof);
-                }
-                // Shared same-tick budget + 45-day partner
-                // cooldown via the central helper, so the
-                // controversy emit can't quietly leapfrog the
-                // behaviour-pass cap or refire on a recurring
-                // offender/victim pair.
-                victim
-                    .happiness
-                    .try_add_partner_context_with_same_tick_budget(
-                        HappinessEventType::ConflictWithTeammate,
-                        -2.0,
-                        offender_id,
-                        || conflict_ctx,
-                        45,
-                        PlayerHappiness::MAX_CONFLICT_WITH_TEAMMATE_PER_TICK,
-                    );
-            }
+        // Public apology — well-adjusted controversial players walk back the
+        // worst of the fallout. Soft positive (+1.0).
+        if self.attributes.professionalism >= 14.0 && controversy <= 12.0 {
+            self.happiness
+                .add_event_default_with_cooldown(HappinessEventType::PublicApology, 90);
         }
     }
 
+    fn apply_controversy_ripple(&mut self, offender_id: u32) {
+        // The victim was picked precisely because friendship was low —
+        // surface that as evidence so the UI explains why this teammate, not
+        // the generic "argued with a teammate".
+        let snapshot = self
+            .relations
+            .get_player(offender_id)
+            .map(|r| (r.level, r.trust, r.friendship, r.professional_respect));
+        let mut victim_evidence: Vec<HappinessEventEvidence> =
+            vec![HappinessEventEvidence::DressingRoomRow];
+        if let Some((level, trust, friendship, prof)) = snapshot {
+            if friendship <= 35.0 {
+                victim_evidence.push(HappinessEventEvidence::LowFriendship);
+            }
+            if trust <= 35.0 {
+                victim_evidence.push(HappinessEventEvidence::LowTrust);
+            }
+            if prof <= 35.0 {
+                victim_evidence.push(HappinessEventEvidence::LowProfessionalRespect);
+            }
+            if level <= -25.0 {
+                victim_evidence.push(HappinessEventEvidence::AlreadyStrainedRelationship);
+            }
+        }
+        let mut conflict_ctx = HappinessEventContext::new(
+            HappinessEventCause::PersonalityClash,
+            HappinessEventSeverity::from_magnitude(-2.0),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_evidence_iter(victim_evidence.iter().copied())
+        .with_follow_up(HappinessEventFollowUp::DressingRoomDamageRisk)
+        .with_teammate_conflict_context(TeammateConflictContext::new(
+            TeammateConflictReason::PersonalityClash,
+            ConflictLocation::DressingRoom,
+        ));
+        if let Some((level, trust, friendship, prof)) = snapshot {
+            conflict_ctx = conflict_ctx
+                .with_relationship_levels(level, level)
+                .with_relationship_axes(trust, friendship, prof);
+        }
+        // Shared same-tick budget + 45-day partner cooldown via the central
+        // helper, so the controversy emit can't quietly leapfrog the
+        // behaviour-pass cap or refire on a recurring offender/victim pair.
+        self.happiness
+            .try_add_partner_context_with_same_tick_budget(
+                HappinessEventType::ConflictWithTeammate,
+                -2.0,
+                offender_id,
+                || conflict_ctx,
+                45,
+                PlayerHappiness::MAX_CONFLICT_WITH_TEAMMATE_PER_TICK,
+            );
+    }
+}
+
+impl TeamBehaviour {
     /// Monthly squad-wide wage audit: compare every player's salary to the
     /// top earner at their position group. If they're a starter earning
     /// <60% of the top salary in their slot, fire a gentle recurring
@@ -846,13 +867,6 @@ impl TeamBehaviour {
         }
     }
 
-    /// Monthly squad-ambition audit. An ambitious star who is clearly
-    /// above the level of the squad around him — or who has just seen a
-    /// top teammate leave unreplaced — pushes the board to strengthen
-    /// before he commits his future. This is a pressure signal, not a
-    /// transfer request; it becomes dangerous only stacked with title /
-    /// European ambition or stalled contract talks. Runs on day 1 only.
-    #[expect(clippy::too_many_lines)]
     pub(super) fn process_squad_ambition_audit(
         players: &mut PlayerCollection,
         ctx: &GlobalContext<'_>,
@@ -861,115 +875,14 @@ impl TeamBehaviour {
         if today.day() != 1 {
             return;
         }
-
-        // Squad baseline from permanent (non-loan) players, plus per-unit
-        // averages / counts so we can name the weakest unit around a star.
-        let mut sum: u32 = 0;
-        let mut count: u32 = 0;
-        let mut by_group: FxHashMap<PlayerFieldPositionGroup, (u32, u32)> = FxHashMap::default();
-        for p in &players.players {
-            if p.is_on_loan() {
-                continue;
-            }
-            let ca = p.player_attributes.current_ability as u32;
-            sum += ca;
-            count += 1;
-            let group = p.position().position_group();
-            let entry = by_group.entry(group).or_insert((0, 0));
-            entry.0 += ca;
-            entry.1 += 1;
-        }
-        if count < 5 {
+        let Some(baseline) = Self::squad_ambition_baseline(players) else {
             return;
-        }
-        let squad_avg = (sum / count) as u8;
-
-        // Weakest unit overall — lowest average ability among groups that
-        // actually have players. Used as context + a thin-depth signal.
-        let weakest_unit = by_group
-            .iter()
-            .filter(|(_, (_, c))| *c > 0)
-            .min_by(|a, b| {
-                let aa = a.1.0 as f32 / a.1.1 as f32;
-                let bb = b.1.0 as f32 / b.1.1 as f32;
-                aa.partial_cmp(&bb).unwrap_or(Ordering::Equal)
-            })
-            .map(|(g, _)| *g);
+        };
 
         for player in players.players.iter_mut() {
-            if player.is_on_loan() {
+            let Some(desire) = player.squad_ambition_desire(&baseline) else {
                 continue;
-            }
-            let ambition = player.attributes.ambition;
-            if ambition < 14.0 {
-                continue;
-            }
-            let ca = player.player_attributes.current_ability;
-            let world_rep = player.player_attributes.world_reputation.max(0);
-            if ca < 130 && world_rep < 4500 {
-                continue;
-            }
-            // Only key figures carry this weight — a backup wanting the
-            // board to sign stars is not a realistic pressure source.
-            let is_key = player
-                .contract
-                .as_ref()
-                .map(|c| {
-                    matches!(
-                        c.squad_status,
-                        PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
-                    )
-                })
-                .unwrap_or(false);
-            if !is_key {
-                continue;
-            }
-            if player
-                .happiness
-                .has_recent_event(&HappinessEventType::WantsStrongerSquad, 90)
-            {
-                continue;
-            }
-
-            // Squad-weakness triggers: the star is meaningfully above the
-            // squad's level, or a close teammate / mentor just left and
-            // wasn't replaced.
-            let above_squad = (ca as i32) - (squad_avg as i32) >= 10;
-            let key_sold = player
-                .happiness
-                .has_recent_event(&HappinessEventType::CloseFriendSold, 60)
-                || player
-                    .happiness
-                    .has_recent_event(&HappinessEventType::MentorDeparted, 60);
-            if !above_squad && !key_sold {
-                continue;
-            }
-
-            let player_group = player.position().position_group();
-            let unit_thin = by_group
-                .get(&player_group)
-                .map(|(_, c)| *c < 3)
-                .unwrap_or(true);
-
-            let mut desire = CareerDesireEventContext::new(CareerDesireKind::StrongerSquadAmbition)
-                .with_squad_average_ability(squad_avg)
-                .with_player_ability(ca)
-                .with_evidence(CareerDesireEvidence::HighAmbition);
-            if let Some(unit) = weakest_unit {
-                desire = desire.with_weakest_unit(unit);
-            }
-            if above_squad {
-                desire = desire
-                    .with_evidence(CareerDesireEvidence::SquadQualityBelowPlayerLevel)
-                    .with_evidence(CareerDesireEvidence::PlayerAboveClubLevel);
-            }
-            if key_sold {
-                desire = desire.with_evidence(CareerDesireEvidence::KeyPlayerSold);
-            }
-            if unit_thin {
-                desire = desire.with_evidence(CareerDesireEvidence::WeakDepthInPlayerUnit);
-            }
-
+            };
             let magnitude = HappinessConfig::default().catalog.wants_stronger_squad;
             let happiness_ctx = HappinessEventContext::new(
                 HappinessEventCause::ReputationAdmiration,
@@ -988,6 +901,137 @@ impl TeamBehaviour {
         }
     }
 
+    fn squad_ambition_baseline(players: &PlayerCollection) -> Option<SquadAmbitionBaseline> {
+        // Squad baseline from permanent (non-loan) players, plus per-unit
+        // averages / counts so we can name the weakest unit around a star.
+        let mut sum: u32 = 0;
+        let mut count: u32 = 0;
+        let mut by_group: FxHashMap<PlayerFieldPositionGroup, (u32, u32)> = FxHashMap::default();
+        for p in &players.players {
+            if p.is_on_loan() {
+                continue;
+            }
+            let ca = p.player_attributes.current_ability as u32;
+            sum += ca;
+            count += 1;
+            let group = p.position().position_group();
+            let entry = by_group.entry(group).or_insert((0, 0));
+            entry.0 += ca;
+            entry.1 += 1;
+        }
+        if count < 5 {
+            return None;
+        }
+        let squad_avg = (sum / count) as u8;
+
+        // Weakest unit overall — lowest average ability among groups that
+        // actually have players. Used as context + a thin-depth signal.
+        let weakest_unit = by_group
+            .iter()
+            .filter(|(_, (_, c))| *c > 0)
+            .min_by(|a, b| {
+                let aa = a.1.0 as f32 / a.1.1 as f32;
+                let bb = b.1.0 as f32 / b.1.1 as f32;
+                aa.partial_cmp(&bb).unwrap_or(Ordering::Equal)
+            })
+            .map(|(g, _)| *g);
+
+        Some(SquadAmbitionBaseline {
+            squad_avg,
+            weakest_unit,
+            by_group,
+        })
+    }
+}
+
+struct SquadAmbitionBaseline {
+    squad_avg: u8,
+    weakest_unit: Option<PlayerFieldPositionGroup>,
+    by_group: FxHashMap<PlayerFieldPositionGroup, (u32, u32)>,
+}
+
+impl Player {
+    fn squad_ambition_desire(
+        &self,
+        baseline: &SquadAmbitionBaseline,
+    ) -> Option<CareerDesireEventContext> {
+        if self.is_on_loan() {
+            return None;
+        }
+        let ambition = self.attributes.ambition;
+        if ambition < 14.0 {
+            return None;
+        }
+        let ca = self.player_attributes.current_ability;
+        let world_rep = self.player_attributes.world_reputation.max(0);
+        if ca < 130 && world_rep < 4500 {
+            return None;
+        }
+        // Only key figures carry this weight — a backup wanting the board to
+        // sign stars is not a realistic pressure source.
+        let is_key = self
+            .contract
+            .as_ref()
+            .map(|c| {
+                matches!(
+                    c.squad_status,
+                    PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
+                )
+            })
+            .unwrap_or(false);
+        if !is_key {
+            return None;
+        }
+        if self
+            .happiness
+            .has_recent_event(&HappinessEventType::WantsStrongerSquad, 90)
+        {
+            return None;
+        }
+
+        // Squad-weakness triggers: the star is meaningfully above the squad's
+        // level, or a close teammate / mentor just left and wasn't replaced.
+        let above_squad = (ca as i32) - (baseline.squad_avg as i32) >= 10;
+        let key_sold = self
+            .happiness
+            .has_recent_event(&HappinessEventType::CloseFriendSold, 60)
+            || self
+                .happiness
+                .has_recent_event(&HappinessEventType::MentorDeparted, 60);
+        if !above_squad && !key_sold {
+            return None;
+        }
+
+        let player_group = self.position().position_group();
+        let unit_thin = baseline
+            .by_group
+            .get(&player_group)
+            .map(|(_, c)| *c < 3)
+            .unwrap_or(true);
+
+        let mut desire = CareerDesireEventContext::new(CareerDesireKind::StrongerSquadAmbition)
+            .with_squad_average_ability(baseline.squad_avg)
+            .with_player_ability(ca)
+            .with_evidence(CareerDesireEvidence::HighAmbition);
+        if let Some(unit) = baseline.weakest_unit {
+            desire = desire.with_weakest_unit(unit);
+        }
+        if above_squad {
+            desire = desire
+                .with_evidence(CareerDesireEvidence::SquadQualityBelowPlayerLevel)
+                .with_evidence(CareerDesireEvidence::PlayerAboveClubLevel);
+        }
+        if key_sold {
+            desire = desire.with_evidence(CareerDesireEvidence::KeyPlayerSold);
+        }
+        if unit_thin {
+            desire = desire.with_evidence(CareerDesireEvidence::WeakDepthInPlayerUnit);
+        }
+        Some(desire)
+    }
+}
+
+impl TeamBehaviour {
     /// Monthly contract-stalemate audit. Where the deterministic country
     /// pipeline reasons about *listing*, this surfaces the player-facing
     /// [`ContractTalksStalled`] signal once a renewal has genuinely broken
@@ -1652,24 +1696,10 @@ impl TeamBehaviour {
     /// borrowed status, though: a visibly poor run pops it, the star
     /// treatment stops, and the room re-rates him on what he actually
     /// shows. Runs on day 1 for every squad.
-    #[expect(clippy::too_many_lines)]
     pub(super) fn process_big_club_aura_audit(
         players: &mut PlayerCollection,
         ctx: &GlobalContext<'_>,
     ) {
-        /// Background must outshine the club this much before the room
-        /// treats the record as an aura.
-        const MIN_AURA: f32 = 0.35;
-        /// Arrival window (days since transfer / loan return) for the
-        /// admiration beat.
-        const ARRIVAL_WINDOW_DAYS: i64 = 45;
-        /// How long the admiration beat keeps the star treatment alive.
-        const AURA_HOLD_DAYS: u16 = 210;
-        /// Rated official sample before form can pop the aura…
-        const FADE_MIN_APPS: u16 = 5;
-        /// …and the season average that reads as "not showing it".
-        const FADE_RATING: f32 = 6.35;
-
         let today = ctx.simulation.date.date();
         if today.day() != 1 {
             return;
@@ -1686,42 +1716,26 @@ impl TeamBehaviour {
             })
             .unwrap_or(5_000);
 
-        // ── Arrival admiration + aura bookkeeping (per player) ──────
         for player in players.players.iter_mut() {
-            let fresh_arrival = player
-                .days_since_transfer(today)
-                .map(|d| (0..=ARRIVAL_WINDOW_DAYS).contains(&d))
-                .unwrap_or(false);
-            if !fresh_arrival {
-                continue;
-            }
-            let aura =
-                MatchExperienceBackground::from_player(player).aura_over(club_reputation, today);
-            if aura < MIN_AURA {
-                continue;
-            }
-            let catalog = HappinessConfig::default().catalog;
-            let magnitude = catalog.admired_for_big_club_spell * (0.7 + 0.6 * aura);
-            let happiness_ctx = HappinessEventContext::new(
-                HappinessEventCause::ReputationAdmiration,
-                HappinessEventSeverity::from_magnitude(magnitude),
-                HappinessEventScope::Personal,
-            );
-            player.happiness.add_event_with_context_and_cooldown(
-                HappinessEventType::AdmiredForBigClubSpell,
-                magnitude,
-                None,
-                happiness_ctx,
-                365,
-            );
+            player.maybe_emit_big_club_arrival(today, club_reputation);
         }
 
-        // ── Star treatment while the aura holds, puncture on a poor run ──
-        struct AuraHolder {
-            id: u32,
-            group: PlayerFieldPositionGroup,
-            ability: u8,
+        let (holders, popped) = Self::aura_state(players);
+        for player in players.players.iter_mut() {
+            if popped.contains(&player.id) {
+                let catalog = HappinessConfig::default().catalog;
+                player.happiness.add_event_with_cooldown(
+                    HappinessEventType::BigClubAuraFaded,
+                    catalog.big_club_aura_faded,
+                    300,
+                );
+                continue;
+            }
+            player.apply_aura_orbit(&holders, today);
         }
+    }
+
+    fn aura_state(players: &PlayerCollection) -> (Vec<AuraHolder>, Vec<u32>) {
         let mut holders: Vec<AuraHolder> = Vec::new();
         let mut popped: Vec<u32> = Vec::new();
         for player in players.players.iter() {
@@ -1751,92 +1765,133 @@ impl TeamBehaviour {
                 });
             }
         }
+        (holders, popped)
+    }
+}
 
-        for player in players.players.iter_mut() {
-            if popped.contains(&player.id) {
-                let catalog = HappinessConfig::default().catalog;
-                player.happiness.add_event_with_cooldown(
-                    HappinessEventType::BigClubAuraFaded,
-                    catalog.big_club_aura_faded,
-                    300,
-                );
-                continue;
-            }
-            // Teammates orbit the aura holders — a monthly drip, stronger
-            // from the young players who grew up watching that badge. The
-            // exception is the man whose shirt the star is here to take:
-            // a credible rival in the same position group feels the
-            // competition, not the glow — his side of the story is the
-            // returning-rival audit, not this one. One band below the
-            // contest sits the apprentice: a young understudy so far
-            // beneath the star that there is no rivalry to feel — he
-            // gets a masterclass to study every day, and the room reads
-            // it as mentorship, not displacement.
-            /// A same-group youngster this far below the star studies
-            /// him instead of contesting the shirt.
-            const APPRENTICE_ABILITY_GAP: u8 = 25;
-            /// Apprenticeship is for kids without a senior claim; a
-            /// young senior-label incumbent belongs to the threat band.
-            const APPRENTICE_MAX_AGE: u8 = 21;
-            for holder in &holders {
-                if holder.id == player.id {
-                    continue;
-                }
-                let same_group = player.position().position_group() == holder.group;
-                if same_group {
-                    let own_ability = player.player_attributes.current_ability;
-                    let senior_claim = player.contract.as_ref().is_some_and(|c| {
-                        matches!(
-                            c.squad_status,
-                            PlayerSquadStatus::KeyPlayer
-                                | PlayerSquadStatus::FirstTeamRegular
-                                | PlayerSquadStatus::FirstTeamSquadRotation
-                                | PlayerSquadStatus::MainBackupPlayer
-                        )
-                    });
-                    let apprentice = player.age(today) <= APPRENTICE_MAX_AGE
-                        && !senior_claim
-                        && holder.ability >= own_ability.saturating_add(APPRENTICE_ABILITY_GAP);
-                    if apprentice {
-                        let catalog = HappinessConfig::default().catalog;
-                        let magnitude = catalog.learning_from_star_teammate;
-                        let happiness_ctx = HappinessEventContext::new(
-                            HappinessEventCause::ReputationAdmiration,
-                            HappinessEventSeverity::from_magnitude(magnitude),
-                            HappinessEventScope::Personal,
-                        );
-                        player
-                            .happiness
-                            .add_event_with_partner_context_and_cooldown(
-                                HappinessEventType::LearningFromStarTeammate,
-                                magnitude,
-                                holder.id,
-                                happiness_ctx,
-                                365,
-                            );
-                        player.relations.update_player_relationship(
-                            holder.id,
-                            RelationshipChange::positive(ChangeType::MentorshipBond, 0.35),
-                            today,
-                        );
-                        continue;
-                    }
-                    let credible_rival = holder.ability.saturating_add(10)
-                        >= player.player_attributes.current_ability;
-                    if credible_rival {
-                        continue;
-                    }
-                }
-                let admiration = if player.age(today) <= 23 { 0.35 } else { 0.20 };
-                player.relations.update_player_relationship(
-                    holder.id,
-                    RelationshipChange::positive(ChangeType::ReputationAdmiration, admiration),
-                    today,
-                );
-            }
+/// How long the admiration beat keeps the star treatment alive.
+const AURA_HOLD_DAYS: u16 = 210;
+/// Rated official sample before form can pop the aura…
+const FADE_MIN_APPS: u16 = 5;
+/// …and the season average that reads as "not showing it".
+const FADE_RATING: f32 = 6.35;
+
+struct AuraHolder {
+    id: u32,
+    group: PlayerFieldPositionGroup,
+    ability: u8,
+}
+
+impl Player {
+    fn maybe_emit_big_club_arrival(&mut self, today: NaiveDate, club_reputation: u16) {
+        /// Background must outshine the club this much before the room treats
+        /// the record as an aura.
+        const MIN_AURA: f32 = 0.35;
+        /// Arrival window (days since transfer / loan return) for the
+        /// admiration beat.
+        const ARRIVAL_WINDOW_DAYS: i64 = 45;
+
+        let fresh_arrival = self
+            .days_since_transfer(today)
+            .map(|d| (0..=ARRIVAL_WINDOW_DAYS).contains(&d))
+            .unwrap_or(false);
+        if !fresh_arrival {
+            return;
         }
+        let aura = MatchExperienceBackground::from_player(self).aura_over(club_reputation, today);
+        if aura < MIN_AURA {
+            return;
+        }
+        let catalog = HappinessConfig::default().catalog;
+        let magnitude = catalog.admired_for_big_club_spell * (0.7 + 0.6 * aura);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationAdmiration,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::Personal,
+        );
+        self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::AdmiredForBigClubSpell,
+            magnitude,
+            None,
+            happiness_ctx,
+            365,
+        );
     }
 
+    /// Teammates orbit the aura holders — a monthly drip, stronger from the
+    /// young players who grew up watching that badge. The exception is the
+    /// man whose shirt the star is here to take: a credible rival in the same
+    /// position group feels the competition, not the glow — his side of the
+    /// story is the returning-rival audit, not this one. One band below the
+    /// contest sits the apprentice: a young understudy so far beneath the
+    /// star that there is no rivalry to feel — he gets a masterclass to study
+    /// every day, and the room reads it as mentorship, not displacement.
+    fn apply_aura_orbit(&mut self, holders: &[AuraHolder], today: NaiveDate) {
+        /// A same-group youngster this far below the star studies him
+        /// instead of contesting the shirt.
+        const APPRENTICE_ABILITY_GAP: u8 = 25;
+        /// Apprenticeship is for kids without a senior claim; a young
+        /// senior-label incumbent belongs to the threat band.
+        const APPRENTICE_MAX_AGE: u8 = 21;
+
+        for holder in holders {
+            if holder.id == self.id {
+                continue;
+            }
+            let same_group = self.position().position_group() == holder.group;
+            if same_group {
+                let own_ability = self.player_attributes.current_ability;
+                let senior_claim = self.contract.as_ref().is_some_and(|c| {
+                    matches!(
+                        c.squad_status,
+                        PlayerSquadStatus::KeyPlayer
+                            | PlayerSquadStatus::FirstTeamRegular
+                            | PlayerSquadStatus::FirstTeamSquadRotation
+                            | PlayerSquadStatus::MainBackupPlayer
+                    )
+                });
+                let apprentice = self.age(today) <= APPRENTICE_MAX_AGE
+                    && !senior_claim
+                    && holder.ability >= own_ability.saturating_add(APPRENTICE_ABILITY_GAP);
+                if apprentice {
+                    let catalog = HappinessConfig::default().catalog;
+                    let magnitude = catalog.learning_from_star_teammate;
+                    let happiness_ctx = HappinessEventContext::new(
+                        HappinessEventCause::ReputationAdmiration,
+                        HappinessEventSeverity::from_magnitude(magnitude),
+                        HappinessEventScope::Personal,
+                    );
+                    self.happiness.add_event_with_partner_context_and_cooldown(
+                        HappinessEventType::LearningFromStarTeammate,
+                        magnitude,
+                        holder.id,
+                        happiness_ctx,
+                        365,
+                    );
+                    self.relations.update_player_relationship(
+                        holder.id,
+                        RelationshipChange::positive(ChangeType::MentorshipBond, 0.35),
+                        today,
+                    );
+                    continue;
+                }
+                let credible_rival =
+                    holder.ability.saturating_add(10) >= self.player_attributes.current_ability;
+                if credible_rival {
+                    continue;
+                }
+            }
+            let admiration = if self.age(today) <= 23 { 0.35 } else { 0.20 };
+            self.relations.update_player_relationship(
+                holder.id,
+                RelationshipChange::positive(ChangeType::ReputationAdmiration, admiration),
+                today,
+            );
+        }
+    }
+}
+
+impl TeamBehaviour {
     /// Monthly returning-rival audit — the incumbent's side of a loan
     /// return. A loanee coming home with a starter's record is a new
     /// signing in competition terms: the credible incumbents in his
@@ -2023,28 +2078,10 @@ impl TeamBehaviour {
     /// pressure). The deeply professional leader is the exception — he
     /// keeps the frustration private and backs the struggler instead.
     /// Runs on day 1, Main team only.
-    #[expect(clippy::too_many_lines)]
     pub(super) fn process_flop_signing_patience_audit(
         players: &mut PlayerCollection,
         ctx: &GlobalContext<'_>,
     ) {
-        /// A fair look first — no verdicts inside the settling window.
-        const SETTLING_GRACE_DAYS: i64 = 60;
-        /// After a year he's not "the new signing" anymore — whatever
-        /// he is by then, the ordinary form machinery owns it.
-        const JUDGEMENT_WINDOW_DAYS: i64 = 400;
-        /// Rated official sample before the room may call it.
-        const MIN_SAMPLE_APPS: u16 = 8;
-        /// The season average that reads as clearly below the standard
-        /// his arrival set.
-        const FLOP_RATING: f32 = 6.2;
-        /// Leadership attribute floor for a voice that carries.
-        const LEADER_MIN_LEADERSHIP: f32 = 14.0;
-        /// Only the strongest voices speak — not the whole XI.
-        const MAX_LEADERS: usize = 3;
-        /// A leader this professional backs the struggler instead.
-        const PROFESSIONAL_FLOOR: f32 = 15.0;
-
         let today = ctx.simulation.date.date();
         if today.day() != 1 {
             return;
@@ -2059,9 +2096,49 @@ impl TeamBehaviour {
             return;
         }
 
-        // The flops: permanent arrivals with weight, past the grace
-        // window, sitting on a real sample well under the line.
-        let flops: Vec<u32> = players
+        let flops = Self::flop_ids(players, today);
+        if flops.is_empty() {
+            return;
+        }
+        let leader_ids = Self::flop_leader_ids(players, today, &flops);
+        if leader_ids.is_empty() {
+            return;
+        }
+
+        // The leaders react — by personality. Track which flops actually
+        // drew a patience-loss row so only they feel the room.
+        let mut pressured: Vec<u32> = Vec::new();
+        for player in players.players.iter_mut() {
+            if !leader_ids.contains(&player.id) {
+                continue;
+            }
+            player.apply_flop_patience(&flops, today, &mut pressured);
+        }
+
+        // The flop senses it — how hard it lands is a question of how he
+        // handles pressure, same curve as the deflated loan return.
+        for player in players.players.iter_mut() {
+            if pressured.contains(&player.id) {
+                player.apply_flop_pressure();
+            }
+        }
+    }
+
+    /// The flops: permanent arrivals with weight, past the grace window,
+    /// sitting on a real sample well under the line.
+    fn flop_ids(players: &PlayerCollection, today: NaiveDate) -> Vec<u32> {
+        /// A fair look first — no verdicts inside the settling window.
+        const SETTLING_GRACE_DAYS: i64 = 60;
+        /// After a year he's not "the new signing" anymore — whatever he is
+        /// by then, the ordinary form machinery owns it.
+        const JUDGEMENT_WINDOW_DAYS: i64 = 400;
+        /// Rated official sample before the room may call it.
+        const MIN_SAMPLE_APPS: u16 = 8;
+        /// The season average that reads as clearly below the standard his
+        /// arrival set.
+        const FLOP_RATING: f32 = 6.2;
+
+        players
             .players
             .iter()
             .filter(|p| !p.is_on_loan() && !Self::is_politics_exempt(p))
@@ -2079,13 +2156,17 @@ impl TeamBehaviour {
                 apps >= MIN_SAMPLE_APPS && rating < FLOP_RATING
             })
             .map(|p| p.id)
-            .collect();
-        if flops.is_empty() {
-            return;
-        }
+            .collect()
+    }
 
-        // The leaders: strongest senior voices in the room, capped so a
-        // flop doesn't collect a row from half the squad.
+    /// The leaders: strongest senior voices in the room, capped so a flop
+    /// doesn't collect a row from half the squad.
+    fn flop_leader_ids(players: &PlayerCollection, today: NaiveDate, flops: &[u32]) -> Vec<u32> {
+        /// Leadership attribute floor for a voice that carries.
+        const LEADER_MIN_LEADERSHIP: f32 = 14.0;
+        /// Only the strongest voices speak — not the whole XI.
+        const MAX_LEADERS: usize = 3;
+
         let mut leaders: Vec<(u32, f32)> = players
             .players
             .iter()
@@ -2105,84 +2186,75 @@ impl TeamBehaviour {
             .collect();
         leaders.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
         leaders.truncate(MAX_LEADERS);
-        let leader_ids: Vec<u32> = leaders.iter().map(|(id, _)| *id).collect();
-        if leader_ids.is_empty() {
-            return;
-        }
+        leaders.into_iter().map(|(id, _)| id).collect()
+    }
+}
 
-        // The leaders react — by personality. Track which flops
-        // actually drew a patience-loss row so only they feel the room.
-        let mut pressured: Vec<u32> = Vec::new();
-        for player in players.players.iter_mut() {
-            if !leader_ids.contains(&player.id) {
-                continue;
-            }
-            for flop_id in &flops {
-                if player.attributes.professionalism >= PROFESSIONAL_FLOOR {
-                    // The professional keeps it in-house and puts an
-                    // arm around the struggler instead.
-                    player.relations.update_player_relationship(
-                        *flop_id,
-                        RelationshipChange::positive(ChangeType::PersonalSupport, 0.3),
-                        today,
-                    );
-                    continue;
-                }
-                let magnitude = HappinessConfig::default()
-                    .catalog
-                    .losing_patience_with_signing;
-                let happiness_ctx = HappinessEventContext::new(
-                    HappinessEventCause::PoorFormPressure,
-                    HappinessEventSeverity::from_magnitude(magnitude),
-                    HappinessEventScope::DressingRoom,
-                );
-                let emitted = player
-                    .happiness
-                    .add_event_with_partner_context_and_cooldown(
-                        HappinessEventType::LosingPatienceWithSigning,
-                        magnitude,
-                        *flop_id,
-                        happiness_ctx,
-                        120,
-                    );
-                player.relations.update_player_relationship(
+impl Player {
+    fn apply_flop_patience(&mut self, flops: &[u32], today: NaiveDate, pressured: &mut Vec<u32>) {
+        /// A leader this professional backs the struggler instead.
+        const PROFESSIONAL_FLOOR: f32 = 15.0;
+
+        for flop_id in flops {
+            if self.attributes.professionalism >= PROFESSIONAL_FLOOR {
+                // The professional keeps it in-house and puts an arm around
+                // the struggler instead.
+                self.relations.update_player_relationship(
                     *flop_id,
-                    RelationshipChange::negative(ChangeType::ReputationTension, 0.35),
+                    RelationshipChange::positive(ChangeType::PersonalSupport, 0.3),
                     today,
                 );
-                if emitted && !pressured.contains(flop_id) {
-                    pressured.push(*flop_id);
-                }
-            }
-        }
-
-        // The flop senses it — how hard it lands is a question of how
-        // he handles pressure, same curve as the deflated loan return.
-        for player in players.players.iter_mut() {
-            if !pressured.contains(&player.id) {
                 continue;
             }
-            let pressure01 = (player.attributes.pressure / 20.0).clamp(0.0, 1.0);
             let magnitude = HappinessConfig::default()
                 .catalog
-                .feels_dressing_room_pressure
-                * (1.3 - 0.6 * pressure01);
+                .losing_patience_with_signing;
             let happiness_ctx = HappinessEventContext::new(
-                HappinessEventCause::ReputationTension,
+                HappinessEventCause::PoorFormPressure,
                 HappinessEventSeverity::from_magnitude(magnitude),
                 HappinessEventScope::DressingRoom,
-            )
-            .with_follow_up(HappinessEventFollowUp::PressureBuilding);
-            player.happiness.add_event_with_context_and_cooldown(
-                HappinessEventType::FeelsDressingRoomPressure,
+            );
+            let emitted = self.happiness.add_event_with_partner_context_and_cooldown(
+                HappinessEventType::LosingPatienceWithSigning,
                 magnitude,
-                None,
+                *flop_id,
                 happiness_ctx,
                 120,
             );
+            self.relations.update_player_relationship(
+                *flop_id,
+                RelationshipChange::negative(ChangeType::ReputationTension, 0.35),
+                today,
+            );
+            if emitted && !pressured.contains(flop_id) {
+                pressured.push(*flop_id);
+            }
         }
     }
 
+    fn apply_flop_pressure(&mut self) {
+        let pressure01 = (self.attributes.pressure / 20.0).clamp(0.0, 1.0);
+        let magnitude = HappinessConfig::default()
+            .catalog
+            .feels_dressing_room_pressure
+            * (1.3 - 0.6 * pressure01);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationTension,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_follow_up(HappinessEventFollowUp::PressureBuilding);
+        self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::FeelsDressingRoomPressure,
+            magnitude,
+            None,
+            happiness_ctx,
+            120,
+        );
+    }
+}
+
+impl TeamBehaviour {
     /// Monthly blocked-homegrown audit — the club chose a borrowed
     /// stopgap over its own kid. A loan-in holding a starter's share of
     /// the group's minutes while an academy product of comparable level
@@ -2194,24 +2266,12 @@ impl TeamBehaviour {
     /// (`UnhappyAboutBlockedHomegrown`, warming toward the kid). A
     /// loanee clearly better than the kid is accepted as fair
     /// competition. Runs on day 1, Main team only.
-    #[expect(clippy::too_many_lines)]
     pub(super) fn process_blocked_homegrown_audit(
         players: &mut PlayerCollection,
         ctx: &GlobalContext<'_>,
     ) {
         /// Enough of the season played for shares to mean something.
         const MIN_TEAM_MATCHES: u8 = 6;
-        /// Start share at which the loan-in owns the position.
-        const BLOCKER_SHARE: f32 = 0.45;
-        /// Start share under which the kid is being starved.
-        const KID_STARVED_SHARE: f32 = 0.20;
-        /// The pathway story is about academy-age players.
-        const KID_MAX_AGE: u8 = 22;
-        /// A loanee more than this above the kid is fair competition,
-        /// not a stopgap blocking a pathway.
-        const COMPARABLE_ABILITY_MARGIN: u8 = 10;
-        /// Only the core's strongest voices carry the grievance.
-        const MAX_SENIOR_VOICES: usize = 3;
 
         let today = ctx.simulation.date.date();
         if today.day() != 1 {
@@ -2236,13 +2296,42 @@ impl TeamBehaviour {
         }
         let matches = league_matches_played as f32;
 
-        struct LoanBlocker {
-            id: u32,
-            group: PlayerFieldPositionGroup,
-            ability: u8,
-            start_share: f32,
+        let blockers = Self::loan_blockers(players, matches);
+        if blockers.is_empty() {
+            return;
         }
-        let blockers: Vec<LoanBlocker> = players
+        let blocked_pairs = Self::blocked_homegrown_pairs(players, &blockers, matches, today);
+        if blocked_pairs.is_empty() {
+            return;
+        }
+
+        // The kid's own grievance — sharper than plain lack of minutes, and
+        // pointed: he knows exactly who is holding the door shut.
+        for player in players.players.iter_mut() {
+            let Some((_, blocker_id)) = blocked_pairs.iter().find(|(kid, _)| *kid == player.id)
+            else {
+                continue;
+            };
+            player.apply_blocked_pathway(*blocker_id, today);
+        }
+
+        // The homegrown senior core reacts to the headline case — the
+        // players who came through that same academy read the benched kid as
+        // a message about what the pathway is worth now.
+        let (headline_kid, _) = blocked_pairs[0];
+        let voice_ids = Self::blocked_homegrown_voices(players, today, headline_kid);
+        for player in players.players.iter_mut() {
+            if voice_ids.contains(&player.id) {
+                player.apply_blocked_homegrown_support(headline_kid, today);
+            }
+        }
+    }
+
+    fn loan_blockers(players: &PlayerCollection, matches: f32) -> Vec<LoanBlocker> {
+        /// Start share at which the loan-in owns the position.
+        const BLOCKER_SHARE: f32 = 0.45;
+
+        players
             .players
             .iter()
             .filter(|p| p.is_on_loan())
@@ -2258,14 +2347,26 @@ impl TeamBehaviour {
                     start_share: share,
                 })
             })
-            .collect();
-        if blockers.is_empty() {
-            return;
-        }
+            .collect()
+    }
 
-        // The kids: homegrown, comparable level, starved of starts
-        // behind a borrowed player in their own position group.
-        let blocked_pairs: Vec<(u32, u32)> = players
+    fn blocked_homegrown_pairs(
+        players: &PlayerCollection,
+        blockers: &[LoanBlocker],
+        matches: f32,
+        today: NaiveDate,
+    ) -> Vec<(u32, u32)> {
+        /// Start share under which the kid is being starved.
+        const KID_STARVED_SHARE: f32 = 0.20;
+        /// The pathway story is about academy-age players.
+        const KID_MAX_AGE: u8 = 22;
+        /// A loanee more than this above the kid is fair competition, not a
+        /// stopgap blocking a pathway.
+        const COMPARABLE_ABILITY_MARGIN: u8 = 10;
+
+        // The kids: homegrown, comparable level, starved of starts behind a
+        // borrowed player in their own position group.
+        players
             .players
             .iter()
             .filter(|p| !p.is_on_loan() && !Self::is_politics_exempt(p))
@@ -2286,47 +2387,17 @@ impl TeamBehaviour {
                     })
                     .map(|b| (p.id, b.id))
             })
-            .collect();
-        if blocked_pairs.is_empty() {
-            return;
-        }
+            .collect()
+    }
 
-        // The kid's own grievance — sharper than plain lack of minutes,
-        // and pointed: he knows exactly who is holding the door shut.
-        for player in players.players.iter_mut() {
-            let Some((_, blocker_id)) = blocked_pairs.iter().find(|(kid, _)| *kid == player.id)
-            else {
-                continue;
-            };
-            let magnitude = HappinessConfig::default()
-                .catalog
-                .pathway_blocked_by_loan_signing;
-            let happiness_ctx = HappinessEventContext::new(
-                HappinessEventCause::PositionalRivalry,
-                HappinessEventSeverity::from_magnitude(magnitude),
-                HappinessEventScope::DressingRoom,
-            )
-            .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
-            player
-                .happiness
-                .add_event_with_partner_context_and_cooldown(
-                    HappinessEventType::PathwayBlockedByLoanSigning,
-                    magnitude,
-                    *blocker_id,
-                    happiness_ctx,
-                    90,
-                );
-            player.relations.update_player_relationship(
-                *blocker_id,
-                RelationshipChange::negative(ChangeType::CompetitionRivalry, 0.3),
-                today,
-            );
-        }
+    fn blocked_homegrown_voices(
+        players: &PlayerCollection,
+        today: NaiveDate,
+        headline_kid: u32,
+    ) -> Vec<u32> {
+        /// Only the core's strongest voices carry the grievance.
+        const MAX_SENIOR_VOICES: usize = 3;
 
-        // The homegrown senior core reacts to the headline case — the
-        // players who came through that same academy read the benched
-        // kid as a message about what the pathway is worth now.
-        let (headline_kid, _) = blocked_pairs[0];
         let mut voices: Vec<(u32, f32)> = players
             .players
             .iter()
@@ -2346,39 +2417,69 @@ impl TeamBehaviour {
             .collect();
         voices.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
         voices.truncate(MAX_SENIOR_VOICES);
-        let voice_ids: Vec<u32> = voices.iter().map(|(id, _)| *id).collect();
+        voices.into_iter().map(|(id, _)| id).collect()
+    }
+}
 
-        for player in players.players.iter_mut() {
-            if !voice_ids.contains(&player.id) {
-                continue;
-            }
-            let magnitude = HappinessConfig::default()
-                .catalog
-                .unhappy_about_blocked_homegrown;
-            let happiness_ctx = HappinessEventContext::new(
-                HappinessEventCause::LeadershipDispute,
-                HappinessEventSeverity::from_magnitude(magnitude),
-                HappinessEventScope::DressingRoom,
-            );
-            player
-                .happiness
-                .add_event_with_partner_context_and_cooldown(
-                    HappinessEventType::UnhappyAboutBlockedHomegrown,
-                    magnitude,
-                    headline_kid,
-                    happiness_ctx,
-                    120,
-                );
-            // The kid gains an ally in the room even while the team
-            // sheet ignores him.
-            player.relations.update_player_relationship(
-                headline_kid,
-                RelationshipChange::positive(ChangeType::PersonalSupport, 0.3),
-                today,
-            );
-        }
+struct LoanBlocker {
+    id: u32,
+    group: PlayerFieldPositionGroup,
+    ability: u8,
+    start_share: f32,
+}
+
+impl Player {
+    fn apply_blocked_pathway(&mut self, blocker_id: u32, today: NaiveDate) {
+        let magnitude = HappinessConfig::default()
+            .catalog
+            .pathway_blocked_by_loan_signing;
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::PositionalRivalry,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+        self.happiness.add_event_with_partner_context_and_cooldown(
+            HappinessEventType::PathwayBlockedByLoanSigning,
+            magnitude,
+            blocker_id,
+            happiness_ctx,
+            90,
+        );
+        self.relations.update_player_relationship(
+            blocker_id,
+            RelationshipChange::negative(ChangeType::CompetitionRivalry, 0.3),
+            today,
+        );
     }
 
+    fn apply_blocked_homegrown_support(&mut self, headline_kid: u32, today: NaiveDate) {
+        let magnitude = HappinessConfig::default()
+            .catalog
+            .unhappy_about_blocked_homegrown;
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::LeadershipDispute,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::DressingRoom,
+        );
+        self.happiness.add_event_with_partner_context_and_cooldown(
+            HappinessEventType::UnhappyAboutBlockedHomegrown,
+            magnitude,
+            headline_kid,
+            happiness_ctx,
+            120,
+        );
+        // The kid gains an ally in the room even while the team sheet ignores
+        // him.
+        self.relations.update_player_relationship(
+            headline_kid,
+            RelationshipChange::positive(ChangeType::PersonalSupport, 0.3),
+            today,
+        );
+    }
+}
+
+impl TeamBehaviour {
     /// Monthly selection-favouritism audit — "the name on the shirt
     /// picks the team". When a player who arrived with weight keeps
     /// starting on reputation while a teammate in the same position
@@ -2388,26 +2489,12 @@ impl TeamBehaviour {
     /// tension toward the favoured). Both gates are deliberately strict
     /// so ordinary rotation never trips this. Runs on day 1, Main team
     /// only.
-    #[expect(clippy::too_many_lines)]
     pub(super) fn process_selection_favouritism_audit(
         players: &mut PlayerCollection,
         ctx: &GlobalContext<'_>,
     ) {
         /// Enough of the season for the pattern to be a pattern.
         const MIN_TEAM_MATCHES: u8 = 8;
-        /// The favoured player owns the shirt…
-        const FAVOURED_SHARE: f32 = 0.55;
-        /// …with a real rated sample…
-        const FAVOURED_MIN_APPS: u16 = 6;
-        /// …that sits visibly under the line.
-        const FAVOURED_RATING_CEILING: f32 = 6.4;
-        /// The overlooked player barely starts…
-        const OVERLOOKED_MAX_SHARE: f32 = 0.25;
-        /// …but has a real sample of his own (subs count — that's how
-        /// the overlooked build their case)…
-        const OVERLOOKED_MIN_APPS: u16 = 4;
-        /// …clearly ahead of the favoured man's.
-        const RATING_EDGE: f32 = 0.5;
 
         let today = ctx.simulation.date.date();
         if today.day() != 1 {
@@ -2432,14 +2519,30 @@ impl TeamBehaviour {
         }
         let matches = league_matches_played as f32;
 
-        struct FavouredName {
-            id: u32,
-            group: PlayerFieldPositionGroup,
-            rating: f32,
+        let favoured = Self::favoured_selections(players, matches);
+        if favoured.is_empty() {
+            return;
         }
-        // Loan-ins can be the favoured name too — a big-club loanee
-        // started on pedigree is exactly this story.
-        let favoured: Vec<FavouredName> = players
+
+        for player in players.players.iter_mut() {
+            if Self::is_politics_exempt(player) {
+                continue;
+            }
+            player.apply_selection_favouritism(&favoured, matches, today);
+        }
+    }
+
+    fn favoured_selections(players: &PlayerCollection, matches: f32) -> Vec<FavouredSelection> {
+        /// The favoured player owns the shirt…
+        const FAVOURED_SHARE: f32 = 0.55;
+        /// …with a real rated sample…
+        const FAVOURED_MIN_APPS: u16 = 6;
+        /// …that sits visibly under the line.
+        const FAVOURED_RATING_CEILING: f32 = 6.4;
+
+        // Loan-ins can be the favoured name too — a big-club loanee started
+        // on pedigree is exactly this story.
+        players
             .players
             .iter()
             .filter(|p| Self::arrived_with_weight(p))
@@ -2453,7 +2556,7 @@ impl TeamBehaviour {
                     && apps >= FAVOURED_MIN_APPS
                     && rating < FAVOURED_RATING_CEILING
                 {
-                    Some(FavouredName {
+                    Some(FavouredSelection {
                         id: p.id,
                         group: p.position().position_group(),
                         rating,
@@ -2462,57 +2565,72 @@ impl TeamBehaviour {
                     None
                 }
             })
-            .collect();
-        if favoured.is_empty() {
+            .collect()
+    }
+}
+
+struct FavouredSelection {
+    id: u32,
+    group: PlayerFieldPositionGroup,
+    rating: f32,
+}
+
+impl Player {
+    fn apply_selection_favouritism(
+        &mut self,
+        favoured: &[FavouredSelection],
+        matches: f32,
+        today: NaiveDate,
+    ) {
+        /// The overlooked player barely starts…
+        const OVERLOOKED_MAX_SHARE: f32 = 0.25;
+        /// …but has a real sample of his own (subs count — that's how the
+        /// overlooked build their case)…
+        const OVERLOOKED_MIN_APPS: u16 = 4;
+        /// …clearly ahead of the favoured man's.
+        const RATING_EDGE: f32 = 0.5;
+
+        if favoured.iter().any(|f| f.id == self.id) {
             return;
         }
-
-        for player in players.players.iter_mut() {
-            if Self::is_politics_exempt(player) {
-                continue;
-            }
-            if favoured.iter().any(|f| f.id == player.id) {
-                continue;
-            }
-            let own_group = player.position().position_group();
-            let apps = player.statistics.played + player.statistics.played_subs;
-            let share = player.statistics.played as f32 / matches;
-            if apps < OVERLOOKED_MIN_APPS || share > OVERLOOKED_MAX_SHARE {
-                continue;
-            }
-            let own_rating = player.statistics.average_rating_realistic(own_group);
-            let Some(fav) = favoured
-                .iter()
-                .find(|f| f.group == own_group && own_rating >= f.rating + RATING_EDGE)
-            else {
-                continue;
-            };
-            let magnitude = HappinessConfig::default()
-                .catalog
-                .feels_selection_favouritism;
-            let happiness_ctx = HappinessEventContext::new(
-                HappinessEventCause::ReputationTension,
-                HappinessEventSeverity::from_magnitude(magnitude),
-                HappinessEventScope::DressingRoom,
-            )
-            .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk);
-            player
-                .happiness
-                .add_event_with_partner_context_and_cooldown(
-                    HappinessEventType::FeelsSelectionFavouritism,
-                    magnitude,
-                    fav.id,
-                    happiness_ctx,
-                    90,
-                );
-            player.relations.update_player_relationship(
-                fav.id,
-                RelationshipChange::negative(ChangeType::ReputationTension, 0.25),
-                today,
-            );
+        let own_group = self.position().position_group();
+        let apps = self.statistics.played + self.statistics.played_subs;
+        let share = self.statistics.played as f32 / matches;
+        if apps < OVERLOOKED_MIN_APPS || share > OVERLOOKED_MAX_SHARE {
+            return;
         }
+        let own_rating = self.statistics.average_rating_realistic(own_group);
+        let Some(fav) = favoured
+            .iter()
+            .find(|f| f.group == own_group && own_rating >= f.rating + RATING_EDGE)
+        else {
+            return;
+        };
+        let magnitude = HappinessConfig::default()
+            .catalog
+            .feels_selection_favouritism;
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationTension,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk);
+        self.happiness.add_event_with_partner_context_and_cooldown(
+            HappinessEventType::FeelsSelectionFavouritism,
+            magnitude,
+            fav.id,
+            happiness_ctx,
+            90,
+        );
+        self.relations.update_player_relationship(
+            fav.id,
+            RelationshipChange::negative(ChangeType::ReputationTension, 0.25),
+            today,
+        );
     }
+}
 
+impl TeamBehaviour {
     /// Monthly rival-past reception audit — the squad's side of the
     /// `ColdShoulderOverRivalPast` arrival beat. While the arrival's
     /// cold-shoulder mark is fresh, the long-serving homegrown core —
@@ -3135,7 +3253,7 @@ impl WageFairness {
         let expected_wage =
             ContractValuation::evaluate(player, &valuation_ctx).expected_wage as f32;
         let effective_salary =
-            expected_annual_value(&package_inputs_from_contract(contract, player)) as f32;
+            PackageInputs::from_contract(contract, player).expected_annual_value() as f32;
 
         // No meaningful expectation (youth / amateur edge) → treat as
         // fairly paid so the gate can never fire on a divide-by-zero.

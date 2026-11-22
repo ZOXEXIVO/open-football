@@ -316,7 +316,6 @@ impl Landmarks {
     /// honestly give. The EYE LINE, which anatomy cannot give at all (hair
     /// moves the top of a head and nothing else does), is looked for in the
     /// picture from the first.
-    #[expect(clippy::too_many_lines)]
     fn of(pixels: &[u8], width: u32, height: u32) -> Option<Landmarks> {
         let head = Silhouette::of(pixels, width, height);
         #[cfg(test)]
@@ -332,85 +331,148 @@ impl Landmarks {
         let head = head?;
         let span = head.widest as f32;
         let pupils = span * Self::PUPILS_OF_A_HEAD;
+        let (row, score) = Self::eye_line(pixels, width, height, &head, span, pupils)?;
 
-        let luminance = |x: f32, y: f32| -> Option<f32> {
-            let (x, y) = (x.round(), y.round());
-            if x < 0.0 || y < 0.0 || x >= width as f32 || y >= height as f32 {
-                return None;
-            }
-            let at = ((y as u32 * width + x as u32) * 4) as usize;
-            (pixels[at + 3] > 128).then(|| {
-                (pixels[at] as f32 * 0.2126
-                    + pixels[at + 1] as f32 * 0.7152
-                    + pixels[at + 2] as f32 * 0.0722)
-                    / 255.0
-            })
-        };
-        // The mean over a little block, so a single dark texel is not an eye.
-        let patch = |centre_x: f32, centre_y: f32, half: f32| -> Option<f32> {
-            let (mut total, mut count) = (0.0, 0.0);
-            let step = (half / 2.0).max(0.5);
-            let mut y = centre_y - half * 0.6;
-            while y <= centre_y + half * 0.6 {
-                let mut x = centre_x - half;
-                while x <= centre_x + half {
-                    if let Some(value) = luminance(x, y) {
-                        total += value;
-                        count += 1.0;
-                    }
-                    x += step;
+        // A face has real contrast between an eye and the skin round it.
+        // Anything flatter than this is a picture the measurement has no
+        // business reading, and the framing's own numbers are the better bet.
+        #[cfg(test)]
+        if std::env::var("MATCH_PICTURE_DUMP").is_ok() {
+            println!(
+                "  eye band: row {row:.0} score {score:.3} (needs {:.3})",
+                Self::CONTRAST
+            );
+        }
+        if score < Self::CONTRAST {
+            return None;
+        }
+
+        Some(Landmarks {
+            centre: head.centre / width as f32,
+            // The row itself, with nothing added to it. It used to be nudged
+            // down by a tenth of a pupil width, because what the search
+            // actually found half the time was the BROW-AND-EYE band and the
+            // brow was as often the winner — two dark marks with a lit bridge
+            // between them describes an eyebrow as exactly as it describes an
+            // eye. The bias split the difference and was wrong for both. What
+            // replaced it is the pair of comparisons that tell the two apart
+            // outright: the WHITES either side of an iris, and the brow that
+            // stands over an eye and over nothing else.
+            eyes: row / height as f32,
+            pupils,
+        })
+        .map(|found| found.clamped(width, height))
+    }
+
+    fn luminance(pixels: &[u8], width: u32, height: u32, x: f32, y: f32) -> Option<f32> {
+        let (x, y) = (x.round(), y.round());
+        if x < 0.0 || y < 0.0 || x >= width as f32 || y >= height as f32 {
+            return None;
+        }
+        let at = ((y as u32 * width + x as u32) * 4) as usize;
+        (pixels[at + 3] > 128).then(|| {
+            (pixels[at] as f32 * 0.2126
+                + pixels[at + 1] as f32 * 0.7152
+                + pixels[at + 2] as f32 * 0.0722)
+                / 255.0
+        })
+    }
+
+    // The mean over a little block, so a single dark texel is not an eye.
+    fn patch(
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+        centre_x: f32,
+        centre_y: f32,
+        half: f32,
+    ) -> Option<f32> {
+        let (mut total, mut count) = (0.0, 0.0);
+        let step = (half / 2.0).max(0.5);
+        let mut y = centre_y - half * 0.6;
+        while y <= centre_y + half * 0.6 {
+            let mut x = centre_x - half;
+            while x <= centre_x + half {
+                if let Some(value) = Self::luminance(pixels, width, height, x, y) {
+                    total += value;
+                    count += 1.0;
                 }
-                y += step.max(1.0);
+                x += step;
             }
-            (count > 3.0).then(|| total / count)
-        };
+            y += step.max(1.0);
+        }
+        (count > 3.0).then(|| total / count)
+    }
 
+    fn whites(
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+        row: f32,
+        at: f32,
+        pupils: f32,
+    ) -> Option<f32> {
+        let iris = (pupils * 0.05).max(1.0);
+        let middle = Self::IRIS
+            .iter()
+            .filter_map(|step| Self::patch(pixels, width, height, at + pupils * step, row, iris))
+            .fold(f32::INFINITY, f32::min);
+        let side = |sign: f32| {
+            Self::SCLERA
+                .iter()
+                .filter_map(|out| {
+                    Self::patch(pixels, width, height, at + sign * pupils * out, row, iris)
+                })
+                .fold(f32::NEG_INFINITY, f32::max)
+        };
+        let white = side(-1.0).min(side(1.0));
+        (middle.is_finite() && white.is_finite()).then_some(white - middle)
+    }
+
+    fn eye_line(
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+        head: &Silhouette,
+        span: f32,
+        pupils: f32,
+    ) -> Option<(f32, f32)> {
         // The eye line, looked for with the spacing already known — which is
         // what makes this a search down one axis instead of over two, and the
         // difference between finding a face and finding the darkest thing in
         // the picture.
         let (from, to) = Self::SEARCH;
         let window = (pupils * 0.11).max(1.0);
-        // What is left of an eye once the iris is taken out of it: two wedges
-        // of sclera, the brightest thing on a face, seven to twelve
-        // millimetres either side of the middle. That pattern — dark, bright
-        // on BOTH sides, at that spacing — is the one mark nothing else on a
-        // head carries, and it is what tells an eye from the BROW over it: a
-        // brow is dark for its whole length, so a sample stepped along one is
-        // dark either side too and this comes out at nothing.
-        //
-        // Both ends are scanned rather than sampled, because where this is
-        // told to look is only ever as good as the pupil distance it was
-        // seeded with — a couple of millimetres out and a fixed sample for
-        // the iris lands on the white of the eye instead.
-        let iris = (pupils * 0.05).max(1.0);
-        let whites = |row: f32, at: f32| -> Option<f32> {
-            let middle = Self::IRIS
-                .iter()
-                .filter_map(|step| patch(at + pupils * step, row, iris))
-                .fold(f32::INFINITY, f32::min);
-            let side = |sign: f32| {
-                Self::SCLERA
-                    .iter()
-                    .filter_map(|out| patch(at + sign * pupils * out, row, iris))
-                    .fold(f32::NEG_INFINITY, f32::max)
-            };
-            let white = side(-1.0).min(side(1.0));
-            (middle.is_finite() && white.is_finite()).then_some(white - middle)
-        };
         let mut best: Option<(f32, f32)> = None;
         let mut row = head.crown as f32 + span * from;
         while row <= head.crown as f32 + span * to && row < height as f32 {
             let across = (head.centre - pupils * 0.5, head.centre + pupils * 0.5);
-            let eyes = (patch(across.0, row, window), patch(across.1, row, window));
-            let bridge = patch(head.centre, row, pupils * 0.12);
+            let eyes = (
+                Self::patch(pixels, width, height, across.0, row, window),
+                Self::patch(pixels, width, height, across.1, row, window),
+            );
+            let bridge = Self::patch(pixels, width, height, head.centre, row, pupils * 0.12);
             let cheeks = (
-                patch(across.0, row + pupils * 0.55, window),
-                patch(across.1, row + pupils * 0.55, window),
+                Self::patch(pixels, width, height, across.0, row + pupils * 0.55, window),
+                Self::patch(pixels, width, height, across.1, row + pupils * 0.55, window),
             );
             let brows = (
-                patch(across.0, row - pupils * Self::BROW_OVER, window),
-                patch(across.1, row - pupils * Self::BROW_OVER, window),
+                Self::patch(
+                    pixels,
+                    width,
+                    height,
+                    across.0,
+                    row - pupils * Self::BROW_OVER,
+                    window,
+                ),
+                Self::patch(
+                    pixels,
+                    width,
+                    height,
+                    across.1,
+                    row - pupils * Self::BROW_OVER,
+                    window,
+                ),
             );
             if let (
                 (Some(left), Some(right)),
@@ -418,8 +480,10 @@ impl Landmarks {
                 (Some(under_left), Some(under_right)),
                 (Some(over_left), Some(over_right)),
             ) = (eyes, bridge, cheeks, brows)
-                && let (Some(white_left), Some(white_right)) =
-                    (whites(row, across.0), whites(row, across.1))
+                && let (Some(white_left), Some(white_right)) = (
+                    Self::whites(pixels, width, height, row, across.0, pupils),
+                    Self::whites(pixels, width, height, row, across.1, pupils),
+                )
             {
                 // What an eye is, put as four comparisons.
                 //
@@ -461,36 +525,7 @@ impl Landmarks {
             row += 1.0;
         }
 
-        let (row, score) = best?;
-        // A face has real contrast between an eye and the skin round it.
-        // Anything flatter than this is a picture the measurement has no
-        // business reading, and the framing's own numbers are the better bet.
-        #[cfg(test)]
-        if std::env::var("MATCH_PICTURE_DUMP").is_ok() {
-            println!(
-                "  eye band: row {row:.0} score {score:.3} (needs {:.3})",
-                Self::CONTRAST
-            );
-        }
-        if score < Self::CONTRAST {
-            return None;
-        }
-
-        Some(Landmarks {
-            centre: head.centre / width as f32,
-            // The row itself, with nothing added to it. It used to be nudged
-            // down by a tenth of a pupil width, because what the search
-            // actually found half the time was the BROW-AND-EYE band and the
-            // brow was as often the winner — two dark marks with a lit bridge
-            // between them describes an eyebrow as exactly as it describes an
-            // eye. The bias split the difference and was wrong for both. What
-            // replaced it is the pair of comparisons that tell the two apart
-            // outright: the WHITES either side of an iris, and the brow that
-            // stands over an eye and over nothing else.
-            eyes: row / height as f32,
-            pupils,
-        })
-        .map(|found| found.clamped(width, height))
+        best
     }
 
     /// Nothing measured or assumed may put the face off the picture.

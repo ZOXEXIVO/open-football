@@ -1,9 +1,10 @@
 pub mod routes;
 
-use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::leagues::address::LeagueAddress;
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::teams::newspaper::NewspaperCounter;
-use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
+use crate::teams::{TeamLookup, TeamNeighborhood};
+use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -61,65 +62,99 @@ pub struct TeamPlayerStats {
     pub average_rating: String,
 }
 
-#[expect(clippy::too_many_lines)]
-pub async fn team_stats_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<TeamStatsRequest>,
-) -> ApiResult<impl IntoResponse> {
-    let guard = state.data.read().await;
+pub struct TeamStatsPage;
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+impl TeamStatsPage {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<TeamStatsRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        let guard = state.data.read().await;
 
-    let i18n = state.i18n.for_lang(&route_params.lang);
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let indexes = simulator_data
-        .indexes
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Indexes not available".to_string()))?;
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let team = TeamLookup::by_slug(simulator_data, &route_params.team_slug)?;
 
-    let team_id = indexes
-        .slug_indexes
-        .get_team_by_slug(&route_params.team_slug)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("Team '{}' not found", route_params.team_slug))
-        })?;
+        Self::template(simulator_data, team, i18n, &route_params)
+    }
 
-    let team = simulator_data
-        .team(team_id)
-        .ok_or_else(|| ApiError::NotFound(format!("Team with ID {} not found", team_id)))?;
+    fn template(
+        data: &SimulatorData,
+        team: &core::Team,
+        i18n: I18n,
+        route_params: &TeamStatsRequest,
+    ) -> Result<TeamStatsTemplate, ApiError> {
+        let league = team.league_id.and_then(|id| data.league(id));
 
-    let league = team.league_id.and_then(|id| simulator_data.league(id));
+        let current_path = format!("/{}/teams/{}/stats", route_params.lang, team.slug);
+        let neighborhood = TeamNeighborhood::for_club(team.club_id, data, &i18n)?;
+        let menu_sections = neighborhood.menu_sections(
+            data,
+            team.club_id,
+            &i18n,
+            &route_params.lang,
+            &current_path,
+        );
+        let players = Self::players(team);
+        let title = team.name.clone();
+        let league_title = league
+            .map(|l| views::Menus::league_display_name(l, &i18n, data))
+            .unwrap_or_default();
 
-    let (neighbor_teams, country_leagues) =
-        get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
-    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-
-    // Sort by the sample-size regressed value so a one-cap teen with
-    // 8.2 raw doesn't push proven starters down the squad-stats table.
-    let mut raw_players: Vec<(&core::Player, f32)> = team
-        .players()
-        .iter()
-        .map(|p| {
-            let pos = p.position().position_group();
-            (*p, p.statistics.average_rating_realistic(pos))
+        Ok(TeamStatsTemplate {
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
+            cpu_brand: &CPU_BRAND,
+            cores_count: *CPU_CORES,
+            i18n,
+            lang: route_params.lang.clone(),
+            title,
+            sub_title_prefix: String::new(),
+            sub_title_suffix: String::new(),
+            sub_title: league_title,
+            sub_title_link: league
+                .map(|l| LeagueAddress::of(data, l).url(&route_params.lang))
+                .unwrap_or_default(),
+            sub_title_flag: None,
+            header_color: data
+                .club(team.club_id)
+                .map(|c| c.colors.background.clone())
+                .unwrap_or_default(),
+            foreground_color: data
+                .club(team.club_id)
+                .map(|c| c.colors.foreground.clone())
+                .unwrap_or_default(),
+            menu_sections,
+            team_slug: team.slug.clone(),
+            active_tab: "stats",
+            show_finances_tab: team.team_type.is_own_team(),
+            show_academy_tab: team.team_type == core::TeamType::Main
+                || team.team_type == core::TeamType::U18,
+            newspaper_count: NewspaperCounter::count(data, team),
+            players,
         })
-        .collect();
+    }
 
-    raw_players.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    fn players(team: &core::Team) -> Vec<TeamPlayerStats> {
+        // Sort by the sample-size regressed value so a one-cap teen with
+        // 8.2 raw doesn't push proven starters down the squad-stats table.
+        let mut raw_players: Vec<(&core::Player, f32)> = team
+            .players()
+            .iter()
+            .map(|p| {
+                let pos = p.position().position_group();
+                (*p, p.statistics.average_rating_realistic(pos))
+            })
+            .collect();
 
-    let players: Vec<TeamPlayerStats> = raw_players
-        .iter()
-        .map(|(p, _)| {
-            TeamPlayerStats {
+        raw_players.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        raw_players
+            .iter()
+            .map(|(p, _)| TeamPlayerStats {
                 slug: p.slug(),
                 last_name: p.full_name.display_last_name().to_string(),
                 first_name: p.full_name.display_first_name().to_string(),
@@ -136,89 +171,7 @@ pub async fn team_stats_action(
                 // Printed value is the plain mean; the ordering above is
                 // what keeps a one-cap 8.2 off the top of the table.
                 average_rating: p.statistics.display_average_rating(),
-            }
-        })
-        .collect();
-
-    let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-    let current_path = format!("/{}/teams/{}/stats", route_params.lang, team.slug);
-    let menu_params = views::MenuParams {
-        i18n: &i18n,
-        lang: &route_params.lang,
-        current_path: &current_path,
-        country_name: cn,
-        country_slug: cs,
-    };
-    let menu_sections = views::team_menu(&menu_params, &neighbor_refs, &league_refs);
-    let title = team.name.clone();
-    let league_title = league
-        .map(|l| views::league_display_name(l, &i18n, simulator_data))
-        .unwrap_or_default();
-
-    Ok(TeamStatsTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        i18n,
-        lang: route_params.lang.clone(),
-        title,
-        sub_title_prefix: String::new(),
-        sub_title_suffix: String::new(),
-        sub_title: league_title,
-        sub_title_link: league
-            .map(|l| LeagueAddress::of(simulator_data, l).url(&route_params.lang))
-            .unwrap_or_default(),
-        sub_title_flag: None,
-        header_color: simulator_data
-            .club(team.club_id)
-            .map(|c| c.colors.background.clone())
-            .unwrap_or_default(),
-        foreground_color: simulator_data
-            .club(team.club_id)
-            .map(|c| c.colors.foreground.clone())
-            .unwrap_or_default(),
-        menu_sections,
-        team_slug: team.slug.clone(),
-        active_tab: "stats",
-        show_finances_tab: team.team_type.is_own_team(),
-        show_academy_tab: team.team_type == core::TeamType::Main
-            || team.team_type == core::TeamType::U18,
-        newspaper_count: NewspaperCounter::count(simulator_data, team),
-        players,
-    })
-}
-
-fn get_neighbor_teams(
-    club_id: u32,
-    data: &SimulatorData,
-    i18n: &I18n,
-) -> Result<NeighborMenus, ApiError> {
-    let club = data
-        .club(club_id)
-        .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
-
-    let teams = views::neighbor_teams(club, i18n);
-
-    let mut country_leagues: Vec<(u32, String, String)> = data
-        .country_by_club(club_id)
-        .map(|country| {
-            country
-                .leagues
-                .leagues
-                .iter()
-                .filter(|l| !l.friendly)
-                .map(|l| (l.id, l.name.clone(), l.slug.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
-    country_leagues.sort_by_key(|(id, _, _)| *id);
-
-    Ok((
-        teams,
-        country_leagues
-            .into_iter()
-            .map(|(_, name, slug)| (name, slug))
-            .collect(),
-    ))
+            })
+            .collect()
+    }
 }

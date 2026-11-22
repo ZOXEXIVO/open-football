@@ -1,5 +1,6 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::DynamicSkinnedMeshBounds;
+use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::mesh::Indices;
 use bevy::mesh::VertexAttributeValues;
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
@@ -1679,14 +1680,14 @@ impl BodyParts {
             taken(meshes, cuts.torso_long),
             Sculptor::clad(copied(meshes, &cuts.collar), Swatch::Trim),
         );
-        garment::skin(&mut torso_long, grain, true);
+        garment::Garment::skin(&mut torso_long, grain, true);
         let mut torso = Sculptor::joined(
             taken(meshes, cuts.torso),
             Sculptor::clad(taken(meshes, cuts.collar), Swatch::Trim),
         );
-        garment::skin(&mut torso, grain, false);
+        garment::Garment::skin(&mut torso, grain, false);
         let mut pelvis = taken(meshes, cuts.pelvis);
-        garment::skin_shorts(&mut pelvis);
+        garment::Garment::skin_shorts(&mut pelvis);
         let upper_arm = Sculptor::clad(taken(meshes, cuts.upper_arm), Swatch::Skin);
         // The forearm is copied and never taken: the bare one is carried over
         // into the working set below, where an outfielder wears it.
@@ -1731,8 +1732,8 @@ impl BodyParts {
 
     /// Shared bind matrices for the shirt and shorts.
     pub fn bind_clothes(&mut self, assets: &mut Assets<SkinnedMeshInverseBindposes>) {
-        self.bindposes = assets.add(garment::binds());
-        self.shorts_bindposes = assets.add(garment::shorts_binds());
+        self.bindposes = assets.add(garment::Garment::binds());
+        self.shorts_bindposes = assets.add(garment::Garment::shorts_binds());
     }
 
     /// **Halves the index buffer of every part that can spare the width.**
@@ -1877,13 +1878,12 @@ impl BodyParts {
     /// Cuts every part of the pattern, one mesh each. The composed working
     /// set is [`Self::new`] above; the tests' rasteriser walks these instead,
     /// because a preview has to show a collar against its shirt.
-    #[expect(clippy::too_many_lines)]
     pub(crate) fn tailor(meshes: &mut Assets<Mesh>, grain: Grain) -> Cuts {
         Cuts {
             #[cfg(test)]
             grain,
-            torso: meshes.add(garment::shirt(grain, false)),
-            torso_long: meshes.add(garment::shirt(grain, true)),
+            torso: meshes.add(garment::Garment::shirt(grain, false)),
+            torso_long: meshes.add(garment::Garment::shirt(grain, true)),
             // The neck of the shirt: the top of the torso swollen by five
             // millimetres, with a rim of its own standing a little above the
             // cloth. Every kit on earth has one, and without it the shirt
@@ -1902,19 +1902,11 @@ impl BodyParts {
             // on a throat — seven millimetres of daylight is a rib-knit neck,
             // and the two and a half centimetres this had were a socket with
             // a head standing in it.
-            collar: meshes.add(Sculptor::part(
-                grain,
-                &[
-                    Ring::set(0.5775, 0.0930, 0.0775, -0.0105),
-                    Ring::set(0.5845, 0.0810, 0.0705, -0.0115),
-                    Ring::set(0.5905, 0.0725, 0.0655, -0.0120),
-                    Ring::set(0.5955, 0.0675, 0.0620, -0.0122),
-                ],
-            )),
+            collar: Self::cut_collar(meshes, grain),
             // The waistband stays under the shirt while the shorts legs
             // swing below it. Its top ends close to the hip pivot so leaning
             // does not push the shorts through the back of the shirt.
-            pelvis: meshes.add(garment::shorts(grain)),
+            pelvis: meshes.add(garment::Garment::shorts(grain)),
             head: meshes.add(Sculptor::part_at(grain, &Self::SKULL, grain.head_sides)),
             // Shaved, a crop, short back and sides, and a mop: the three caps
             // start lower at the temple, carry more volume and leave less
@@ -1925,43 +1917,15 @@ impl BodyParts {
             // and the temples all the way down while the face stays clear, so
             // the hair stops where hair stops rather than in a level line
             // ruled round the head at ear height.
-            hair: [
-                None,
-                Some(meshes.add(Self::cap(grain, 0.100, 0.005, 0.0498))),
-                Some(meshes.add(Self::cap(grain, 0.092, 0.009, 0.0586))),
-                Some(meshes.add(Self::cap(grain, 0.084, 0.017, 0.0790))),
-            ],
+            hair: Self::cut_hair(meshes, grain),
             // Deltoid and biceps taper into a rounded elbow centred on the
             // pivot. Extending the surface beyond the pivot hides the cut end
             // during flexion without a separate joint ball.
-            upper_arm: meshes.add(Sculptor::rounded_limb(
-                grain,
-                &[
-                    Ring::oval(-0.118, 0.0530, 0.0500),
-                    Ring::oval(-0.130, 0.0522, 0.0488),
-                    Ring::oval(-0.205, 0.0472, 0.0448),
-                    Ring::oval(-0.268, 0.0430, 0.0420),
-                    Ring::oval(-0.300, 0.0420, 0.0420),
-                ],
-                Relief::SMOOTH,
-            )),
+            upper_arm: Self::cut_upper_arm(meshes, grain),
             // The proximal forearm stays inside the rounded upper-arm end.
             // Its radius grows below the elbow instead of stepping out at the
             // pivot, so the join reads as a crease when bent.
-            forearm: meshes.add(Sculptor::part(
-                grain,
-                &[
-                    Ring::oval(0.040, 0.0090, 0.0090),
-                    Ring::oval(0.026, 0.0310, 0.0310),
-                    Ring::oval(0.000, 0.0405, 0.0405),
-                    Ring::oval(-0.028, 0.0430, 0.0415),
-                    Ring::oval(-0.065, 0.0445, 0.0420),
-                    Ring::oval(-0.115, 0.0420, 0.0378),
-                    Ring::oval(-0.180, 0.0350, 0.0310),
-                    Ring::oval(-0.225, 0.0292, 0.0258),
-                    Ring::oval(-0.252, 0.0268, 0.0240),
-                ],
-            )),
+            forearm: Self::cut_forearm(meshes, grain),
             hand: [Self::hand(grain, -1.0), Self::hand(grain, 1.0)].map(|mesh| meshes.add(mesh)),
             // Cuff, back of the hand, then the padded palm out to the
             // fingertips. Half again as long as a bare hand and nearly twice
@@ -1973,18 +1937,7 @@ impl BodyParts {
             // hand and squared off at the end, which is what a keeper's glove
             // is — a flat surface, deliberately, because the point of it is
             // to be in the way.
-            glove: meshes.add(Sculptor::part(
-                grain,
-                &[
-                    Ring::oval(0.044, 0.030, 0.025),
-                    Ring::oval(0.028, 0.035, 0.027),
-                    Ring::oval(0.008, 0.034, 0.024),
-                    Ring::squared(-0.020, 0.047, 0.025, 0.0, 2.4),
-                    Ring::squared(-0.054, 0.057, 0.026, 0.0, 2.5),
-                    Ring::squared(-0.080, 0.057, 0.023, 0.0, 2.4),
-                    Ring::squared(-0.090, 0.054, 0.020, 0.0, 2.2),
-                ],
-            )),
+            glove: Self::cut_glove(meshes, grain),
             // One finger, in two segments: the proximal phalanx off the
             // knuckle, and the other two past it as one part. Both modelled
             // about their own root so the splay and the curl are rotations
@@ -2036,57 +1989,16 @@ impl BodyParts {
                 ],
                 grain.blob_sides,
             )),
-            sleeve_forearm: meshes.add(Sculptor::part(
-                grain,
-                &[
-                    Ring::oval(0.044, 0.0090, 0.0090),
-                    Ring::oval(0.029, 0.0340, 0.0340),
-                    Ring::oval(0.000, 0.0455, 0.0455),
-                    Ring::squared(-0.055, 0.0516, 0.0490, 0.001, 2.15),
-                    Ring::squared(-0.120, 0.0464, 0.0422, 0.002, 2.10),
-                    Ring::squared(-0.185, 0.0394, 0.0354, 0.002, 2.10),
-                    Ring::squared(-0.235, 0.0336, 0.0302, 0.002, 2.05),
-                    Ring::squared(-0.268, 0.0294, 0.0266, 0.002, 2.00),
-                ],
-            )),
-            cuff_forearm: meshes.add(Sculptor::part(
-                grain,
-                &[
-                    Ring::squared(-0.212, 0.0396, 0.0374, 0.002, 2.10),
-                    Ring::squared(-0.242, 0.0358, 0.0338, 0.002, 2.05),
-                    Ring::squared(-0.260, 0.0324, 0.0306, 0.002, 2.00),
-                    Ring::squared(-0.270, 0.0268, 0.0254, 0.002, 2.00),
-                    // Rounded support under the wrist hinge keeps it joined
-                    // to the sleeve when the palm bends back for a save.
-                    Ring::oval(-0.290, 0.026, 0.025),
-                    Ring::oval(-0.309, 0.014, 0.014),
-                    Ring::oval(-0.315, 0.002, 0.002),
-                ],
-            )),
+            sleeve_forearm: Self::cut_sleeve_forearm(meshes, grain),
+            cuff_forearm: Self::cut_cuff_forearm(meshes, grain),
             // Quadriceps high on the thigh, narrowing into the knee — and the
             // whole muscle carried a few millimetres forward of the bone,
             // which is where it is. The channel between the two heads of the
             // muscle is the [`Self::QUADS`] relief, on the half of the thigh
             // the shorts leave bare.
-            thigh: meshes.add(Sculptor::rounded_limb(
-                grain,
-                &[
-                    // Flesh begins inside the leg opening. Hidden upper
-                    // thighs would cut through cloth blending with the pelvis.
-                    Ring::set(-0.292, 0.0730, 0.0710, 0.003),
-                    Ring::set(-0.340, 0.0685, 0.0672, 0.002),
-                    Ring::set(-0.420, 0.0550, 0.0550, 0.000),
-                    Ring::set(-0.455, 0.0520, 0.0520, 0.000),
-                ],
-                Self::QUADS,
-            )),
+            thigh: Self::cut_thigh(meshes, grain),
             // The rounded end of the thigh fills the knee as the shin bends.
-            shin: meshes.add(Sculptor::modelled(
-                grain,
-                &Self::SHIN,
-                grain.sides,
-                Self::CALF,
-            )),
+            shin: Self::cut_shin(meshes, grain),
             // The turnover at the top of the sock, in the shorts colour — the
             // one piece of kit detail that survives at this distance.
             //
@@ -2096,24 +2008,7 @@ impl BodyParts {
             // z-fought along a band right across the shin: at any range the
             // sock tops came out ragged and speckled, and the closer the
             // camera got the worse it looked.
-            sock_top: meshes.add(Sculptor::lathe(
-                &{
-                    let mut band = Sculptor::band(&Self::shin(grain), -0.078, -0.024, 4, 0.0020);
-                    // Rolled under at the bottom edge, where a turnover is turned
-                    // over.
-                    band.insert(
-                        0,
-                        Sculptor::section(&Self::shin(grain), -0.090).swollen(0.0012),
-                    );
-                    band
-                },
-                grain.sides,
-                // Smooth, and the calf under it is what keeps it that way: the
-                // turnover's rolled edge has only a millimetre of clearance
-                // over the sock, so [`Self::CALF`] is written to start below
-                // this band rather than to be followed through it.
-                Relief::SMOOTH,
-            )),
+            sock_top: Self::cut_sock_top(meshes, grain),
             // A boot, rather than the stretched egg it was.
             //
             // A lathe about the leg's own axis cannot make a foot symmetric
@@ -2122,39 +2017,26 @@ impl BodyParts {
             // well in front of the ankle, the widest part is across the ball
             // of the foot, and the whole thing draws back and narrows into the
             // heel as it rises.
-            boot: meshes.add(Sculptor::part(
-                grain,
-                &[
-                    Ring::set(-0.040, 0.026, 0.062, 0.024),
-                    Ring::set(-0.032, 0.040, 0.086, 0.022),
-                    Ring::set(-0.018, 0.047, 0.097, 0.016),
-                    Ring::set(0.000, 0.048, 0.096, 0.006),
-                    Ring::set(0.018, 0.044, 0.080, -0.008),
-                    Ring::set(0.034, 0.036, 0.058, -0.018),
-                    Ring::set(0.046, 0.026, 0.038, -0.022),
-                ],
-            )),
+            boot: Self::cut_boot(meshes, grain),
             // A real shirt number covers most of the upper back, and a real
             // name runs across the shoulders above it. Both lie ON the shirt:
             // see [`Sculptor::decal`] for why a flat rectangle cannot.
-            number: meshes.add(Sculptor::decal(
-                &Self::shirt(grain),
-                Self::TRUNK,
+            number: Self::cut_print(
+                meshes,
+                grain,
                 Self::NUMBER_AT,
                 Self::NUMBER_HEIGHT,
                 -FRAC_PI_2,
                 Self::NUMBER_ARC,
-                Self::PRINT_LIFT,
-            )),
-            name: meshes.add(Sculptor::decal(
-                &Self::shirt(grain),
-                Self::TRUNK,
+            ),
+            name: Self::cut_print(
+                meshes,
+                grain,
                 Self::NAME_AT,
                 Self::NAME_HEIGHT,
                 -FRAC_PI_2,
                 Self::NAME_ARC,
-                Self::PRINT_LIFT,
-            )),
+            ),
             // The same arc, half a turn round the body and carried up under the
             // collar — so the plate across his chest sets the name at the size
             // it is set at across his shoulders, and the lettering is not a
@@ -2166,16 +2048,194 @@ impl BodyParts {
             // directions, so the lettering runs left to right for whoever is
             // looking at that side of him: at the back a player's right is on
             // the reader's left, and at the front it is on the reader's right.
-            name_front: meshes.add(Sculptor::decal(
-                &Self::shirt(grain),
-                Self::TRUNK,
+            name_front: Self::cut_print(
+                meshes,
+                grain,
                 Self::NAME_FRONT_AT,
                 Self::NAME_FRONT_HEIGHT,
                 FRAC_PI_2,
                 Self::NAME_FRONT_ARC,
-                Self::PRINT_LIFT,
-            )),
+            ),
         }
+    }
+
+    fn cut_collar(meshes: &mut Assets<Mesh>, grain: Grain) -> Handle<Mesh> {
+        meshes.add(Sculptor::part(
+            grain,
+            &[
+                Ring::set(0.5775, 0.0930, 0.0775, -0.0105),
+                Ring::set(0.5845, 0.0810, 0.0705, -0.0115),
+                Ring::set(0.5905, 0.0725, 0.0655, -0.0120),
+                Ring::set(0.5955, 0.0675, 0.0620, -0.0122),
+            ],
+        ))
+    }
+
+    fn cut_upper_arm(meshes: &mut Assets<Mesh>, grain: Grain) -> Handle<Mesh> {
+        meshes.add(Sculptor::rounded_limb(
+            grain,
+            &[
+                Ring::oval(-0.118, 0.0530, 0.0500),
+                Ring::oval(-0.130, 0.0522, 0.0488),
+                Ring::oval(-0.205, 0.0472, 0.0448),
+                Ring::oval(-0.268, 0.0430, 0.0420),
+                Ring::oval(-0.300, 0.0420, 0.0420),
+            ],
+            Relief::SMOOTH,
+        ))
+    }
+
+    fn cut_forearm(meshes: &mut Assets<Mesh>, grain: Grain) -> Handle<Mesh> {
+        meshes.add(Sculptor::part(
+            grain,
+            &[
+                Ring::oval(0.040, 0.0090, 0.0090),
+                Ring::oval(0.026, 0.0310, 0.0310),
+                Ring::oval(0.000, 0.0405, 0.0405),
+                Ring::oval(-0.028, 0.0430, 0.0415),
+                Ring::oval(-0.065, 0.0445, 0.0420),
+                Ring::oval(-0.115, 0.0420, 0.0378),
+                Ring::oval(-0.180, 0.0350, 0.0310),
+                Ring::oval(-0.225, 0.0292, 0.0258),
+                Ring::oval(-0.252, 0.0268, 0.0240),
+            ],
+        ))
+    }
+
+    fn cut_glove(meshes: &mut Assets<Mesh>, grain: Grain) -> Handle<Mesh> {
+        meshes.add(Sculptor::part(
+            grain,
+            &[
+                Ring::oval(0.044, 0.030, 0.025),
+                Ring::oval(0.028, 0.035, 0.027),
+                Ring::oval(0.008, 0.034, 0.024),
+                Ring::squared(-0.020, 0.047, 0.025, 0.0, 2.4),
+                Ring::squared(-0.054, 0.057, 0.026, 0.0, 2.5),
+                Ring::squared(-0.080, 0.057, 0.023, 0.0, 2.4),
+                Ring::squared(-0.090, 0.054, 0.020, 0.0, 2.2),
+            ],
+        ))
+    }
+
+    fn cut_sleeve_forearm(meshes: &mut Assets<Mesh>, grain: Grain) -> Handle<Mesh> {
+        meshes.add(Sculptor::part(
+            grain,
+            &[
+                Ring::oval(0.044, 0.0090, 0.0090),
+                Ring::oval(0.029, 0.0340, 0.0340),
+                Ring::oval(0.000, 0.0455, 0.0455),
+                Ring::squared(-0.055, 0.0516, 0.0490, 0.001, 2.15),
+                Ring::squared(-0.120, 0.0464, 0.0422, 0.002, 2.10),
+                Ring::squared(-0.185, 0.0394, 0.0354, 0.002, 2.10),
+                Ring::squared(-0.235, 0.0336, 0.0302, 0.002, 2.05),
+                Ring::squared(-0.268, 0.0294, 0.0266, 0.002, 2.00),
+            ],
+        ))
+    }
+
+    fn cut_cuff_forearm(meshes: &mut Assets<Mesh>, grain: Grain) -> Handle<Mesh> {
+        meshes.add(Sculptor::part(
+            grain,
+            &[
+                Ring::squared(-0.212, 0.0396, 0.0374, 0.002, 2.10),
+                Ring::squared(-0.242, 0.0358, 0.0338, 0.002, 2.05),
+                Ring::squared(-0.260, 0.0324, 0.0306, 0.002, 2.00),
+                Ring::squared(-0.270, 0.0268, 0.0254, 0.002, 2.00),
+                // Rounded support under the wrist hinge keeps it joined
+                // to the sleeve when the palm bends back for a save.
+                Ring::oval(-0.290, 0.026, 0.025),
+                Ring::oval(-0.309, 0.014, 0.014),
+                Ring::oval(-0.315, 0.002, 0.002),
+            ],
+        ))
+    }
+
+    fn cut_thigh(meshes: &mut Assets<Mesh>, grain: Grain) -> Handle<Mesh> {
+        meshes.add(Sculptor::rounded_limb(
+            grain,
+            &[
+                // Flesh begins inside the leg opening. Hidden upper
+                // thighs would cut through cloth blending with the pelvis.
+                Ring::set(-0.292, 0.0730, 0.0710, 0.003),
+                Ring::set(-0.340, 0.0685, 0.0672, 0.002),
+                Ring::set(-0.420, 0.0550, 0.0550, 0.000),
+                Ring::set(-0.455, 0.0520, 0.0520, 0.000),
+            ],
+            Self::QUADS,
+        ))
+    }
+
+    fn cut_shin(meshes: &mut Assets<Mesh>, grain: Grain) -> Handle<Mesh> {
+        meshes.add(Sculptor::modelled(
+            grain,
+            &Self::SHIN,
+            grain.sides,
+            Self::CALF,
+        ))
+    }
+
+    fn cut_sock_top(meshes: &mut Assets<Mesh>, grain: Grain) -> Handle<Mesh> {
+        meshes.add(Sculptor::lathe(
+            &{
+                let mut band = Sculptor::band(&Self::shin(grain), -0.078, -0.024, 4, 0.0020);
+                // Rolled under at the bottom edge, where a turnover is turned
+                // over.
+                band.insert(
+                    0,
+                    Sculptor::section(&Self::shin(grain), -0.090).swollen(0.0012),
+                );
+                band
+            },
+            grain.sides,
+            // Smooth, and the calf under it is what keeps it that way: the
+            // turnover's rolled edge has only a millimetre of clearance
+            // over the sock, so [`Self::CALF`] is written to start below
+            // this band rather than to be followed through it.
+            Relief::SMOOTH,
+        ))
+    }
+
+    fn cut_boot(meshes: &mut Assets<Mesh>, grain: Grain) -> Handle<Mesh> {
+        meshes.add(Sculptor::part(
+            grain,
+            &[
+                Ring::set(-0.040, 0.026, 0.062, 0.024),
+                Ring::set(-0.032, 0.040, 0.086, 0.022),
+                Ring::set(-0.018, 0.047, 0.097, 0.016),
+                Ring::set(0.000, 0.048, 0.096, 0.006),
+                Ring::set(0.018, 0.044, 0.080, -0.008),
+                Ring::set(0.034, 0.036, 0.058, -0.018),
+                Ring::set(0.046, 0.026, 0.038, -0.022),
+            ],
+        ))
+    }
+
+    fn cut_hair(meshes: &mut Assets<Mesh>, grain: Grain) -> [Option<Handle<Mesh>>; 4] {
+        [
+            None,
+            Some(meshes.add(Self::cap(grain, 0.100, 0.005, 0.0498))),
+            Some(meshes.add(Self::cap(grain, 0.092, 0.009, 0.0586))),
+            Some(meshes.add(Self::cap(grain, 0.084, 0.017, 0.0790))),
+        ]
+    }
+
+    fn cut_print(
+        meshes: &mut Assets<Mesh>,
+        grain: Grain,
+        at: f32,
+        height: f32,
+        facing: f32,
+        arc: f32,
+    ) -> Handle<Mesh> {
+        meshes.add(Sculptor::decal(
+            &Self::shirt(grain),
+            Self::TRUNK,
+            at,
+            height,
+            facing,
+            arc,
+            Self::PRINT_LIFT,
+        ))
     }
 
     /// A cap of hair over the skull, coming down to `from` at the sides,
@@ -4652,7 +4712,6 @@ impl Joint {
     /// folds on a positive one. Every amplitude is interpolated out of
     /// standing still, which is what lets a player come to a stop without an
     /// idle animation to blend into.
-    #[expect(clippy::too_many_lines)]
     pub fn pose_in(&self, gait: &Gait, posture: &Posture) -> Quat {
         // The left leg is half a cycle behind the right.
         let leg = gait.phase + if self.side < 0.0 { PI } else { 0.0 };
@@ -4731,26 +4790,68 @@ impl Joint {
         // Only one arm points, and which one is the sign of the signal.
         let pointing = (self.side * gait.pointing).clamp(0.0, 1.0);
 
+        let pose = Pose {
+            gait,
+            posture,
+            leg,
+            standing,
+            weight,
+            leading,
+            trailing,
+            bracing,
+            grassed,
+            kicking,
+            throwing,
+            heading,
+            tossing,
+            trapping,
+            striking,
+            receiving,
+            on_head,
+            on_hips,
+            doubled,
+            limp,
+            urging,
+            pointing,
+        };
+
         match self.limb {
-            // Hips counter-rotate against the shoulders — the thing that
-            // makes a run read as a person rather than a mechanism — and
-            // carry the weight shift when he is standing.
-            Limb::Pelvis => {
-                // The hips lead a kick and the shoulders follow it: the pelvis
-                // is already opening toward the target while the boot is still
-                // travelling, which is the sequence that makes a strike look
-                // as though it came from the ground up rather than from the
-                // knee. The phase offset is what puts it ahead — at contact
-                // the hips have turned through and the chest has not.
-                //
-                // Signed off the kicking foot, so a left-footer turns the
-                // other way.
-                let opening = Self::KICK_TWIST
-                    * gait.foot
-                    * (gait.swing + Self::KICK_HIP_LEAD).clamp(-1.0, 1.0)
-                    * kicking;
-                Quat::from_rotation_y(
-                    Self::HIP_TWIST * Self::cycling(gait) * gait.spring * gait.phase.sin() * gait.course.y
+            Limb::Pelvis => self.pose_pelvis(&pose),
+            Limb::Torso => self.pose_torso(&pose),
+            Limb::Head => self.pose_head(&pose),
+            Limb::Shoulder => self.pose_shoulder(&pose),
+            Limb::Elbow => self.pose_elbow(&pose),
+            Limb::Wrist => self.pose_wrist(&pose),
+            Limb::Finger(index) | Limb::Knuckle(index) => self.pose_fingers(&pose, index),
+            Limb::Thumb => self.pose_thumb(&pose),
+            Limb::ThumbTip => self.pose_thumb_tip(&pose),
+            Limb::Hip => self.pose_hip(&pose),
+            Limb::Knee => self.pose_knee(&pose),
+            Limb::Ankle => self.pose_ankle(&pose),
+        }
+    }
+
+    fn pose_pelvis(&self, pose: &Pose<'_>) -> Quat {
+        let gait = pose.gait;
+        let posture = pose.posture;
+        let weight = pose.weight;
+        let kicking = pose.kicking;
+
+        // The hips lead a kick and the shoulders follow it: the pelvis
+        // is already opening toward the target while the boot is still
+        // travelling, which is the sequence that makes a strike look
+        // as though it came from the ground up rather than from the
+        // knee. The phase offset is what puts it ahead — at contact
+        // the hips have turned through and the chest has not.
+        //
+        // Signed off the kicking foot, so a left-footer turns the
+        // other way.
+        let opening = Self::KICK_TWIST
+            * gait.foot
+            * (gait.swing + Self::KICK_HIP_LEAD).clamp(-1.0, 1.0)
+            * kicking;
+        Quat::from_rotation_y(
+            Self::HIP_TWIST * Self::cycling(gait) * gait.spring * gait.phase.sin() * gait.course.y
                         - opening
                         // Opened toward the way he is going. A shuffle is not
                         // square to the last millimetre — the hips lead.
@@ -4760,40 +4861,49 @@ impl Joint {
                         // the hip sockets, and [`Posture::ride`] has
                         // already swung those round. See [`Gait::open`].
                         + posture.opened,
-                ) * Quat::from_rotation_z(
-                    Self::WEIGHT_SHIFT * weight
+        ) * Quat::from_rotation_z(
+            Self::WEIGHT_SHIFT * weight
                         // …and listed exactly as far as the two hips are
                         // apart in height, so the seat of the shorts sits on
                         // the legs rather than across them.
                         + posture.roll,
-                )
-            }
-            Limb::Torso => {
-                // Rock through the stride, a quarter cycle off the twist so
-                // the shoulder drops as the opposite leg drives; the weight
-                // shift when standing; and the bank into a turn.
-                //
-                // Bank sign: heading increases turning toward +X, and a
-                // positive Z rotation carries the head toward −X, so leaning
-                // INTO a left turn is the negative of the turn signal. If it
-                // ever looks like a motorbike falling the wrong way, this is
-                // the sign to flip.
-                let roll = Self::rocking(gait) + Self::WEIGHT_SHIFT * 0.8 * weight
-                    - Self::BANK * gait.turn * Self::banking(gait);
-                // A keeper with the ball stands up out of all of it. Two
-                // reasons, and the second is the load-bearing one: he does
-                // straighten up, and the arm angles above are measured off an
-                // upright chest — leave the lean and the rock in and the ball
-                // drifts a couple of centimetres out of his gloves every
-                // stride.
-                //
-                // A diving keeper comes out of it for the same reason and one
-                // more: the lean is the forward pitch of a man driving off the
-                // ground, and there is no ground under him.
-                let settle = Self::upright(gait);
-                let running = Quat::from_rotation_x(Self::leaning(gait) + Self::nodding(gait))
-                    * Quat::from_rotation_y(
-                        -Self::CHEST_TWIST
+        )
+    }
+
+    fn pose_torso(&self, pose: &Pose<'_>) -> Quat {
+        let gait = pose.gait;
+        let posture = pose.posture;
+        let weight = pose.weight;
+        let kicking = pose.kicking;
+        let heading = pose.heading;
+        let tossing = pose.tossing;
+        let trapping = pose.trapping;
+
+        // Rock through the stride, a quarter cycle off the twist so
+        // the shoulder drops as the opposite leg drives; the weight
+        // shift when standing; and the bank into a turn.
+        //
+        // Bank sign: heading increases turning toward +X, and a
+        // positive Z rotation carries the head toward −X, so leaning
+        // INTO a left turn is the negative of the turn signal. If it
+        // ever looks like a motorbike falling the wrong way, this is
+        // the sign to flip.
+        let roll = Self::rocking(gait) + Self::WEIGHT_SHIFT * 0.8 * weight
+            - Self::BANK * gait.turn * Self::banking(gait);
+        // A keeper with the ball stands up out of all of it. Two
+        // reasons, and the second is the load-bearing one: he does
+        // straighten up, and the arm angles above are measured off an
+        // upright chest — leave the lean and the rock in and the ball
+        // drifts a couple of centimetres out of his gloves every
+        // stride.
+        //
+        // A diving keeper comes out of it for the same reason and one
+        // more: the lean is the forward pitch of a man driving off the
+        // ground, and there is no ground under him.
+        let settle = Self::upright(gait);
+        let running = Quat::from_rotation_x(Self::leaning(gait) + Self::nodding(gait))
+            * Quat::from_rotation_y(
+                -Self::CHEST_TWIST
                             * Self::cycling(gait)
                             * gait.spring
                             // A beat behind the hips, which drive it. See
@@ -4809,14 +4919,14 @@ impl Joint {
                             // where he is going runs chest, then hips, then
                             // travel. See [`Gait::open`].
                             + Self::OPEN_CHEST * posture.opened,
-                    )
-                    * Quat::from_rotation_z(roll * settle);
-                // Then, in order: the set's forward lean over bent knees, the
-                // arch and the turn onto the ball in flight, and the curl
-                // over the landing. Each one is scaled by its own signal, so
-                // for twenty-one players out of twenty-two every term after
-                // the first is identity.
-                running
+            )
+            * Quat::from_rotation_z(roll * settle);
+        // Then, in order: the set's forward lean over bent knees, the
+        // arch and the turn onto the ball in flight, and the curl
+        // over the landing. Each one is scaled by its own signal, so
+        // for twenty-one players out of twenty-two every term after
+        // the first is identity.
+        running
                     * Self::coiling(gait)
                     * Quat::from_rotation_x(
                         Self::SET_LEAN * Self::crouched(gait) * (1.0 - gait.save * gait.save_aim.y.max(0.0)),
@@ -4935,30 +5045,19 @@ impl Joint {
                             + Self::DOUBLED_STOOP * gait.doubled_over
                             + Self::CHEER_ARCH * gait.elation,
                     )
-            }
-            // He watches the ball. The head hangs off the torso, so this yaw
-            // is already relative to his chest — turning it is the single
-            // cheapest thing in the whole rig that reads as attention, and
-            // without it twenty-two players stare rigidly down their own
-            // running line all match.
-            //
-            // Still kept level in pitch against his own forward lean — a
-            // runner leans from the hips and looks up the pitch, not at his
-            // own boots — and then tipped onto the ball, which for a keeper
-            // is most of what a save is: he does not take his eyes off it,
-            // and up to now he never once looked up at one.
-            //
-            // The twist is subtracted back out because the head hangs off the
-            // torso: without that, rotating the chest onto the ball in a dive
-            // swings the face straight past it.
-            Limb::Head => {
-                // A runner's head stays level while his chest rocks under it —
-                // the eyes are on the ball and the neck does the work. So the
-                // torso's own roll is subtracted back out, the same way the
-                // dive's twist is: without it the whole head tips side to side
-                // once per stride, which is the one thing nobody's does.
-                let steady = -Self::rocking(gait);
-                Quat::from_rotation_y(
+    }
+
+    fn pose_head(&self, pose: &Pose<'_>) -> Quat {
+        let gait = pose.gait;
+        let heading = pose.heading;
+
+        // A runner's head stays level while his chest rocks under it —
+        // the eyes are on the ball and the neck does the work. So the
+        // torso's own roll is subtracted back out, the same way the
+        // dive's twist is: without it the whole head tips side to side
+        // once per stride, which is the one thing nobody's does.
+        let steady = -Self::rocking(gait);
+        Quat::from_rotation_y(
                     gait.look
                         - Self::DIVE_TWIST * gait.lead * gait.stretch * (1.0 - 0.5 * gait.grounded),
                 ) * Quat::from_rotation_x(
@@ -4991,15 +5090,24 @@ impl Joint {
                             + Self::BEATEN_HEAD * gait.beaten
                             + Self::RISE_HEAD * Self::kneeling(gait) * (1.0 - gait.beaten),
                     )
-            }
-            Limb::Shoulder => {
-                let swing_arm = posture.arm_swing(leg, 1);
-                // Arms swing against the leg on the same side, and are carried
-                // wider the harder the player is running — and wider again, or
-                // tighter, depending on the man.
-                // — and wider again with the ball at his feet, which is a
-                // man balancing over it rather than running freely.
-                let carriage = 0.15
+    }
+
+    fn pose_shoulder(&self, pose: &Pose<'_>) -> Quat {
+        let gait = pose.gait;
+        let posture = pose.posture;
+        let leg = pose.leg;
+        let standing = pose.standing;
+        let kicking = pose.kicking;
+        let trapping = pose.trapping;
+        let striking = pose.striking;
+
+        let swing_arm = posture.arm_swing(leg, 1);
+        // Arms swing against the leg on the same side, and are carried
+        // wider the harder the player is running — and wider again, or
+        // tighter, depending on the man.
+        // — and wider again with the ball at his feet, which is a
+        // man balancing over it rather than running freely.
+        let carriage = 0.15
                     + 0.07 * gait.run
                     + 0.055 * gait.signature
                     + 0.045 * Self::cycling(gait) * posture.arm_swing(leg + FRAC_PI_2, 1)
@@ -5016,290 +5124,338 @@ impl Joint {
                         * Self::sidling(gait)
                         * self.side
                         * Self::carried(gait);
-                // Nobody's two arms do the same thing. Tied to the signature
-                // so it is this player's asymmetry, the same one every time.
-                let asymmetry = 1.0 + 0.11 * gait.signature * self.side;
-                // Standing, they drift instead of locking. Offset by side so
-                // the two do not move as a pair.
-                let drift = 0.055 * standing * Self::swaying(gait.idle + self.side);
-                // The counter-swing: the arm OPPOSITE the kicking leg comes
-                // forward and up through the ball while the one on the kicking
-                // side goes back. Every rotation a footballer puts into a ball
-                // has to be paid for somewhere, and this is where — without it
-                // the whole action reads as a mechanism hinged at one joint.
-                let counter = Self::through(
-                    if striking < 0.0 {
-                        Self::KICK_COUNTER
-                    } else {
-                        Self::KICK_TRAIL
-                    },
+        // Nobody's two arms do the same thing. Tied to the signature
+        // so it is this player's asymmetry, the same one every time.
+        let asymmetry = 1.0 + 0.11 * gait.signature * self.side;
+        // Standing, they drift instead of locking. Offset by side so
+        // the two do not move as a pair.
+        let drift = 0.055 * standing * Self::swaying(gait.idle + self.side);
+        // The counter-swing: the arm OPPOSITE the kicking leg comes
+        // forward and up through the ball while the one on the kicking
+        // side goes back. Every rotation a footballer puts into a ball
+        // has to be paid for somewhere, and this is where — without it
+        // the whole action reads as a mechanism hinged at one joint.
+        let counter = Self::through(
+            if striking < 0.0 {
+                Self::KICK_COUNTER
+            } else {
+                Self::KICK_TRAIL
+            },
+            gait.swing,
+        ) * kicking
+            * striking.abs();
+        // Signed with the stride, like the leg it answers: arms pump
+        // against a run and hang wide across a shuffle, where there
+        // is no stride for them to counter.
+        let arm = Self::arming(gait)
+            * (1.0 + Self::ARM_JITTER * gait.jitter.x)
+            * swing_arm
+            * gait.course.y
+            * asymmetry
+            + drift
+            + counter
+            + gait.arm_balance.y;
+        // And the counter-arm alone comes across his chest, which is
+        // the other half of paying for the turn.
+        let across = self.side * Self::KICK_ARM_SPREAD * kicking * (-striking).max(0.0);
+        // Leave clearance beside the shirt when inertia brings the
+        // inside arm inward. Deliberate kick poses keep their reach.
+        let balance = gait.arm_balance.x.clamp(-0.7 * carriage, 0.7 * carriage);
+        let swinging = Quat::from_rotation_z(self.side * carriage - across + balance)
+                * Quat::from_rotation_x(arm)
+                // Rotate in the socket as the hand comes forward.
+                // The elbow stays outside the shirt while the forearm
+                // travels toward the centreline instead of on rails.
+                * Quat::from_rotation_y(
+                    -self.side * 0.22 * Self::cycling(gait)
+                        * gait.course.y.max(0.0) * (0.5 - 0.5 * swing_arm),
+                );
+        self.shoulder_mood(pose, swinging, swing_arm, asymmetry)
+    }
+
+    fn shoulder_mood(
+        &self,
+        pose: &Pose<'_>,
+        swinging: Quat,
+        swing_arm: f32,
+        asymmetry: f32,
+    ) -> Quat {
+        let gait = pose.gait;
+        let on_head = pose.on_head;
+        let on_hips = pose.on_hips;
+        let doubled = pose.doubled;
+        let limp = pose.limp;
+        let urging = pose.urging;
+        let pointing = pose.pointing;
+        let slumped = Self::lifted(
+            swinging,
+            Quat::from_rotation_z(self.side * Self::SLUMP_LIMP_SPREAD)
+                * Quat::from_rotation_x(Self::SLUMP_LIMP_SHOULDER),
+            limp,
+        );
+        // Sign NEGATED for the raised arms, the same inversion
+        // [`Self::REACH_SPREAD`] documents: a roll about +Z carries a
+        // hanging arm outward and a raised one inward, so signing
+        // these like the pose above crosses his own wrists over his
+        // head instead of putting the elbows out.
+        let slumped = Self::lifted(
+            slumped,
+            Quat::from_rotation_z(-self.side * Self::SLUMP_HEAD_SPREAD)
+                * Quat::from_rotation_x(Self::SLUMP_HEAD_SHOULDER),
+            on_head,
+        );
+        // Hands on the hips: the arm barely moves and the YAW does
+        // all the work, composed innermost so it rolls the arm in
+        // its socket rather than swinging it. See
+        // [`Self::HIPS_TURN`] — this is the pose the rig could not
+        // reach until the standing save gave the shoulder a yaw.
+        let slumped = Self::lifted(
+            slumped,
+            Quat::from_rotation_z(self.side * Self::HIPS_SPREAD)
+                * Quat::from_rotation_x(Self::HIPS_SHOULDER)
+                * Quat::from_rotation_y(self.side * Self::HIPS_TURN),
+            on_hips,
+        );
+        // …and bent double, where the arms hang vertically out of a
+        // chest that is horizontal, which relative to that chest is
+        // a positive pitch.
+        let slumped = Self::lifted(
+            slumped,
+            Quat::from_rotation_z(self.side * Self::DOUBLED_SPREAD)
+                * Quat::from_rotation_x(Self::DOUBLED_SHOULDER),
+            doubled,
+        );
+        // The two a keeper does when the ball is at the other end.
+        // Above the slump, below everything he might actually be
+        // doing — which is right, because they are what he does when
+        // there is nothing to do.
+        let barking = Self::lifted(
+            slumped,
+            Quat::from_rotation_y(
+                -self.side * (Self::URGE_YAW - Self::CLAP_OPEN * Self::clap(gait)),
+            ) * Quat::from_rotation_x(Self::URGE_SHOULDER),
+            urging,
+        );
+        let organising = Self::lifted(
+            barking,
+            Quat::from_rotation_y(self.side * Self::POINT_YAW)
+                * Quat::from_rotation_x(Self::POINT_SHOULDER),
+            pointing,
+        );
+        let cheering = Self::lifted(
+            organising,
+            Quat::from_rotation_z(-self.side * Self::CHEER_SPREAD)
+                * Quat::from_rotation_x(Self::CHEER_SHOULDER),
+            gait.elation,
+        );
+        // …and no two keepers set alike. The same signature that
+        // carries how wide a man holds his arms running: one stands
+        // with his gloves high and narrow, another low and wide, and
+        // two goalkeepers in identical postures is the same lockstep
+        // the run cycle was fixed for.
+        let ready = Self::lifted(
+            cheering,
+            Quat::from_rotation_z(self.side * Self::SET_SPREAD * (1.0 + 0.22 * gait.signature))
+                * Quat::from_rotation_x(Self::SET_SHOULDER * (1.0 - 0.30 * gait.signature)),
+            Self::armed(gait),
+        );
+        // **And a keeper with his gloves up is not welded to them.**
+        //
+        // The same fault as the legs, in the same shape and one line
+        // apart: `held` SLERPS the shoulder onto a fixed angle, so
+        // whatever weight the set is given is that much of the arm
+        // swing gone. Measured, a glove travelled 1.8 cm through a
+        // walk with his hands up against 20.8 cm with them down —
+        // and a keeper is at his most watched with his hands up. A
+        // ready posture is a CARRIAGE, so the cycle goes back on top
+        // of the hold rather than being erased by it.
+        //
+        // Two motions, because a keeper has two gaits. The pump
+        // ALTERNATES — it is signed by `swing`, which is already
+        // half a cycle apart on the two arms — and is what answers a
+        // walk. The sway moves the pair TOGETHER, which is what a
+        // side-step does with them: no `self.side` on it, because
+        // the two shoulder frames differ by a roll and a yaw of the
+        // same sign carries both arms the same way. ⚠ A yaw and not
+        // a roll, the trap [`Joint::SAVE_ACROSS`] documents: with
+        // the forearms up in front of him a roll about the arm's own
+        // axis moves a glove barely at all.
+        self.shoulder_ready(pose, ready, swing_arm, asymmetry)
+    }
+
+    fn shoulder_ready(&self, pose: &Pose<'_>, ready: Quat, swing_arm: f32, asymmetry: f32) -> Quat {
+        let gait = pose.gait;
+        let trailing = pose.trailing;
+        let poise = Self::armed(gait);
+        let ready = ready
+            * Quat::from_rotation_x(
+                Self::READY_PUMP * poise * Self::cycling(gait) * swing_arm * asymmetry,
+            )
+            * Quat::from_rotation_y(
+                Self::READY_SWAY * poise * Self::sidling(gait) * Self::carried(gait),
+            );
+        // **The save he makes on his feet**, and the most repeated
+        // thing a goalkeeper does. Both arms go to the ball: the
+        // PITCH of the shoulder is how high it is and the YAW is how
+        // far across him, so one pair of numbers covers a ball at his
+        // boots, one at his chest and one over his shoulder.
+        //
+        // **The near arm leads and the far one barely goes.** Two arms
+        // travelling the same distance across him is the superman that
+        // [`Gait::lead`] exists to prevent in a dive, and it reads no
+        // better standing up — rendered, it is a man pointing at
+        // something. The far shoulder stays in front of his chest,
+        // which is both what a keeper does and where the second glove
+        // is any use.
+        //
+        // Above the set, because this is what the set turns into, and
+        // below the leap, the hold and the reach, all three of which
+        // are a keeper who is no longer on his feet.
+        let leading_hand = 0.55 + 0.45 * (self.side * gait.save_aim.x).clamp(-1.0, 1.0);
+        let saving = Self::lifted(
+            ready,
+            Quat::from_rotation_y(
+                Self::SAVE_ACROSS * gait.save_aim.x * leading_hand
+                    + self.side * Self::PARRY_SPREAD * gait.parry,
+            ) * Quat::from_rotation_x(
+                Self::SAVE_LOW
+                    + (Self::SAVE_HIGH - Self::SAVE_LOW)
+                        * (gait.save_aim.y * 0.5 + 0.5).clamp(0.0, 1.0),
+            ),
+            gait.save,
+        );
+        let leaping = Self::lifted(
+            saving,
+            Quat::from_rotation_z(self.side * Self::JUMP_SPREAD)
+                * Quat::from_rotation_x(Self::JUMP_SHOULDER),
+            gait.jump,
+        );
+        let holding = Self::lifted(
+            leaping,
+            Quat::from_rotation_z(self.side * Self::CRADLE_SPREAD)
+                * Quat::from_rotation_x(Self::CRADLE_SHOULDER),
+            gait.carry,
+        );
+        // The reach itself, opening out across the flight rather than
+        // arriving whole: gathered at take-off, past the head by the
+        // apex — and this arm only gets all the way there if it is
+        // the leading one.
+        let shoulder = Self::LAUNCH_SHOULDER
+            + (Self::reach_shoulder(gait) - Self::LAUNCH_SHOULDER) * gait.stretch
+            + Self::TRAIL_SHOULDER * trailing * gait.stretch.max(0.5);
+        let spread = (Self::REACH_SPREAD + Self::TRAIL_SPREAD * trailing)
+            * Self::reach_span(gait)
+            * (1.0 - gait.claimed)
+            + Self::CLAIM_SPREAD * gait.claimed;
+        // Reach after the cradle, so a keeper who takes the ball
+        // cleanly at the top of a leap has his arms come down into
+        // the hold rather than stay up around a ball he already has.
+        let out = Self::lifted(
+            holding,
+            Quat::from_rotation_z(-self.side * spread) * Quat::from_rotation_x(shoulder),
+            gait.reach,
+        );
+        // The landing: whatever he was doing up there, the top arm
+        // comes in as he hits the grass and the underneath one goes
+        // out along it. Sign negated on the second, the same
+        // inversion [`Self::REACH_SPREAD`] documents — a roll about
+        // +Z carries a hanging arm outward and a raised one inward,
+        // and this one is raised.
+        self.shoulder_land(pose, out)
+    }
+
+    fn shoulder_land(&self, pose: &Pose<'_>, out: Quat) -> Quat {
+        let gait = pose.gait;
+        let leading = pose.leading;
+        let bracing = pose.bracing;
+        let grassed = pose.grassed;
+        let throwing = pose.throwing;
+        let heading = pose.heading;
+        let tossing = pose.tossing;
+        let striking = pose.striking;
+        let down = Self::lifted(
+            out,
+            Quat::from_rotation_z(self.side * Self::DOWN_SPREAD)
+                * Quat::from_rotation_x(Self::DOWN_SHOULDER),
+            bracing,
+        );
+        let down = Self::lifted(
+            down,
+            Quat::from_rotation_z(self.side * Self::GRASS_SPREAD)
+                * Quat::from_rotation_x(Self::GRASS_SHOULDER),
+            grassed,
+        );
+        // Face in his hands on the turf: the TOP arm only, since the
+        // other one is underneath him and the ground has it.
+        let down = Self::lifted(
+            down,
+            Quat::from_rotation_z(self.side * Self::BEATEN_SPREAD)
+                * Quat::from_rotation_x(Self::BEATEN_SHOULDER),
+            gait.beaten * (1.0 - leading.max(0.0)),
+        );
+        // …and then both hands onto the grass to push himself off
+        // it. Above the landing poses because it is what replaces
+        // them: an arm folded across his chest cannot take his
+        // weight.
+        let down = Self::lifted(
+            down,
+            Quat::from_rotation_z(self.side * Self::RISE_SPREAD)
+                * Quat::from_rotation_x(-gait.over),
+            gait.propping(),
+        );
+        // And a keeper's throw, which is the same swing as a kick sent
+        // to the arm instead: cocked behind his ear and hurled
+        // overarm. Only the throwing side moves.
+        let hurled = Self::lifted(
+            down,
+            Quat::from_rotation_x(Self::through(
+                Self::heaved(Self::THROW_SHOULDER, gait.heft, Self::THROW_LEAST),
+                gait.swing,
+            )),
+            throwing * striking.max(0.0),
+        );
+        // Attacking a cross: both arms out, holding the space he is
+        // about to jump into.
+        let attacking = Self::lifted(
+            hurled,
+            Quat::from_rotation_z(self.side * Self::NOD_SPREAD)
+                * Quat::from_rotation_x(Self::NOD_SHOULDER),
+            heading,
+        );
+        // A throw-in, where BOTH arms go over the head together.
+        Self::lifted(
+            attacking,
+            Quat::from_rotation_z(self.side * Self::TOSS_SPREAD)
+                * Quat::from_rotation_x(Self::through(
+                    Self::heaved(Self::TOSS_SHOULDER, gait.heft, Self::TOSS_LEAST),
                     gait.swing,
-                ) * kicking
-                    * striking.abs();
-                // Signed with the stride, like the leg it answers: arms pump
-                // against a run and hang wide across a shuffle, where there
-                // is no stride for them to counter.
-                let arm = Self::arming(gait)
-                    * (1.0 + Self::ARM_JITTER * gait.jitter.x)
-                    * swing_arm
-                    * gait.course.y
-                    * asymmetry
-                    + drift
-                    + counter
-                    + gait.arm_balance.y;
-                // And the counter-arm alone comes across his chest, which is
-                // the other half of paying for the turn.
-                let across = self.side * Self::KICK_ARM_SPREAD * kicking * (-striking).max(0.0);
-                // Leave clearance beside the shirt when inertia brings the
-                // inside arm inward. Deliberate kick poses keep their reach.
-                let balance = gait.arm_balance.x.clamp(-0.7 * carriage, 0.7 * carriage);
-                let swinging = Quat::from_rotation_z(self.side * carriage - across + balance)
-                        * Quat::from_rotation_x(arm)
-                        // Rotate in the socket as the hand comes forward.
-                        // The elbow stays outside the shirt while the forearm
-                        // travels toward the centreline instead of on rails.
-                        * Quat::from_rotation_y(
-                            -self.side * 0.22 * Self::cycling(gait)
-                                * gait.course.y.max(0.0) * (0.5 - 0.5 * swing_arm),
-                        );
-                // How he took the goal, layered straight onto the run cycle
-                // and UNDER everything else — a mood is a modification of
-                // standing about, and anything he is actually doing (a save,
-                // a throw, a kick) has to beat it.
-                let slumped = Self::lifted(
-                    swinging,
-                    Quat::from_rotation_z(self.side * Self::SLUMP_LIMP_SPREAD)
-                        * Quat::from_rotation_x(Self::SLUMP_LIMP_SHOULDER),
-                    limp,
-                );
-                // Sign NEGATED for the raised arms, the same inversion
-                // [`Self::REACH_SPREAD`] documents: a roll about +Z carries a
-                // hanging arm outward and a raised one inward, so signing
-                // these like the pose above crosses his own wrists over his
-                // head instead of putting the elbows out.
-                let slumped = Self::lifted(
-                    slumped,
-                    Quat::from_rotation_z(-self.side * Self::SLUMP_HEAD_SPREAD)
-                        * Quat::from_rotation_x(Self::SLUMP_HEAD_SHOULDER),
-                    on_head,
-                );
-                // Hands on the hips: the arm barely moves and the YAW does
-                // all the work, composed innermost so it rolls the arm in
-                // its socket rather than swinging it. See
-                // [`Self::HIPS_TURN`] — this is the pose the rig could not
-                // reach until the standing save gave the shoulder a yaw.
-                let slumped = Self::lifted(
-                    slumped,
-                    Quat::from_rotation_z(self.side * Self::HIPS_SPREAD)
-                        * Quat::from_rotation_x(Self::HIPS_SHOULDER)
-                        * Quat::from_rotation_y(self.side * Self::HIPS_TURN),
-                    on_hips,
-                );
-                // …and bent double, where the arms hang vertically out of a
-                // chest that is horizontal, which relative to that chest is
-                // a positive pitch.
-                let slumped = Self::lifted(
-                    slumped,
-                    Quat::from_rotation_z(self.side * Self::DOUBLED_SPREAD)
-                        * Quat::from_rotation_x(Self::DOUBLED_SHOULDER),
-                    doubled,
-                );
-                // The two a keeper does when the ball is at the other end.
-                // Above the slump, below everything he might actually be
-                // doing — which is right, because they are what he does when
-                // there is nothing to do.
-                let barking = Self::lifted(
-                    slumped,
-                    Quat::from_rotation_y(
-                        -self.side * (Self::URGE_YAW - Self::CLAP_OPEN * Self::clap(gait)),
-                    ) * Quat::from_rotation_x(Self::URGE_SHOULDER),
-                    urging,
-                );
-                let organising = Self::lifted(
-                    barking,
-                    Quat::from_rotation_y(self.side * Self::POINT_YAW)
-                        * Quat::from_rotation_x(Self::POINT_SHOULDER),
-                    pointing,
-                );
-                let cheering = Self::lifted(
-                    organising,
-                    Quat::from_rotation_z(-self.side * Self::CHEER_SPREAD)
-                        * Quat::from_rotation_x(Self::CHEER_SHOULDER),
-                    gait.elation,
-                );
-                // …and no two keepers set alike. The same signature that
-                // carries how wide a man holds his arms running: one stands
-                // with his gloves high and narrow, another low and wide, and
-                // two goalkeepers in identical postures is the same lockstep
-                // the run cycle was fixed for.
-                let ready = Self::lifted(
-                    cheering,
-                    Quat::from_rotation_z(
-                        self.side * Self::SET_SPREAD * (1.0 + 0.22 * gait.signature),
-                    ) * Quat::from_rotation_x(Self::SET_SHOULDER * (1.0 - 0.30 * gait.signature)),
-                    Self::armed(gait),
-                );
-                // **And a keeper with his gloves up is not welded to them.**
-                //
-                // The same fault as the legs, in the same shape and one line
-                // apart: `held` SLERPS the shoulder onto a fixed angle, so
-                // whatever weight the set is given is that much of the arm
-                // swing gone. Measured, a glove travelled 1.8 cm through a
-                // walk with his hands up against 20.8 cm with them down —
-                // and a keeper is at his most watched with his hands up. A
-                // ready posture is a CARRIAGE, so the cycle goes back on top
-                // of the hold rather than being erased by it.
-                //
-                // Two motions, because a keeper has two gaits. The pump
-                // ALTERNATES — it is signed by `swing`, which is already
-                // half a cycle apart on the two arms — and is what answers a
-                // walk. The sway moves the pair TOGETHER, which is what a
-                // side-step does with them: no `self.side` on it, because
-                // the two shoulder frames differ by a roll and a yaw of the
-                // same sign carries both arms the same way. ⚠ A yaw and not
-                // a roll, the trap [`Joint::SAVE_ACROSS`] documents: with
-                // the forearms up in front of him a roll about the arm's own
-                // axis moves a glove barely at all.
-                let poise = Self::armed(gait);
-                let ready = ready
-                    * Quat::from_rotation_x(
-                        Self::READY_PUMP * poise * Self::cycling(gait) * swing_arm * asymmetry,
-                    )
-                    * Quat::from_rotation_y(
-                        Self::READY_SWAY * poise * Self::sidling(gait) * Self::carried(gait),
-                    );
-                // **The save he makes on his feet**, and the most repeated
-                // thing a goalkeeper does. Both arms go to the ball: the
-                // PITCH of the shoulder is how high it is and the YAW is how
-                // far across him, so one pair of numbers covers a ball at his
-                // boots, one at his chest and one over his shoulder.
-                //
-                // **The near arm leads and the far one barely goes.** Two arms
-                // travelling the same distance across him is the superman that
-                // [`Gait::lead`] exists to prevent in a dive, and it reads no
-                // better standing up — rendered, it is a man pointing at
-                // something. The far shoulder stays in front of his chest,
-                // which is both what a keeper does and where the second glove
-                // is any use.
-                //
-                // Above the set, because this is what the set turns into, and
-                // below the leap, the hold and the reach, all three of which
-                // are a keeper who is no longer on his feet.
-                let leading_hand = 0.55 + 0.45 * (self.side * gait.save_aim.x).clamp(-1.0, 1.0);
-                let saving = Self::lifted(
-                    ready,
-                    Quat::from_rotation_y(
-                        Self::SAVE_ACROSS * gait.save_aim.x * leading_hand
-                            + self.side * Self::PARRY_SPREAD * gait.parry,
-                    ) * Quat::from_rotation_x(
-                        Self::SAVE_LOW
-                            + (Self::SAVE_HIGH - Self::SAVE_LOW)
-                                * (gait.save_aim.y * 0.5 + 0.5).clamp(0.0, 1.0),
-                    ),
-                    gait.save,
-                );
-                let leaping = Self::lifted(
-                    saving,
-                    Quat::from_rotation_z(self.side * Self::JUMP_SPREAD)
-                        * Quat::from_rotation_x(Self::JUMP_SHOULDER),
-                    gait.jump,
-                );
-                let holding = Self::lifted(
-                    leaping,
-                    Quat::from_rotation_z(self.side * Self::CRADLE_SPREAD)
-                        * Quat::from_rotation_x(Self::CRADLE_SHOULDER),
-                    gait.carry,
-                );
-                // The reach itself, opening out across the flight rather than
-                // arriving whole: gathered at take-off, past the head by the
-                // apex — and this arm only gets all the way there if it is
-                // the leading one.
-                let shoulder = Self::LAUNCH_SHOULDER
-                    + (Self::reach_shoulder(gait) - Self::LAUNCH_SHOULDER) * gait.stretch
-                    + Self::TRAIL_SHOULDER * trailing * gait.stretch.max(0.5);
-                let spread = (Self::REACH_SPREAD + Self::TRAIL_SPREAD * trailing)
-                    * Self::reach_span(gait)
-                    * (1.0 - gait.claimed)
-                    + Self::CLAIM_SPREAD * gait.claimed;
-                // Reach after the cradle, so a keeper who takes the ball
-                // cleanly at the top of a leap has his arms come down into
-                // the hold rather than stay up around a ball he already has.
-                let out = Self::lifted(
-                    holding,
-                    Quat::from_rotation_z(-self.side * spread) * Quat::from_rotation_x(shoulder),
-                    gait.reach,
-                );
-                // The landing: whatever he was doing up there, the top arm
-                // comes in as he hits the grass and the underneath one goes
-                // out along it. Sign negated on the second, the same
-                // inversion [`Self::REACH_SPREAD`] documents — a roll about
-                // +Z carries a hanging arm outward and a raised one inward,
-                // and this one is raised.
-                let down = Self::lifted(
-                    out,
-                    Quat::from_rotation_z(self.side * Self::DOWN_SPREAD)
-                        * Quat::from_rotation_x(Self::DOWN_SHOULDER),
-                    bracing,
-                );
-                let down = Self::lifted(
-                    down,
-                    Quat::from_rotation_z(self.side * Self::GRASS_SPREAD)
-                        * Quat::from_rotation_x(Self::GRASS_SHOULDER),
-                    grassed,
-                );
-                // Face in his hands on the turf: the TOP arm only, since the
-                // other one is underneath him and the ground has it.
-                let down = Self::lifted(
-                    down,
-                    Quat::from_rotation_z(self.side * Self::BEATEN_SPREAD)
-                        * Quat::from_rotation_x(Self::BEATEN_SHOULDER),
-                    gait.beaten * (1.0 - leading.max(0.0)),
-                );
-                // …and then both hands onto the grass to push himself off
-                // it. Above the landing poses because it is what replaces
-                // them: an arm folded across his chest cannot take his
-                // weight.
-                let down = Self::lifted(
-                    down,
-                    Quat::from_rotation_z(self.side * Self::RISE_SPREAD)
-                        * Quat::from_rotation_x(-gait.over),
-                    gait.propping(),
-                );
-                // And a keeper's throw, which is the same swing as a kick sent
-                // to the arm instead: cocked behind his ear and hurled
-                // overarm. Only the throwing side moves.
-                let hurled = Self::lifted(
-                    down,
-                    Quat::from_rotation_x(Self::through(
-                        Self::heaved(Self::THROW_SHOULDER, gait.heft, Self::THROW_LEAST),
-                        gait.swing,
-                    )),
-                    throwing * striking.max(0.0),
-                );
-                // Attacking a cross: both arms out, holding the space he is
-                // about to jump into.
-                let attacking = Self::lifted(
-                    hurled,
-                    Quat::from_rotation_z(self.side * Self::NOD_SPREAD)
-                        * Quat::from_rotation_x(Self::NOD_SHOULDER),
-                    heading,
-                );
-                // A throw-in, where BOTH arms go over the head together.
-                Self::lifted(
-                    attacking,
-                    Quat::from_rotation_z(self.side * Self::TOSS_SPREAD)
-                        * Quat::from_rotation_x(Self::through(
-                            Self::heaved(Self::TOSS_SHOULDER, gait.heft, Self::TOSS_LEAST),
-                            gait.swing,
-                        )),
-                    tossing,
-                )
-            }
-            // Elbow carriage is the most individual thing about a runner:
-            // some hold them almost straight, some at a right angle.
-            Limb::Elbow => {
-                let running = Quat::from_rotation_x(
-                    -Self::elbow_flex(gait) * (1.0 + Self::ELBOW_SPREAD * gait.elbows)
+                )),
+            tossing,
+        )
+    }
+
+    fn pose_elbow(&self, pose: &Pose<'_>) -> Quat {
+        let gait = pose.gait;
+        let posture = pose.posture;
+        let leg = pose.leg;
+        let leading = pose.leading;
+        let trailing = pose.trailing;
+        let bracing = pose.bracing;
+        let grassed = pose.grassed;
+        let kicking = pose.kicking;
+        let throwing = pose.throwing;
+        let heading = pose.heading;
+        let tossing = pose.tossing;
+        let striking = pose.striking;
+        let on_head = pose.on_head;
+        let on_hips = pose.on_hips;
+        let doubled = pose.doubled;
+        let limp = pose.limp;
+        let urging = pose.urging;
+        let pointing = pose.pointing;
+
+        let running = Quat::from_rotation_x(
+            -Self::elbow_flex(gait) * (1.0 + Self::ELBOW_SPREAD * gait.elbows)
                         // **The elbow OPENS behind him and closes in front**,
                         // which is what an arm drive is and is most of how
                         // far a hand actually travels.
@@ -5318,412 +5474,416 @@ impl Joint {
                         // Elbows come up over a ball he is carrying, and the
                         // counter-arm bends hard through a kick.
                         + Self::CARRY_ELBOW * gait.carrying
-                        - 0.55 * kicking * (-striking).max(0.0),
-                );
-                // Hanging soft, or folded right back onto the crown. Under
-                // everything else, as at the shoulder.
-                let slumped =
-                    Self::held(running, Quat::from_rotation_x(Self::SLUMP_LIMP_ELBOW), limp);
-                let slumped = Self::held(
-                    slumped,
-                    Quat::from_rotation_x(Self::SLUMP_HEAD_ELBOW),
-                    on_head,
-                );
-                let slumped = Self::held(slumped, Quat::from_rotation_x(Self::HIPS_ELBOW), on_hips);
-                let slumped =
-                    Self::held(slumped, Quat::from_rotation_x(Self::DOUBLED_ELBOW), doubled);
-                let slumped = Self::held(slumped, Quat::from_rotation_x(Self::URGE_ELBOW), urging);
-                let slumped =
-                    Self::held(slumped, Quat::from_rotation_x(Self::POINT_ELBOW), pointing);
-                let running = Self::held(
-                    slumped,
-                    Quat::from_rotation_x(Self::CHEER_ELBOW),
-                    gait.elation,
-                );
-                let ready = Self::held(
-                    running,
-                    Quat::from_rotation_x(Self::SET_ELBOW * (1.0 + 0.14 * gait.signature)),
-                    Self::armed(gait),
-                );
-                // Soft behind a catch, all but straight behind a parry: one
-                // takes the pace off the ball and the other puts pace into it.
-                let saving = Self::held(
-                    ready,
-                    Quat::from_rotation_x(
-                        Self::SAVE_ELBOW
-                            * (1.0 - 0.8 * gait.parry)
-                            * (1.0 - 0.7 * gait.save_aim.y.max(0.0))
-                            + 0.45 * gait.save_recoil,
-                    ),
-                    gait.save,
-                );
-                let leaping =
-                    Self::held(saving, Quat::from_rotation_x(Self::JUMP_ELBOW), gait.jump);
-                let holding = Self::held(
-                    leaping,
-                    Quat::from_rotation_x(Self::CRADLE_ELBOW),
-                    gait.carry,
-                );
-                let elbow = Self::LAUNCH_ELBOW
-                    + (Self::REACH_ELBOW - Self::LAUNCH_ELBOW) * Self::unfolding(gait)
-                    + Self::TRAIL_ELBOW * trailing * gait.stretch;
-                let out = Self::held(holding, Quat::from_rotation_x(elbow), gait.reach);
-                let down = Self::held(
-                    out,
-                    Quat::from_rotation_x(Self::DOWN_ELBOW + Self::thud_elbow(gait)),
-                    bracing,
-                );
-                let down = Self::held(down, Quat::from_rotation_x(Self::GRASS_ELBOW), grassed);
-                let down = Self::held(
-                    down,
-                    Quat::from_rotation_x(Self::BEATEN_ELBOW),
-                    gait.beaten * (1.0 - leading.max(0.0)),
-                );
-                let down = Self::held(
-                    down,
-                    Quat::from_rotation_x(
-                        (Self::RISE_ELBOW.0 + Self::RISE_ELBOW.1 * gait.rising).min(-0.30),
-                    ),
-                    gait.propping(),
-                );
-                let hurled = Self::held(
-                    down,
-                    Quat::from_rotation_x(Self::through(
-                        Self::heaved(Self::THROW_ELBOW, gait.heft, Self::THROW_LEAST),
-                        gait.swing,
-                    )),
-                    throwing * striking.max(0.0),
-                );
-                let attacking = Self::held(hurled, Quat::from_rotation_x(Self::NOD_ELBOW), heading);
-                Self::held(
-                    attacking,
-                    Quat::from_rotation_x(Self::through(
-                        Self::heaved(Self::TOSS_ELBOW, gait.heft, Self::TOSS_LEAST),
-                        gait.swing,
-                    )),
-                    tossing,
-                )
-            }
-            // The hands. Loose on the run, up and open in the set, broken
-            // back and turned out at full stretch, cupped under a ball he has
-            // claimed. A glove that stays in line with its forearm reads as
-            // the end of a stick, however good the arm above it is.
-            Limb::Wrist => {
-                // The hand yields after the forearm reverses, then settles.
-                // This sits below the contact poses so catches and throws
-                // still put the palms exactly where the ball needs them.
-                let follow = 0.14 * Self::cycling(gait) * gait.course.y * posture.arm_swing(leg, 3);
-                let loose = Quat::from_rotation_x(
-                    Self::WRIST_REST * (1.0 + 0.5 * gait.signature * self.side) + follow,
-                );
-                // Palms flat on the crown. Without it the gloves point off
-                // the ends of the forearms and the pose reads as two arms
-                // waving rather than as hands on a head.
-                let slumped = Self::held(loose, Quat::from_rotation_x(Self::SLUMP_WRIST), on_head);
-                let slumped = Self::held(
-                    slumped,
-                    Quat::from_rotation_z(self.side * Self::HIPS_WRIST_TURN)
-                        * Quat::from_rotation_x(Self::HIPS_WRIST),
-                    on_hips,
-                );
-                let slumped =
-                    Self::held(slumped, Quat::from_rotation_x(Self::DOUBLED_WRIST), doubled);
-                let slumped = Self::held(slumped, Quat::from_rotation_x(Self::URGE_WRIST), urging);
-                let slumped =
-                    Self::held(slumped, Quat::from_rotation_x(Self::POINT_WRIST), pointing);
-                let ready = Self::held(
-                    slumped,
-                    Quat::from_rotation_z(self.side * 0.28)
-                        * Quat::from_rotation_x(Self::SET_WRIST + 0.5 * follow),
-                    Self::armed(gait),
-                );
-                // Behind the ball: the gloves break back off the forearms so
-                // the palms face it, and turn out flat for a parry, where the
-                // whole point is a surface rather than a pair of hands.
-                let saving = Self::held(
-                    ready,
-                    Quat::from_rotation_y(-self.side * 0.18 * (1.0 - gait.parry))
-                        * Quat::from_rotation_z(-0.16 * gait.save_aim.x)
-                        * Quat::from_rotation_x(
-                            Self::SAVE_WRIST + Self::PARRY_WRIST * gait.parry
-                                - 0.18 * gait.save_recoil,
-                        ),
-                    gait.save,
-                );
-                let holding = Self::held(
-                    saving,
-                    Quat::from_rotation_z(-self.side * 0.20)
-                        * Quat::from_rotation_x(Self::CRADLE_WRIST),
-                    gait.carry,
-                );
-                // Splayed to cover an area, or turned in around a ball he has
-                // actually got hold of.
-                let out = Self::held(
-                    holding,
-                    Quat::from_rotation_z(
-                        self.side * Self::REACH_WRIST_SPREAD * (1.0 - 2.0 * gait.claimed),
-                    ) * Quat::from_rotation_x(Self::REACH_WRIST),
-                    gait.reach,
-                );
-                // A fist is supported straight behind the knuckles; an open
-                // parry instead keeps the wrist extended behind its palm.
-                let out = Self::held(out, Quat::from_rotation_x(0.06), gait.punch);
-                let down = Self::held(out, Quat::from_rotation_x(Self::CRADLE_WRIST), bracing);
-                // Palm flat on the turf, taking his weight.
-                Self::held(
-                    down,
-                    Quat::from_rotation_x(Self::RISE_WRIST),
-                    gait.propping(),
-                )
-            }
-            // The fingers, which are the difference between a hand and a
-            // mitten — see [`Limb::Finger`].
-            //
-            // Two numbers drive all ten of them: how CLOSED the hand is and
-            // how far the fingers are FANNED apart, and between them they
-            // cover everything a keeper's hands ever do. The splay that used
-            // to be baked into the spawn transform is the `across` term
-            // here, read back out of the knuckle's own position so the two
-            // cannot drift apart.
-            Limb::Finger(index) | Limb::Knuckle(index) => {
-                let across = self.origin.x;
-                // **A pointed hand is the one gesture where the four fingers
-                // do different things.** The index goes straight and the
-                // other three shut, which is the whole of what pointing is —
-                // an open hand held out is a man showing you his palm.
-                let mut grip = if index == 0 {
-                    Self::grip(gait) * (1.0 - pointing)
-                } else {
-                    Self::grip(gait).max(Self::HAND_POINTING * pointing)
-                };
-                // Small, staggered flexion while relaxed. Receiving and
-                // gripping a ball take over completely, without finger jitter.
-                let free = (1.0 - Self::armed(gait))
-                    * (1.0 - gait.save)
-                    * (1.0 - gait.reach)
-                    * (1.0 - gait.carry.max(gait.claimed))
-                    * (1.0 - gait.punch)
-                    * (1.0 - pointing);
-                grip += 0.025
-                    * free
-                    * (gait.idle * 1.3
-                        + index as f32 * 0.8
-                        + self.side * 0.6
-                        + gait.phase * gait.run)
-                        .sin();
-                grip = grip.clamp(0.0, 1.0);
-                let fan = Self::fan(gait) * (1.0 - pointing);
-                // Not every finger does the same thing, and that is most of
-                // what separates a hand from a comb. A relaxed little finger
-                // curls further than an index; a spread one goes wider.
-                let bias = Self::FINGER_CURL[usize::from(index).min(3)];
-                // The first joint closes first; the tips follow into the
-                // palm. A ball grip stays cupped instead of becoming a fist.
-                let curl = match self.limb {
-                    Limb::Knuckle(_) => Self::GRIP_KNUCKLE * grip.powf(1.2),
-                    _ => Self::GRIP_FINGER * grip,
-                } * bias;
-                // The second segment carries no splay of its own: a finger
-                // fans at the knuckle it grows out of and bends in a plane
-                // after that, which is what makes a closing hand converge
-                // rather than stay a fan all the way in.
-                let splay = match self.limb {
-                    Limb::Knuckle(_) => 0.0,
-                    // Fanned OUT to cover a ball and drawn back IN as the
-                    // hand closes: the two ends of the one gesture, and the
-                    // reason the fan cannot simply be added to the rest
-                    // splay.
-                    _ => across * BodyParts::SPLAY * (1.0 + Self::FAN_WIDE * fan - grip),
-                };
-                Quat::from_rotation_z(splay) * Quat::from_rotation_x(curl)
-            }
-            // The thumb opposes, which is the whole of what a thumb is for:
-            // out of the way of a ball coming into the palm, and across it
-            // once the hand has closed on something.
-            Limb::Thumb => {
-                let grip = Self::grip(gait).max(Self::HAND_POINTING * pointing);
-                let fan = Self::fan(gait) * (1.0 - pointing);
-                Quat::from_rotation_z(
-                    -self.side * (Self::THUMB_OUT + Self::THUMB_FAN * fan - Self::THUMB_IN * grip),
-                ) * Quat::from_rotation_y(-self.side * 0.85 * grip)
-                    * Quat::from_rotation_x(Self::THUMB_REST + Self::THUMB_CURL * grip)
-            }
-            Limb::ThumbTip => {
-                let grip = Self::grip(gait).max(Self::HAND_POINTING * pointing);
-                Quat::from_rotation_x(0.10 + 0.95 * Actors::ease((grip - 0.12) / 0.88))
-            }
-            Limb::Hip => {
-                // **The stride carries the ground he covers.** The amplitude
-                // is the larger of what he is working at and what the turf is
-                // asking for — see [`Joint::stepping`] — and it is SIGNED by
-                // the direction of travel, so a keeper dropping backwards
-                // onto his line runs the cycle the other way round instead of
-                // moonwalking down the pitch.
-                let amplitude =
-                    Self::HIP_SWING.0 + Self::HIP_SWING.1 * Self::stepping(gait) + gait.stance;
-                // The lateral half of the same decomposition. A wide base
-                // (both legs out, so the feet stay on their own sides of him)
-                // and then each foot stepping across in turn — antiphase,
-                // exactly like the stride, because at any instant one foot is
-                // planted and sliding back under him while the other swings
-                // on ahead of him.
-                //
-                // The near leg alone steps into a save; the far one is what
-                // he is pushing off.
-                // Whether THIS foot is the one off the ground, and how far
-                // through its swing. The whole difference between a step and
-                // a scissor: with the legs mirrored there was no swing to
-                // pick up, and neither boot ever left the grass.
-                let picking = Self::tread(leg).1 * Self::sidling(gait);
-                let near_leg = (self.side * gait.save_aim.x).clamp(0.0, 1.0);
-                // ⚠ Composed onto the WHOLE branch below rather than into the
-                // run cycle. The base is a stance, not a stride: a keeper who
-                // is set, or reaching, still has his feet where his last
-                // side-step left them, and folding it into `running` lets the
-                // set layer slerp it away underneath him.
-                //
-                // …and the whole leg turns onto the run first. See
-                // [`Gait::open`]: a footballer travelling across himself
-                // opens his hips and RUNS, and only what is left over after
-                // that is a side-step. Outermost of the three, because it is
-                // the frame the other two are expressed in — the splay is
-                // across the line of the hips and the stride is along it,
-                // and yawing the pair of them is exactly what opening up
-                // does to a pair of legs.
-                let hold = gait.hold[usize::from(self.side > 0.0)];
-                let across = posture.turn
-                    * Quat::from_rotation_z(
-                        Self::abduct(gait, self.side)
-                            + Self::SAVE_STEP * Self::rooted(gait) * gait.save_aim.x * near_leg
-                            + hold.splay * hold.weight,
-                    );
-                // The run, plus what his legs do about a change of pace: feet
-                // driving out behind him off the mark, planted out in front
-                // under the brakes.
-                let running = Quat::from_rotation_x(
-                    // ⚠ [`Joint::striding`] and not the plain sinusoid, and
-                    // the re-fit is applied to the foot's OFFSET rather than
-                    // to the angle — `L·sin θ` is not linear in `θ`, so
-                    // scaling the angle compresses the far end of every step
-                    // and puts back most of the slip the shape just took
-                    // out. Same trap as [`Joint::abduct`], which says so.
-                    // `sin(amplitude)` IS the half-excursion as a share of a
-                    // leg; the shape and the gain belong there, and the
-                    // `asin` turns it back into a hip.
-                    Self::swinging(gait, leg, amplitude) * gait.course.y
+                - 0.55 * kicking * (-striking).max(0.0),
+        );
+        // Hanging soft, or folded right back onto the crown. Under
+        // everything else, as at the shoulder.
+        let slumped = Self::held(running, Quat::from_rotation_x(Self::SLUMP_LIMP_ELBOW), limp);
+        let slumped = Self::held(
+            slumped,
+            Quat::from_rotation_x(Self::SLUMP_HEAD_ELBOW),
+            on_head,
+        );
+        let slumped = Self::held(slumped, Quat::from_rotation_x(Self::HIPS_ELBOW), on_hips);
+        let slumped = Self::held(slumped, Quat::from_rotation_x(Self::DOUBLED_ELBOW), doubled);
+        let slumped = Self::held(slumped, Quat::from_rotation_x(Self::URGE_ELBOW), urging);
+        let slumped = Self::held(slumped, Quat::from_rotation_x(Self::POINT_ELBOW), pointing);
+        let running = Self::held(
+            slumped,
+            Quat::from_rotation_x(Self::CHEER_ELBOW),
+            gait.elation,
+        );
+        let ready = Self::held(
+            running,
+            Quat::from_rotation_x(Self::SET_ELBOW * (1.0 + 0.14 * gait.signature)),
+            Self::armed(gait),
+        );
+        // Soft behind a catch, all but straight behind a parry: one
+        // takes the pace off the ball and the other puts pace into it.
+        let saving = Self::held(
+            ready,
+            Quat::from_rotation_x(
+                Self::SAVE_ELBOW
+                    * (1.0 - 0.8 * gait.parry)
+                    * (1.0 - 0.7 * gait.save_aim.y.max(0.0))
+                    + 0.45 * gait.save_recoil,
+            ),
+            gait.save,
+        );
+        let leaping = Self::held(saving, Quat::from_rotation_x(Self::JUMP_ELBOW), gait.jump);
+        let holding = Self::held(
+            leaping,
+            Quat::from_rotation_x(Self::CRADLE_ELBOW),
+            gait.carry,
+        );
+        let elbow = Self::LAUNCH_ELBOW
+            + (Self::REACH_ELBOW - Self::LAUNCH_ELBOW) * Self::unfolding(gait)
+            + Self::TRAIL_ELBOW * trailing * gait.stretch;
+        let out = Self::held(holding, Quat::from_rotation_x(elbow), gait.reach);
+        let down = Self::held(
+            out,
+            Quat::from_rotation_x(Self::DOWN_ELBOW + Self::thud_elbow(gait)),
+            bracing,
+        );
+        let down = Self::held(down, Quat::from_rotation_x(Self::GRASS_ELBOW), grassed);
+        let down = Self::held(
+            down,
+            Quat::from_rotation_x(Self::BEATEN_ELBOW),
+            gait.beaten * (1.0 - leading.max(0.0)),
+        );
+        let down = Self::held(
+            down,
+            Quat::from_rotation_x(
+                (Self::RISE_ELBOW.0 + Self::RISE_ELBOW.1 * gait.rising).min(-0.30),
+            ),
+            gait.propping(),
+        );
+        let hurled = Self::held(
+            down,
+            Quat::from_rotation_x(Self::through(
+                Self::heaved(Self::THROW_ELBOW, gait.heft, Self::THROW_LEAST),
+                gait.swing,
+            )),
+            throwing * striking.max(0.0),
+        );
+        let attacking = Self::held(hurled, Quat::from_rotation_x(Self::NOD_ELBOW), heading);
+        Self::held(
+            attacking,
+            Quat::from_rotation_x(Self::through(
+                Self::heaved(Self::TOSS_ELBOW, gait.heft, Self::TOSS_LEAST),
+                gait.swing,
+            )),
+            tossing,
+        )
+    }
+
+    fn pose_wrist(&self, pose: &Pose<'_>) -> Quat {
+        let gait = pose.gait;
+        let posture = pose.posture;
+        let leg = pose.leg;
+        let bracing = pose.bracing;
+        let on_head = pose.on_head;
+        let on_hips = pose.on_hips;
+        let doubled = pose.doubled;
+        let urging = pose.urging;
+        let pointing = pose.pointing;
+
+        // The hand yields after the forearm reverses, then settles.
+        // This sits below the contact poses so catches and throws
+        // still put the palms exactly where the ball needs them.
+        let follow = 0.14 * Self::cycling(gait) * gait.course.y * posture.arm_swing(leg, 3);
+        let loose = Quat::from_rotation_x(
+            Self::WRIST_REST * (1.0 + 0.5 * gait.signature * self.side) + follow,
+        );
+        // Palms flat on the crown. Without it the gloves point off
+        // the ends of the forearms and the pose reads as two arms
+        // waving rather than as hands on a head.
+        let slumped = Self::held(loose, Quat::from_rotation_x(Self::SLUMP_WRIST), on_head);
+        let slumped = Self::held(
+            slumped,
+            Quat::from_rotation_z(self.side * Self::HIPS_WRIST_TURN)
+                * Quat::from_rotation_x(Self::HIPS_WRIST),
+            on_hips,
+        );
+        let slumped = Self::held(slumped, Quat::from_rotation_x(Self::DOUBLED_WRIST), doubled);
+        let slumped = Self::held(slumped, Quat::from_rotation_x(Self::URGE_WRIST), urging);
+        let slumped = Self::held(slumped, Quat::from_rotation_x(Self::POINT_WRIST), pointing);
+        let ready = Self::held(
+            slumped,
+            Quat::from_rotation_z(self.side * 0.28)
+                * Quat::from_rotation_x(Self::SET_WRIST + 0.5 * follow),
+            Self::armed(gait),
+        );
+        // Behind the ball: the gloves break back off the forearms so
+        // the palms face it, and turn out flat for a parry, where the
+        // whole point is a surface rather than a pair of hands.
+        let saving = Self::held(
+            ready,
+            Quat::from_rotation_y(-self.side * 0.18 * (1.0 - gait.parry))
+                * Quat::from_rotation_z(-0.16 * gait.save_aim.x)
+                * Quat::from_rotation_x(
+                    Self::SAVE_WRIST + Self::PARRY_WRIST * gait.parry - 0.18 * gait.save_recoil,
+                ),
+            gait.save,
+        );
+        let holding = Self::held(
+            saving,
+            Quat::from_rotation_z(-self.side * 0.20) * Quat::from_rotation_x(Self::CRADLE_WRIST),
+            gait.carry,
+        );
+        // Splayed to cover an area, or turned in around a ball he has
+        // actually got hold of.
+        let out = Self::held(
+            holding,
+            Quat::from_rotation_z(
+                self.side * Self::REACH_WRIST_SPREAD * (1.0 - 2.0 * gait.claimed),
+            ) * Quat::from_rotation_x(Self::REACH_WRIST),
+            gait.reach,
+        );
+        // A fist is supported straight behind the knuckles; an open
+        // parry instead keeps the wrist extended behind its palm.
+        let out = Self::held(out, Quat::from_rotation_x(0.06), gait.punch);
+        let down = Self::held(out, Quat::from_rotation_x(Self::CRADLE_WRIST), bracing);
+        // Palm flat on the turf, taking his weight.
+        Self::held(
+            down,
+            Quat::from_rotation_x(Self::RISE_WRIST),
+            gait.propping(),
+        )
+    }
+
+    fn pose_fingers(&self, pose: &Pose<'_>, index: u8) -> Quat {
+        let gait = pose.gait;
+        let pointing = pose.pointing;
+
+        let across = self.origin.x;
+        // **A pointed hand is the one gesture where the four fingers
+        // do different things.** The index goes straight and the
+        // other three shut, which is the whole of what pointing is —
+        // an open hand held out is a man showing you his palm.
+        let mut grip = if index == 0 {
+            Self::grip(gait) * (1.0 - pointing)
+        } else {
+            Self::grip(gait).max(Self::HAND_POINTING * pointing)
+        };
+        // Small, staggered flexion while relaxed. Receiving and
+        // gripping a ball take over completely, without finger jitter.
+        let free = (1.0 - Self::armed(gait))
+            * (1.0 - gait.save)
+            * (1.0 - gait.reach)
+            * (1.0 - gait.carry.max(gait.claimed))
+            * (1.0 - gait.punch)
+            * (1.0 - pointing);
+        grip += 0.025
+            * free
+            * (gait.idle * 1.3 + index as f32 * 0.8 + self.side * 0.6 + gait.phase * gait.run)
+                .sin();
+        grip = grip.clamp(0.0, 1.0);
+        let fan = Self::fan(gait) * (1.0 - pointing);
+        // Not every finger does the same thing, and that is most of
+        // what separates a hand from a comb. A relaxed little finger
+        // curls further than an index; a spread one goes wider.
+        let bias = Self::FINGER_CURL[usize::from(index).min(3)];
+        // The first joint closes first; the tips follow into the
+        // palm. A ball grip stays cupped instead of becoming a fist.
+        let curl = match self.limb {
+            Limb::Knuckle(_) => Self::GRIP_KNUCKLE * grip.powf(1.2),
+            _ => Self::GRIP_FINGER * grip,
+        } * bias;
+        // The second segment carries no splay of its own: a finger
+        // fans at the knuckle it grows out of and bends in a plane
+        // after that, which is what makes a closing hand converge
+        // rather than stay a fan all the way in.
+        let splay = match self.limb {
+            Limb::Knuckle(_) => 0.0,
+            // Fanned OUT to cover a ball and drawn back IN as the
+            // hand closes: the two ends of the one gesture, and the
+            // reason the fan cannot simply be added to the rest
+            // splay.
+            _ => across * BodyParts::SPLAY * (1.0 + Self::FAN_WIDE * fan - grip),
+        };
+        Quat::from_rotation_z(splay) * Quat::from_rotation_x(curl)
+    }
+
+    fn pose_thumb(&self, pose: &Pose<'_>) -> Quat {
+        let gait = pose.gait;
+        let pointing = pose.pointing;
+
+        let grip = Self::grip(gait).max(Self::HAND_POINTING * pointing);
+        let fan = Self::fan(gait) * (1.0 - pointing);
+        Quat::from_rotation_z(
+            -self.side * (Self::THUMB_OUT + Self::THUMB_FAN * fan - Self::THUMB_IN * grip),
+        ) * Quat::from_rotation_y(-self.side * 0.85 * grip)
+            * Quat::from_rotation_x(Self::THUMB_REST + Self::THUMB_CURL * grip)
+    }
+
+    fn pose_thumb_tip(&self, pose: &Pose<'_>) -> Quat {
+        let gait = pose.gait;
+        let pointing = pose.pointing;
+
+        let grip = Self::grip(gait).max(Self::HAND_POINTING * pointing);
+        Quat::from_rotation_x(0.10 + 0.95 * Actors::ease((grip - 0.12) / 0.88))
+    }
+
+    fn pose_hip(&self, pose: &Pose<'_>) -> Quat {
+        let gait = pose.gait;
+        let posture = pose.posture;
+        let leg = pose.leg;
+        let leading = pose.leading;
+        let trailing = pose.trailing;
+        let kicking = pose.kicking;
+        let striking = pose.striking;
+        let receiving = pose.receiving;
+
+        // **The stride carries the ground he covers.** The amplitude
+        // is the larger of what he is working at and what the turf is
+        // asking for — see [`Joint::stepping`] — and it is SIGNED by
+        // the direction of travel, so a keeper dropping backwards
+        // onto his line runs the cycle the other way round instead of
+        // moonwalking down the pitch.
+        let amplitude = Self::HIP_SWING.0 + Self::HIP_SWING.1 * Self::stepping(gait) + gait.stance;
+        // The lateral half of the same decomposition. A wide base
+        // (both legs out, so the feet stay on their own sides of him)
+        // and then each foot stepping across in turn — antiphase,
+        // exactly like the stride, because at any instant one foot is
+        // planted and sliding back under him while the other swings
+        // on ahead of him.
+        //
+        // The near leg alone steps into a save; the far one is what
+        // he is pushing off.
+        // Whether THIS foot is the one off the ground, and how far
+        // through its swing. The whole difference between a step and
+        // a scissor: with the legs mirrored there was no swing to
+        // pick up, and neither boot ever left the grass.
+        let picking = Self::tread(leg).1 * Self::sidling(gait);
+        let near_leg = (self.side * gait.save_aim.x).clamp(0.0, 1.0);
+        // ⚠ Composed onto the WHOLE branch below rather than into the
+        // run cycle. The base is a stance, not a stride: a keeper who
+        // is set, or reaching, still has his feet where his last
+        // side-step left them, and folding it into `running` lets the
+        // set layer slerp it away underneath him.
+        //
+        // …and the whole leg turns onto the run first. See
+        // [`Gait::open`]: a footballer travelling across himself
+        // opens his hips and RUNS, and only what is left over after
+        // that is a side-step. Outermost of the three, because it is
+        // the frame the other two are expressed in — the splay is
+        // across the line of the hips and the stride is along it,
+        // and yawing the pair of them is exactly what opening up
+        // does to a pair of legs.
+        let hold = gait.hold[usize::from(self.side > 0.0)];
+        let across = posture.turn
+            * Quat::from_rotation_z(
+                Self::abduct(gait, self.side)
+                    + Self::SAVE_STEP * Self::rooted(gait) * gait.save_aim.x * near_leg
+                    + hold.splay * hold.weight,
+            );
+        // The run, plus what his legs do about a change of pace: feet
+        // driving out behind him off the mark, planted out in front
+        // under the brakes.
+        let running = Quat::from_rotation_x(
+            // ⚠ [`Joint::striding`] and not the plain sinusoid, and
+            // the re-fit is applied to the foot's OFFSET rather than
+            // to the angle — `L·sin θ` is not linear in `θ`, so
+            // scaling the angle compresses the far end of every step
+            // and puts back most of the slip the shape just took
+            // out. Same trap as [`Joint::abduct`], which says so.
+            // `sin(amplitude)` IS the half-excursion as a share of a
+            // leg; the shape and the gain belong there, and the
+            // `asin` turns it back into a hip.
+            Self::swinging(gait, leg, amplitude) * gait.course.y
                         // …signed with the course for the same reason the
                         // trunk's lean is: a man driving off backwards
                         // plants his feet out in FRONT of himself.
                         + Self::DRIVE_HIP * gait.driving() * gait.course.y
                         + Self::SHUFFLE_HIP_PICKUP * picking,
-                );
-                // …and under him when he is bent over them. ⚠ The knee
-                // alone will not do it: the legs hang off the hips with
-                // nothing beneath them, so bending a knee on its own swings
-                // the shin backward and takes the boot off the grass, which
-                // is what it did.
-                let running = Self::held(
-                    running,
-                    Quat::from_rotation_x(Self::DOUBLED_HIP),
-                    gait.doubled_over,
-                );
-                // ⚠ [`Joint::crouched`] and NOT `gait.set`. This is a slerp
-                // onto a fixed angle, so whatever weight it is given is that
-                // much of the stride gone — and a keeper walking with the
-                // ball in his box used to arrive here at 0.83.
-                let ready = Self::held(
-                    running,
-                    Quat::from_rotation_x(
-                        Self::SET_HIP + Self::TOES_HIP * Self::on_his_toes(gait, self.side),
-                    ),
-                    Self::crouched(gait),
-                );
-                // Coming down off the split-step: the set, deeper, while his
-                // weight settles into his knees. Under the save, because a
-                // ball arriving on the landing still gets his whole body
-                // to it. See [`Self::LAND_CROUCH`].
-                let landing = Self::held(
-                    ready,
-                    Quat::from_rotation_x(Self::SET_HIP * Self::LAND_CROUCH),
-                    gait.land,
-                );
-                // ⚠ [`Joint::rooted`] and NOT `gait.save`, on the argument
-                // `crouched` makes one layer down: this is a slerp onto a
-                // fixed angle, and the engine steps him to nearly every
-                // ball he saves on his feet.
-                let ready = Self::held(
-                    landing,
-                    Quat::from_rotation_x(
-                        Self::SET_HIP
+        );
+        // …and under him when he is bent over them. ⚠ The knee
+        // alone will not do it: the legs hang off the hips with
+        // nothing beneath them, so bending a knee on its own swings
+        // the shin backward and takes the boot off the grass, which
+        // is what it did.
+        let running = Self::held(
+            running,
+            Quat::from_rotation_x(Self::DOUBLED_HIP),
+            gait.doubled_over,
+        );
+        // ⚠ [`Joint::crouched`] and NOT `gait.set`. This is a slerp
+        // onto a fixed angle, so whatever weight it is given is that
+        // much of the stride gone — and a keeper walking with the
+        // ball in his box used to arrive here at 0.83.
+        let ready = Self::held(
+            running,
+            Quat::from_rotation_x(
+                Self::SET_HIP + Self::TOES_HIP * Self::on_his_toes(gait, self.side),
+            ),
+            Self::crouched(gait),
+        );
+        // Coming down off the split-step: the set, deeper, while his
+        // weight settles into his knees. Under the save, because a
+        // ball arriving on the landing still gets his whole body
+        // to it. See [`Self::LAND_CROUCH`].
+        let landing = Self::held(
+            ready,
+            Quat::from_rotation_x(Self::SET_HIP * Self::LAND_CROUCH),
+            gait.land,
+        );
+        // ⚠ [`Joint::rooted`] and NOT `gait.save`, on the argument
+        // `crouched` makes one layer down: this is a slerp onto a
+        // fixed angle, and the engine steps him to nearly every
+        // ball he saves on his feet.
+        let ready = Self::held(
+            landing,
+            Quat::from_rotation_x(
+                Self::SET_HIP
                             + Self::SAVE_HIP * Self::stooping(gait)
                             // …and straight under him going the other way.
                             // See [`Joint::SAVE_RISE_HIP`].
                             + Self::SAVE_RISE_HIP * gait.save_aim.y.clamp(0.0, 1.0),
-                    ),
-                    Self::rooted(gait),
-                );
-                // …and gathered a little under him while he is up on the
-                // hop — both legs alike, since it is taken off both feet.
-                // See [`Self::HOP_HIP`].
-                let hopping = Self::held(
-                    ready,
-                    Quat::from_rotation_x(Self::SET_HIP + Self::HOP_HIP),
-                    gait.hop,
-                );
-                let leaping = Self::held(
-                    hopping,
-                    Quat::from_rotation_x(Self::jump_leg(gait, self.side).x),
-                    gait.jump,
-                );
-                // In flight the legs trail — the near one straight behind
-                // him because it is the one he pushed off, the far one
-                // swinging up over it.
-                // ⚠ …and NOT over a leap. `dive` means "off his feet" and
-                // stays 1 for a keeper who went straight up, so without the
-                // gate the trail slerps away the push the jump above just
-                // drew. See `PlayerActor::gait` and [`Self::diving_legs`].
-                let diving = Self::held(
-                    leaping,
-                    Quat::from_rotation_x(Self::dive_leg(gait, leading, trailing).0),
-                    Self::diving_legs(gait),
-                );
-                let down = Self::held(diving, Quat::from_rotation_x(Self::DOWN_HIP), gait.grounded);
-                // Knees drawn under him to push off, held at a constant
-                // angle to the GRASS rather than to his own chest. See
-                // [`Self::RISE_THIGH`].
-                let down = Self::held(
-                    down,
-                    Quat::from_rotation_x(-(gait.over + Self::RISE_THIGH)),
-                    Self::kneeling(gait),
-                );
-                // And the kick, on the striking leg only — the other one is
-                // planted and keeps its stride.
-                let kicked = Self::held(
-                    down,
-                    Quat::from_rotation_x(Self::through(Self::KICK_HIP, gait.swing)),
-                    kicking * striking.max(0.0),
-                );
-                // …and the trap, likewise: the receiving leg out to the ball.
-                // …and last of all, outside every layer, the turn that keeps a
-                // planted sole where it came down: it is worked off the leg as
-                // all of the above leaves it.
-                across
-                    * Quat::from_rotation_x(hold.flex * hold.weight + Self::STEP_HIP * hold.lift)
-                    * Self::held(kicked, Self::trap_leg(gait), receiving)
-            }
-            // Deepest as the leg folds through underneath the player, and all
-            // but straight again by the time it reaches out to land. Squaring
-            // the curve is what narrows the tuck to that one part of the
-            // cycle; a plain cosine leaves the leading leg bent on touchdown,
-            // which reads as a stumble rather than a stride.
-            Limb::Knee => {
-                let hold = gait.hold[usize::from(self.side > 0.0)];
-                let running = Quat::from_rotation_x(
-                    // ⚠ [`Joint::tucking`], because the HIP has to solve
-                    // against this same angle — a folded leg reaches less far
-                    // forward than a straight one — and two copies of it do
-                    // not stay the same angle.
-                    Self::tucking(gait, leg)
+            ),
+            Self::rooted(gait),
+        );
+        // …and gathered a little under him while he is up on the
+        // hop — both legs alike, since it is taken off both feet.
+        // See [`Self::HOP_HIP`].
+        let hopping = Self::held(
+            ready,
+            Quat::from_rotation_x(Self::SET_HIP + Self::HOP_HIP),
+            gait.hop,
+        );
+        let leaping = Self::held(
+            hopping,
+            Quat::from_rotation_x(Self::jump_leg(gait, self.side).x),
+            gait.jump,
+        );
+        // In flight the legs trail — the near one straight behind
+        // him because it is the one he pushed off, the far one
+        // swinging up over it.
+        // ⚠ …and NOT over a leap. `dive` means "off his feet" and
+        // stays 1 for a keeper who went straight up, so without the
+        // gate the trail slerps away the push the jump above just
+        // drew. See `PlayerActor::gait` and [`Self::diving_legs`].
+        let diving = Self::held(
+            leaping,
+            Quat::from_rotation_x(Self::dive_leg(gait, leading, trailing).0),
+            Self::diving_legs(gait),
+        );
+        let down = Self::held(diving, Quat::from_rotation_x(Self::DOWN_HIP), gait.grounded);
+        // Knees drawn under him to push off, held at a constant
+        // angle to the GRASS rather than to his own chest. See
+        // [`Self::RISE_THIGH`].
+        let down = Self::held(
+            down,
+            Quat::from_rotation_x(-(gait.over + Self::RISE_THIGH)),
+            Self::kneeling(gait),
+        );
+        // And the kick, on the striking leg only — the other one is
+        // planted and keeps its stride.
+        let kicked = Self::held(
+            down,
+            Quat::from_rotation_x(Self::through(Self::KICK_HIP, gait.swing)),
+            kicking * striking.max(0.0),
+        );
+        // …and the trap, likewise: the receiving leg out to the ball.
+        // …and last of all, outside every layer, the turn that keeps a
+        // planted sole where it came down: it is worked off the leg as
+        // all of the above leaves it.
+        across
+            * Quat::from_rotation_x(hold.flex * hold.weight + Self::STEP_HIP * hold.lift)
+            * Self::held(kicked, Self::trap_leg(gait), receiving)
+    }
+
+    fn pose_knee(&self, pose: &Pose<'_>) -> Quat {
+        let gait = pose.gait;
+        let leg = pose.leg;
+
+        let hold = gait.hold[usize::from(self.side > 0.0)];
+        let running = Quat::from_rotation_x(
+            // ⚠ [`Joint::tucking`], because the HIP has to solve
+            // against this same angle — a folded leg reaches less far
+            // forward than a straight one — and two copies of it do
+            // not stay the same angle.
+            Self::tucking(gait, leg)
                         // The swinging foot picks up out of a side-step, and
                         // a backpedalling man's knees come up in front of him
                         // — neither of which the sagittal cycle draws, since
@@ -5739,144 +5899,154 @@ impl Joint {
                             * (0.5 + 0.5 * (leg - Self::TUCK_LEAD).cos()).powi(2)
                         // Sunk over the ball, the way a man carrying one runs.
                         + Self::CARRY_KNEE * gait.carrying,
-                );
-                // Weight off, knees soft. Paid for in height by
-                // [`Self::SLUMP_DROP`].
-                let running = Self::held(
-                    running,
-                    Quat::from_rotation_x(Self::SLUMP_KNEE),
-                    gait.despair,
-                );
-                // …and bent under him, because that is what his hands are
-                // resting on.
-                let running = Self::held(
-                    running,
-                    Quat::from_rotation_x(Self::DOUBLED_KNEE),
-                    gait.doubled_over,
-                );
-                let ready = Self::held(
-                    running,
-                    Quat::from_rotation_x(
-                        Self::SET_KNEE + Self::TOES_KNEE * Self::on_his_toes(gait, self.side),
-                    ),
-                    Self::crouched(gait),
-                );
-                // The landing off a split-step, paid for in height by
-                // [`Self::LAND_DROP`] — same shape as the set, deeper.
-                let landing = Self::held(
-                    ready,
-                    Quat::from_rotation_x(Self::SET_KNEE * Self::LAND_CROUCH),
-                    gait.land,
-                );
-                // Down under himself to a ball at his boots. Its own layer
-                // above the set rather than a term inside the run cycle,
-                // because a keeper making a save is nearly always set and the
-                // set would slerp it away — see the note at [`Limb::Hip`].
-                let saving = Self::held(
-                    landing,
-                    Quat::from_rotation_x(
-                        Self::SET_KNEE
-                            + Self::SAVE_KNEE * Self::stooping(gait)
-                            + Self::SAVE_RISE_KNEE * gait.save_aim.y.clamp(0.0, 1.0),
-                    ),
-                    // The legs' share of it — see the note at the hip.
-                    Self::rooted(gait),
-                );
-                // Folded a little under him on the hop. See [`Self::HOP_KNEE`].
-                let hopping = Self::held(
-                    saving,
-                    Quat::from_rotation_x(Self::SET_KNEE + Self::HOP_KNEE),
-                    gait.hop,
-                );
-                let leaping = Self::held(
-                    hopping,
-                    Quat::from_rotation_x(Self::jump_leg(gait, self.side).y),
-                    gait.jump,
-                );
-                let diving = Self::held(
-                    leaping,
-                    Quat::from_rotation_x(Self::dive_leg(gait, leading, trailing).1),
-                    Self::diving_legs(gait),
-                );
-                let down = Self::held(
-                    diving,
-                    Quat::from_rotation_x(Self::DOWN_KNEE + Self::thud_knee(gait)),
-                    gait.grounded,
-                );
-                let down = Self::held(
-                    down,
-                    Quat::from_rotation_x(Self::RISE_KNEE),
-                    Self::kneeling(gait),
-                );
-                // The kicking knee whips through the ball; the standing one
-                // bends to take the weight while it does.
-                let swung = Self::held(
-                    down,
-                    Quat::from_rotation_x(Self::through(Self::KICK_KNEE, gait.swing)),
-                    kicking * striking.max(0.0),
-                );
-                let planted = Self::held(
-                    swung,
-                    Quat::from_rotation_x(Self::PLANT_KNEE),
-                    kicking * (-striking).max(0.0),
-                );
-                // The receiving knee softens as the leg goes out and gives
-                // as the ball arrives; the standing one takes his weight
-                // exactly as it does under a kick.
-                let received = Self::held(
-                    planted,
-                    Quat::from_rotation_x(Self::through(Self::TRAP_KNEE, gait.swing)),
-                    receiving,
-                );
-                let braced = Self::held(
-                    received,
-                    Quat::from_rotation_x(Self::PLANT_KNEE),
-                    trapping * (-striking).max(0.0),
-                );
-                // A throw-in is taken off both feet, and they give under it:
-                // the knees bend into the arch and push back up through the
-                // release. It is the only strike in football where the legs
-                // do the same thing as each other.
-                let tossed = Self::held(
-                    braced,
-                    Quat::from_rotation_x(Self::through(
-                        Self::heaved(Self::TOSS_KNEE, gait.heft, 0.55),
-                        gait.swing,
-                    )),
-                    tossing,
-                );
-                // The fold that keeps a planted sole where it came down, on
-                // the knee as every layer leaves it — see the hip.
-                Quat::from_rotation_x(hold.fold * hold.weight + Self::STEP_KNEE * hold.lift)
-                    * tossed
-            }
-            // The foot rolls through the stride: pulled up as the leg
-            // reaches out to land, driven down and back off the toe at the
-            // end of the push. See [`Self::ANKLE_PLANTAR`].
-            //
-            // Scaled by `run` like every other amplitude here, so a
-            // standing player's foot is flat on the grass and none of the
-            // standing poses — the set, the slump, the cradle — has to know
-            // this joint exists.
-            Limb::Ankle => {
-                // Off `stepping` rather than `run` for the same reason the
-                // hip is: the roll belongs to the step, and at a walk the
-                // step is bigger than the effort. Signed with the stride, so
-                // going backwards the foot rolls the other way — a man never
-                // puts a heel down travelling backwards, which is what the
-                // plantar term below is.
-                // **Sideways, the pitch above has nothing to drive it.** It
-                // is signed by `course.y`, so a boot travelling across the
-                // body held ONE angle for the whole cycle — the welded foot
-                // this joint exists to stop, back again on the other axis.
-                //
-                // A side-step turns the feet out toward the way he is going
-                // and rolls them through the push, and the swinging one
-                // points as it leaves the grass.
-                let across = Self::sidling(gait);
-                let (tread, lift) = Self::tread(leg);
-                let rolling = Quat::from_rotation_y(
-                    Self::TOE_OUT * gait.course.x * across
+        );
+        // Weight off, knees soft. Paid for in height by
+        // [`Self::SLUMP_DROP`].
+        let running = Self::held(
+            running,
+            Quat::from_rotation_x(Self::SLUMP_KNEE),
+            gait.despair,
+        );
+        // …and bent under him, because that is what his hands are
+        // resting on.
+        let running = Self::held(
+            running,
+            Quat::from_rotation_x(Self::DOUBLED_KNEE),
+            gait.doubled_over,
+        );
+        let ready = Self::held(
+            running,
+            Quat::from_rotation_x(
+                Self::SET_KNEE + Self::TOES_KNEE * Self::on_his_toes(gait, self.side),
+            ),
+            Self::crouched(gait),
+        );
+        // The landing off a split-step, paid for in height by
+        // [`Self::LAND_DROP`] — same shape as the set, deeper.
+        let landing = Self::held(
+            ready,
+            Quat::from_rotation_x(Self::SET_KNEE * Self::LAND_CROUCH),
+            gait.land,
+        );
+        // Down under himself to a ball at his boots. Its own layer
+        // above the set rather than a term inside the run cycle,
+        // because a keeper making a save is nearly always set and the
+        // set would slerp it away — see the note at [`Limb::Hip`].
+        let saving = Self::held(
+            landing,
+            Quat::from_rotation_x(
+                Self::SET_KNEE
+                    + Self::SAVE_KNEE * Self::stooping(gait)
+                    + Self::SAVE_RISE_KNEE * gait.save_aim.y.clamp(0.0, 1.0),
+            ),
+            // The legs' share of it — see the note at the hip.
+            Self::rooted(gait),
+        );
+        // Folded a little under him on the hop. See [`Self::HOP_KNEE`].
+        self.knee_fold(pose, hold, saving)
+    }
+
+    fn knee_fold(&self, pose: &Pose<'_>, hold: Hold, saving: Quat) -> Quat {
+        let gait = pose.gait;
+        let leading = pose.leading;
+        let trailing = pose.trailing;
+        let kicking = pose.kicking;
+        let tossing = pose.tossing;
+        let trapping = pose.trapping;
+        let striking = pose.striking;
+        let receiving = pose.receiving;
+        let hopping = Self::held(
+            saving,
+            Quat::from_rotation_x(Self::SET_KNEE + Self::HOP_KNEE),
+            gait.hop,
+        );
+        let leaping = Self::held(
+            hopping,
+            Quat::from_rotation_x(Self::jump_leg(gait, self.side).y),
+            gait.jump,
+        );
+        let diving = Self::held(
+            leaping,
+            Quat::from_rotation_x(Self::dive_leg(gait, leading, trailing).1),
+            Self::diving_legs(gait),
+        );
+        let down = Self::held(
+            diving,
+            Quat::from_rotation_x(Self::DOWN_KNEE + Self::thud_knee(gait)),
+            gait.grounded,
+        );
+        let down = Self::held(
+            down,
+            Quat::from_rotation_x(Self::RISE_KNEE),
+            Self::kneeling(gait),
+        );
+        // The kicking knee whips through the ball; the standing one
+        // bends to take the weight while it does.
+        let swung = Self::held(
+            down,
+            Quat::from_rotation_x(Self::through(Self::KICK_KNEE, gait.swing)),
+            kicking * striking.max(0.0),
+        );
+        let planted = Self::held(
+            swung,
+            Quat::from_rotation_x(Self::PLANT_KNEE),
+            kicking * (-striking).max(0.0),
+        );
+        // The receiving knee softens as the leg goes out and gives
+        // as the ball arrives; the standing one takes his weight
+        // exactly as it does under a kick.
+        let received = Self::held(
+            planted,
+            Quat::from_rotation_x(Self::through(Self::TRAP_KNEE, gait.swing)),
+            receiving,
+        );
+        let braced = Self::held(
+            received,
+            Quat::from_rotation_x(Self::PLANT_KNEE),
+            trapping * (-striking).max(0.0),
+        );
+        // A throw-in is taken off both feet, and they give under it:
+        // the knees bend into the arch and push back up through the
+        // release. It is the only strike in football where the legs
+        // do the same thing as each other.
+        let tossed = Self::held(
+            braced,
+            Quat::from_rotation_x(Self::through(
+                Self::heaved(Self::TOSS_KNEE, gait.heft, 0.55),
+                gait.swing,
+            )),
+            tossing,
+        );
+        // The fold that keeps a planted sole where it came down, on
+        // the knee as every layer leaves it — see the hip.
+        Quat::from_rotation_x(hold.fold * hold.weight + Self::STEP_KNEE * hold.lift) * tossed
+    }
+
+    fn pose_ankle(&self, pose: &Pose<'_>) -> Quat {
+        let gait = pose.gait;
+        let leg = pose.leg;
+        let kicking = pose.kicking;
+        let striking = pose.striking;
+        let receiving = pose.receiving;
+
+        // Off `stepping` rather than `run` for the same reason the
+        // hip is: the roll belongs to the step, and at a walk the
+        // step is bigger than the effort. Signed with the stride, so
+        // going backwards the foot rolls the other way — a man never
+        // puts a heel down travelling backwards, which is what the
+        // plantar term below is.
+        // **Sideways, the pitch above has nothing to drive it.** It
+        // is signed by `course.y`, so a boot travelling across the
+        // body held ONE angle for the whole cycle — the welded foot
+        // this joint exists to stop, back again on the other axis.
+        //
+        // A side-step turns the feet out toward the way he is going
+        // and rolls them through the push, and the swinging one
+        // points as it leaves the grass.
+        let across = Self::sidling(gait);
+        let (tread, lift) = Self::tread(leg);
+        let rolling = Quat::from_rotation_y(
+            Self::TOE_OUT * gait.course.x * across
                         // **…and this man's own feet, whichever way he is
                         // going.** The term above is scaled by `course.x`,
                         // so it is a claim about a SIDE-STEP — and an
@@ -5887,56 +6057,50 @@ impl Joint {
                         // the two feet splay rather than both pointing one
                         // way. See [`Gait::toes`].
                         + self.side * gait.toes,
-                ) * Quat::from_rotation_z(
-                    Self::FOOT_ROLL * gait.course.x * across * tread,
-                ) * Quat::from_rotation_x(
-                    Self::ankle_pitch(gait, leg)
+        ) * Quat::from_rotation_z(Self::FOOT_ROLL * gait.course.x * across * tread)
+            * Quat::from_rotation_x(
+                Self::ankle_pitch(gait, leg)
                             + Self::BACKPEDAL_ANKLE * Self::backing(gait)
                             + Self::ANKLE_PLANTAR * 0.5 * lift * across
                             // …and up onto his toes for a ball above him,
                             // outside the `stepping` scaling above because
                             // a keeper making this save is standing still.
                             + Self::ANKLE_PLANTAR * Self::SAVE_RISE_TOE * Self::reaching(gait),
-                );
-                // Up on the split-step the toes drop, both feet alike —
-                // there is nothing under them for the fifth of a second he
-                // is up. See [`Self::HOP_TOES`].
-                let hopping = Self::held(
-                    rolling,
-                    Quat::from_rotation_x(Self::ANKLE_PLANTAR * Self::HOP_TOES),
-                    gait.hop,
-                );
-                // Off his feet there is nothing to push against and the
-                // toes fall into a point.
-                let flying = Self::held(
-                    hopping,
-                    Quat::from_rotation_x(
-                        Self::DIVE_ANKLE
-                            * (1.0
-                                - gait.keeper
-                                    * gait.jump
-                                    * Actors::ease((gait.jump_phase - 0.5) * 2.0)),
-                    ),
-                    gait.dive.max(gait.jump),
-                );
-                // …and the standing leg locks under a kick while the
-                // striking foot points through the ball.
-                let struck = Self::held(
-                    flying,
-                    Quat::from_rotation_x(Self::ANKLE_PLANTAR * 0.8),
-                    kicking * striking.max(0.0),
-                );
-                // Taking a pass the foot turns out and the toes come up, so
-                // it is the inside of the boot the ball meets. At the ankle
-                // rather than the hip, so the boot turns where it lands.
-                Self::held(
-                    struck,
-                    Quat::from_rotation_y(gait.foot * Self::TRAP_OPEN)
-                        * Quat::from_rotation_x(-Self::TRAP_TOE_UP),
-                    receiving,
-                )
-            }
-        }
+            );
+        // Up on the split-step the toes drop, both feet alike —
+        // there is nothing under them for the fifth of a second he
+        // is up. See [`Self::HOP_TOES`].
+        let hopping = Self::held(
+            rolling,
+            Quat::from_rotation_x(Self::ANKLE_PLANTAR * Self::HOP_TOES),
+            gait.hop,
+        );
+        // Off his feet there is nothing to push against and the
+        // toes fall into a point.
+        let flying = Self::held(
+            hopping,
+            Quat::from_rotation_x(
+                Self::DIVE_ANKLE
+                    * (1.0 - gait.keeper * gait.jump * Actors::ease((gait.jump_phase - 0.5) * 2.0)),
+            ),
+            gait.dive.max(gait.jump),
+        );
+        // …and the standing leg locks under a kick while the
+        // striking foot points through the ball.
+        let struck = Self::held(
+            flying,
+            Quat::from_rotation_x(Self::ANKLE_PLANTAR * 0.8),
+            kicking * striking.max(0.0),
+        );
+        // Taking a pass the foot turns out and the toes come up, so
+        // it is the inside of the boot the ball meets. At the ankle
+        // rather than the hip, so the boot turns where it lands.
+        Self::held(
+            struck,
+            Quat::from_rotation_y(gait.foot * Self::TRAP_OPEN)
+                * Quat::from_rotation_x(-Self::TRAP_TOE_UP),
+            receiving,
+        )
     }
 
     /// **The receiving leg, out to the ball**: yawed toward where it will
@@ -7397,6 +7561,31 @@ impl Carriage {
     }
 }
 
+struct Pose<'a> {
+    gait: &'a Gait,
+    posture: &'a Posture,
+    leg: f32,
+    standing: f32,
+    weight: f32,
+    leading: f32,
+    trailing: f32,
+    bracing: f32,
+    grassed: f32,
+    kicking: f32,
+    throwing: f32,
+    heading: f32,
+    tossing: f32,
+    trapping: f32,
+    striking: f32,
+    receiving: f32,
+    on_head: f32,
+    on_hips: f32,
+    doubled: f32,
+    limp: f32,
+    urging: f32,
+    pointing: f32,
+}
+
 /// Hangs one footballer's meshes off an actor entity.
 pub struct Footballer;
 
@@ -7405,7 +7594,6 @@ impl Footballer {
     /// and stride. Legs hang from the [`Carriage`] so the torso can lean without
     /// taking the feet with it; arms and head hang from the torso so that they
     /// do.
-    #[expect(clippy::too_many_lines)]
     pub fn assemble(
         commands: &mut Commands,
         root: Entity,
@@ -7439,279 +7627,329 @@ impl Footballer {
                     Transform::from_translation(hips),
                 ))
                 .id();
-
-            // The torso mesh carries its own collar now, so the kit sheet
-            // answers for both — see [`BodyParts`], which is where the merge
-            // and its arithmetic live.
-            let mut shoulders = Vec::new();
-            let mut chest = body.spawn((
-                Joint::new(root, Limb::Torso, 0.0, hips),
-                Mesh3d(if keeper {
-                    parts.torso_long.clone()
-                } else {
-                    parts.torso.clone()
-                }),
-                Worn::on(root, if keeper { Part::TorsoLong } else { Part::Torso }),
-                MeshMaterial3d(outfit.kit.clone()),
-                Transform::from_translation(hips),
-            ));
-            let chest_id = chest.id();
-            chest.with_children(|torso| {
-                // Both panels lie ON the shirt rather than in front of it, so
-                // they take the torso's own transform and nothing else — see
-                // [`Sculptor::decal`].
-                if let Some(number) = outfit.number.clone() {
-                    torso.spawn((
-                        Mesh3d(parts.number.clone()),
-                        Worn::on(root, Part::Number),
-                        MeshMaterial3d(number),
-                        Transform::default(),
-                    ));
-                }
-                if let Some(name) = outfit.name.clone() {
-                    torso.spawn((
-                        Mesh3d(parts.name.clone()),
-                        Worn::on(root, Part::Name),
-                        MeshMaterial3d(name),
-                        Transform::default(),
-                    ));
-                }
-                // …and the plate round the front, off for the whole match bar
-                // the walk-out. Its own panel and its own material, because it
-                // is the name INVERTED — see [`FrontPrint`].
-                if let Some(plate) = outfit.name_front.clone() {
-                    torso.spawn((
-                        FrontPrint,
-                        Mesh3d(parts.name_front.clone()),
-                        Worn::on(root, Part::NameFront),
-                        MeshMaterial3d(plate),
-                        Transform::default(),
-                        Visibility::Hidden,
-                    ));
-                }
-                torso
-                    .spawn((
-                        Joint::new(root, Limb::Head, 0.0, neck),
-                        Mesh3d(parts.head.clone()),
-                        Worn::on(root, Part::Head),
-                        MeshMaterial3d(outfit.face.clone()),
-                        Transform::from_translation(neck),
-                    ))
-                    .with_children(|head| {
-                        if let Some(hair) = parts.hair[outfit.hair_style.index()].clone() {
-                            head.spawn((
-                                Mesh3d(hair),
-                                Worn::on(root, Part::Hair(outfit.hair_style.index())),
-                                MeshMaterial3d(outfit.hair.clone()),
-                                Thatch { actor: root },
-                                Transform::default(),
-                            ));
-                        }
-                    });
-
-                for side in [-1.0f32, 1.0] {
-                    let shoulder =
-                        Vec3::new(side * Physique::SHOULDER_SPREAD, Physique::SHOULDER, 0.0);
-                    // The arm still drives the hand and forearm. The shirt
-                    // follows this same joint through its skin weights.
-                    let shoulder_id = torso
-                        .spawn((
-                            Joint::new(root, Limb::Shoulder, side, shoulder),
-                            Mesh3d(parts.upper_arm.clone()),
-                            Worn::on(root, Part::UpperArm),
-                            MeshMaterial3d(outfit.limb.clone()),
-                            DressedFlesh {
-                                actor: root,
-                                strip: outfit.strip,
-                            },
-                            Transform::from_translation(shoulder),
-                        ))
-                        .with_children(|arm| {
-                            // The outfield forearm is bare skin and stays on
-                            // the shared complexion ramp; a keeper's carries
-                            // the rest of his sleeve and the cuff at the
-                            // wrist, merged like the arm above it.
-                            let mut lower = arm.spawn((
-                                Joint::new(root, Limb::Elbow, side, elbow),
-                                Mesh3d(if keeper {
-                                    parts.forearm_sleeved.clone()
-                                } else {
-                                    parts.forearm.clone()
-                                }),
-                                Worn::on(
-                                    root,
-                                    if keeper {
-                                        Part::ForearmSleeved
-                                    } else {
-                                        Part::Forearm
-                                    },
-                                ),
-                                Transform::from_translation(elbow),
-                            ));
-                            if keeper {
-                                lower.insert((
-                                    MeshMaterial3d(outfit.limb.clone()),
-                                    DressedFlesh {
-                                        actor: root,
-                                        strip: outfit.strip,
-                                    },
-                                ));
-                            } else {
-                                lower.insert((
-                                    MeshMaterial3d(outfit.skin.clone()),
-                                    Flesh { actor: root },
-                                ));
-                            }
-                            lower.with_children(|forearm| {
-                                let mut wearing = forearm.spawn((
-                                    Joint::new(root, Limb::Wrist, side, wrist),
-                                    Mesh3d(if keeper {
-                                        parts.glove.clone()
-                                    } else {
-                                        parts.hand[usize::from(side > 0.0)].clone()
-                                    }),
-                                    Worn::on(
-                                        root,
-                                        if keeper {
-                                            Part::Glove
-                                        } else {
-                                            Part::Hand(usize::from(side > 0.0))
-                                        },
-                                    ),
-                                    MeshMaterial3d(outfit.hands.clone()),
-                                    Transform::from_translation(wrist),
-                                ));
-                                // A keeper's hands are GLOVES. Everything else
-                                // marked here is repainted the colour of the
-                                // man's own photograph, and a pair of gloves
-                                // repainted flesh is not a pair of gloves.
-                                if !keeper {
-                                    wearing.insert(Flesh { actor: root });
-                                }
-                                wearing.with_children(|hand| {
-                                    if !keeper {
-                                        return;
-                                    }
-                                    // Every digit is a JOINT now, so the one
-                                    // loop that poses the rig,
-                                    // `Actors::pose_joints`, poses them too — the fingers
-                                    // cost nothing here that the elbows do
-                                    // not. The spawn transform carries the
-                                    // rest position and the size; the angle
-                                    // is [`Joint::pose_in`]'s.
-                                    for (limb, at) in BodyParts::digits(side) {
-                                        let thumb = matches!(limb, Limb::Thumb);
-                                        let mut digit = hand.spawn((
-                                            Joint::new(root, limb, side, at.translation),
-                                            Mesh3d(if thumb {
-                                                parts.thumb.clone()
-                                            } else {
-                                                parts.finger.clone()
-                                            }),
-                                            Worn::on(
-                                                root,
-                                                if thumb { Part::Thumb } else { Part::Finger },
-                                            ),
-                                            MeshMaterial3d(outfit.hands.clone()),
-                                            at,
-                                        ));
-                                        let Limb::Finger(index) = limb else {
-                                            digit.with_child((
-                                                Joint::new(
-                                                    root,
-                                                    Limb::ThumbTip,
-                                                    side,
-                                                    BodyParts::THUMB_JOINT,
-                                                ),
-                                                Mesh3d(parts.thumbtip.clone()),
-                                                Worn::on(root, Part::Thumbtip),
-                                                MeshMaterial3d(outfit.hands.clone()),
-                                                Transform::from_translation(BodyParts::THUMB_JOINT),
-                                            ));
-                                            continue;
-                                        };
-                                        digit.with_child((
-                                            Joint::new(
-                                                root,
-                                                Limb::Knuckle(index),
-                                                side,
-                                                BodyParts::KNUCKLE_JOINT,
-                                            ),
-                                            Mesh3d(parts.fingertip.clone()),
-                                            Worn::on(root, Part::Fingertip),
-                                            MeshMaterial3d(outfit.hands.clone()),
-                                            Transform::from_translation(BodyParts::KNUCKLE_JOINT),
-                                        ));
-                                    }
-                                });
-                            });
-                        })
-                        .id();
-                    shoulders.push(shoulder_id);
-                }
-            });
-            chest.insert((
-                SkinnedMesh {
-                    inverse_bindposes: parts.bindposes.clone(),
-                    joints: vec![chest_id, shoulders[0], shoulders[1]],
-                },
-                DynamicSkinnedMeshBounds,
-            ));
-
-            let mut legs = Vec::new();
-            for side in [-1.0f32, 1.0] {
-                let hip = Vec3::new(side * Physique::HIP_SPREAD, Physique::HIP, 0.0);
-                // The leg of the shorts swings with the thigh it hangs on and
-                // the sock's turnover with the shin, so both ride IN those
-                // meshes now — the thigh on the limb sheet because bare skin
-                // shows below the hem, the shin on the kit sheet because a
-                // sock covers all of it.
-                let leg = body
-                    .spawn((
-                        Joint::new(root, Limb::Hip, side, hip),
-                        Mesh3d(parts.thigh.clone()),
-                        Worn::on(root, Part::Thigh),
-                        MeshMaterial3d(outfit.limb.clone()),
-                        DressedFlesh {
-                            actor: root,
-                            strip: outfit.strip,
-                        },
-                        Transform::from_translation(hip),
-                    ))
-                    .with_children(|leg| {
-                        leg.spawn((
-                            Joint::new(root, Limb::Knee, side, knee),
-                            Mesh3d(parts.shin.clone()),
-                            Worn::on(root, Part::Shin),
-                            MeshMaterial3d(outfit.kit.clone()),
-                            Transform::from_translation(knee),
-                        ))
-                        .with_children(|shin| {
-                            // The boot hangs off an ANKLE rather than off the
-                            // shin: its mesh origin already sits where the
-                            // ankle is (the sole is 38 mm below it), so the
-                            // joint rotates the foot about the right point
-                            // without moving the boot a millimetre at rest.
-                            shin.spawn((
-                                Joint::new(root, Limb::Ankle, side, ankle),
-                                Mesh3d(parts.boot.clone()),
-                                Worn::on(root, Part::Boot),
-                                MeshMaterial3d(outfit.boots.clone()),
-                                Transform::from_translation(ankle),
-                            ));
-                        });
-                    })
-                    .id();
-                legs.push(leg);
-            }
-            body.commands().entity(pelvis).insert((
-                SkinnedMesh {
-                    inverse_bindposes: parts.shorts_bindposes.clone(),
-                    joints: vec![pelvis, legs[0], legs[1]],
-                },
-                DynamicSkinnedMeshBounds,
-            ));
+            Self::upper_body(body, root, parts, outfit, keeper, hips, neck, elbow, wrist);
+            Self::legs(body, root, parts, outfit, pelvis, knee, ankle);
         });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn upper_body(
+        body: &mut RelatedSpawnerCommands<ChildOf>,
+        root: Entity,
+        parts: &BodyParts,
+        outfit: &Outfit,
+        keeper: bool,
+        hips: Vec3,
+        neck: Vec3,
+        elbow: Vec3,
+        wrist: Vec3,
+    ) {
+        // The torso mesh carries its own collar now, so the kit sheet
+        // answers for both — see [`BodyParts`], which is where the merge
+        // and its arithmetic live.
+        let mut shoulders = Vec::new();
+        let mut chest = body.spawn((
+            Joint::new(root, Limb::Torso, 0.0, hips),
+            Mesh3d(if keeper {
+                parts.torso_long.clone()
+            } else {
+                parts.torso.clone()
+            }),
+            Worn::on(root, if keeper { Part::TorsoLong } else { Part::Torso }),
+            MeshMaterial3d(outfit.kit.clone()),
+            Transform::from_translation(hips),
+        ));
+        let chest_id = chest.id();
+        chest.with_children(|torso| {
+            // Both panels lie ON the shirt rather than in front of it, so
+            // they take the torso's own transform and nothing else — see
+            // [`Sculptor::decal`].
+            if let Some(number) = outfit.number.clone() {
+                torso.spawn((
+                    Mesh3d(parts.number.clone()),
+                    Worn::on(root, Part::Number),
+                    MeshMaterial3d(number),
+                    Transform::default(),
+                ));
+            }
+            if let Some(name) = outfit.name.clone() {
+                torso.spawn((
+                    Mesh3d(parts.name.clone()),
+                    Worn::on(root, Part::Name),
+                    MeshMaterial3d(name),
+                    Transform::default(),
+                ));
+            }
+            // …and the plate round the front, off for the whole match bar
+            // the walk-out. Its own panel and its own material, because it
+            // is the name INVERTED — see [`FrontPrint`].
+            if let Some(plate) = outfit.name_front.clone() {
+                torso.spawn((
+                    FrontPrint,
+                    Mesh3d(parts.name_front.clone()),
+                    Worn::on(root, Part::NameFront),
+                    MeshMaterial3d(plate),
+                    Transform::default(),
+                    Visibility::Hidden,
+                ));
+            }
+            torso
+                .spawn((
+                    Joint::new(root, Limb::Head, 0.0, neck),
+                    Mesh3d(parts.head.clone()),
+                    Worn::on(root, Part::Head),
+                    MeshMaterial3d(outfit.face.clone()),
+                    Transform::from_translation(neck),
+                ))
+                .with_children(|head| {
+                    if let Some(hair) = parts.hair[outfit.hair_style.index()].clone() {
+                        head.spawn((
+                            Mesh3d(hair),
+                            Worn::on(root, Part::Hair(outfit.hair_style.index())),
+                            MeshMaterial3d(outfit.hair.clone()),
+                            Thatch { actor: root },
+                            Transform::default(),
+                        ));
+                    }
+                });
+
+            for side in [-1.0f32, 1.0] {
+                shoulders.push(Self::arm(
+                    torso, root, parts, outfit, keeper, side, elbow, wrist,
+                ));
+            }
+        });
+        chest.insert((
+            SkinnedMesh {
+                inverse_bindposes: parts.bindposes.clone(),
+                joints: vec![chest_id, shoulders[0], shoulders[1]],
+            },
+            DynamicSkinnedMeshBounds,
+        ));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn arm(
+        torso: &mut RelatedSpawnerCommands<ChildOf>,
+        root: Entity,
+        parts: &BodyParts,
+        outfit: &Outfit,
+        keeper: bool,
+        side: f32,
+        elbow: Vec3,
+        wrist: Vec3,
+    ) -> Entity {
+        let shoulder = Vec3::new(side * Physique::SHOULDER_SPREAD, Physique::SHOULDER, 0.0);
+        // The arm still drives the hand and forearm. The shirt
+        // follows this same joint through its skin weights.
+        torso
+            .spawn((
+                Joint::new(root, Limb::Shoulder, side, shoulder),
+                Mesh3d(parts.upper_arm.clone()),
+                Worn::on(root, Part::UpperArm),
+                MeshMaterial3d(outfit.limb.clone()),
+                DressedFlesh {
+                    actor: root,
+                    strip: outfit.strip,
+                },
+                Transform::from_translation(shoulder),
+            ))
+            .with_children(|arm| {
+                Self::forearm(arm, root, parts, outfit, keeper, side, elbow, wrist);
+            })
+            .id()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn forearm(
+        arm: &mut RelatedSpawnerCommands<ChildOf>,
+        root: Entity,
+        parts: &BodyParts,
+        outfit: &Outfit,
+        keeper: bool,
+        side: f32,
+        elbow: Vec3,
+        wrist: Vec3,
+    ) {
+        // The outfield forearm is bare skin and stays on the shared
+        // complexion ramp; a keeper's carries the rest of his sleeve and the
+        // cuff at the wrist, merged like the arm above it.
+        let mut lower = arm.spawn((
+            Joint::new(root, Limb::Elbow, side, elbow),
+            Mesh3d(if keeper {
+                parts.forearm_sleeved.clone()
+            } else {
+                parts.forearm.clone()
+            }),
+            Worn::on(
+                root,
+                if keeper {
+                    Part::ForearmSleeved
+                } else {
+                    Part::Forearm
+                },
+            ),
+            Transform::from_translation(elbow),
+        ));
+        if keeper {
+            lower.insert((
+                MeshMaterial3d(outfit.limb.clone()),
+                DressedFlesh {
+                    actor: root,
+                    strip: outfit.strip,
+                },
+            ));
+        } else {
+            lower.insert((MeshMaterial3d(outfit.skin.clone()), Flesh { actor: root }));
+        }
+        lower.with_children(|forearm| {
+            Self::hand(forearm, root, parts, outfit, keeper, side, wrist);
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn hand(
+        forearm: &mut RelatedSpawnerCommands<ChildOf>,
+        root: Entity,
+        parts: &BodyParts,
+        outfit: &Outfit,
+        keeper: bool,
+        side: f32,
+        wrist: Vec3,
+    ) {
+        let mut wearing = forearm.spawn((
+            Joint::new(root, Limb::Wrist, side, wrist),
+            Mesh3d(if keeper {
+                parts.glove.clone()
+            } else {
+                parts.hand[usize::from(side > 0.0)].clone()
+            }),
+            Worn::on(
+                root,
+                if keeper {
+                    Part::Glove
+                } else {
+                    Part::Hand(usize::from(side > 0.0))
+                },
+            ),
+            MeshMaterial3d(outfit.hands.clone()),
+            Transform::from_translation(wrist),
+        ));
+        // A keeper's hands are GLOVES. Everything else
+        // marked here is repainted the colour of the
+        // man's own photograph, and a pair of gloves
+        // repainted flesh is not a pair of gloves.
+        if !keeper {
+            wearing.insert(Flesh { actor: root });
+        }
+        wearing.with_children(|hand| {
+            if !keeper {
+                return;
+            }
+            // Every digit is a JOINT now, so the one
+            // loop that poses the rig,
+            // `Actors::pose_joints`, poses them too — the fingers
+            // cost nothing here that the elbows do
+            // not. The spawn transform carries the
+            // rest position and the size; the angle
+            // is [`Joint::pose_in`]'s.
+            for (limb, at) in BodyParts::digits(side) {
+                let thumb = matches!(limb, Limb::Thumb);
+                let mut digit = hand.spawn((
+                    Joint::new(root, limb, side, at.translation),
+                    Mesh3d(if thumb {
+                        parts.thumb.clone()
+                    } else {
+                        parts.finger.clone()
+                    }),
+                    Worn::on(root, if thumb { Part::Thumb } else { Part::Finger }),
+                    MeshMaterial3d(outfit.hands.clone()),
+                    at,
+                ));
+                let Limb::Finger(index) = limb else {
+                    digit.with_child((
+                        Joint::new(root, Limb::ThumbTip, side, BodyParts::THUMB_JOINT),
+                        Mesh3d(parts.thumbtip.clone()),
+                        Worn::on(root, Part::Thumbtip),
+                        MeshMaterial3d(outfit.hands.clone()),
+                        Transform::from_translation(BodyParts::THUMB_JOINT),
+                    ));
+                    continue;
+                };
+                digit.with_child((
+                    Joint::new(root, Limb::Knuckle(index), side, BodyParts::KNUCKLE_JOINT),
+                    Mesh3d(parts.fingertip.clone()),
+                    Worn::on(root, Part::Fingertip),
+                    MeshMaterial3d(outfit.hands.clone()),
+                    Transform::from_translation(BodyParts::KNUCKLE_JOINT),
+                ));
+            }
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn legs(
+        body: &mut RelatedSpawnerCommands<ChildOf>,
+        root: Entity,
+        parts: &BodyParts,
+        outfit: &Outfit,
+        pelvis: Entity,
+        knee: Vec3,
+        ankle: Vec3,
+    ) {
+        let mut legs = Vec::new();
+        for side in [-1.0f32, 1.0] {
+            let hip = Vec3::new(side * Physique::HIP_SPREAD, Physique::HIP, 0.0);
+            // The leg of the shorts swings with the thigh it hangs on and
+            // the sock's turnover with the shin, so both ride IN those
+            // meshes now — the thigh on the limb sheet because bare skin
+            // shows below the hem, the shin on the kit sheet because a
+            // sock covers all of it.
+            let leg = body
+                .spawn((
+                    Joint::new(root, Limb::Hip, side, hip),
+                    Mesh3d(parts.thigh.clone()),
+                    Worn::on(root, Part::Thigh),
+                    MeshMaterial3d(outfit.limb.clone()),
+                    DressedFlesh {
+                        actor: root,
+                        strip: outfit.strip,
+                    },
+                    Transform::from_translation(hip),
+                ))
+                .with_children(|leg| {
+                    leg.spawn((
+                        Joint::new(root, Limb::Knee, side, knee),
+                        Mesh3d(parts.shin.clone()),
+                        Worn::on(root, Part::Shin),
+                        MeshMaterial3d(outfit.kit.clone()),
+                        Transform::from_translation(knee),
+                    ))
+                    .with_children(|shin| {
+                        // The boot hangs off an ANKLE rather than off the
+                        // shin: its mesh origin already sits where the
+                        // ankle is (the sole is 38 mm below it), so the
+                        // joint rotates the foot about the right point
+                        // without moving the boot a millimetre at rest.
+                        shin.spawn((
+                            Joint::new(root, Limb::Ankle, side, ankle),
+                            Mesh3d(parts.boot.clone()),
+                            Worn::on(root, Part::Boot),
+                            MeshMaterial3d(outfit.boots.clone()),
+                            Transform::from_translation(ankle),
+                        ));
+                    });
+                })
+                .id();
+            legs.push(leg);
+        }
+        body.commands().entity(pelvis).insert((
+            SkinnedMesh {
+                inverse_bindposes: parts.shorts_bindposes.clone(),
+                joints: vec![pelvis, legs[0], legs[1]],
+            },
+            DynamicSkinnedMeshBounds,
+        ));
     }
 }
 
@@ -8260,7 +8498,7 @@ pub(crate) mod preview {
         let elbow = Vec3::new(0.0, -Physique::UPPER_ARM, 0.0);
         let knee = Vec3::new(0.0, -Physique::THIGH, 0.0);
         let wrist = Vec3::new(0.0, -Physique::FOREARM - Physique::WRIST_DROP, 0.0);
-        let shirt = garment::posed(
+        let shirt = garment::Garment::posed(
             meshes
                 .get(if keeper {
                     &parts.torso_long
@@ -8272,7 +8510,7 @@ pub(crate) mod preview {
             gait,
             keeper,
         );
-        let shorts = garment::posed_shorts(meshes.get(&parts.pelvis).unwrap(), gait);
+        let shorts = garment::Garment::posed_shorts(meshes.get(&parts.pelvis).unwrap(), gait);
         let mut draw = |handle: &Handle<Mesh>, at: Transform, tint: Vec3| {
             if handle == &parts.torso {
                 part_mesh(canvas, lens, &shirt, carriage * at, tint);

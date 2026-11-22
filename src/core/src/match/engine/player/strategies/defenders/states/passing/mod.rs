@@ -18,9 +18,7 @@ use nalgebra::Vector3;
 pub struct DefenderPassingState {}
 
 impl StateProcessingHandler for DefenderPassingState {
-    #[expect(clippy::too_many_lines)]
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Check if the defender still has the ball
         if !ctx.player.has_ball(ctx) {
             // Lost possession, transition to appropriate state
             return Some(StateChangeResult::with_defender_state(
@@ -38,6 +36,62 @@ impl StateProcessingHandler for DefenderPassingState {
             return Some(release.resolve(ctx));
         }
 
+        if let Some(result) = Self::counter_attack(ctx) {
+            return Some(result);
+        }
+        if let Some(result) = self.under_heavy_pressure(ctx) {
+            return Some(result);
+        }
+        if let Some(result) = self.tired_short_pass(ctx) {
+            return Some(result);
+        }
+        if let Some(result) = self.normal_pass(ctx) {
+            return Some(result);
+        }
+        if let Some(result) = self.dangerous_position(ctx) {
+            return Some(result);
+        }
+        if ctx.in_state_time > 20 && self.can_dribble_effectively(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Running,
+            ));
+        }
+        self.timeout(ctx)
+    }
+
+    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // While holding the ball and looking for pass options, move slowly or stand still
+
+        // If player should adjust position to find better passing angles
+        if self.should_adjust_position(ctx) {
+            // Calculate target position based on the defensive situation
+            if let Some(target_position) =
+                ctx.player().movement().calculate_better_passing_position()
+            {
+                return Some(
+                    SteeringBehavior::Arrive {
+                        target: target_position,
+                        slowing_distance: 5.0, // Short distance for subtle movement
+                    }
+                    .calculate(ctx.player)
+                    .velocity,
+                );
+            }
+        }
+
+        // Default to very slow movement or stationary
+        Some(Vector3::new(0.0, 0.0, 0.0))
+    }
+
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Passing is a quick action with minimal physical effort - very low intensity
+        DefenderCondition::new(ActivityIntensity::Low).process(ctx);
+    }
+}
+
+impl DefenderPassingState {
+    /// A defender who has just won it looks long before he looks square.
+    fn counter_attack(ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // ── Counter-attack outlet ──────────────────────────────────────
         //
         // Real-football upset mechanic: when a defender wins the ball
@@ -65,7 +119,14 @@ impl StateProcessingHandler for DefenderPassingState {
                 )),
             ));
         }
+        None
+    }
 
+    /// Under heavy pressure — prefer a safe pass, any safe pass. The
+    /// old rule "clear if safe pass < 20u" was too eager; a short
+    /// safe pass is still a ball-retention win. Only escalate to
+    /// Clearing when truly no safe pass exists.
+    fn under_heavy_pressure(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Under heavy pressure — prefer a safe pass, any safe pass. The
         // old rule "clear if safe pass < 20u" was too eager; a short
         // safe pass is still a ball-retention win. Only escalate to
@@ -104,7 +165,11 @@ impl StateProcessingHandler for DefenderPassingState {
                 ))
             };
         }
+        None
+    }
 
+    /// If teammates are tired, prefer a safe short pass.
+    fn tired_short_pass(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // If teammates are tired, prefer a safe short pass
         if self.are_teammates_tired(ctx)
             && let Some(safe_target) = ctx
@@ -126,7 +191,11 @@ impl StateProcessingHandler for DefenderPassingState {
                 ));
             }
         }
+        None
+    }
 
+    /// Normal passing situation - evaluate options more carefully.
+    fn normal_pass(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Normal passing situation - evaluate options more carefully.
         // 280u = 35 m: far enough to find a winger, short of a hoof.
         if let Some((best_target, _reason)) = ctx
@@ -157,7 +226,11 @@ impl StateProcessingHandler for DefenderPassingState {
                 ));
             }
         }
+        None
+    }
 
+    /// No good passing option and close to own goal: consider clearing.
+    fn dangerous_position(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // If no good passing option and close to own goal, consider clearing
         if ctx.player().defensive().in_dangerous_position() {
             // "If no good passing option" is what the comment says and
@@ -189,14 +262,11 @@ impl StateProcessingHandler for DefenderPassingState {
                 DefenderState::Clearing,
             ));
         }
+        None
+    }
 
-        // If viable to dribble out of pressure (wait before bailing to prevent Running↔Passing oscillation)
-        if ctx.in_state_time > 20 && self.can_dribble_effectively(ctx) {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Running,
-            ));
-        }
-
+    /// Time-based fallback - don't get stuck in this state too long.
+    fn timeout(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Time-based fallback - don't get stuck in this state too long
         if ctx.in_state_time > 50 {
             // If we've been in this state for a while, make a decision
@@ -236,41 +306,9 @@ impl StateProcessingHandler for DefenderPassingState {
                 DefenderState::Running,
             ));
         }
-
         None
     }
 
-    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // While holding the ball and looking for pass options, move slowly or stand still
-
-        // If player should adjust position to find better passing angles
-        if self.should_adjust_position(ctx) {
-            // Calculate target position based on the defensive situation
-            if let Some(target_position) =
-                ctx.player().movement().calculate_better_passing_position()
-            {
-                return Some(
-                    SteeringBehavior::Arrive {
-                        target: target_position,
-                        slowing_distance: 5.0, // Short distance for subtle movement
-                    }
-                    .calculate(ctx.player)
-                    .velocity,
-                );
-            }
-        }
-
-        // Default to very slow movement or stationary
-        Some(Vector3::new(0.0, 0.0, 0.0))
-    }
-
-    fn process_conditions(&self, ctx: ConditionContext) {
-        // Passing is a quick action with minimal physical effort - very low intensity
-        DefenderCondition::new(ActivityIntensity::Low).process(ctx);
-    }
-}
-
-impl DefenderPassingState {
     /// Detect a counter-attack opportunity and return the long-ball
     /// target if one exists. Returns `Some` only when:
     ///

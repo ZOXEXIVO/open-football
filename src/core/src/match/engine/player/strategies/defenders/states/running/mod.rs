@@ -12,9 +12,7 @@ use crate::r#match::player::strategies::shared::players::ops::clearance::{
     ClearanceCall, TouchlineCall,
 };
 use crate::r#match::player::strategies::shared::players::ops::defender_skill::DefenderSkillProfile;
-use crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::{
-    ShotDecision, evaluate_forward_shot_decision,
-};
+use crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::ShotDecision;
 use crate::r#match::{
     ConditionContext, MatchContext, MatchPlayerLite, PlayerSide, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -40,271 +38,38 @@ const MAX_SHOOTING_DISTANCE: f32 = 320.0;
 pub struct DefenderRunningState {}
 
 impl StateProcessingHandler for DefenderRunningState {
-    #[expect(clippy::too_many_lines)]
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // The man on the ball. Without it, the read.
         if !ctx.player.has_ball(ctx) {
             return Some(DefenderRead::change(ctx));
         }
 
-        {
-            // WINNING IT IN YOUR OWN AREA IS NOT A BUILD-UP SITUATION.
-            //
-            // Everything below this used to come first — a counter-attack
-            // outlet, a coach-tempo hold that returns `None` for any
-            // opponent beyond 15u, an emergency pass whose only test is
-            // that the selector returned somebody, the wide ladder, the
-            // shot — and `should_clear` sat at the bottom. So the one
-            // model that reads the squeeze, the danger and whether the
-            // out is genuinely an out was the last thing asked and, under
-            // `prefer_possession`, was not reached at all between 15u and
-            // `ClearanceCall::SQUEEZE_FAR`.
-            if let Some(release) = ClearanceCall::decide(ctx).or_else(|| TouchlineCall::decide(ctx))
-            {
-                return Some(release.resolve(ctx));
-            }
-
-            // Counter-attack outlet (see `defenders/states/passing/mod.rs`
-            // for the rationale). Defenders frequently fire passes from
-            // the Running state on the first tick after winning the ball
-            // — long before they're allowed to transition into Passing
-            // state — so the same opportunity check has to live here
-            // too, or counters that fire here would be missed and the
-            // defender would end up recycling backwards via the buildup
-            // branches further down.
-            if let Some(target) = Self::find_counter_attack_target(ctx) {
-                return Some(StateChangeResult::with_defender_state_and_event(
-                    DefenderRead::released(ctx),
-                    Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::builder()
-                            .with_from_player_id(ctx.player.id)
-                            .with_to_player_id(target.id)
-                            .with_reason("DEF_COUNTER_ATTACK")
-                            .build(ctx),
-                    )),
-                ));
-            }
-
-            // A side keeping the ball plays it back or across rather than
-            // forward — unless pressed or a counter is on, when the break
-            // beats it (see TeamOps::counter_window).
-            if ctx.team().prefers_keeping_the_ball()
-                && !self.is_opponent_closing_fast(ctx)
-                && !ctx.team().counter_window()
-            {
-                if let Some(safe_target) = self.find_safe_backward_pass(ctx) {
-                    return Some(StateChangeResult::with_defender_state_and_event(
-                        DefenderRead::released(ctx),
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::builder()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(safe_target.id)
-                                .with_reason("DEF_COACH_TEMPO_PASS_BACK")
-                                .build(ctx),
-                        )),
-                    ));
-                }
-            }
-
-            // EMERGENCY PASS: Opponent closing fast — pass immediately before they arrive
-            if self.is_opponent_closing_fast(ctx) {
-                if let Some(target) = self.find_emergency_pass_target(ctx) {
-                    return Some(StateChangeResult::with_defender_state_and_event(
-                        DefenderRead::released(ctx),
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::builder()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(target.id)
-                                .with_reason("DEF_EMERGENCY_PASS")
-                                .build(ctx),
-                        )),
-                    ));
-                }
-                // Nothing from the bespoke search — ask the real one
-                // before hoofing it.
-                //
-                // `find_emergency_pass_target` is a local, hand-rolled
-                // scan and it comes up empty far more often than the
-                // situation warrants: instrumented, this branch alone is
-                // 59% of every clearance in the match (~25 per team per
-                // match) and is why defenders measure 10 clearances each
-                // against a real ~3.5. The engine already has a pass
-                // search that knows about congestion, interception risk,
-                // personality and direction; a defender under pressure
-                // should consult THAT before deciding there is no ball on.
-                // NB `find_safe_pass_option()` is NOT the search to use
-                // here: it scans `nearby(50.0)` — fifty units is 6.25 m —
-                // so it only ever sees a team-mate close enough to be in
-                // the same huddle, and it comes up empty for the same
-                // reason the bespoke scan does. `find_best_pass_option`
-                // is the evaluator every other line on the pitch uses,
-                // at a distance a defender can actually pass.
-                if let Some((safe, _)) = ctx
-                    .player()
-                    .passing()
-                    .find_best_pass_option_with_distance(220.0)
-                {
-                    return Some(StateChangeResult::with_defender_state_and_event(
-                        DefenderRead::released(ctx),
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::builder()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(safe.id)
-                                .with_reason("DEF_EMERGENCY_SAFE_PASS")
-                                .build(ctx),
-                        )),
-                    ));
-                }
-                #[cfg(feature = "match-logs")]
-                crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(2);
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Clearing,
-                ));
-            }
-
-            // THE WIDE AREA — the same ladder a winger gets, because it
-            // is decided by where he is standing and not by what it says
-            // on his shirt. An overlapping full-back at the byline is in
-            // the identical situation to the man he overlapped, and the
-            // engine used to give him a narrower, defender-only version
-            // of the decision. See `FlankPlay`.
-            match FlankPlay::decide(ctx) {
-                Some(FlankAction::ReleaseOutside { target }) => {
-                    #[cfg(feature = "match-logs")]
-                    crate::mid_run_diag::WideDiag::note(4);
-                    return Some(StateChangeResult::with_defender_state_and_event(
-                        DefenderState::Running,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::builder()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(target)
-                                .with_reason("DEF_FLANK_RELEASE")
-                                .build(ctx),
-                        )),
-                    ));
-                }
-                Some(FlankAction::Deliver) => {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Crossing,
-                    ));
-                }
-                None => {}
-            }
-
-            // Defenders consult the SAME shot helper as everyone else.
-            //
-            // This used to be a bespoke `shooting_close(..) > 0.40`
-            // threshold behind a 3.75 m range cap — the only line in the
-            // engine that never reached `evaluate_forward_shot_decision`.
-            // Two consequences: a defender's shoot/no-shoot call ignored
-            // the angle, the lane, the keeper and the game state that
-            // every other player weighs, and no amount of work on the
-            // shared model could reach him.
-            //
-            // Through the helper, a centre-back with 6 finishing still
-            // rarely shoots — `execution_skill` and `selection_skill`
-            // price exactly that — but he does so because of who he is
-            // rather than because of a blanket veto on his position.
-            #[cfg(feature = "match-logs")]
-            DefenderShotDiag::note_onball(self.is_in_shooting_range(ctx));
-
-            if self.is_in_shooting_range(ctx) && ctx.team().can_shoot() && ctx.player().can_shoot()
-            {
-                #[cfg(feature = "match-logs")]
-                DefenderShotDiag::note_decision();
-                match evaluate_forward_shot_decision(ctx, "DEF_SHOOT") {
-                    ShotDecision::Shoot { reason } => {
-                        return Some(
-                            StateChangeResult::with_defender_state(DefenderState::Shooting)
-                                .with_shot_reason(reason),
-                        );
-                    }
-                    // A defender who is better off laying it off does that
-                    // through his normal passing path, as before.
-                    ShotDecision::Pass | ShotDecision::Hold => {}
-                }
-            }
-
-            if self.should_clear(ctx) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Clearing,
-                ));
-            }
-
-            // Allow defenders to carry the ball forward when safe
-            // This wastes time (good for protecting a lead) and lets teammates rest
-            if self.should_carry_ball(ctx) {
-                // Stay in Running state — don't pass yet
-                return None;
-            }
-
-            if let Some(result) = self.try_pass(ctx) {
-                return Some(result);
-            }
+        if let Some(result) = self.clearance_or_counter(ctx) {
+            return Some(result);
+        }
+        if let Some(result) = self.wide_or_shoot(ctx) {
+            return Some(result);
         }
 
-        // SMART BUILD-UP: Graduated response instead of always clearing
+        if self.should_clear(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Clearing,
+            ));
+        }
+
+        // Allow defenders to carry the ball forward when safe
+        // This wastes time (good for protecting a lead) and lets teammates rest
+        if self.should_carry_ball(ctx) {
+            // Stay in Running state — don't pass yet
+            return None;
+        }
+
+        if let Some(result) = self.try_pass(ctx) {
+            return Some(result);
+        }
+
         if ctx.player.has_ball(ctx) && ctx.in_state_time > 80 {
-            // Under immediate pressure — clear, but only with nothing on.
-            //
-            // This sat ABOVE the safe-pass search below it and returned
-            // unconditionally, so the "graduated response" the block is
-            // named for never graduated: any opponent within 15u (1.9 m)
-            // after 0.8 s on the ball meant hoof, and the 80-150 tick
-            // look-for-a-pass rung underneath was unreachable whenever a
-            // defender was actually being closed down — which is the only
-            // time it matters. A defender under pressure looks for the
-            // out FIRST; that is what playing out of the back is.
-            if ctx.players().opponents().exists(15.0) {
-                let def_profile = DefenderSkillProfile::from_ctx(ctx);
-                if def_profile.must_clear_under_pressure()
-                    || self.find_safe_buildup_pass(ctx, 150.0).is_none()
-                {
-                    #[cfg(feature = "match-logs")]
-                    crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(3);
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Clearing,
-                    ));
-                }
-            }
-
-            // The out first: a safe short pass, then a longer one upfield.
-            if let Some(target) = self.find_safe_buildup_pass(ctx, 150.0) {
-                return Some(StateChangeResult::with_defender_state_and_event(
-                    DefenderRead::released(ctx),
-                    Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::builder()
-                            .with_from_player_id(ctx.player.id)
-                            .with_to_player_id(target.id)
-                            .with_reason("DEF_RUNNING_BUILDUP_SHORT")
-                            .build(ctx),
-                    )),
-                ));
-            }
-
-            if let Some(target) = self.find_safe_buildup_pass(ctx, 300.0) {
-                return Some(StateChangeResult::with_defender_state_and_event(
-                    DefenderRead::released(ctx),
-                    Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::builder()
-                            .with_from_player_id(ctx.player.id)
-                            .with_to_player_id(target.id)
-                            .with_reason("DEF_RUNNING_BUILDUP_LONG")
-                            .build(ctx),
-                    )),
-                ));
-            }
-
-            // Nothing on. With an opponent closing on him it goes;
-            // otherwise he carries on until the stall guard.
-            const DANGER_RADIUS: f32 = 48.0;
-            if ctx.players().opponents().exists(DANGER_RADIUS) || ctx.in_state_time > 750 {
-                #[cfg(feature = "match-logs")]
-                crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(4);
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Clearing,
-                ));
-            }
+            return self.build_up(ctx);
         }
 
         None
@@ -379,7 +144,460 @@ impl StateProcessingHandler for DefenderRunningState {
     }
 }
 
+/// The fixed picture a defender's build-up scan scores candidates against.
+struct BuildUp {
+    player_pos: Vector3<f32>,
+    to_goal: Vector3<f32>,
+    prefer_safe: bool,
+    under_heavy_press: bool,
+    creativity: f32,
+}
+
+impl BuildUp {
+    fn read(ctx: &StateProcessingContext) -> Self {
+        let player_pos = ctx.player.position;
+        let goal_pos = ctx.player().opponent_goal_position();
+        let to_goal = (goal_pos - player_pos).normalize();
+        Self {
+            player_pos,
+            to_goal,
+            prefer_safe: ctx.team().prefers_keeping_the_ball(),
+            // Count how many opponents are within pressing range of us —
+            // if we're being hunted, shorten the decision window and accept
+            // a backward outlet rather than try to play through the press.
+            under_heavy_press: ctx.tick_context.grid.opponents(ctx.player.id, 18.0).count() >= 2,
+            // Skill signal: build-up profile (passing/technique/composure/
+            // decisions/vision blend, condition-aware) drives how ambitious
+            // the diagonals get.
+            creativity: DefenderSkillProfile::from_ctx(ctx).buildup_profile,
+        }
+    }
+
+    /// Score one candidate. `None` when the ball cannot or should not go
+    /// there.
+    fn score(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> Option<f32> {
+        if teammate.tactical_positions.is_goalkeeper() && !self.under_heavy_press {
+            // GK is only a valid outlet under pressure — recycling
+            // to the keeper in open play kills tempo.
+            return None;
+        }
+
+        let pass_dist = (teammate.position - self.player_pos).magnitude();
+        if pass_dist < 30.0 {
+            // Too close — weak passes create ping-pong claim loops
+            return None;
+        }
+
+        let odds = ctx.player().clear_pass(teammate.id)?;
+        let space_score = self.space_score(ctx, teammate)?;
+        let to_teammate = teammate.position - self.player_pos;
+        let pass_len = to_teammate.magnitude();
+        let lane_penalty = self.lane_penalty(ctx, teammate, pass_len);
+        let forward_component = if pass_len > 0.1 {
+            (to_teammate / pass_len).dot(&self.to_goal)
+        } else {
+            0.0
+        };
+
+        // Hard reject deep-backward passes unless under pressure
+        // (where the keeper / a covering centre-back is the right
+        // outlet regardless).
+        if forward_component < -0.4 && !self.under_heavy_press {
+            return None;
+        }
+
+        let progression_score = if self.prefer_safe {
+            // Coach wants tempo control — backward / lateral is FINE
+            forward_component.abs() * (-20.0) + 30.0
+        } else if self.under_heavy_press {
+            // Pressed — any safe outlet is good, slight forward bias
+            forward_component * 20.0 + 10.0
+        } else {
+            // Open play — reward forward progression strongly
+            if forward_component > 0.0 {
+                forward_component * 55.0
+            } else {
+                forward_component * 35.0
+            }
+        };
+
+        let third_man_bonus = self.third_man_bonus(ctx, teammate, forward_component);
+        let position_bonus = self.position_bonus(teammate, forward_component);
+        let distance_pref = if pass_dist < 80.0 {
+            10.0 // short safe pass
+        } else if pass_dist < 150.0 {
+            8.0
+        } else {
+            // Long pass costs accuracy; only skilled passers should pick it
+            (self.creativity - 0.5).max(0.0) * 20.0
+        };
+
+        Some(odds.price(
+            space_score + progression_score + third_man_bonus + position_bonus + distance_pref
+                - lane_penalty,
+        ))
+    }
+
+    /// A. Space around the receiver — continuous, 20u is "in space", 5u is
+    /// "tightly marked".
+    fn space_score(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> Option<f32> {
+        let mut nearest_opp_dist = f32::MAX;
+        for (_opp_id, d) in ctx.tick_context.grid.opponents(teammate.id, 25.0) {
+            if d < nearest_opp_dist {
+                nearest_opp_dist = d;
+            }
+        }
+        // Reject if receiver is literally being tackled
+        if nearest_opp_dist < 4.0 {
+            return None;
+        }
+        Some((nearest_opp_dist / 25.0).clamp(0.0, 1.0) * 40.0)
+    }
+
+    /// B. Opponents within 6u of the pass line. Three is a turnover
+    /// waiting to happen even if `has_clear_pass` passed.
+    fn lane_penalty(
+        &self,
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+        pass_len: f32,
+    ) -> f32 {
+        if pass_len <= 0.1 {
+            return 0.0;
+        }
+        let to_teammate = teammate.position - self.player_pos;
+        let lane_dir = to_teammate / pass_len;
+        let blockers = ctx
+            .players()
+            .opponents()
+            .all()
+            .filter(|opp| {
+                let to_opp = opp.position - self.player_pos;
+                let projection = to_opp.x * lane_dir.x + to_opp.y * lane_dir.y;
+                if projection < 3.0 || projection > pass_len - 3.0 {
+                    return false;
+                }
+                let closest = self.player_pos + lane_dir * projection;
+                let perp = ((opp.position.x - closest.x).powi(2)
+                    + (opp.position.y - closest.y).powi(2))
+                .sqrt();
+                perp < 6.0
+            })
+            .count();
+        (blockers as f32) * 10.0
+    }
+
+    /// D. Third-man potential — does the receiver have a forward option of
+    /// their own? One such outlet is enough.
+    fn third_man_bonus(
+        &self,
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+        _forward_component: f32,
+    ) -> f32 {
+        let ahead = ctx
+            .players()
+            .teammates()
+            .all()
+            .filter(|t| t.id != teammate.id && t.id != ctx.player.id)
+            .filter(|t| {
+                let to_t = (t.position - teammate.position).normalize();
+                if to_t.dot(&self.to_goal) <= 0.25 {
+                    return false;
+                }
+                if (t.position - teammate.position).norm_squared() < 15.0 * 15.0 {
+                    return false;
+                }
+                ctx.tick_context.grid.opponents(t.id, 12.0).count() < 2
+            })
+            .count();
+        (ahead.min(2) as f32) * 10.0
+    }
+
+    /// E. Position fit: quick outlets in a press, creators otherwise.
+    fn position_bonus(&self, teammate: &MatchPlayerLite, forward_component: f32) -> f32 {
+        if teammate.tactical_positions.is_midfielder() {
+            22.0
+        } else if teammate.tactical_positions.is_forward() {
+            if self.under_heavy_press {
+                // Long ball to a forward under pressure is a
+                // legitimate outlet — score boosted.
+                28.0
+            } else if self.creativity > 0.7 {
+                30.0 // Visionary passer can pick the forward
+            } else {
+                15.0
+            }
+        } else if teammate.tactical_positions.is_goalkeeper() {
+            // Only reached if under_heavy_press (gate above). Keeper
+            // outlet under pressure is the safest possible option.
+            35.0
+        } else {
+            // Defender — useful as a side switch
+            if forward_component.abs() < 0.3 {
+                18.0 // lateral → switch play
+            } else {
+                8.0
+            }
+        }
+    }
+}
+
 impl DefenderRunningState {
+    /// The man on the ball in his own area: the clearance policy first,
+    /// then the counter, the tempo ball and the emergency out.
+    fn clearance_or_counter(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // WINNING IT IN YOUR OWN AREA IS NOT A BUILD-UP SITUATION.
+        //
+        // Everything below this used to come first — a counter-attack
+        // outlet, a coach-tempo hold that returns `None` for any
+        // opponent beyond 15u, an emergency pass whose only test is
+        // that the selector returned somebody, the wide ladder, the
+        // shot — and `should_clear` sat at the bottom. So the one
+        // model that reads the squeeze, the danger and whether the
+        // out is genuinely an out was the last thing asked and, under
+        // `prefer_possession`, was not reached at all between 15u and
+        // `ClearanceCall::SQUEEZE_FAR`.
+        if let Some(release) = ClearanceCall::decide(ctx).or_else(|| TouchlineCall::decide(ctx)) {
+            return Some(release.resolve(ctx));
+        }
+
+        // Counter-attack outlet (see `defenders/states/passing/mod.rs`
+        // for the rationale). Defenders frequently fire passes from
+        // the Running state on the first tick after winning the ball
+        // — long before they're allowed to transition into Passing
+        // state — so the same opportunity check has to live here
+        // too, or counters that fire here would be missed and the
+        // defender would end up recycling backwards via the buildup
+        // branches further down.
+        if let Some(target) = Self::find_counter_attack_target(ctx) {
+            return Some(StateChangeResult::with_defender_state_and_event(
+                DefenderRead::released(ctx),
+                Event::PlayerEvent(PlayerEvent::PassTo(
+                    PassingEventContext::builder()
+                        .with_from_player_id(ctx.player.id)
+                        .with_to_player_id(target.id)
+                        .with_reason("DEF_COUNTER_ATTACK")
+                        .build(ctx),
+                )),
+            ));
+        }
+
+        // A side keeping the ball plays it back or across rather than
+        // forward — unless pressed or a counter is on, when the break
+        // beats it (see TeamOps::counter_window).
+        if ctx.team().prefers_keeping_the_ball()
+            && !self.is_opponent_closing_fast(ctx)
+            && !ctx.team().counter_window()
+        {
+            if let Some(safe_target) = self.find_safe_backward_pass(ctx) {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderRead::released(ctx),
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(safe_target.id)
+                            .with_reason("DEF_COACH_TEMPO_PASS_BACK")
+                            .build(ctx),
+                    )),
+                ));
+            }
+        }
+
+        // EMERGENCY PASS: Opponent closing fast — pass immediately before they arrive
+        if self.is_opponent_closing_fast(ctx) {
+            if let Some(target) = self.find_emergency_pass_target(ctx) {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderRead::released(ctx),
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(target.id)
+                            .with_reason("DEF_EMERGENCY_PASS")
+                            .build(ctx),
+                    )),
+                ));
+            }
+            // Nothing from the bespoke search — ask the real one
+            // before hoofing it.
+            //
+            // `find_emergency_pass_target` is a local, hand-rolled
+            // scan and it comes up empty far more often than the
+            // situation warrants: instrumented, this branch alone is
+            // 59% of every clearance in the match (~25 per team per
+            // match) and is why defenders measure 10 clearances each
+            // against a real ~3.5. The engine already has a pass
+            // search that knows about congestion, interception risk,
+            // personality and direction; a defender under pressure
+            // should consult THAT before deciding there is no ball on.
+            // NB `find_safe_pass_option()` is NOT the search to use
+            // here: it scans `nearby(50.0)` — fifty units is 6.25 m —
+            // so it only ever sees a team-mate close enough to be in
+            // the same huddle, and it comes up empty for the same
+            // reason the bespoke scan does. `find_best_pass_option`
+            // is the evaluator every other line on the pitch uses,
+            // at a distance a defender can actually pass.
+            if let Some((safe, _)) = ctx
+                .player()
+                .passing()
+                .find_best_pass_option_with_distance(220.0)
+            {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderRead::released(ctx),
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(safe.id)
+                            .with_reason("DEF_EMERGENCY_SAFE_PASS")
+                            .build(ctx),
+                    )),
+                ));
+            }
+            #[cfg(feature = "match-logs")]
+            crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(2);
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Clearing,
+            ));
+        }
+
+        None
+    }
+
+    /// The wide ladder and the shared shot decision, in that order.
+    fn wide_or_shoot(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // THE WIDE AREA — the same ladder a winger gets, because it
+        // is decided by where he is standing and not by what it says
+        // on his shirt. An overlapping full-back at the byline is in
+        // the identical situation to the man he overlapped, and the
+        // engine used to give him a narrower, defender-only version
+        // of the decision. See `FlankPlay`.
+        match FlankPlay::decide(ctx) {
+            Some(FlankAction::ReleaseOutside { target }) => {
+                #[cfg(feature = "match-logs")]
+                crate::mid_run_diag::WideDiag::note(4);
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Running,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(target)
+                            .with_reason("DEF_FLANK_RELEASE")
+                            .build(ctx),
+                    )),
+                ));
+            }
+            Some(FlankAction::Deliver) => {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Crossing,
+                ));
+            }
+            None => {}
+        }
+
+        // Defenders consult the SAME shot helper as everyone else.
+        //
+        // This used to be a bespoke `shooting_close(..) > 0.40`
+        // threshold behind a 3.75 m range cap — the only line in the
+        // engine that never reached `evaluate_forward_shot_decision`.
+        // Two consequences: a defender's shoot/no-shoot call ignored
+        // the angle, the lane, the keeper and the game state that
+        // every other player weighs, and no amount of work on the
+        // shared model could reach him.
+        //
+        // Through the helper, a centre-back with 6 finishing still
+        // rarely shoots — `execution_skill` and `selection_skill`
+        // price exactly that — but he does so because of who he is
+        // rather than because of a blanket veto on his position.
+        #[cfg(feature = "match-logs")]
+        DefenderShotDiag::note_onball(self.is_in_shooting_range(ctx));
+
+        if self.is_in_shooting_range(ctx) && ctx.team().can_shoot() && ctx.player().can_shoot() {
+            #[cfg(feature = "match-logs")]
+            DefenderShotDiag::note_decision();
+            match ShotDecision::evaluate(ctx, "DEF_SHOOT") {
+                ShotDecision::Shoot { reason } => {
+                    return Some(
+                        StateChangeResult::with_defender_state(DefenderState::Shooting)
+                            .with_shot_reason(reason),
+                    );
+                }
+                // A defender who is better off laying it off does that
+                // through his normal passing path, as before.
+                ShotDecision::Pass | ShotDecision::Hold => {}
+            }
+        }
+
+        None
+    }
+
+    /// Graduated build-up: a safe short pass, a longer one upfield, then
+    /// the stall guard.
+    fn build_up(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // SMART BUILD-UP: Graduated response instead of always clearing
+        if ctx.player.has_ball(ctx) && ctx.in_state_time > 80 {
+            // Under immediate pressure — clear, but only with nothing on.
+            //
+            // This sat ABOVE the safe-pass search below it and returned
+            // unconditionally, so the "graduated response" the block is
+            // named for never graduated: any opponent within 15u (1.9 m)
+            // after 0.8 s on the ball meant hoof, and the 80-150 tick
+            // look-for-a-pass rung underneath was unreachable whenever a
+            // defender was actually being closed down — which is the only
+            // time it matters. A defender under pressure looks for the
+            // out FIRST; that is what playing out of the back is.
+            if ctx.players().opponents().exists(15.0) {
+                let def_profile = DefenderSkillProfile::from_ctx(ctx);
+                if def_profile.must_clear_under_pressure()
+                    || self.find_safe_buildup_pass(ctx, 150.0).is_none()
+                {
+                    #[cfg(feature = "match-logs")]
+                crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(3);
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Clearing,
+                    ));
+                }
+            }
+
+            // The out first: a safe short pass, then a longer one upfield.
+            if let Some(target) = self.find_safe_buildup_pass(ctx, 150.0) {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderRead::released(ctx),
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(target.id)
+                            .with_reason("DEF_RUNNING_BUILDUP_SHORT")
+                            .build(ctx),
+                    )),
+                ));
+            }
+
+            if let Some(target) = self.find_safe_buildup_pass(ctx, 300.0) {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderRead::released(ctx),
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(target.id)
+                            .with_reason("DEF_RUNNING_BUILDUP_LONG")
+                            .build(ctx),
+                    )),
+                ));
+            }
+
+            // Nothing on. With an opponent closing on him it goes;
+            // otherwise he carries on until the stall guard.
+            const DANGER_RADIUS: f32 = 48.0;
+            if ctx.players().opponents().exists(DANGER_RADIUS) || ctx.in_state_time > 750 {
+                #[cfg(feature = "match-logs")]
+            crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(4);
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Clearing,
+                ));
+            }
+        }
+        None
+    }
     /// Counter-attack outlet — same gates as `DefenderPassingState`.
     /// Returns the long-ball target when (a) we won possession recently,
     /// (b) the opposition over-committed forward, and (c) a teammate is
@@ -931,189 +1149,22 @@ impl DefenderRunningState {
     ///      low-block responses favour midfielders / forwards.
     ///   F. **Coach override** — under WasteTime / ParkTheBus the
     ///      scoring inverts: backward and lateral safe options win.
-    #[expect(clippy::too_many_lines)]
     fn find_safe_buildup_pass(
         &self,
         ctx: &StateProcessingContext,
         max_distance: f32,
     ) -> Option<MatchPlayerLite> {
-        let player_pos = ctx.player.position;
-        let goal_pos = ctx.player().opponent_goal_position();
-        let to_goal_vec = goal_pos - player_pos;
-        let to_goal = to_goal_vec.normalize();
-
-        let prefer_safe = ctx.team().prefers_keeping_the_ball();
-        // Count how many opponents are within pressing range of us —
-        // if we're being hunted, shorten the decision window and accept
-        // a backward outlet rather than try to play through the press.
-        let pressers_on_me = ctx.tick_context.grid.opponents(ctx.player.id, 18.0).count();
-        let under_heavy_press = pressers_on_me >= 2;
-
-        // Skill signal: build-up profile (passing/technique/composure/
-        // decisions/vision blend, condition-aware) drives how ambitious
-        // the diagonals get. Replaces the raw (passing+vision)/2.
-        let creativity = DefenderSkillProfile::from_ctx(ctx).buildup_profile;
+        let setup = BuildUp::read(ctx);
 
         let mut best_target: Option<(MatchPlayerLite, f32)> = None;
-
         for teammate in ctx.players().teammates().nearby(max_distance) {
-            if teammate.tactical_positions.is_goalkeeper() && !under_heavy_press {
-                // GK is only a valid outlet under pressure — recycling
-                // to the keeper in open play kills tempo.
-                continue;
-            }
-
-            let pass_dist = (teammate.position - player_pos).magnitude();
-            if pass_dist < 30.0 {
-                continue; // Too close — weak passes create ping-pong claim loops
-            }
-
-            let Some(odds) = ctx.player().clear_pass(teammate.id) else {
+            let Some(score) = setup.score(ctx, &teammate) else {
                 continue;
             };
-
-            // A. SPACE AROUND RECEIVER — continuous signal. Finds nearest
-            // opponent; closer = penalty. 20u of clearance is "in space",
-            // 5u is "tightly marked". Continuous scoring beats the old
-            // hard cut-off at 2 opponents.
-            let mut nearest_opp_dist = f32::MAX;
-            for (_opp_id, d) in ctx.tick_context.grid.opponents(teammate.id, 25.0) {
-                if d < nearest_opp_dist {
-                    nearest_opp_dist = d;
-                }
-            }
-            // Reject if receiver is literally being tackled
-            if nearest_opp_dist < 4.0 {
-                continue;
-            }
-            let space_score = (nearest_opp_dist / 25.0).clamp(0.0, 1.0) * 40.0;
-
-            // B. PASS-LANE PRESSURE — count opponents within 6u of the
-            // pass line. Three opponents in the lane is a turnover
-            // waiting to happen even if has_clear_pass passed.
-            let to_teammate = teammate.position - player_pos;
-            let pass_len = to_teammate.magnitude();
-            let lane_blockers = if pass_len > 0.1 {
-                let lane_dir = to_teammate / pass_len;
-                ctx.players()
-                    .opponents()
-                    .all()
-                    .filter(|opp| {
-                        let to_opp = opp.position - player_pos;
-                        let projection = to_opp.x * lane_dir.x + to_opp.y * lane_dir.y;
-                        if projection < 3.0 || projection > pass_len - 3.0 {
-                            return false;
-                        }
-                        let closest = player_pos + lane_dir * projection;
-                        let perp = ((opp.position.x - closest.x).powi(2)
-                            + (opp.position.y - closest.y).powi(2))
-                        .sqrt();
-                        perp < 6.0
-                    })
-                    .count()
-            } else {
-                0
-            };
-            let lane_penalty = (lane_blockers as f32) * 10.0;
-
-            // C. FORWARD PROGRESSION — dot product, heavily weighted.
-            let forward_component = if pass_len > 0.1 {
-                (to_teammate / pass_len).dot(&to_goal)
-            } else {
-                0.0
-            };
-
-            // Hard reject deep-backward passes unless under pressure
-            // (where the keeper / a covering centre-back is the right
-            // outlet regardless).
-            if forward_component < -0.4 && !under_heavy_press {
-                continue;
-            }
-
-            let progression_score = if prefer_safe {
-                // Coach wants tempo control — backward / lateral is FINE
-                forward_component.abs() * (-20.0) + 30.0
-            } else if under_heavy_press {
-                // Pressed — any safe outlet is good, slight forward bias
-                forward_component * 20.0 + 10.0
-            } else {
-                // Open play — reward forward progression strongly
-                if forward_component > 0.0 {
-                    forward_component * 55.0
-                } else {
-                    forward_component * 35.0
-                }
-            };
-
-            // D. THIRD-MAN POTENTIAL — does the receiver have a forward
-            // option of their own? Cheap check: count teammates who are
-            // both ahead of the receiver AND in space. One such outlet
-            // is enough; more doesn't add much.
-            let receiver_ahead_options = ctx
-                .players()
-                .teammates()
-                .all()
-                .filter(|t| t.id != teammate.id && t.id != ctx.player.id)
-                .filter(|t| {
-                    let to_t = (t.position - teammate.position).normalize();
-                    if to_t.dot(&to_goal) <= 0.25 {
-                        return false;
-                    }
-                    if (t.position - teammate.position).norm_squared() < 15.0 * 15.0 {
-                        return false;
-                    }
-                    let opp_near_t = ctx.tick_context.grid.opponents(t.id, 12.0).count();
-                    opp_near_t < 2
-                })
-                .count();
-            let third_man_bonus = (receiver_ahead_options.min(2) as f32) * 10.0;
-
-            // E. TACTICAL / POSITION FIT
-            let position_bonus = if teammate.tactical_positions.is_midfielder() {
-                22.0
-            } else if teammate.tactical_positions.is_forward() {
-                if under_heavy_press {
-                    // Long ball to a forward under pressure is a
-                    // legitimate outlet — score boosted.
-                    28.0
-                } else if creativity > 0.7 {
-                    30.0 // Visionary passer can pick the forward
-                } else {
-                    15.0
-                }
-            } else if teammate.tactical_positions.is_goalkeeper() {
-                // Only reached if under_heavy_press (gate above). Keeper
-                // outlet under pressure is the safest possible option.
-                35.0
-            } else {
-                // Defender — useful as a side switch
-                if forward_component.abs() < 0.3 {
-                    18.0 // lateral → switch play
-                } else {
-                    8.0
-                }
-            };
-
-            // F. DISTANCE PREFERENCE — smooth, no sharp cliff
-            let distance_pref = if pass_dist < 80.0 {
-                10.0 // short safe pass
-            } else if pass_dist < 150.0 {
-                8.0
-            } else {
-                // Long pass costs accuracy; only skilled passers should pick it
-                (creativity - 0.5).max(0.0) * 20.0
-            };
-
-            let score = odds.price(
-                space_score + progression_score + third_man_bonus + position_bonus + distance_pref
-                    - lane_penalty,
-            );
-
             if best_target.as_ref().is_none_or(|(_, s)| score > *s) {
                 best_target = Some((teammate, score));
             }
         }
-
         best_target.map(|(t, _)| t)
     }
 

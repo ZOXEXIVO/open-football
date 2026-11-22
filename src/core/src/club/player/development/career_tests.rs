@@ -12,10 +12,7 @@ use super::ceilings::PositionalSkillCeilings;
 use super::football::{MatchFootball, SquadRole};
 use super::ledger::GrowthSource;
 use super::skills_array::SkillKey;
-use super::skills_array::{
-    SK_GK_AERIAL_REACH, SK_GK_THROWING, SK_MATCH_READINESS, SKILL_COUNT, skills_to_array,
-    write_array_into,
-};
+use super::skills_array::{SK_GK_AERIAL_REACH, SK_GK_THROWING, SK_MATCH_READINESS, SKILL_COUNT};
 use super::timing::MaturationTiming;
 
 use crate::club::player::builder::PlayerBuilder;
@@ -781,7 +778,7 @@ impl Prospect {
             }
         }
         let mut skills = PlayerSkills::default();
-        write_array_into(&mut skills, &arr);
+        skills.write_from_array(&arr);
         skills.mental.determination = character;
         skills.mental.work_rate = character;
         skills.fit_to_ability(position, ca, 20.0, None);
@@ -847,14 +844,14 @@ impl Envelope {
 
     fn at(player: &Player, age: f32) -> f32 {
         let ceilings = PositionalSkillCeilings::for_player(player, age);
-        let mut arr = skills_to_array(player);
+        let mut arr = player.skills_to_array();
         for (i, v) in arr.iter_mut().enumerate() {
             if i != SK_MATCH_READINESS && *v > 0.0 {
                 *v = ceilings.at(i);
             }
         }
         let mut skills = player.skills;
-        write_array_into(&mut skills, &arr);
+        skills.write_from_array(&arr);
         skills.calculate_ability_for_position(player.position()) as f32
             / player.player_attributes.potential_ability as f32
     }
@@ -1157,7 +1154,7 @@ impl Career {
     }
 
     fn close_season(&mut self) {
-        let skills = skills_to_array(&self.player);
+        let skills = self.player.skills_to_array();
         let attributes = skills
             .iter()
             .enumerate()
@@ -1471,7 +1468,7 @@ fn a_career_is_a_pure_function_of_its_inputs() {
         Career::new(player, Club::AVERAGE, Role::Starter, Cohort::start()).run_seasons(4)
     };
     let (a, b) = (run(), run());
-    assert_eq!(skills_to_array(&a.player), skills_to_array(&b.player));
+    assert_eq!(a.player.skills_to_array(), b.player.skills_to_array());
     assert_eq!(
         a.player.player_attributes.current_ability,
         b.player.player_attributes.current_ability
@@ -1933,11 +1930,11 @@ fn an_offseason_camp_sharpens_without_growing_attributes() {
         12.0,
     );
     player.skills.physical.match_readiness = 5.0;
-    let before = skills_to_array(&player);
+    let before = player.skills_to_array();
     for _ in 0..80 {
         player.on_offseason_camp_day(0.8);
     }
-    let after = skills_to_array(&player);
+    let after = player.skills_to_array();
     for i in 0..SKILL_COUNT {
         if i == SK_MATCH_READINESS {
             assert!(after[i] > before[i], "the camp rebuilt no sharpness");
@@ -3482,7 +3479,7 @@ fn what_the_squad_trains_matters() {
         &coach,
         &[TrainingType::Shooting, TrainingType::Passing],
     );
-    let (a, b) = (skills_to_array(&with), skills_to_array(&without));
+    let (a, b) = (with.skills_to_array(), without.skills_to_array());
     for key in [SkillKey::Tackling, SkillKey::Marking] {
         assert!(
             a[key.idx()] > b[key.idx()],
@@ -3503,7 +3500,7 @@ fn better_coaching_more_growth() {
     ];
     let mut boy = Scenario::player(3201, PlayerPositionType::MidfielderCenter, 19, 150, 0.45);
     boy.draw_blueprint(Cohort::start());
-    let before: f32 = skills_to_array(&boy).iter().sum();
+    let before: f32 = boy.skills_to_array().iter().sum();
     let grown = |coaching: u8| {
         let mut player = boy.clone();
         let coach = Club {
@@ -3512,7 +3509,7 @@ fn better_coaching_more_growth() {
         }
         .coach();
         TrainingTwins::season(&mut player, &coach, &sessions);
-        skills_to_array(&player).iter().sum::<f32>() - before
+        player.skills_to_array().iter().sum::<f32>() - before
     };
     let (good, poor) = (grown(17), grown(6));
     assert!(

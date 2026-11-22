@@ -24,7 +24,7 @@
 
 use super::MatchOutcome;
 use super::MatchParticipation;
-use super::scaling;
+use super::scaling::HappinessScaling;
 use crate::club::mind::organs::memory::{ActorRef, EncodingInputs, EpisodeKind, FactClaim};
 use crate::club::person::Person;
 use crate::club::player::behaviour_config::HappinessConfig;
@@ -317,7 +317,7 @@ impl Player {
         let magnitude = base * severity_mul;
 
         let happiness_ctx = HappinessEventContext::new(
-            cause_for_private_talk(signal.reason),
+            signal.reason.happiness_cause(),
             HappinessEventSeverity::from_magnitude(magnitude),
             HappinessEventScope::Personal,
         )
@@ -545,8 +545,8 @@ impl Player {
         let base = HappinessConfig::default()
             .catalog
             .magnitude(HappinessEventType::UnhappyWithTacticalRole);
-        let amb_mul = scaling::ambition_amplifier(self.attributes.ambition);
-        let prof_dampen = scaling::criticism_dampener(self.attributes.professionalism);
+        let amb_mul = HappinessScaling::ambition_amplifier(self.attributes.ambition);
+        let prof_dampen = HappinessScaling::criticism_dampener(self.attributes.professionalism);
         let count_factor = ((repeated_mismatch_count as f32 - 2.0) * 0.15).clamp(0.0, 0.6);
         let magnitude = base * amb_mul * prof_dampen * (1.0 + count_factor);
 
@@ -650,8 +650,8 @@ impl Player {
             Some(PlayerSquadStatus::HotProspectForTheFuture) => 1.10,
             _ => 1.0,
         };
-        let prof_dampen = scaling::criticism_dampener(self.attributes.professionalism);
-        let amb_mul = scaling::ambition_amplifier(self.attributes.ambition);
+        let prof_dampen = HappinessScaling::criticism_dampener(self.attributes.professionalism);
+        let amb_mul = HappinessScaling::ambition_amplifier(self.attributes.ambition);
         let magnitude = base * age_mul * status_mul * prof_dampen * amb_mul;
 
         let cause = match ctx.primary_reason {
@@ -757,7 +757,7 @@ impl Player {
         };
         let captain_mul = if ctx.was_captain { 1.20 } else { 1.0 };
         let form_mul = if ctx.recent_hot_form { 1.25 } else { 1.0 };
-        let amb_mul = scaling::ambition_amplifier(self.attributes.ambition);
+        let amb_mul = HappinessScaling::ambition_amplifier(self.attributes.ambition);
         let magnitude = base * importance_mul * status_mul * captain_mul * form_mul * amb_mul;
 
         let happiness_ctx = HappinessEventContext::new(
@@ -801,7 +801,7 @@ impl Player {
         };
         let early_hooks_mul = 1.0 + (ctx.recent_early_hooks as f32 * 0.10).min(0.40);
         let big_mul = if ctx.is_big_match { 1.20 } else { 1.0 };
-        let prof_dampen = scaling::criticism_dampener(self.attributes.professionalism);
+        let prof_dampen = HappinessScaling::criticism_dampener(self.attributes.professionalism);
         let temperament_mul = 1.0 + ((20.0 - self.attributes.temperament.min(20.0)) / 20.0) * 0.25;
         let magnitude = base * kind_mul * early_hooks_mul * big_mul * prof_dampen * temperament_mul;
 
@@ -865,7 +865,7 @@ impl Player {
         } else {
             0.85
         };
-        let prof_dampen = scaling::criticism_dampener(self.attributes.professionalism);
+        let prof_dampen = HappinessScaling::criticism_dampener(self.attributes.professionalism);
         let magnitude = base * stage_mul * layoff_mul * prof_dampen;
 
         let mut injury_ctx =
@@ -921,13 +921,13 @@ impl Player {
         let base = HappinessConfig::default()
             .catalog
             .magnitude(HappinessEventType::ConcernedByClubDirection);
-        let amb_mul = scaling::ambition_amplifier(self.attributes.ambition);
+        let amb_mul = HappinessScaling::ambition_amplifier(self.attributes.ambition);
         let influence_signal = if ctx.evidence.contains(&ClubDirectionEvidence::HighInfluence) {
             1.15
         } else {
             1.0
         };
-        let prof_dampen = scaling::criticism_dampener(self.attributes.professionalism);
+        let prof_dampen = HappinessScaling::criticism_dampener(self.attributes.professionalism);
         let magnitude = base * amb_mul * influence_signal * prof_dampen * ctx.weight;
 
         let happiness_ctx = HappinessEventContext::new(
@@ -1217,7 +1217,7 @@ impl Player {
         let base = HappinessConfig::default()
             .catalog
             .magnitude(HappinessEventType::EncouragedBySquadInvestment);
-        let amb_mul = scaling::ambition_amplifier(self.attributes.ambition);
+        let amb_mul = HappinessScaling::ambition_amplifier(self.attributes.ambition);
         let prior_concern_mul = if self
             .happiness
             .has_recent_event(&HappinessEventType::WantsStrongerSquad, 180)
@@ -1245,19 +1245,6 @@ impl Player {
             happiness_ctx,
             120,
         );
-    }
-}
-
-/// Map a private-talk reason to the right top-level `HappinessEventCause`
-/// label. Drives the cause i18n key on the rendered row.
-fn cause_for_private_talk(reason: PrivateTalkReason) -> HappinessEventCause {
-    match reason {
-        PrivateTalkReason::PlayingTime => HappinessEventCause::PoorFormPressure,
-        PrivateTalkReason::Contract => HappinessEventCause::WageJealousy,
-        PrivateTalkReason::TransferStatus => HappinessEventCause::ReputationTension,
-        PrivateTalkReason::CaptaincyOrStatus => HappinessEventCause::LeadershipDispute,
-        PrivateTalkReason::TacticalRole => HappinessEventCause::TacticalDisagreement,
-        PrivateTalkReason::ManagerRelationship => HappinessEventCause::LeadershipDispute,
     }
 }
 

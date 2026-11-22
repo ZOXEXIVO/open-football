@@ -3,7 +3,6 @@ use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::calculators::FreeAgentReleaseReason;
 use crate::club::player::interaction::{
     InteractionOutcome, InteractionTone, InteractionTopic, ManagerInteraction,
-    default_cooldown_days,
 };
 use crate::club::staff::coach::standing::{EvidenceLens, StandingEvidence};
 use crate::club::staff::perception::CoachProfile;
@@ -195,251 +194,260 @@ impl TeamBehaviourResult {
         }
     }
 
-    #[expect(clippy::too_many_lines)]
     fn process_manager_talks<D: LeagueProcessAccess>(&self, data: &mut D) {
         let sim_date = data.date().date();
 
         for talk in &self.manager_talks {
             if let Some(player) = data.player_mut(talk.player_id) {
-                // Apply morale change
-                player.happiness.adjust_morale(talk.morale_change);
-
-                // Apply relationship change with manager
-                if talk.relationship_change.abs() > 0.001 {
-                    let change = if talk.relationship_change >= 0.0 {
-                        RelationshipChange::positive(
-                            ChangeType::CoachingSuccess,
-                            talk.relationship_change.abs(),
-                        )
-                    } else {
-                        RelationshipChange::negative(
-                            ChangeType::DisciplinaryAction,
-                            talk.relationship_change.abs(),
-                        )
-                    };
-                    player
-                        .relations
-                        .update_staff_relationship(talk.staff_id, change, sim_date);
-
-                    // Coach rapport mirrors the staff-relation update —
-                    // mid-magnitude relationship deltas become rapport ticks
-                    // so trusted coaches actually accumulate trust here.
-                    let rapport_amount = (talk.relationship_change.abs() * 4.0).round() as i16;
-                    if rapport_amount > 0 {
-                        if talk.relationship_change >= 0.0 {
-                            player
-                                .rapport
-                                .on_positive(talk.staff_id, sim_date, rapport_amount);
-                        } else {
-                            player
-                                .rapport
-                                .on_negative(talk.staff_id, sim_date, rapport_amount);
-                        }
-                    }
-
-                    // Also update the happiness factor for manager relationship
-                    let current = player.happiness.factors.manager_relationship;
-                    player.happiness.factors.manager_relationship =
-                        (current + talk.relationship_change * 5.0).clamp(-15.0, 15.0);
-                }
-
-                // Add happiness event
-                let event_type = if talk.success {
-                    match talk.talk_type {
-                        ManagerTalkType::Praise => HappinessEventType::ManagerPraise,
-                        ManagerTalkType::Discipline => HappinessEventType::ManagerDiscipline,
-                        ManagerTalkType::PlayingTimeTalk => {
-                            HappinessEventType::ManagerPlayingTimePromise
-                        }
-                        _ => HappinessEventType::ManagerPraise,
-                    }
-                } else {
-                    // A failed talk that actually stung is a manager
-                    // interaction outcome — model it as ManagerCriticism
-                    // (or Discipline), not PoorTraining, which is
-                    // reserved for actual training-ground sessions.
-                    match talk.talk_type {
-                        ManagerTalkType::Discipline => HappinessEventType::ManagerDiscipline,
-                        _ => HappinessEventType::ManagerCriticism,
-                    }
-                };
-                if TalkFeedGate::feed_worthy(&talk.talk_type, talk.success, talk.morale_change) {
-                    let topic = ManagerInteractionTopicMapper::from_talk(&talk.talk_type, player);
-                    let tone = ManagerInteractionToneMapper::from_interaction(&talk.tone);
-                    let acceptance = ManagerInteractionAcceptanceMapper::from_outcome(
-                        talk.success,
-                        talk.morale_change,
-                    );
-                    let mut mctx = ManagerInteractionEventContext::new(topic, tone, acceptance)
-                        .with_manager_staff_id(talk.staff_id);
-                    if matches!(
-                        talk.talk_type,
-                        ManagerTalkType::PlayingTimeTalk | ManagerTalkType::PlayingTimeRequest
-                    ) {
-                        let credibility = if talk.honest_framing { 0.9 } else { 0.55 };
-                        mctx = mctx.with_promise(PromiseKind::PlayingTime, credibility);
-                    }
-                    let happiness_ctx = HappinessEventContext::new(
-                        HappinessEventCause::Other,
-                        HappinessEventSeverity::from_magnitude(talk.morale_change),
-                        HappinessEventScope::DressingRoom,
-                    )
-                    .with_manager_interaction_context(mctx);
-                    player.happiness.add_event_with_context(
-                        event_type,
-                        talk.morale_change,
-                        None,
-                        happiness_ctx,
-                    );
-                }
-
-                let mut promise_created = false;
-
-                // The moving-on talk is the honest word, success or not:
-                // the club is finding him a move. It lands as the same
-                // told-not-in-plans event the listing pass uses, on the
-                // same cooldown, so a player who keeps asking hears it at
-                // most twice a season and nothing here clears his
-                // unhappiness.
-                if matches!(talk.talk_type, ManagerTalkType::MovingOnTalk) {
-                    let magnitude = HappinessConfig::default().catalog.told_not_in_plans;
-                    player.happiness.add_event_with_cooldown(
-                        HappinessEventType::ToldNotInPlans,
-                        magnitude,
-                        180,
-                    );
-                }
-
-                // Remove statuses on success. A player the club is moving
-                // on keeps his unhappiness whatever a talk achieved: the
-                // grievance is that he is not wanted, and no chat changes
-                // that — clearing it reset the six-month clock behind his
-                // own transfer request every week.
-                let being_moved_on = player.is_being_moved_on();
-                if talk.success {
-                    match talk.talk_type {
-                        ManagerTalkType::PlayingTimeTalk | ManagerTalkType::MoraleTalk => {
-                            if !being_moved_on {
-                                player.statuses.remove(PlayerStatusType::Unh);
-                            }
-                            // A successful playing-time chat is a concrete
-                            // promise — record it with full credibility &
-                            // importance context so verification weights
-                            // honestly. Honest framing scales the horizon
-                            // shorter (a calmer "we'll see in 30 days"),
-                            // soft reassurance pushes longer.
-                            if talk.talk_type == ManagerTalkType::PlayingTimeTalk {
-                                let horizon = if talk.honest_framing { 30 } else { 45 };
-                                player.record_promise_full(
-                                    ManagerPromiseKind::PlayingTime,
-                                    sim_date,
-                                    horizon,
-                                    Some(talk.staff_id),
-                                    None,
-                                    false,
-                                );
-                                promise_created = true;
-                            }
-                        }
-                        ManagerTalkType::TransferDiscussion => {
-                            // Coach agreed to consider sale next window.
-                            // Record TransferPermission so the player
-                            // remembers — broken later if no offer is
-                            // entertained.
-                            player.record_promise_full(
-                                ManagerPromiseKind::TransferPermission,
-                                sim_date,
-                                120,
-                                Some(talk.staff_id),
-                                None,
-                                false,
-                            );
-                            promise_created = true;
-                        }
-                        ManagerTalkType::PlayingTimeRequest => {
-                            player
-                                .happiness
-                                .add_event(HappinessEventType::ManagerPlayingTimePromise, 8.0);
-                            player.record_promise_full(
-                                ManagerPromiseKind::PlayingTime,
-                                sim_date,
-                                30,
-                                Some(talk.staff_id),
-                                None,
-                                false,
-                            );
-                            promise_created = true;
-                        }
-                        ManagerTalkType::LoanRequest
-                            // Force-pinned players: the listing flag wins
-                            // even over a successful loan-request talk —
-                            // nothing actually happens, the player stays.
-                            if !player.is_force_match_selection => {
-                                player.statuses.add(sim_date, PlayerStatusType::Loa);
-                                let lctx =
-                                    LoanEventContext::new(LoanEventKind::LoanListingAccepted);
-                                let happiness_ctx = HappinessEventContext::new(
-                                    HappinessEventCause::Other,
-                                    HappinessEventSeverity::Moderate,
-                                    HappinessEventScope::Boardroom,
-                                )
-                                .with_loan_context(lctx);
-                                player.happiness.add_event_with_context(
-                                    HappinessEventType::LoanListingAccepted,
-                                    5.0,
-                                    None,
-                                    happiness_ctx,
-                                );
-                            }
-                        _ => {}
-                    }
-                } else {
-                    // Handle failure for player-initiated requests
-                    match talk.talk_type {
-                        ManagerTalkType::PlayingTimeRequest => {
-                            player.on_playing_time_talk_refused(talk.staff_id);
-                        }
-                        ManagerTalkType::LoanRequest => {
-                            // Denied loan — unsettled about future. Honest
-                            // refusal hits softer than a wishy-washy fob.
-                            player.statuses.add(sim_date, PlayerStatusType::Fut);
-                            let mag = if talk.honest_framing { -3.0 } else { -5.0 };
-                            player
-                                .happiness
-                                .add_event(HappinessEventType::LackOfPlayingTime, mag);
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Append the interaction record. Picker writes to log on
-                // apply, not on emit, so the cooldown gate sees the
-                // *committed* set of talks, not transient pickings.
-                let topic = topic_for_talk(talk.talk_type.clone());
-                let outcome = if promise_created {
-                    InteractionOutcome::PromiseMade
-                } else if talk.success {
-                    InteractionOutcome::Positive
-                } else if talk.morale_change.abs() < 0.5 {
-                    InteractionOutcome::Neutral
-                } else {
-                    InteractionOutcome::Negative
-                };
-                let cooldown = sim_date + Duration::days(default_cooldown_days(topic));
-                player.interactions.push(ManagerInteraction {
-                    date: sim_date,
-                    staff_id: talk.staff_id,
-                    topic,
-                    tone: talk.tone,
-                    player_mood_before: talk.mood_before,
-                    outcome,
-                    promise_created,
-                    relationship_delta: talk.relationship_change,
-                    morale_delta: talk.morale_change,
-                    cooldown_until: cooldown,
-                });
+                player.apply_manager_talk(talk, sim_date);
             }
         }
+    }
+}
+
+impl Player {
+    fn apply_manager_talk(&mut self, talk: &ManagerTalkResult, sim_date: NaiveDate) {
+        self.apply_manager_talk_relationship(talk, sim_date);
+        self.apply_manager_talk_event(talk);
+        if matches!(talk.talk_type, ManagerTalkType::MovingOnTalk) {
+            // The moving-on talk is the honest word, success or not: the
+            // club is finding him a move. It lands as the same
+            // told-not-in-plans event the listing pass uses, on the same
+            // cooldown, so a player who keeps asking hears it at most twice
+            // a season and nothing here clears his unhappiness.
+            let magnitude = HappinessConfig::default().catalog.told_not_in_plans;
+            self.happiness.add_event_with_cooldown(
+                HappinessEventType::ToldNotInPlans,
+                magnitude,
+                180,
+            );
+        }
+        let promise_created = self.apply_manager_talk_outcome(talk, sim_date);
+        self.record_manager_talk_interaction(talk, sim_date, promise_created);
+    }
+
+    fn apply_manager_talk_relationship(&mut self, talk: &ManagerTalkResult, sim_date: NaiveDate) {
+        // Apply morale change.
+        self.happiness.adjust_morale(talk.morale_change);
+
+        // Apply relationship change with manager.
+        if talk.relationship_change.abs() <= 0.001 {
+            return;
+        }
+        let change = if talk.relationship_change >= 0.0 {
+            RelationshipChange::positive(
+                ChangeType::CoachingSuccess,
+                talk.relationship_change.abs(),
+            )
+        } else {
+            RelationshipChange::negative(
+                ChangeType::DisciplinaryAction,
+                talk.relationship_change.abs(),
+            )
+        };
+        self.relations
+            .update_staff_relationship(talk.staff_id, change, sim_date);
+
+        // Coach rapport mirrors the staff-relation update — mid-magnitude
+        // relationship deltas become rapport ticks so trusted coaches
+        // actually accumulate trust here.
+        let rapport_amount = (talk.relationship_change.abs() * 4.0).round() as i16;
+        if rapport_amount > 0 {
+            if talk.relationship_change >= 0.0 {
+                self.rapport
+                    .on_positive(talk.staff_id, sim_date, rapport_amount);
+            } else {
+                self.rapport
+                    .on_negative(talk.staff_id, sim_date, rapport_amount);
+            }
+        }
+
+        // Also update the happiness factor for manager relationship.
+        let current = self.happiness.factors.manager_relationship;
+        self.happiness.factors.manager_relationship =
+            (current + talk.relationship_change * 5.0).clamp(-15.0, 15.0);
+    }
+
+    fn apply_manager_talk_event(&mut self, talk: &ManagerTalkResult) {
+        let event_type = if talk.success {
+            match talk.talk_type {
+                ManagerTalkType::Praise => HappinessEventType::ManagerPraise,
+                ManagerTalkType::Discipline => HappinessEventType::ManagerDiscipline,
+                ManagerTalkType::PlayingTimeTalk => HappinessEventType::ManagerPlayingTimePromise,
+                _ => HappinessEventType::ManagerPraise,
+            }
+        } else {
+            // A failed talk that actually stung is a manager interaction
+            // outcome — model it as ManagerCriticism (or Discipline), not
+            // PoorTraining, which is reserved for actual training-ground
+            // sessions.
+            match talk.talk_type {
+                ManagerTalkType::Discipline => HappinessEventType::ManagerDiscipline,
+                _ => HappinessEventType::ManagerCriticism,
+            }
+        };
+        if !TalkFeedGate::feed_worthy(&talk.talk_type, talk.success, talk.morale_change) {
+            return;
+        }
+        let topic = ManagerInteractionTopicMapper::from_talk(&talk.talk_type, self);
+        let tone = ManagerInteractionToneMapper::from_interaction(&talk.tone);
+        let acceptance =
+            ManagerInteractionAcceptanceMapper::from_outcome(talk.success, talk.morale_change);
+        let mut mctx = ManagerInteractionEventContext::new(topic, tone, acceptance)
+            .with_manager_staff_id(talk.staff_id);
+        if matches!(
+            talk.talk_type,
+            ManagerTalkType::PlayingTimeTalk | ManagerTalkType::PlayingTimeRequest
+        ) {
+            let credibility = if talk.honest_framing { 0.9 } else { 0.55 };
+            mctx = mctx.with_promise(PromiseKind::PlayingTime, credibility);
+        }
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::from_magnitude(talk.morale_change),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_manager_interaction_context(mctx);
+        self.happiness
+            .add_event_with_context(event_type, talk.morale_change, None, happiness_ctx);
+    }
+
+    fn apply_manager_talk_outcome(
+        &mut self,
+        talk: &ManagerTalkResult,
+        sim_date: NaiveDate,
+    ) -> bool {
+        let mut promise_created = false;
+        // Remove statuses on success. A player the club is moving on keeps
+        // his unhappiness whatever a talk achieved: the grievance is that he
+        // is not wanted, and no chat changes that — clearing it reset the
+        // six-month clock behind his own transfer request every week.
+        let being_moved_on = self.is_being_moved_on();
+        if talk.success {
+            match talk.talk_type {
+                ManagerTalkType::PlayingTimeTalk | ManagerTalkType::MoraleTalk => {
+                    if !being_moved_on {
+                        self.statuses.remove(PlayerStatusType::Unh);
+                    }
+                    // A successful playing-time chat is a concrete promise —
+                    // record it with full credibility & importance context so
+                    // verification weights honestly. Honest framing scales
+                    // the horizon shorter (a calmer "we'll see in 30 days"),
+                    // soft reassurance pushes longer.
+                    if talk.talk_type == ManagerTalkType::PlayingTimeTalk {
+                        let horizon = if talk.honest_framing { 30 } else { 45 };
+                        self.record_promise_full(
+                            ManagerPromiseKind::PlayingTime,
+                            sim_date,
+                            horizon,
+                            Some(talk.staff_id),
+                            None,
+                            false,
+                        );
+                        promise_created = true;
+                    }
+                }
+                ManagerTalkType::TransferDiscussion => {
+                    // Coach agreed to consider sale next window. Record
+                    // TransferPermission so the player remembers — broken
+                    // later if no offer is entertained.
+                    self.record_promise_full(
+                        ManagerPromiseKind::TransferPermission,
+                        sim_date,
+                        120,
+                        Some(talk.staff_id),
+                        None,
+                        false,
+                    );
+                    promise_created = true;
+                }
+                ManagerTalkType::PlayingTimeRequest => {
+                    self.happiness
+                        .add_event(HappinessEventType::ManagerPlayingTimePromise, 8.0);
+                    self.record_promise_full(
+                        ManagerPromiseKind::PlayingTime,
+                        sim_date,
+                        30,
+                        Some(talk.staff_id),
+                        None,
+                        false,
+                    );
+                    promise_created = true;
+                }
+                ManagerTalkType::LoanRequest
+                    // Force-pinned players: the listing flag wins even over a
+                    // successful loan-request talk — nothing actually
+                    // happens, the player stays.
+                    if !self.is_force_match_selection => {
+                        self.statuses.add(sim_date, PlayerStatusType::Loa);
+                        let lctx = LoanEventContext::new(LoanEventKind::LoanListingAccepted);
+                        let happiness_ctx = HappinessEventContext::new(
+                            HappinessEventCause::Other,
+                            HappinessEventSeverity::Moderate,
+                            HappinessEventScope::Boardroom,
+                        )
+                        .with_loan_context(lctx);
+                        self.happiness.add_event_with_context(
+                            HappinessEventType::LoanListingAccepted,
+                            5.0,
+                            None,
+                            happiness_ctx,
+                        );
+                    }
+                _ => {}
+            }
+        } else {
+            // Handle failure for player-initiated requests.
+            match talk.talk_type {
+                ManagerTalkType::PlayingTimeRequest => {
+                    self.on_playing_time_talk_refused(talk.staff_id);
+                }
+                ManagerTalkType::LoanRequest => {
+                    // Denied loan — unsettled about future. Honest refusal
+                    // hits softer than a wishy-washy fob.
+                    self.statuses.add(sim_date, PlayerStatusType::Fut);
+                    let mag = if talk.honest_framing { -3.0 } else { -5.0 };
+                    self.happiness
+                        .add_event(HappinessEventType::LackOfPlayingTime, mag);
+                }
+                _ => {}
+            }
+        }
+        promise_created
+    }
+
+    fn record_manager_talk_interaction(
+        &mut self,
+        talk: &ManagerTalkResult,
+        sim_date: NaiveDate,
+        promise_created: bool,
+    ) {
+        // Append the interaction record. Picker writes to log on apply, not
+        // on emit, so the cooldown gate sees the *committed* set of talks,
+        // not transient pickings.
+        let topic = talk.talk_type.topic();
+        let outcome = if promise_created {
+            InteractionOutcome::PromiseMade
+        } else if talk.success {
+            InteractionOutcome::Positive
+        } else if talk.morale_change.abs() < 0.5 {
+            InteractionOutcome::Neutral
+        } else {
+            InteractionOutcome::Negative
+        };
+        let cooldown = sim_date + Duration::days(topic.default_cooldown_days());
+        self.interactions.push(ManagerInteraction {
+            date: sim_date,
+            staff_id: talk.staff_id,
+            topic,
+            tone: talk.tone,
+            player_mood_before: talk.mood_before,
+            outcome,
+            promise_created,
+            relationship_delta: talk.relationship_change,
+            morale_delta: talk.morale_change,
+            cooldown_until: cooldown,
+        });
     }
 }
 
@@ -460,157 +468,165 @@ impl PlayerBehaviourResult {
         }
     }
 
-    #[expect(clippy::too_many_lines)]
     pub fn process<D: LeagueProcessAccess>(&self, data: &mut D) {
         let sim_date = data.date().date();
+        let mut candidates = self.collect_emit_candidates(data, sim_date);
+        Self::emit_candidates(data, &mut candidates);
+    }
 
-        // Two-pass design. Pass 1 applies every relation update and
-        // builds a visible-event candidate per pair that crossed the
-        // magnitude threshold; pass 2 ranks the candidates per player
-        // by severity (|applied| desc, pre-incident relation tier,
-        // partner id) and pushes them through the shared same-tick
-        // budget helper. The relation drift always lands — only the
-        // headline row is gated. The per-tick caps and the 45-day
-        // per-partner cooldown live on `PlayerHappiness`; the helper
-        // observes both.
-        const PARTNER_EVENT_COOLDOWN_DAYS: u16 = 45;
-
-        // Only the nudges past the visibility threshold become candidates —
-        // a handful out of the thousands a full update produces — so the
-        // list grows from empty rather than being sized for every nudge.
+    /// Pass 1: apply every relation update and build a visible-event
+    /// candidate per pair that crossed the magnitude threshold. The relation
+    /// drift always lands — only the headline row is gated. The per-tick caps
+    /// and the 45-day per-partner cooldown live on `PlayerHappiness`; the
+    /// emitter observes both.
+    fn collect_emit_candidates<D: LeagueProcessAccess>(
+        &self,
+        data: &mut D,
+        sim_date: NaiveDate,
+    ) -> Vec<EmitCandidate<'_>> {
         let mut candidates: Vec<EmitCandidate> = Vec::new();
-
         for relationship_result in &self.relationship_result {
-            let partner_id = relationship_result.to_player_id;
-
-            // The raw `relationship_change` doesn't reflect what
-            // `PlayerRelation::apply_change` actually applies —
-            // PersonalConflict, MatchCooperation, ConflictResolution
-            // and others multiply internally. Compare the *applied*
-            // magnitude so a raw -0.20 PersonalConflict (≈-0.60
-            // applied) actually surfaces. Below the threshold the
-            // relation drift lands and nothing else is built.
-            let applied = applied_level_magnitude(
-                relationship_result.relationship_change,
-                &relationship_result.change_type,
-            );
-            let visible = applied.abs() > 0.5;
-
-            // Look up partner-side personality / squad info BEFORE we take
-            // a `&mut` on `from_player`. Used for SamePosition /
-            // SimilarSquadStatus evidence — partner is a different player,
-            // so the borrows don't conflict.
-            let (partner_position, partner_squad_status) = if visible {
-                let partner = data.player(partner_id);
-                (
-                    partner.map(|p| p.position()),
-                    partner
-                        .and_then(|p| p.contract.as_ref())
-                        .map(|c| c.squad_status.clone()),
-                )
-            } else {
-                (None, None)
-            };
-
-            let Some(player_to_modify) = data.player_mut(relationship_result.from_player_id) else {
-                continue;
-            };
-
-            // Snapshot the relation BEFORE applying the update —
-            // earlier versions of this code read it AFTER, so
-            // `relationship_level_before` was actually post-update.
-            // Default to a neutral relation when no prior record
-            // exists (first-ever interaction with this teammate).
-            let prior = visible
-                .then(|| PairRelationSnapshot::capture(player_to_modify, partner_id))
-                .flatten();
-            let snapshot_before = prior.unwrap_or_else(PairRelationSnapshot::neutral);
-            let had_prior_relation = prior.is_some();
-
-            player_to_modify.relations.update_with_type(
-                partner_id,
-                relationship_result.relationship_change,
-                relationship_result.change_type.clone(),
-                sim_date,
-            );
-
-            if !visible {
-                continue;
-            }
-
-            // Snapshot AFTER so the renderer can speak about trend
-            // direction without recomputing the delta.
-            let level_after = player_to_modify
-                .relations
-                .get_player(partner_id)
-                .map(|r| r.level)
-                .unwrap_or(snapshot_before.level);
-
-            // Evidence from the pre-update snapshot — the true
-            // "before the incident" state the user wants explained.
-            let evidence = PairEventContextBuilder::build_evidence(
-                &relationship_result.change_type,
-                snapshot_before,
-                had_prior_relation,
-                player_to_modify,
-                partner_position.as_ref(),
-                partner_squad_status,
-                sim_date,
-            );
-
-            if applied > 0.5 {
-                candidates.push(EmitCandidate {
-                    from_id: relationship_result.from_player_id,
-                    partner_id,
-                    kind: HappinessEventType::TeammateBonding,
-                    magnitude: 1.0,
-                    applied_abs: applied.abs(),
-                    change_type: &relationship_result.change_type,
-                    snapshot_before,
-                    level_after,
-                    evidence,
-                });
-            } else {
-                // applied < -0.5
-                let mut conflict_evidence = evidence;
-                // RepeatedIncident: a recent conflict with this same
-                // partner promotes the incident from a one-off to a
-                // chronic concern in the dressing-room.
-                let recent_count = player_to_modify
-                    .happiness
-                    .recent_events
-                    .iter()
-                    .filter(|e| {
-                        e.event_type == HappinessEventType::ConflictWithTeammate
-                            && e.partner_player_id == Some(partner_id)
-                            && e.days_ago <= 90
-                    })
-                    .count();
-                if recent_count >= 1
-                    && !conflict_evidence.contains(&HappinessEventEvidence::RepeatedIncident)
-                {
-                    conflict_evidence.push(HappinessEventEvidence::RepeatedIncident);
-                }
-                candidates.push(EmitCandidate {
-                    from_id: relationship_result.from_player_id,
-                    partner_id,
-                    kind: HappinessEventType::ConflictWithTeammate,
-                    magnitude: -1.5,
-                    applied_abs: applied.abs(),
-                    change_type: &relationship_result.change_type,
-                    snapshot_before,
-                    level_after,
-                    evidence: conflict_evidence,
-                });
+            if let Some(candidate) = self.candidate_for_change(relationship_result, data, sim_date)
+            {
+                candidates.push(candidate);
             }
         }
+        candidates
+    }
 
-        // Pass 2 — rank per player and push through the shared
-        // same-tick budget helper. The helper reads
-        // `same_tick_event_count` on each call, so events any earlier
-        // emitter (controversy, mentorship, training, match-day
-        // post-incident) already added in this tick consume budget
-        // here too — no local counters needed.
+    fn candidate_for_change<'a, D: LeagueProcessAccess>(
+        &'a self,
+        relationship_result: &'a PlayerRelationshipChangeResult,
+        data: &mut D,
+        sim_date: NaiveDate,
+    ) -> Option<EmitCandidate<'a>> {
+        let partner_id = relationship_result.to_player_id;
+
+        // The raw `relationship_change` doesn't reflect what
+        // `PlayerRelation::apply_change` actually applies —
+        // PersonalConflict, MatchCooperation, ConflictResolution and others
+        // multiply internally. Compare the *applied* magnitude so a raw
+        // -0.20 PersonalConflict (≈-0.60 applied) actually surfaces. Below
+        // the threshold the relation drift lands and nothing else is built.
+        let applied = relationship_result
+            .change_type
+            .applied_level_magnitude(relationship_result.relationship_change);
+        let visible = applied.abs() > 0.5;
+
+        // Look up partner-side personality / squad info BEFORE we take a
+        // `&mut` on `from_player`. Used for SamePosition / SimilarSquadStatus
+        // evidence — partner is a different player, so the borrows don't
+        // conflict.
+        let (partner_position, partner_squad_status) = if visible {
+            let partner = data.player(partner_id);
+            (
+                partner.map(|p| p.position()),
+                partner
+                    .and_then(|p| p.contract.as_ref())
+                    .map(|c| c.squad_status.clone()),
+            )
+        } else {
+            (None, None)
+        };
+
+        let player_to_modify = data.player_mut(relationship_result.from_player_id)?;
+
+        // Snapshot the relation BEFORE applying the update — earlier
+        // versions of this code read it AFTER, so
+        // `relationship_level_before` was actually post-update. Default to a
+        // neutral relation when no prior record exists (first-ever
+        // interaction with this teammate).
+        let prior = visible
+            .then(|| PairRelationSnapshot::capture(player_to_modify, partner_id))
+            .flatten();
+        let snapshot_before = prior.unwrap_or_else(PairRelationSnapshot::neutral);
+        let had_prior_relation = prior.is_some();
+
+        player_to_modify.relations.update_with_type(
+            partner_id,
+            relationship_result.relationship_change,
+            relationship_result.change_type.clone(),
+            sim_date,
+        );
+
+        if !visible {
+            return None;
+        }
+
+        // Snapshot AFTER so the renderer can speak about trend direction
+        // without recomputing the delta.
+        let level_after = player_to_modify
+            .relations
+            .get_player(partner_id)
+            .map(|r| r.level)
+            .unwrap_or(snapshot_before.level);
+
+        // Evidence from the pre-update snapshot — the true "before the
+        // incident" state the user wants explained.
+        let evidence = PairEventContextBuilder::build_evidence(
+            &relationship_result.change_type,
+            snapshot_before,
+            had_prior_relation,
+            player_to_modify,
+            partner_position.as_ref(),
+            partner_squad_status,
+            sim_date,
+        );
+
+        if applied > 0.5 {
+            return Some(EmitCandidate {
+                from_id: relationship_result.from_player_id,
+                partner_id,
+                kind: HappinessEventType::TeammateBonding,
+                magnitude: 1.0,
+                applied_abs: applied.abs(),
+                change_type: &relationship_result.change_type,
+                snapshot_before,
+                level_after,
+                evidence,
+            });
+        }
+
+        // applied < -0.5
+        let mut conflict_evidence = evidence;
+        // RepeatedIncident: a recent conflict with this same partner promotes
+        // the incident from a one-off to a chronic concern in the
+        // dressing-room.
+        let recent_count = player_to_modify
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| {
+                e.event_type == HappinessEventType::ConflictWithTeammate
+                    && e.partner_player_id == Some(partner_id)
+                    && e.days_ago <= 90
+            })
+            .count();
+        if recent_count >= 1
+            && !conflict_evidence.contains(&HappinessEventEvidence::RepeatedIncident)
+        {
+            conflict_evidence.push(HappinessEventEvidence::RepeatedIncident);
+        }
+        Some(EmitCandidate {
+            from_id: relationship_result.from_player_id,
+            partner_id,
+            kind: HappinessEventType::ConflictWithTeammate,
+            magnitude: -1.5,
+            applied_abs: applied.abs(),
+            change_type: &relationship_result.change_type,
+            snapshot_before,
+            level_after,
+            evidence: conflict_evidence,
+        })
+    }
+
+    /// Pass 2: rank per player and push through the shared same-tick budget
+    /// helper. The helper reads `same_tick_event_count` on each call, so
+    /// events any earlier emitter (controversy, mentorship, training,
+    /// match-day post-incident) already added in this tick consume budget
+    /// here too — no local counters needed.
+    fn emit_candidates<D: LeagueProcessAccess>(data: &mut D, candidates: &mut [EmitCandidate<'_>]) {
+        const PARTNER_EVENT_COOLDOWN_DAYS: u16 = 45;
         // One stable sort by player, then severity, orders every player's
         // block exactly as sorting the blocks one by one would.
         candidates.sort_by(|a, b| {
@@ -620,7 +636,7 @@ impl PlayerBehaviourResult {
         });
         let mut player_id: Option<u32> = None;
         let mut player = None;
-        for cand in candidates {
+        for cand in candidates.iter_mut() {
             if player_id != Some(cand.from_id) {
                 player_id = Some(cand.from_id);
                 player = data.player_mut(cand.from_id);
@@ -1047,29 +1063,31 @@ impl PairEventContextBuilder {
     }
 }
 
-/// Estimate the level-axis movement that
-/// [`PlayerRelation::apply_change`] applies for a given raw delta and
-/// change type. Mirrors the multipliers in `relations.rs` so the
-/// event-emission threshold reflects the change the player actually
-/// experiences. Keep these in sync if `apply_change` changes.
-fn applied_level_magnitude(raw: f32, change_type: &ChangeType) -> f32 {
-    let magnitude = raw.abs();
-    let level_mult = match change_type {
-        ChangeType::MatchCooperation => 2.0,
-        ChangeType::TrainingBonding => 1.0,
-        ChangeType::ConflictResolution => 2.0,
-        ChangeType::PersonalSupport => 2.0,
-        ChangeType::CompetitionRivalry => 2.0,
-        ChangeType::TrainingFriction => 1.0,
-        ChangeType::PersonalConflict => 3.0,
-        ChangeType::ReputationAdmiration => 1.5,
-        ChangeType::ReputationTension => 1.5,
-        // Catch-all changes (CoachingSuccess, MentorshipBond, …) hit
-        // level_axis 1:1 in apply_change's default arm.
-        _ => 1.0,
-    };
-    let signed = if raw >= 0.0 { 1.0 } else { -1.0 };
-    signed * magnitude * level_mult
+impl ChangeType {
+    /// Estimate the level-axis movement that
+    /// [`PlayerRelation::apply_change`] applies for a given raw delta.
+    /// Mirrors the multipliers in `relations.rs` so the event-emission
+    /// threshold reflects the change the player actually experiences. Keep
+    /// these in sync if `apply_change` changes.
+    fn applied_level_magnitude(&self, raw: f32) -> f32 {
+        let magnitude = raw.abs();
+        let level_mult = match self {
+            ChangeType::MatchCooperation => 2.0,
+            ChangeType::TrainingBonding => 1.0,
+            ChangeType::ConflictResolution => 2.0,
+            ChangeType::PersonalSupport => 2.0,
+            ChangeType::CompetitionRivalry => 2.0,
+            ChangeType::TrainingFriction => 1.0,
+            ChangeType::PersonalConflict => 3.0,
+            ChangeType::ReputationAdmiration => 1.5,
+            ChangeType::ReputationTension => 1.5,
+            // Catch-all changes (CoachingSuccess, MentorshipBond, …) hit
+            // level_axis 1:1 in apply_change's default arm.
+            _ => 1.0,
+        };
+        let signed = if raw >= 0.0 { 1.0 } else { -1.0 };
+        signed * magnitude * level_mult
+    }
 }
 
 pub struct PlayerRelationshipChangeResult {
@@ -1118,22 +1136,26 @@ pub enum ManagerTalkType {
     LoanRequest,
 }
 
-/// Translate the legacy `ManagerTalkType` into the new
-/// [`InteractionTopic`] taxonomy. Used by `process_manager_talks` so the
-/// interaction log uses the football-specific topics rather than the
-/// implementation-shaped talk-types.
-pub(crate) fn topic_for_talk(talk: ManagerTalkType) -> InteractionTopic {
-    match talk {
-        ManagerTalkType::PlayingTimeTalk | ManagerTalkType::PlayingTimeRequest => {
-            InteractionTopic::PlayingTime
+impl ManagerTalkType {
+    /// Translate the legacy talk type into the new [`InteractionTopic`]
+    /// taxonomy. Used by `process_manager_talks` so the interaction log uses
+    /// the football-specific topics rather than the implementation-shaped
+    /// talk-types.
+    pub(crate) fn topic(&self) -> InteractionTopic {
+        match self {
+            ManagerTalkType::PlayingTimeTalk | ManagerTalkType::PlayingTimeRequest => {
+                InteractionTopic::PlayingTime
+            }
+            ManagerTalkType::MoraleTalk | ManagerTalkType::Motivational => {
+                InteractionTopic::PoorForm
+            }
+            ManagerTalkType::Praise => InteractionTopic::GoodForm,
+            ManagerTalkType::Discipline => InteractionTopic::Discipline,
+            ManagerTalkType::TransferDiscussion | ManagerTalkType::MovingOnTalk => {
+                InteractionTopic::TransferRequest
+            }
+            ManagerTalkType::LoanRequest => InteractionTopic::LoanRequest,
         }
-        ManagerTalkType::MoraleTalk | ManagerTalkType::Motivational => InteractionTopic::PoorForm,
-        ManagerTalkType::Praise => InteractionTopic::GoodForm,
-        ManagerTalkType::Discipline => InteractionTopic::Discipline,
-        ManagerTalkType::TransferDiscussion | ManagerTalkType::MovingOnTalk => {
-            InteractionTopic::TransferRequest
-        }
-        ManagerTalkType::LoanRequest => InteractionTopic::LoanRequest,
     }
 }
 

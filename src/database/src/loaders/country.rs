@@ -1,7 +1,7 @@
-use core::shared::fullname::slug_from_display;
+use core::shared::fullname::FullName;
 use serde::Deserialize;
 
-use super::compiled::compiled;
+use super::compiled::CompiledDatabase;
 use super::domestic_cup::DomesticCupEntity;
 
 #[derive(Deserialize, Clone)]
@@ -110,7 +110,7 @@ pub struct CountryLoader;
 
 impl CountryLoader {
     pub fn load() -> Vec<CountryEntity> {
-        let db = compiled();
+        let db = CompiledDatabase::get();
         db.countries
             .iter()
             .cloned()
@@ -119,11 +119,11 @@ impl CountryLoader {
                 // "côte d'ivoire"). Folded once here, every URL and the slug
                 // index carry the same URL-safe form. The cup table is keyed
                 // by the same display text, so it is matched folded too.
-                country.slug = slug_from_display(&country.slug);
+                country.slug = FullName::slug_from_display(&country.slug);
                 country.domestic_cup = db
                     .domestic_cups
                     .iter()
-                    .find(|c| slug_from_display(&c.country_slug) == country.slug)
+                    .find(|c| FullName::slug_from_display(&c.country_slug) == country.slug)
                     .cloned();
                 // Same pattern for the transfer card, keyed by code rather
                 // than slug — the code is what the data tree's directories
@@ -141,12 +141,12 @@ impl CountryLoader {
 
     /// Look up a country code by its ID. Always returns lowercase ASCII —
     /// the loaded data is lowercase ("br", "nl", "jp"), and consumers
-    /// (`Language::from_country_code`, `country_skill_bias`,
+    /// (`Language::from_country_code`, `CountrySkillBias`,
     /// `PhysicalProfile::country_height_offset`) all match on lowercase.
     /// Forcing the cast here makes the contract explicit and immune to any
     /// future data file accidentally storing mixed case.
     pub fn code_for_id(country_id: u32) -> String {
-        compiled()
+        CompiledDatabase::get()
             .countries
             .iter()
             .find(|c| c.id == country_id)
@@ -203,7 +203,7 @@ mod tests {
             );
         }
 
-        let raw: HashSet<&str> = super::compiled()
+        let raw: HashSet<&str> = crate::loaders::CompiledDatabase::get()
             .countries
             .iter()
             .map(|c| c.slug.as_str())
@@ -310,7 +310,7 @@ mod tests {
     fn the_shipped_cards_price_the_named_corridors() {
         use std::collections::HashMap;
 
-        use crate::generators::convert::convert_country_transfers;
+        use crate::generators::convert::CountryTransferProfileConverter;
         use core::transfers::{
             MarketAffinity, MarketAffinityInputs, MarketCountryFacts, MarketMap, MoveKind,
             ScoutingRegion,
@@ -328,7 +328,7 @@ mod tests {
             .map(|c| {
                 (
                     c.id,
-                    convert_country_transfers(c.transfers.as_ref(), &by_code),
+                    CountryTransferProfileConverter::new(&by_code).convert(c.transfers.as_ref()),
                 )
             })
             .collect();

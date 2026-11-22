@@ -555,6 +555,30 @@ pub enum ManagerPromiseKind {
     Captaincy,
 }
 
+impl ManagerPromiseKind {
+    /// Sensible per-kind default for `target_value` when callers don't
+    /// supply one. Reads the player's contract so the threshold matches
+    /// their stated squad role.
+    fn default_target(self, contract: &Option<PlayerClubContract>) -> u16 {
+        use crate::PlayerSquadStatus::*;
+        match self {
+            ManagerPromiseKind::PlayingTime => 0,
+            ManagerPromiseKind::StartingRole => match contract.as_ref().map(|c| &c.squad_status) {
+                Some(KeyPlayer) => 80,
+                Some(FirstTeamRegular) => 60,
+                Some(FirstTeamSquadRotation) => 40,
+                _ => 30,
+            },
+            ManagerPromiseKind::TacticalRole => 0,
+            ManagerPromiseKind::LoanDevelopment => 0,
+            ManagerPromiseKind::PreferredPosition
+            | ManagerPromiseKind::TransferPermission
+            | ManagerPromiseKind::ContractReview
+            | ManagerPromiseKind::Captaincy => 0,
+        }
+    }
+}
+
 /// What the manager committed to. The historical signature only stored
 /// `baseline_apps`; new kinds reach for `target_value` (a kind-specific
 /// metric — share of starts, minutes, capacity %), `made_by_staff_id`
@@ -598,6 +622,61 @@ pub struct ManagerPromise {
     /// announcement). Public promises broken cause media & dressing-room
     /// fallout that private ones don't.
     pub is_public: bool,
+}
+
+impl ManagerPromise {
+    fn is_kept(
+        &self,
+        usage: super::usage::PlayerUsage,
+        loan_min_apps: Option<u16>,
+        now: NaiveDate,
+        in_preferred_pos: bool,
+        high_status: bool,
+        recent_events: &[crate::club::player::happiness::HappinessEvent],
+    ) -> bool {
+        let delta_apps = self.usage_since_promise(usage).appearances;
+        let days = (self.deadline - self.made_on).num_days().max(1) as u16;
+        match self.kind {
+            ManagerPromiseKind::PlayingTime
+            | ManagerPromiseKind::StartingRole
+            | ManagerPromiseKind::LoanDevelopment => self
+                .involvement_progress(usage, loan_min_apps)
+                .is_some_and(|(delivered, required)| delivered >= required),
+            ManagerPromiseKind::PreferredPosition => in_preferred_pos,
+            ManagerPromiseKind::TacticalRole => {
+                let required = (days / 10).max(2);
+                high_status && delta_apps >= required
+            }
+            ManagerPromiseKind::TransferPermission => {
+                // Kept by default unless a recent TransferBidRejected event
+                // tagged the player saying "no".
+                !recent_events.iter().any(|e| {
+                    e.event_type == HappinessEventType::TransferBidRejected
+                        && e.days_ago <= (now - self.made_on).num_days().max(0) as u16
+                })
+            }
+            ManagerPromiseKind::ContractReview => {
+                // Kept if a contract event landed in the window.
+                recent_events.iter().any(|e| {
+                    matches!(
+                        e.event_type,
+                        HappinessEventType::ContractRenewal | HappinessEventType::ContractOffer
+                    ) && e.days_ago <= (now - self.made_on).num_days().max(0) as u16
+                })
+            }
+            ManagerPromiseKind::Captaincy => recent_events.iter().any(|e| {
+                e.event_type == HappinessEventType::CaptaincyAwarded
+                    && e.days_ago as i64 <= (now - self.made_on).num_days().max(0)
+            }),
+        }
+    }
+
+    fn outcome_weight(&self) -> f32 {
+        let importance_w = self.importance_to_player as f32 / 100.0;
+        let credibility_w = self.credibility_at_creation as f32 / 100.0;
+        let public_w = if self.is_public { 1.3 } else { 1.0 };
+        importance_w * (0.5 + credibility_w) * public_w
+    }
 }
 
 impl Player {
@@ -945,7 +1024,7 @@ impl Player {
         let baseline_starts = usage.starts;
         let credibility = self.promise_credibility(kind, made_by_staff_id);
         let importance = self.promise_importance(kind);
-        let target = target_value.unwrap_or_else(|| default_target(kind, &self.contract));
+        let target = target_value.unwrap_or_else(|| kind.default_target(&self.contract));
         self.promises.retain(|p| p.kind != kind);
         self.promises.push(ManagerPromise {
             kind,
@@ -1067,31 +1146,26 @@ impl Player {
     /// kept or broken promise lays down. `None` when unresolved — the
     /// episode is still recorded against the coach, it just carries no
     /// club cue.
-    #[expect(clippy::too_many_lines)]
     pub fn verify_promises(&mut self, now: NaiveDate, club_id: Option<u32>) {
         if self.promises.is_empty() {
             return;
         }
+        let (kept_weight, kept_by, broken_weight, broken_by) = self.evaluate_promises(now);
+        self.remember_promise_episodes(now, club_id, &kept_by, &broken_by);
+        self.apply_promise_morale(kept_weight, broken_weight);
+    }
+
+    /// Evaluate and drain every promise whose deadline has passed, keeping
+    /// the aggregate morale weights and the coaches each outcome belongs to.
+    fn evaluate_promises(
+        &mut self,
+        now: NaiveDate,
+    ) -> (f32, Vec<(u32, f32)>, f32, Vec<(u32, f32)>) {
         let usage = super::usage::PlayerUsage::of(self);
         let mut kept_weight: f32 = 0.0;
         let mut broken_weight: f32 = 0.0;
-        // Who made each promise that came due, and how much it mattered.
-        // The morale path only needs the aggregate weight; memory needs
-        // the person — a broken promise is not a bad week, it is a fact
-        // about a man, and it has to be filed against him.
         let mut kept_by: Vec<(u32, f32)> = Vec::new();
         let mut broken_by: Vec<(u32, f32)> = Vec::new();
-
-        // Compute helpers needed across multiple variants. Captaincy is
-        // tracked at squad/Relations level, not on the player, so we use
-        // a CaptaincyAwarded event recorded since the promise was made
-        // as the visible signal.
-        let captaincy_awarded_recently = |window_days: i64| {
-            self.happiness.recent_events.iter().any(|e| {
-                e.event_type == HappinessEventType::CaptaincyAwarded
-                    && e.days_ago as i64 <= window_days.max(0)
-            })
-        };
 
         // Pure-data check — formation isn't known here. Default to "kept"
         // unless a RoleMismatch event fired in the last 60 days.
@@ -1100,32 +1174,28 @@ impl Player {
             .recent_events
             .iter()
             .any(|e| e.event_type == HappinessEventType::RoleMismatch && e.days_ago <= 60);
-
         // Snapshot whether a KeyPlayer / FirstTeamRegular status currently
         // holds — drives TacticalRole verification.
         let high_status = matches!(
             self.contract.as_ref().map(|c| &c.squad_status),
             Some(PlayerSquadStatus::KeyPlayer) | Some(PlayerSquadStatus::FirstTeamRegular)
         );
-
-        // Loan-min-apps target lives on the contract; pull once.
         let loan_min_apps = self
             .contract_loan
             .as_ref()
             .and_then(|c| c.loan_min_appearances);
 
-        // Match-opportunity gate for playing-time promises. A "you'll
-        // play" / loan-development promise must not be judged broken until
-        // the club has actually played eligible official matches the
-        // player was overlooked for AND the grace / sample rules are met.
-        // Until then the promise stays pending rather than firing a
-        // PromiseBroken on calendar time alone.
+        // Match-opportunity gate for playing-time promises. A "you'll play"
+        // / loan-development promise must not be judged broken until the
+        // club has actually played eligible official matches the player was
+        // overlooked for AND the grace / sample rules are met.
         let pt_cfg = PlayingTimeFrustrationConfig::default();
         let pt_opp = self.playing_time_opportunity(now);
         let pt_status = self.contract.as_ref().map(|c| c.squad_status.clone());
         let playing_time_judgeable = pt_opp
             .can_judge(pt_status.as_ref(), &pt_cfg, loan_min_apps)
             .is_some();
+        let recent_events = &self.happiness.recent_events;
 
         self.promises.retain(|p| {
             if now < p.deadline {
@@ -1136,47 +1206,21 @@ impl Player {
             {
                 return true;
             }
-            let delta_apps = p.usage_since_promise(usage).appearances;
-            let days = (p.deadline - p.made_on).num_days().max(1) as u16;
 
-            let kept = match p.kind {
-                ManagerPromiseKind::PlayingTime
-                | ManagerPromiseKind::StartingRole
-                | ManagerPromiseKind::LoanDevelopment => p
-                    .involvement_progress(usage, loan_min_apps)
-                    .is_some_and(|(delivered, required)| delivered >= required),
-                ManagerPromiseKind::PreferredPosition => in_preferred_pos,
-                ManagerPromiseKind::TacticalRole => {
-                    let required = (days / 10).max(2);
-                    high_status && delta_apps >= required
-                }
-                ManagerPromiseKind::TransferPermission => {
-                    // Kept by default unless a recent TransferBidRejected
-                    // event tagged the player saying "no".
-                    !self.happiness.recent_events.iter().any(|e| {
-                        e.event_type == HappinessEventType::TransferBidRejected
-                            && e.days_ago <= (now - p.made_on).num_days().max(0) as u16
-                    })
-                }
-                ManagerPromiseKind::ContractReview => {
-                    // Kept if a contract event landed in the window.
-                    self.happiness.recent_events.iter().any(|e| {
-                        matches!(
-                            e.event_type,
-                            HappinessEventType::ContractRenewal | HappinessEventType::ContractOffer
-                        ) && e.days_ago <= (now - p.made_on).num_days().max(0) as u16
-                    })
-                }
-                ManagerPromiseKind::Captaincy => {
-                    captaincy_awarded_recently((now - p.made_on).num_days())
-                }
-            };
+            let kept = p.is_kept(
+                usage,
+                loan_min_apps,
+                now,
+                in_preferred_pos,
+                high_status,
+                recent_events,
+            );
 
             // Zero-match invariant: a playing-time / loan-development
-            // promise can't be "broken" before the club has given the
-            // player real eligible match opportunities and the grace /
-            // sample rules are satisfied. Keep it pending instead of
-            // firing a PromiseBroken on elapsed days alone.
+            // promise can't be "broken" before the club has given the player
+            // real eligible match opportunities and the grace / sample rules
+            // are satisfied. Keep it pending instead of firing a
+            // PromiseBroken on elapsed days alone.
             if !kept
                 && matches!(
                     p.kind,
@@ -1187,13 +1231,10 @@ impl Player {
                 return true;
             }
 
-            // Importance × credibility weighting. Kept lifts ~half as
-            // hard as a broken promise hurts ("hard to build, easy to lose")
+            // Importance × credibility weighting. Kept lifts ~half as hard
+            // as a broken promise hurts ("hard to build, easy to lose")
             // mirroring the rapport asymmetry.
-            let importance_w = p.importance_to_player as f32 / 100.0;
-            let credibility_w = p.credibility_at_creation as f32 / 100.0;
-            let public_w = if p.is_public { 1.3 } else { 1.0 };
-            let weight = importance_w * (0.5 + credibility_w) * public_w;
+            let weight = p.outcome_weight();
             if kept {
                 kept_weight += weight;
                 if let Some(staff_id) = p.made_by_staff_id {
@@ -1208,42 +1249,55 @@ impl Player {
             false
         });
 
-        // File the outcome against the man who gave his word.
-        //
-        // Importance carries straight into how deeply this lands: a
-        // promise the player cared about, broken, is one of the few
-        // things in a career he will still be able to tell you about a
-        // decade later. That is `relevance` doing its job — the same
-        // event against a promise he barely wanted barely registers.
-        if !kept_by.is_empty() || !broken_by.is_empty() {
-            let mind_ctx = self.mind_context(now, club_id);
-            for (staff_id, weight, kind) in kept_by
-                .iter()
-                .map(|(id, w)| (*id, *w, EpisodeKind::ManagerPromiseKept))
-                .chain(
-                    broken_by
-                        .iter()
-                        .map(|(id, w)| (*id, *w, EpisodeKind::ManagerPromiseBroken)),
-                )
-            {
-                let intensity = kind.spec().intensity;
-                self.mind.remember_with(
-                    kind,
-                    ActorRef::staff(staff_id),
-                    &mind_ctx,
-                    EncodingInputs {
-                        intensity,
-                        // `weight` folds importance × credibility × public;
-                        // 1.0 is an ordinary private promise, ~2.9 the most
-                        // loaded public one.
-                        relevance: (weight / 2.0).clamp(0.0, 1.0),
-                        surprise: 0.5,
-                    },
-                    None,
-                );
-            }
-        }
+        (kept_weight, kept_by, broken_weight, broken_by)
+    }
 
+    /// File the outcome against the man who gave his word.
+    ///
+    /// Importance carries straight into how deeply this lands: a promise
+    /// the player cared about, broken, is one of the few things in a career
+    /// he will still be able to tell you about a decade later. That is
+    /// `relevance` doing its job — the same event against a promise he
+    /// barely wanted barely registers.
+    fn remember_promise_episodes(
+        &mut self,
+        now: NaiveDate,
+        club_id: Option<u32>,
+        kept_by: &[(u32, f32)],
+        broken_by: &[(u32, f32)],
+    ) {
+        if kept_by.is_empty() && broken_by.is_empty() {
+            return;
+        }
+        let mind_ctx = self.mind_context(now, club_id);
+        for (staff_id, weight, kind) in kept_by
+            .iter()
+            .map(|(id, w)| (*id, *w, EpisodeKind::ManagerPromiseKept))
+            .chain(
+                broken_by
+                    .iter()
+                    .map(|(id, w)| (*id, *w, EpisodeKind::ManagerPromiseBroken)),
+            )
+        {
+            let intensity = kind.spec().intensity;
+            self.mind.remember_with(
+                kind,
+                ActorRef::staff(staff_id),
+                &mind_ctx,
+                EncodingInputs {
+                    intensity,
+                    // `weight` folds importance × credibility × public; 1.0
+                    // is an ordinary private promise, ~2.9 the most loaded
+                    // public one.
+                    relevance: (weight / 2.0).clamp(0.0, 1.0),
+                    surprise: 0.5,
+                },
+                None,
+            );
+        }
+    }
+
+    fn apply_promise_morale(&mut self, kept_weight: f32, broken_weight: f32) {
         if kept_weight > 0.0 {
             let mag = (4.0 * kept_weight).clamp(1.0, 14.0);
             let mctx = ManagerInteractionEventContext::new(
@@ -1473,7 +1527,6 @@ impl Player {
     /// development tick. Used by `ClubAcademy::simulate` so academy
     /// players develop only via `train_academy_players`, never through
     /// both signals in the same week.
-    #[expect(clippy::too_many_lines)]
     pub fn simulate_with_options(
         &mut self,
         ctx: &GlobalContext<'_>,
@@ -1543,135 +1596,12 @@ impl Player {
         // Player happiness & morale evaluation (weekly)
         let team_reputation = ctx.team.as_ref().map(|t| t.reputation).unwrap_or(0.0);
         if ctx.simulation.is_week_beginning() {
-            // The mind's periodic think, before anything reads it. The
-            // five faculties reflect on where he actually is, the goal
-            // stack is reviewed, and the monthly consolidation banks
-            // what recent episodes meant while they are still there to
-            // learn from.
-            let mind_ctx = self.mind_context(now.date(), ctx.club.as_ref().map(|c| c.id));
-            let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
-            let club_country_id = ctx.country.as_ref().map(|c| c.id).unwrap_or(0);
-            let mut situation = self.mind_situation(now.date(), club_country_id, country_code);
-            // The club he is at, not the squad that holds his registration:
-            // a reserve at a giant is at a giant.
-            situation.club_reputation = ctx
-                .club
-                .as_ref()
-                .map(|c| c.main_team_reputation as f32 / 10_000.0)
-                .filter(|standing| *standing > 0.0)
-                .unwrap_or(team_reputation)
-                .clamp(0.0, 1.0);
-            situation.division_reputation = ctx
-                .club
-                .as_ref()
-                .map(|c| c.league_reputation)
-                .filter(|division| *division > 0)
-                .or_else(|| ctx.team.as_ref().and_then(|t| t.league_reputation))
-                .unwrap_or(0);
-            situation.ceiling = PotentialEstimator::observable_ceiling(self, now.date());
-            // His OWN federation's calendar. A tournament clock belongs to
-            // a passport: a Brazilian at Arsenal is counting down to the
-            // Copa, not the Euros, and the country he plays in was the
-            // only clock the mind could see. A native's nationality
-            // continent is his club's, so nothing moves for him.
-            situation.months_to_tournament = ctx
-                .simulation
-                .tournament_clocks
-                .months_for(self.nationality_continent_id)
-                .unwrap_or_else(|| {
-                    ctx.country
-                        .as_ref()
-                        .map(|c| c.months_to_tournament)
-                        .unwrap_or(u8::MAX)
-                });
-            // The week's mood, swept into memory before the faculties
-            // reflect on it — so a fallout with the manager on Thursday
-            // is already something he remembers when he thinks about his
-            // future on Monday, rather than a week later.
-            situation.days_to_main_window_close = ctx
-                .country
-                .as_ref()
-                .map(|c| c.days_to_main_window_close)
-                .unwrap_or(u16::MAX);
-            self.remember_recent_mood(ctx.club.as_ref().map(|c| c.id), now.date());
-            self.mind.tick_with(&mind_ctx, &situation);
-            // …and how badly he wants to go home, read here because the
-            // mind has just thought and the picture is already built. The
-            // transfer pool then reads two fields instead of rebuilding
-            // this for every player in the world every day.
-            self.home_pull = HomePull::read(self, &situation, now.date());
-            // Decay interaction log so old talks don't keep the cooldown
-            // gates cold past their useful window.
-            self.interactions.decay(now.date());
-            // Verify promises before happiness so kept/broken events feed
-            // into the same weekly morale recalculation.
-            self.verify_promises(now.date(), ctx.club.as_ref().map(|c| c.id));
-            let season_state = TeamSeasonState {
-                league_position: ctx.club.as_ref().map(|c| c.league_position).unwrap_or(0),
-                league_size: ctx.club.as_ref().map(|c| c.league_size).unwrap_or(0),
-                season_progress: ctx
-                    .club
-                    .as_ref()
-                    .map(|c| {
-                        if c.total_league_matches > 0 {
-                            c.league_matches_played as f32 / c.total_league_matches as f32
-                        } else {
-                            0.0
-                        }
-                    })
-                    .unwrap_or(0.0)
-                    .clamp(0.0, 1.0),
-                league_reputation: ctx.club.as_ref().map(|c| c.league_reputation).unwrap_or(0),
-            };
-            let club_morale_ctx = ctx
-                .club
-                .as_ref()
-                .map(|c| ClubMoraleContext {
-                    coach_best_technical: c.coach_best_technical,
-                    coach_best_mental: c.coach_best_mental,
-                    coach_best_fitness: c.coach_best_fitness,
-                    coach_best_goalkeeping: c.coach_best_goalkeeping,
-                    training_facility_quality: c.training_facility_quality,
-                    youth_facility_quality: c.youth_facility_quality,
-                })
-                .unwrap_or_default();
-            self.process_happiness_full(
+            self.process_weekly(
+                ctx,
+                now,
                 &mut result,
-                now.date(),
+                skip_natural_development,
                 team_reputation,
-                season_state,
-                club_morale_ctx,
-            );
-            // A week passed for his development.
-            if !skip_natural_development {
-                self.process_development(now.date());
-            }
-            // The level he competes at: his team's own competition (a B
-            // squad in the third division, a U18 side in youth football)
-            // before the club's main league.
-            let league_reputation = ctx
-                .team
-                .as_ref()
-                .and_then(|t| t.league_reputation)
-                .unwrap_or_else(|| ctx.club.as_ref().map(|c| c.league_reputation).unwrap_or(0));
-            // Language learning when playing abroad
-            let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
-            self.process_language_learning(now.date(), country_code);
-            // Post-transfer integration: bonding / isolation events for the
-            // first ~24 weeks at a new club.
-            self.process_integration(now.date(), country_code);
-            // Weekly transfer-environment story tick — ongoing
-            // weak↔elite / star↔weak narratives layered on top of the
-            // first-tick shocks. Active for the first 168 days after a
-            // transfer; no-op otherwise.
-            let team_rep = ctx.team.as_ref().map(|t| t.reputation).unwrap_or(0.0);
-            let formation_for_story = ctx.team.as_ref().and_then(|t| t.formation);
-            self.process_transfer_environment_story(
-                now.date(),
-                country_code,
-                team_rep,
-                league_reputation,
-                formation_for_story.as_ref(),
             );
         }
 
@@ -1688,6 +1618,181 @@ impl Player {
         }
 
         result
+    }
+
+    /// One weekly reflection: the mind thinks, promises settle, and the
+    /// resulting mood is folded into happiness before life away from the
+    /// pitch gets its own tick.
+    fn process_weekly(
+        &mut self,
+        ctx: &GlobalContext<'_>,
+        now: chrono::NaiveDateTime,
+        result: &mut PlayerResult,
+        skip_natural_development: bool,
+        team_reputation: f32,
+    ) {
+        self.process_weekly_mind(ctx, now, result, team_reputation);
+        // A week passed for his development.
+        if !skip_natural_development {
+            self.process_development(now.date());
+        }
+        self.process_weekly_life(ctx, now);
+    }
+
+    fn process_weekly_mind(
+        &mut self,
+        ctx: &GlobalContext<'_>,
+        now: chrono::NaiveDateTime,
+        result: &mut PlayerResult,
+        team_reputation: f32,
+    ) {
+        // The mind's periodic think, before anything reads it. The five
+        // faculties reflect on where he actually is, the goal stack is
+        // reviewed, and the monthly consolidation banks what recent episodes
+        // meant while they are still there to learn from.
+        let mind_ctx = self.mind_context(now.date(), ctx.club.as_ref().map(|c| c.id));
+        let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
+        let club_country_id = ctx.country.as_ref().map(|c| c.id).unwrap_or(0);
+        let situation =
+            self.weekly_mind_situation(ctx, now, team_reputation, club_country_id, country_code);
+        self.remember_recent_mood(ctx.club.as_ref().map(|c| c.id), now.date());
+        self.mind.tick_with(&mind_ctx, &situation);
+        // …and how badly he wants to go home, read here because the mind has
+        // just thought and the picture is already built. The transfer pool
+        // then reads two fields instead of rebuilding this for every player
+        // in the world every day.
+        self.home_pull = HomePull::read(self, &situation, now.date());
+        // Decay interaction log so old talks don't keep the cooldown gates
+        // cold past their useful window.
+        self.interactions.decay(now.date());
+        // Verify promises before happiness so kept/broken events feed into
+        // the same weekly morale recalculation.
+        self.verify_promises(now.date(), ctx.club.as_ref().map(|c| c.id));
+        let season_state = Self::weekly_season_state(ctx);
+        let club_morale_ctx = Self::weekly_morale_context(ctx);
+        self.process_happiness_full(
+            result,
+            now.date(),
+            team_reputation,
+            season_state,
+            club_morale_ctx,
+        );
+    }
+
+    fn weekly_mind_situation(
+        &self,
+        ctx: &GlobalContext<'_>,
+        now: chrono::NaiveDateTime,
+        team_reputation: f32,
+        club_country_id: u32,
+        country_code: &str,
+    ) -> MindSituation {
+        let mut situation = self.mind_situation(now.date(), club_country_id, country_code);
+        // The club he is at, not the squad that holds his registration: a
+        // reserve at a giant is at a giant.
+        situation.club_reputation = ctx
+            .club
+            .as_ref()
+            .map(|c| c.main_team_reputation as f32 / 10_000.0)
+            .filter(|standing| *standing > 0.0)
+            .unwrap_or(team_reputation)
+            .clamp(0.0, 1.0);
+        situation.division_reputation = ctx
+            .club
+            .as_ref()
+            .map(|c| c.league_reputation)
+            .filter(|division| *division > 0)
+            .or_else(|| ctx.team.as_ref().and_then(|t| t.league_reputation))
+            .unwrap_or(0);
+        situation.ceiling = PotentialEstimator::observable_ceiling(self, now.date());
+        // His OWN federation's calendar. A tournament clock belongs to a
+        // passport: a Brazilian at Arsenal is counting down to the Copa, not
+        // the Euros, and the country he plays in was the only clock the mind
+        // could see. A native's nationality continent is his club's, so
+        // nothing moves for him.
+        situation.months_to_tournament = ctx
+            .simulation
+            .tournament_clocks
+            .months_for(self.nationality_continent_id)
+            .unwrap_or_else(|| {
+                ctx.country
+                    .as_ref()
+                    .map(|c| c.months_to_tournament)
+                    .unwrap_or(u8::MAX)
+            });
+        // The week's mood, swept into memory before the faculties reflect on
+        // it — so a fallout with the manager on Thursday is already something
+        // he remembers when he thinks about his future on Monday, rather than
+        // a week later.
+        situation.days_to_main_window_close = ctx
+            .country
+            .as_ref()
+            .map(|c| c.days_to_main_window_close)
+            .unwrap_or(u16::MAX);
+        situation
+    }
+
+    fn weekly_season_state(ctx: &GlobalContext<'_>) -> TeamSeasonState {
+        TeamSeasonState {
+            league_position: ctx.club.as_ref().map(|c| c.league_position).unwrap_or(0),
+            league_size: ctx.club.as_ref().map(|c| c.league_size).unwrap_or(0),
+            season_progress: ctx
+                .club
+                .as_ref()
+                .map(|c| {
+                    if c.total_league_matches > 0 {
+                        c.league_matches_played as f32 / c.total_league_matches as f32
+                    } else {
+                        0.0
+                    }
+                })
+                .unwrap_or(0.0)
+                .clamp(0.0, 1.0),
+            league_reputation: ctx.club.as_ref().map(|c| c.league_reputation).unwrap_or(0),
+        }
+    }
+
+    fn weekly_morale_context(ctx: &GlobalContext<'_>) -> ClubMoraleContext {
+        ctx.club
+            .as_ref()
+            .map(|c| ClubMoraleContext {
+                coach_best_technical: c.coach_best_technical,
+                coach_best_mental: c.coach_best_mental,
+                coach_best_fitness: c.coach_best_fitness,
+                coach_best_goalkeeping: c.coach_best_goalkeeping,
+                training_facility_quality: c.training_facility_quality,
+                youth_facility_quality: c.youth_facility_quality,
+            })
+            .unwrap_or_default()
+    }
+
+    fn process_weekly_life(&mut self, ctx: &GlobalContext<'_>, now: chrono::NaiveDateTime) {
+        // The level he competes at: his team's own competition (a B squad in
+        // the third division, a U18 side in youth football) before the club's
+        // main league.
+        let league_reputation = ctx
+            .team
+            .as_ref()
+            .and_then(|t| t.league_reputation)
+            .unwrap_or_else(|| ctx.club.as_ref().map(|c| c.league_reputation).unwrap_or(0));
+        let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
+        // Language learning when playing abroad.
+        self.process_language_learning(now.date(), country_code);
+        // Post-transfer integration: bonding / isolation events for the
+        // first ~24 weeks at a new club.
+        self.process_integration(now.date(), country_code);
+        // Weekly transfer-environment story tick — ongoing weak↔elite /
+        // star↔weak narratives layered on top of the first-tick shocks.
+        // Active for the first 168 days after a transfer; no-op otherwise.
+        let team_rep = ctx.team.as_ref().map(|t| t.reputation).unwrap_or(0.0);
+        let formation_for_story = ctx.team.as_ref().and_then(|t| t.formation);
+        self.process_transfer_environment_story(
+            now.date(),
+            country_code,
+            team_rep,
+            league_reputation,
+            formation_for_story.as_ref(),
+        );
     }
 
     pub fn shirt_number(&self) -> u8 {
@@ -1849,7 +1954,7 @@ impl Player {
     /// Weekly language learning: if the player is in a country whose language
     /// they don't speak natively, they gradually learn it.
     fn process_language_learning(&mut self, now: NaiveDate, country_code: &str) {
-        use crate::club::player::language::{Language, weekly_language_progress};
+        use crate::club::player::language::Language;
 
         if country_code.is_empty() {
             return;
@@ -1888,7 +1993,7 @@ impl Player {
                 .map(|l| l.proficiency)
                 .unwrap_or(0);
 
-            let gain = weekly_language_progress(
+            let gain = PlayerLanguage::weekly_progress(
                 self.attributes.adaptability,
                 self.attributes.professionalism,
                 age,
@@ -1962,28 +2067,6 @@ impl Player {
                 );
             }
         }
-    }
-}
-
-/// Sensible per-kind default for `target_value` when callers don't
-/// supply one. Reads the player's contract so the threshold matches
-/// their stated squad role.
-fn default_target(kind: ManagerPromiseKind, contract: &Option<PlayerClubContract>) -> u16 {
-    use crate::PlayerSquadStatus::*;
-    match kind {
-        ManagerPromiseKind::PlayingTime => 0,
-        ManagerPromiseKind::StartingRole => match contract.as_ref().map(|c| &c.squad_status) {
-            Some(KeyPlayer) => 80,
-            Some(FirstTeamRegular) => 60,
-            Some(FirstTeamSquadRotation) => 40,
-            _ => 30,
-        },
-        ManagerPromiseKind::TacticalRole => 0,
-        ManagerPromiseKind::LoanDevelopment => 0,
-        ManagerPromiseKind::PreferredPosition
-        | ManagerPromiseKind::TransferPermission
-        | ManagerPromiseKind::ContractReview
-        | ManagerPromiseKind::Captaincy => 0,
     }
 }
 

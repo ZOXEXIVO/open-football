@@ -10,7 +10,7 @@ use chrono::NaiveDate;
 
 use crate::club::board::{BoardContext, FfpStatus};
 use crate::utils::DateUtils;
-use crate::{Club, StaffPosition, TeamType};
+use crate::{Club, StaffPosition, Team, TeamType};
 
 /// Aggregated best staff attribute scores across all teams at the club.
 /// Precomputed once per club-tick so per-player systems can read via
@@ -88,7 +88,6 @@ impl Club {
     /// is the count for THIS season — the one figure the club cannot derive,
     /// because its own match history is never truncated at a season turn.
     /// Every sporting number below is scoped to it.
-    #[expect(clippy::too_many_lines)]
     pub(in crate::club::process) fn build_board_context(
         &self,
         country_economic_factor: f32,
@@ -99,107 +98,37 @@ impl Club {
         let main_team = self.teams.main();
 
         let main_squad_size = main_team.map(|t| t.players.len()).unwrap_or(0);
-
         let reserve_squad_size: usize = self
             .teams
             .iter()
             .filter(|t| t.team_type != TeamType::Main)
             .map(|t| t.players.len())
             .sum();
-
         let total_annual_wages: u32 = self.teams.iter().map(|t| t.get_annual_salary()).sum();
-
         let reputation_score = main_team
             .map(|t| t.reputation.overall_score())
             .unwrap_or(0.0);
-
-        // Form, points and goals — all of them this season's, off one walk
-        // of the slice the league's own count delimits.
+        // Form, points and goals — all of them this season's, off one walk of
+        // the slice the league's own count delimits.
         let season = main_team
             .map(|t| {
                 t.match_history
                     .season_record(league_matches_played as usize, Self::FORM_WINDOW)
             })
             .unwrap_or_default();
-
-        // Average squad ability
         let avg_squad_ability = main_team
             .map(|t| t.players.current_ability_avg())
             .unwrap_or(0);
-
         let main_tactic = main_team
             .and_then(|t| t.tactics.as_ref())
             .map(|tac| tac.tactic_type);
-        // Both usage ratios are measured against the board's own MANDATE,
-        // not against the live budget.
-        //
-        // The live wage budget is itself derived from the mandate and then
-        // throttled by distress, so dividing the bill by it made the ratio
-        // partly a measurement of the board's own last decision: a club put
-        // under a distress throttle read as overspending purely because the
-        // denominator had shrunk.
-        let mandate = self.board.season_targets.as_ref();
-        let wage_budget_usage = mandate
-            .map(|t| t.adjusted_wage_budget())
-            .filter(|m| *m > 0)
-            .map(|m| total_annual_wages as f32 / m as f32)
-            .unwrap_or(0.0);
-        // …and what the manager has actually spent of his chest. Hard-coded
-        // to zero until now, so the financial component score could never
-        // see transfer spending at all.
-        let transfer_budget_usage = mandate
-            .map(|t| {
-                self.finance
-                    .season_fees
-                    .usage_against(t.adjusted_transfer_budget().min(i32::MAX as i64) as i32)
-            })
-            .unwrap_or(0.0);
-
-        // Squad age profile, youth share, injury crisis, and key-player
-        // unrest from the main squad. `u21_minutes_share` is approximated
-        // by the U21 headcount share (a true minutes figure isn't tracked
-        // at this layer yet).
+        let (wage_budget_usage, transfer_budget_usage) = self.finance_mandate_usage();
         let (squad_avg_age, u21_minutes_share, injury_crisis_score, key_player_unrest_count) =
             main_team
-                .map(|t| {
-                    let players = t.players.players();
-                    let n = players.len();
-                    if n == 0 {
-                        return (0u8, 0.0f32, 0.0f32, 0u8);
-                    }
-                    let mut age_sum = 0u32;
-                    let mut u21 = 0u32;
-                    let mut injured = 0u32;
-                    let mut unrest = 0u32;
-                    for p in &players {
-                        let age = DateUtils::age(p.birth_date, date);
-                        age_sum += age as u32;
-                        if age <= 21 {
-                            u21 += 1;
-                        }
-                        if p.player_attributes.is_injured {
-                            injured += 1;
-                        }
-                        if p.happiness().morale < 35.0 {
-                            unrest += 1;
-                        }
-                    }
-                    (
-                        (age_sum / n as u32) as u8,
-                        u21 as f32 / n as f32,
-                        injured as f32 / n as f32,
-                        unrest.min(u8::MAX as u32) as u8,
-                    )
-                })
+                .map(|t| Self::squad_health(t, date))
                 .unwrap_or((0, 0.0, 0.0, 0));
-
-        let manager_contract = main_team
-            .and_then(|t| t.staffs.find_by_position(StaffPosition::Manager))
-            .and_then(|s| s.contract.as_ref());
-        let manager_contract_months_left = manager_contract
-            .map(|c| ((c.expired - date).num_days() / 30).max(0) as i32)
-            .unwrap_or(0);
-        let manager_annual_salary = manager_contract.map(|c| c.salary).unwrap_or(0);
+        let (manager_contract_months_left, manager_annual_salary) =
+            Self::manager_contract_info(main_team, date);
 
         BoardContext {
             balance: self.finance.balance.balance,
@@ -247,5 +176,84 @@ impl Club {
             facility_academy: self.facilities.academy.clone(),
             facility_recruitment: self.facilities.recruitment.clone(),
         }
+    }
+    /// Wage-budget and transfer-budget usage against the board's mandate,
+    /// not the live throttled budget.
+    fn finance_mandate_usage(&self) -> (f32, f32) {
+        let mandate = self.board.season_targets.as_ref();
+        // Both usage ratios are measured against the board's own MANDATE, not
+        // against the live budget. The live wage budget is itself derived from
+        // the mandate and then throttled by distress, so dividing the bill by
+        // it made the ratio partly a measurement of the board's own last
+        // decision: a club put under a distress throttle read as overspending
+        // purely because the denominator had shrunk.
+        let wage_budget_usage = mandate
+            .map(|t| t.adjusted_wage_budget())
+            .filter(|m| *m > 0)
+            .map(|m| {
+                self.teams
+                    .iter()
+                    .map(|t| t.get_annual_salary())
+                    .sum::<u32>() as f32
+                    / m as f32
+            })
+            .unwrap_or(0.0);
+        // …and what the manager has actually spent of his chest. Hard-coded
+        // to zero until now, so the financial component score could never see
+        // transfer spending at all.
+        let transfer_budget_usage = mandate
+            .map(|t| {
+                self.finance
+                    .season_fees
+                    .usage_against(t.adjusted_transfer_budget().min(i32::MAX as i64) as i32)
+            })
+            .unwrap_or(0.0);
+        (wage_budget_usage, transfer_budget_usage)
+    }
+
+    /// Squad age profile, youth share, injury crisis, and key-player unrest
+    /// from the main squad. `u21_minutes_share` is approximated by the U21
+    /// headcount share (a true minutes figure isn't tracked at this layer
+    /// yet).
+    fn squad_health(team: &Team, date: NaiveDate) -> (u8, f32, f32, u8) {
+        let players = team.players.players();
+        let n = players.len();
+        if n == 0 {
+            return (0, 0.0, 0.0, 0);
+        }
+        let mut age_sum = 0u32;
+        let mut u21 = 0u32;
+        let mut injured = 0u32;
+        let mut unrest = 0u32;
+        for p in &players {
+            let age = DateUtils::age(p.birth_date, date);
+            age_sum += age as u32;
+            if age <= 21 {
+                u21 += 1;
+            }
+            if p.player_attributes.is_injured {
+                injured += 1;
+            }
+            if p.happiness().morale < 35.0 {
+                unrest += 1;
+            }
+        }
+        (
+            (age_sum / n as u32) as u8,
+            u21 as f32 / n as f32,
+            injured as f32 / n as f32,
+            unrest.min(u8::MAX as u32) as u8,
+        )
+    }
+
+    fn manager_contract_info(main_team: Option<&Team>, date: NaiveDate) -> (i32, u32) {
+        let manager_contract = main_team
+            .and_then(|t| t.staffs.find_by_position(StaffPosition::Manager))
+            .and_then(|s| s.contract.as_ref());
+        let months_left = manager_contract
+            .map(|c| ((c.expired - date).num_days() / 30).max(0) as i32)
+            .unwrap_or(0);
+        let annual_salary = manager_contract.map(|c| c.salary).unwrap_or(0);
+        (months_left, annual_salary)
     }
 }

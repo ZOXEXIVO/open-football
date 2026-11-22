@@ -18,7 +18,6 @@ use crate::r#match::player::diagnostics::defender_census::TakeRule;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart};
-#[cfg(feature = "match-logs")]
 use nalgebra::Vector3;
 
 /// **The interception duel, priced as a contest.**
@@ -283,10 +282,23 @@ impl InterceptionContest {
     }
 }
 
+/// A pass in flight, as the interception contest sees it: who played it,
+/// who it is going to, and the geometry shared by every defender's roll.
+struct InterceptionWindow<'a> {
+    passer: &'a MatchPlayer,
+    #[cfg(feature = "match-logs")]
+    target: &'a MatchPlayer,
+    receiver_gap: f32,
+    speed: f32,
+    dir: Vector3<f32>,
+    since_strike: f32,
+    minute: u32,
+    delivery: f32,
+}
+
 impl Ball {
     /// Every opponent the ball draws level with gets one go at it — see
     /// [`InterceptionContest`]. Runs only on unowned balls in flight.
-    #[expect(clippy::too_many_lines)]
     pub fn try_intercept(
         &mut self,
         context: &MatchContext,
@@ -331,26 +343,44 @@ impl Ball {
         if self.cached_shot_target.is_some() {
             return;
         }
-        // Who played it: for the opposing side, and for the other half of
-        // the duel.
-        let Some(passer) = self
-            .previous_owner
-            .and_then(|id| players.iter().find(|p| p.id == id))
-        else {
+        let Some(window) = self.interception_window(players) else {
             return;
         };
-        let passer_team = passer.team_id;
-        let minute = sc::minute_from_ticks(self.current_tick_cached);
-        let delivery = sc::passing_execution(passer, minute);
+
+        for (slot, player) in players.iter().enumerate() {
+            // A man down injured, or getting up from a challenge he
+            // missed, cuts nothing out.
+            if player.team_id == window.passer.team_id || !player.can_play_ball() {
+                continue;
+            }
+            let bit = 1u64 << slot;
+            if self.intercept_rolled & bit != 0 {
+                continue;
+            }
+            if self.intercept_at_crossing(player, bit, &window, context, events) {
+                return;
+            }
+        }
+    }
+
+    /// Who played the ball, who it is going to, and the flight's own
+    /// geometry — everything the crossing test needs that does not change
+    /// from one defender to the next.
+    fn interception_window<'p>(
+        &self,
+        players: &'p [MatchPlayer],
+    ) -> Option<InterceptionWindow<'p>> {
+        // Who played it: for the opposing side, and for the other half of
+        // the duel.
+        let passer = self
+            .previous_owner
+            .and_then(|id| players.iter().find(|p| p.id == id))?;
         // The last stride and a half to its man is the receiver's: what
         // happens there is his first touch under pressure and the duel
         // after it, both priced elsewhere, not an interception.
-        let Some(target) = self
+        let target = self
             .pass_target_player_id
-            .and_then(|id| players.iter().find(|p| p.id == id))
-        else {
-            return;
-        };
+            .and_then(|id| players.iter().find(|p| p.id == id))?;
         let receiver_gap =
             (self.position.x - target.position.x).hypot(self.position.y - target.position.y);
 
@@ -359,125 +389,138 @@ impl Ball {
         const MIN_INTERCEPTABLE_SPEED: f32 = 0.25;
         let speed = (self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y).sqrt();
         if speed < MIN_INTERCEPTABLE_SPEED {
-            return;
+            return None;
         }
-        let dir_x = self.velocity.x / speed;
-        let dir_y = self.velocity.y / speed;
-        // How far a man moves in a tick, so the crossing test still finds
-        // one running alongside the ball.
-        const STRIDE: f32 = 0.7;
+        let dir = Vector3::new(self.velocity.x, self.velocity.y, 0.0) / speed;
         let since_strike = self
             .current_tick_cached
             .saturating_sub(self.last_release_tick) as f32;
+        let minute = sc::minute_from_ticks(self.current_tick_cached);
+        let delivery = sc::passing_execution(passer, minute);
+        Some(InterceptionWindow {
+            passer,
+            #[cfg(feature = "match-logs")]
+            target,
+            receiver_gap,
+            speed,
+            dir,
+            since_strike,
+            minute,
+            delivery,
+        })
+    }
 
-        for (slot, player) in players.iter().enumerate() {
-            // A man down injured, or getting up from a challenge he
-            // missed, cuts nothing out.
-            if player.team_id == passer_team || !player.can_play_ball() {
-                continue;
-            }
-            let bit = 1u64 << slot;
-            if self.intercept_rolled & bit != 0 {
-                continue;
-            }
-            let dx = player.position.x - self.position.x;
-            let dy = player.position.y - self.position.y;
-            // Positive while the ball is still travelling toward him.
-            let along = dx * dir_x + dy * dir_y;
-            // His roll is at his closest approach — the tick the ball draws
-            // level with him. A man it was already moving away from (the
-            // presser it was played past at the kick, a chaser behind it)
-            // never crosses, so never rolls.
-            if along > 0.0 || along < -(speed + STRIDE) {
-                continue;
-            }
-            // His CLOSEST approach, not his distance at the sample the
-            // crossing happened to be caught on. The along-axis window is
-            // a tick wide, so a driven ball put up to half a metre of
-            // pure sampling error into the reach term.
-            let miss = (dx * dir_y - dy * dir_x).abs();
-            #[cfg(feature = "match-logs")]
-            if let Some(census) = self.lane_census.as_mut() {
-                census.note_zone_gap(miss, since_strike, receiver_gap);
-                if since_strike >= 20.0 {
-                    census.note_gap(miss);
-                }
-            }
-            if miss > InterceptionContest::REACH {
-                continue;
-            }
-            // ⚠ THE LAST STRIDE AND A HALF IS A CONTEST, NOT A GIFT.
-            //
-            // The whole function used to return once the ball was within
-            // `CONTROL_DISTANCE` (12u) of its intended man, which removes
-            // every defender from the last metre and a half whatever his
-            // own reach. Controlled reception and clean interception keep
-            // their separate reaches; where they overlap, the man who is
-            // physically closer to the ball has it.
-            if receiver_gap <= CONTROL_DISTANCE && miss > receiver_gap {
-                continue;
-            }
-            // One go, whatever the height: a ball over his head at the
-            // crossing was his moment too.
-            self.intercept_rolled |= bit;
-            let height_factor =
-                AerialReach::reach_difficulty(self.position.z, player.skills.physical.jumping);
-            if height_factor <= 0.0 {
-                continue;
-            }
-            // Where he was standing when it was struck, so a man the ball
-            // is rolled THROUGH is told apart from one who ran into its
-            // line. Back-extrapolated from his own velocity, which is the
-            // only record of it the tick carries.
-            let was_there = player.position - player.velocity * since_strike;
-            let sx = was_there.x - self.last_release_position.x;
-            let sy = was_there.y - self.last_release_position.y;
-            let set = InterceptionContest::is_set_for_it((sx * dir_y - sy * dir_x).abs());
-            let chance = InterceptionContest::chance(
-                miss,
-                speed,
-                since_strike,
-                height_factor,
-                sc::interception(player, minute),
-                delivery,
-                set,
-            );
-            let fires = context.rng.unit_f32() < chance;
-            #[cfg(feature = "match-logs")]
-            {
-                let flat = |a: Vector3<f32>, b: Vector3<f32>| (a.x - b.x).hypot(a.y - b.y);
-                lane_diag::LaneDiag::note_roll(
-                    chance,
-                    miss,
-                    since_strike,
-                    fires,
-                    flat(self.position, target.position),
-                    flat(self.position, self.last_release_position),
-                    flat(player.position, target.position),
-                    speed,
-                    self.lane_census
-                        .as_ref()
-                        .and_then(|c| c.perp_at_strike(player.id)),
-                    InterceptionContest::REACH,
-                    &player.state,
-                );
-            }
-            if fires {
-                #[cfg(feature = "match-logs")]
-                {
-                    let in_box = context.penalty_area(true).contains(&self.position)
-                        || context.penalty_area(false).contains(&self.position);
-                    crate::mid_run_diag::BoxPassDiag::note_cut_out(in_box);
-                    context.defender_census.borrow_mut().tag_take(
-                        TakeRule::Interception,
-                        player.id,
-                        self.current_tick_cached,
-                    );
-                }
-                self.take_intercepted(player, events);
-                return;
+    /// One defender's one go at the ball as it draws level with him.
+    /// Returns true when he takes it.
+    fn intercept_at_crossing(
+        &mut self,
+        player: &MatchPlayer,
+        bit: u64,
+        window: &InterceptionWindow<'_>,
+        context: &MatchContext,
+        events: &mut EventCollection,
+    ) -> bool {
+        // How far a man moves in a tick, so the crossing test still finds
+        // one running alongside the ball.
+        const STRIDE: f32 = 0.7;
+        let dx = player.position.x - self.position.x;
+        let dy = player.position.y - self.position.y;
+        // Positive while the ball is still travelling toward him.
+        let along = dx * window.dir.x + dy * window.dir.y;
+        // His roll is at his closest approach — the tick the ball draws
+        // level with him. A man it was already moving away from (the
+        // presser it was played past at the kick, a chaser behind it)
+        // never crosses, so never rolls.
+        if along > 0.0 || along < -(window.speed + STRIDE) {
+            return false;
+        }
+        // His CLOSEST approach, not his distance at the sample the
+        // crossing happened to be caught on. The along-axis window is
+        // a tick wide, so a driven ball put up to half a metre of
+        // pure sampling error into the reach term.
+        let miss = (dx * window.dir.y - dy * window.dir.x).abs();
+        #[cfg(feature = "match-logs")]
+        if let Some(census) = self.lane_census.as_mut() {
+            census.note_zone_gap(miss, window.since_strike, window.receiver_gap);
+            if window.since_strike >= 20.0 {
+                census.note_gap(miss);
             }
         }
+        if miss > InterceptionContest::REACH {
+            return false;
+        }
+        // ⚠ THE LAST STRIDE AND A HALF IS A CONTEST, NOT A GIFT.
+        //
+        // The whole function used to return once the ball was within
+        // `CONTROL_DISTANCE` (12u) of its intended man, which removes
+        // every defender from the last metre and a half whatever his
+        // own reach. Controlled reception and clean interception keep
+        // their separate reaches; where they overlap, the man who is
+        // physically closer to the ball has it.
+        if window.receiver_gap <= CONTROL_DISTANCE && miss > window.receiver_gap {
+            return false;
+        }
+        // One go, whatever the height: a ball over his head at the
+        // crossing was his moment too.
+        self.intercept_rolled |= bit;
+        let height_factor =
+            AerialReach::reach_difficulty(self.position.z, player.skills.physical.jumping);
+        if height_factor <= 0.0 {
+            return false;
+        }
+        // Where he was standing when it was struck, so a man the ball
+        // is rolled THROUGH is told apart from one who ran into its
+        // line. Back-extrapolated from his own velocity, which is the
+        // only record of it the tick carries.
+        let was_there = player.position - player.velocity * window.since_strike;
+        let sx = was_there.x - self.last_release_position.x;
+        let sy = was_there.y - self.last_release_position.y;
+        let set = InterceptionContest::is_set_for_it((sx * window.dir.y - sy * window.dir.x).abs());
+        let chance = InterceptionContest::chance(
+            miss,
+            window.speed,
+            window.since_strike,
+            height_factor,
+            sc::interception(player, window.minute),
+            window.delivery,
+            set,
+        );
+        let fires = context.rng.unit_f32() < chance;
+        #[cfg(feature = "match-logs")]
+        {
+            let flat = |a: Vector3<f32>, b: Vector3<f32>| (a.x - b.x).hypot(a.y - b.y);
+            lane_diag::LaneDiag::note_roll(
+                chance,
+                miss,
+                window.since_strike,
+                fires,
+                flat(self.position, window.target.position),
+                flat(self.position, self.last_release_position),
+                flat(player.position, window.target.position),
+                window.speed,
+                self.lane_census
+                    .as_ref()
+                    .and_then(|c| c.perp_at_strike(player.id)),
+                InterceptionContest::REACH,
+                &player.state,
+            );
+        }
+        if !fires {
+            return false;
+        }
+        #[cfg(feature = "match-logs")]
+        {
+            let in_box = context.penalty_area(true).contains(&self.position)
+                || context.penalty_area(false).contains(&self.position);
+            crate::mid_run_diag::BoxPassDiag::note_cut_out(in_box);
+            context.defender_census.borrow_mut().tag_take(
+                TakeRule::Interception,
+                player.id,
+                self.current_tick_cached,
+            );
+        }
+        self.take_intercepted(player, events);
+        true
     }
 
     /// The ball is his, under his touch where he met it: it leaves the

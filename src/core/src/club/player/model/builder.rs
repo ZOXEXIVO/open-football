@@ -4,7 +4,7 @@ use crate::club::player::language::PlayerLanguage;
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::mind::PlayerMind;
 use crate::club::player::rapport::PlayerRapport;
-use crate::club::player::traits::{PlayerTrait, generate_player_traits};
+use crate::club::player::traits::PlayerTrait;
 use crate::club::{
     PersonBehaviour, PlayerAttributes, PlayerClubContract, PlayerMailbox, PlayerSkills,
     PlayerTraining,
@@ -209,7 +209,7 @@ impl PlayerBuilder {
             .player_attributes
             .ok_or("player_attributes is required")?;
         let traits = self.traits.unwrap_or_else(|| {
-            generate_player_traits(
+            PlayerTrait::generate(
                 &skills,
                 &positions.positions,
                 player_attributes.current_ability,

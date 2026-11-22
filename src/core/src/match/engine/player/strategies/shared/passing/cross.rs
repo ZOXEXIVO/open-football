@@ -229,6 +229,59 @@ pub struct CrossDecision {
 /// Crossing decision + aerial-duel calculators. Everything the crossing
 /// and heading states need to agree on lives here so the two roles can't
 /// drift apart.
+/// What the crosser sees once, before scanning runners.
+struct CrossPick {
+    goal_pos: Vector3<f32>,
+    crosser_pos: Vector3<f32>,
+    crosser_dist_to_goal: f32,
+    field_height: f32,
+    forward_dir: f32,
+    gk_pos: Option<Vector3<f32>>,
+    minute: u32,
+    delivery: f32,
+    from_inside: bool,
+}
+
+impl CrossPick {
+    fn read(ctx: &StateProcessingContext) -> Self {
+        let goal_pos = ctx.player().opponent_goal_position();
+        let crosser_pos = ctx.player.position;
+        let forward_dir = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
+        Self {
+            goal_pos,
+            crosser_pos,
+            crosser_dist_to_goal: (crosser_pos - goal_pos).magnitude(),
+            field_height: ctx.context.field_size.height as f32,
+            forward_dir,
+            gk_pos: ctx
+                .players()
+                .opponents()
+                .goalkeeper()
+                .next()
+                .map(|gk| gk.position),
+            minute: sc::minute_from_ms(ctx.context.total_match_time),
+            delivery: PassBlock::technique(
+                ctx.player,
+                sc::minute_from_ms(ctx.context.total_match_time),
+                true,
+            ),
+            from_inside: !MatchContext::cross_byline_off()
+                && CrossModel::inside_at_the_byline(crosser_pos, goal_pos),
+        }
+    }
+}
+
+/// The runner's attacking attributes, normalised once per candidate.
+struct RunnerSkills {
+    off_the_ball: f32,
+    heading: f32,
+    jumping: f32,
+    strength: f32,
+    anticipation: f32,
+    composure: f32,
+    finishing: f32,
+}
+
 pub struct CrossModel;
 
 impl CrossModel {
@@ -364,32 +417,15 @@ impl CrossModel {
     /// [`Self::pick`], with how good the best delivery is: the runner's
     /// fit for the ball, whether he can reach it, how contested its patch
     /// is, how deep it lands and how much of it is the keeper's.
-    #[expect(clippy::too_many_lines)]
     pub fn pick_rated(ctx: &StateProcessingContext<'_>) -> Option<(CrossDecision, f32)> {
-        let goal_pos = ctx.player().opponent_goal_position();
-        let crosser_pos = ctx.player.position;
-        let crosser_dist_to_goal = (crosser_pos - goal_pos).magnitude();
-        let field_height = ctx.context.field_size.height as f32;
-        let forward_dir = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
-
-        let gk_pos = ctx
-            .players()
-            .opponents()
-            .goalkeeper()
-            .next()
-            .map(|gk| gk.position);
-        let minute = sc::minute_from_ms(ctx.context.total_match_time);
-        let delivery = PassBlock::technique(ctx.player, minute, true);
+        let pick = CrossPick::read(ctx);
 
         let mut best: Option<(CrossDecision, f32)> = None;
-        let from_inside =
-            !MatchContext::cross_byline_off() && Self::inside_at_the_byline(crosser_pos, goal_pos);
-
         for teammate in ctx.players().teammates().all() {
             if teammate.id == ctx.player.id {
                 continue;
             }
-            if (teammate.position - goal_pos).magnitude() > 260.0 {
+            if (teammate.position - pick.goal_pos).magnitude() > 260.0 {
                 continue;
             }
 
@@ -398,142 +434,192 @@ impl CrossModel {
                 continue;
             };
 
-            let off_the_ball = (runner.skills.mental.off_the_ball / 20.0).clamp(0.0, 1.0);
-            let heading = (runner.skills.technical.heading / 20.0).clamp(0.0, 1.0);
-            let jumping = (runner.skills.physical.jumping / 20.0).clamp(0.0, 1.0);
-            let strength = (runner.skills.physical.strength / 20.0).clamp(0.0, 1.0);
-            let anticipation = (runner.skills.mental.anticipation / 20.0).clamp(0.0, 1.0);
-            let composure = (runner.skills.mental.composure / 20.0).clamp(0.0, 1.0);
-            let finishing = (runner.skills.technical.finishing / 20.0).clamp(0.0, 1.0);
-
-            let picked = [Self::pick_type(
-                ctx,
-                crosser_pos,
-                crosser_dist_to_goal,
-                teammate.position,
-                goal_pos,
-                heading,
-            )];
-            let types: &[CrossType] = if from_inside {
-                &Self::FROM_INSIDE
-            } else {
-                &picked
+            let Some(candidate) = Self::rate_runner(ctx, &pick, teammate, runner) else {
+                continue;
             };
-            for &cross_type in types {
-                // Lane requirement, by delivery.
-                //
-                // A LOFTED ball is played over the traffic by definition —
-                // demanding an unobstructed raycast for it is what made
-                // open-play crosses impossible, since the trajectory solver
-                // then read the clear lane as "keep it down".
-                //
-                // A CUTBACK is a pass to feet and genuinely needs the lane. A
-                // DRIVEN LOW cross does not: it is deliberately fizzed through
-                // the six-yard area precisely because bodies are in the way,
-                // and it is aimed at a space rather than at the man. Requiring
-                // a clean raycast to the runner's feet for it filtered nearly
-                // every ground delivery out of the model (driven-low 1%,
-                // cutback 0% of deliveries).
-                // A cut-back is a ground ball to his feet: its lane is priced
-                // the way every choice between lanes is.
-                let lane = if matches!(cross_type, CrossType::Cutback) {
-                    let Some(odds) = ctx.player().clear_pass(teammate.id) else {
-                        continue;
-                    };
-                    Some(odds)
-                } else {
-                    None
-                };
-
-                let aim_point = if from_inside {
-                    Self::aim_from_inside(
-                        cross_type,
-                        goal_pos,
-                        crosser_pos,
-                        teammate.position,
-                        forward_dir,
-                    )
-                } else {
-                    Self::aim_point_for(
-                        cross_type,
-                        goal_pos,
-                        crosser_pos,
-                        teammate.position,
-                        forward_dir,
-                        field_height,
-                    )
-                };
-
-                // How far the runner has to travel to attack the delivery. A
-                // ball hung to a spot nobody can reach is a bad cross however
-                // good the runner is.
-                let runner_gap = (teammate.position - aim_point).magnitude();
-                let reachability = (1.0 - (runner_gap / 130.0)).clamp(0.0, 1.0);
-
-                // Marker proximity around the AIM POINT, not around the runner
-                // — that is the space actually being contested.
-                let contesting = ctx
-                    .players()
-                    .opponents()
-                    .all()
-                    .filter(|o| (o.position - aim_point).magnitude() < 45.0)
-                    .count();
-                let separation = match contesting {
-                    0 => 1.0,
-                    1 => 0.72,
-                    2 => 0.45,
-                    _ => 0.25,
-                };
-
-                // Goalkeeper claim risk: a ball dropped inside the keeper's
-                // zone gets caught. Real crossers aim away from him, and the
-                // whipped near-post ball is dangerous precisely because it is
-                // too fast to claim.
-                let gk_claim_risk = gk_pos
-                    .map(|gk| {
-                        let gap = (aim_point - gk).magnitude();
-                        let base = if gap < 90.0 { 1.0 - (gap / 90.0) } else { 0.0 };
-                        base * cross_type.keeper_claim_scale()
-                    })
-                    .unwrap_or(0.0);
-
-                // Depth bonus: deliveries into the prime zone are worth more.
-                let aim_depth = (aim_point - goal_pos).magnitude();
-                let depth_bonus = (1.0 - (aim_depth / 190.0)).clamp(0.0, 1.0);
-
-                // A ground delivery is attacked with the feet, an aerial one
-                // with the head — score the runner on the attribute the
-                // delivery actually asks of them.
-                let attack_ability = if cross_type.is_lofted() {
-                    heading * 0.42 + jumping * 0.32 + strength * 0.26
-                } else {
-                    finishing * 0.45 + composure * 0.30 + anticipation * 0.25
-                };
-
-                let score = (attack_ability * 0.34
-                    + off_the_ball * 0.20
-                    + anticipation * 0.08
-                    + reachability * 0.16
-                    + separation * 0.14
-                    + depth_bonus * 0.08
-                    - gk_claim_risk * 0.22)
-                    .max(0.0)
-                    * Self::gets_past(ctx, cross_type, aim_point, delivery, minute);
-                let score = lane.map_or(score, |odds| odds.price(score));
-
-                let candidate = CrossDecision {
-                    cross_type,
-                    target_id: teammate.id,
-                    aim_point,
-                };
-
-                if best.as_ref().is_none_or(|(_, bs)| score > *bs) {
-                    best = Some((candidate, score));
-                }
+            if best.as_ref().is_none_or(|(_, bs)| candidate.1 > *bs) {
+                best = Some(candidate);
             }
         }
 
         best
+    }
+
+    /// The best delivery for one runner, if any of the cross types is
+    /// viable from where the crosser stands.
+    fn rate_runner(
+        ctx: &StateProcessingContext,
+        pick: &CrossPick,
+        teammate: MatchPlayerLite,
+        runner: &MatchPlayer,
+    ) -> Option<(CrossDecision, f32)> {
+        let off_the_ball = (runner.skills.mental.off_the_ball / 20.0).clamp(0.0, 1.0);
+        let heading = (runner.skills.technical.heading / 20.0).clamp(0.0, 1.0);
+        let jumping = (runner.skills.physical.jumping / 20.0).clamp(0.0, 1.0);
+        let strength = (runner.skills.physical.strength / 20.0).clamp(0.0, 1.0);
+        let anticipation = (runner.skills.mental.anticipation / 20.0).clamp(0.0, 1.0);
+        let composure = (runner.skills.mental.composure / 20.0).clamp(0.0, 1.0);
+        let finishing = (runner.skills.technical.finishing / 20.0).clamp(0.0, 1.0);
+
+        let picked = [Self::pick_type(
+            ctx,
+            pick.crosser_pos,
+            pick.crosser_dist_to_goal,
+            teammate.position,
+            pick.goal_pos,
+            heading,
+        )];
+        let types: &[CrossType] = if pick.from_inside {
+            &Self::FROM_INSIDE
+        } else {
+            &picked
+        };
+
+        let mut best: Option<(CrossDecision, f32)> = None;
+        for &cross_type in types {
+            let Some(candidate) = Self::rate_delivery(
+                ctx,
+                pick,
+                teammate,
+                cross_type,
+                RunnerSkills {
+                    off_the_ball,
+                    heading,
+                    jumping,
+                    strength,
+                    anticipation,
+                    composure,
+                    finishing,
+                },
+            ) else {
+                continue;
+            };
+            if best.as_ref().is_none_or(|(_, bs)| candidate.1 > *bs) {
+                best = Some(candidate);
+            }
+        }
+        best
+    }
+
+    /// One delivery of one type to one runner, scored. `None` when the
+    /// ball cannot be played there.
+    fn rate_delivery(
+        ctx: &StateProcessingContext,
+        pick: &CrossPick,
+        teammate: MatchPlayerLite,
+        cross_type: CrossType,
+        skills: RunnerSkills,
+    ) -> Option<(CrossDecision, f32)> {
+        // Lane requirement, by delivery.
+        //
+        // A LOFTED ball is played over the traffic by definition —
+        // demanding an unobstructed raycast for it is what made
+        // open-play crosses impossible, since the trajectory solver
+        // then read the clear lane as "keep it down".
+        //
+        // A CUTBACK is a pass to feet and genuinely needs the lane. A
+        // DRIVEN LOW cross does not: it is deliberately fizzed through
+        // the six-yard area precisely because bodies are in the way,
+        // and it is aimed at a space rather than at the man. Requiring
+        // a clean raycast to the runner's feet for it filtered nearly
+        // every ground delivery out of the model (driven-low 1%,
+        // cutback 0% of deliveries).
+        // A cut-back is a ground ball to his feet: its lane is priced
+        // the way every choice between lanes is.
+        let lane = if matches!(cross_type, CrossType::Cutback) {
+            let Some(odds) = ctx.player().clear_pass(teammate.id) else {
+                return None;
+            };
+            Some(odds)
+        } else {
+            None
+        };
+
+        let aim_point = if pick.from_inside {
+            Self::aim_from_inside(
+                cross_type,
+                pick.goal_pos,
+                pick.crosser_pos,
+                teammate.position,
+                pick.forward_dir,
+            )
+        } else {
+            Self::aim_point_for(
+                cross_type,
+                pick.goal_pos,
+                pick.crosser_pos,
+                teammate.position,
+                pick.forward_dir,
+                pick.field_height,
+            )
+        };
+
+        // How far the runner has to travel to attack the delivery. A
+        // ball hung to a spot nobody can reach is a bad cross however
+        // good the runner is.
+        let runner_gap = (teammate.position - aim_point).magnitude();
+        let reachability = (1.0 - (runner_gap / 130.0)).clamp(0.0, 1.0);
+
+        // Marker proximity around the AIM POINT, not around the runner
+        // — that is the space actually being contested.
+        let contesting = ctx
+            .players()
+            .opponents()
+            .all()
+            .filter(|o| (o.position - aim_point).magnitude() < 45.0)
+            .count();
+        let separation = match contesting {
+            0 => 1.0,
+            1 => 0.72,
+            2 => 0.45,
+            _ => 0.25,
+        };
+
+        // Goalkeeper claim risk: a ball dropped inside the keeper's
+        // zone gets caught. Real crossers aim away from him, and the
+        // whipped near-post ball is dangerous precisely because it is
+        // too fast to claim.
+        let gk_claim_risk = pick
+            .gk_pos
+            .map(|gk| {
+                let gap = (aim_point - gk).magnitude();
+                let base = if gap < 90.0 { 1.0 - (gap / 90.0) } else { 0.0 };
+                base * cross_type.keeper_claim_scale()
+            })
+            .unwrap_or(0.0);
+
+        // Depth bonus: deliveries into the prime zone are worth more.
+        let aim_depth = (aim_point - pick.goal_pos).magnitude();
+        let depth_bonus = (1.0 - (aim_depth / 190.0)).clamp(0.0, 1.0);
+
+        // A ground delivery is attacked with the feet, an aerial one
+        // with the head — score the runner on the attribute the
+        // delivery actually asks of them.
+        let attack_ability = if cross_type.is_lofted() {
+            skills.heading * 0.42 + skills.jumping * 0.32 + skills.strength * 0.26
+        } else {
+            skills.finishing * 0.45 + skills.composure * 0.30 + skills.anticipation * 0.25
+        };
+
+        let score = (attack_ability * 0.34
+            + skills.off_the_ball * 0.20
+            + skills.anticipation * 0.08
+            + reachability * 0.16
+            + separation * 0.14
+            + depth_bonus * 0.08
+            - gk_claim_risk * 0.22)
+            .max(0.0)
+            * Self::gets_past(ctx, cross_type, aim_point, pick.delivery, pick.minute);
+        let score = lane.map_or(score, |odds| odds.price(score));
+
+        Some((
+            CrossDecision {
+                cross_type,
+                target_id: teammate.id,
+                aim_point,
+            },
+            score,
+        ))
     }
 
     /// Where each ball from inside the box at the byline is aimed: the

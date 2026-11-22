@@ -18,7 +18,7 @@ use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::player::strategies::shared::passing::{FlankAction, FlankPlay};
 use crate::r#match::player::strategies::shared::players::ops::clearance::TouchlineCall;
 use crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::{
-    BallCarry, ShotDecision, evaluate_forward_shot_decision,
+    BallCarry, ShotDecision,
 };
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
@@ -35,7 +35,6 @@ const PENALTY_AREA_DEPTH: f32 = 132.0;
 pub struct ForwardRunningState {}
 
 impl StateProcessingHandler for ForwardRunningState {
-    #[expect(clippy::too_many_lines)]
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // `Running` is the man on the ball; without it the read answers.
         if !ctx.player.has_ball(ctx) {
@@ -52,7 +51,106 @@ impl StateProcessingHandler for ForwardRunningState {
         }
 
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+        if let Some(step) = self.snapshot(ctx, distance_to_goal) {
+            return step.into_option();
+        }
+        if let Some(result) = self.patient_recycle(ctx, distance_to_goal) {
+            return Some(result);
+        }
+        if let Some(step) = self.point_blank(ctx, distance_to_goal) {
+            return step.into_option();
+        }
 
+        let defer_to_teammate = self.has_teammate_with_much_better_shot(ctx, distance_to_goal);
+        if let Some(result) = self.clear_shot(ctx, distance_to_goal, defer_to_teammate) {
+            return Some(result);
+        }
+        if let Some(step) = self.box_hold(ctx, distance_to_goal, defer_to_teammate) {
+            return step.into_option();
+        }
+        if let Some(result) = self.cutback(ctx, distance_to_goal) {
+            return Some(result);
+        }
+        if defer_to_teammate {
+            // The pass state picks the target. The pass-EV-beats-shot-xG
+            // case is handled inside the unified helper.
+            #[cfg(feature = "match-logs")]
+            ForwardCensus::note_pass_site(ctx, FwdRequest::PassOther);
+            return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+        }
+        if let Some(step) = self.open_path(ctx, distance_to_goal) {
+            return step.into_option();
+        }
+        if let Some(result) = self.one_two(ctx) {
+            return Some(result);
+        }
+        if let Some(result) = self.hold_up(ctx) {
+            return Some(result);
+        }
+        if let Some(result) = self.congestion(ctx) {
+            return Some(result);
+        }
+        if let Some(result) = self.under_pressure(ctx) {
+            return Some(result);
+        }
+        if let Some(result) = self.wide_and_pass(ctx) {
+            return Some(result);
+        }
+        if let Some(result) = self.anti_oscillation(ctx) {
+            return Some(result);
+        }
+
+        // Continue running with ball briefly while looking for an opening
+        stuck_exit_stats::note(4, ctx.in_state_time, ctx.player.velocity.norm());
+        None
+    }
+
+    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        if ctx.player.has_ball(ctx) {
+            return Some(self.calculate_ball_carrying_movement(ctx) * Self::carry_age_factor(ctx));
+        }
+        // The read moves him on the tick he is here without it; whatever is
+        // left of that tick he spends on his place.
+        Some(
+            SteeringBehavior::Arrive {
+                target: ctx.team().my_anchor(),
+                slowing_distance: 25.0,
+            }
+            .calculate(ctx.player)
+            .velocity,
+        )
+    }
+
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Forwards do a lot of intense running - high intensity with velocity
+        ForwardCondition::new(ActivityIntensity::High).process(ctx);
+    }
+}
+
+enum ForwardStep {
+    Result(StateChangeResult),
+    Hold,
+}
+
+impl ForwardStep {
+    fn into_option(self) -> Option<StateChangeResult> {
+        match self {
+            ForwardStep::Result(result) => Some(result),
+            ForwardStep::Hold => None,
+        }
+    }
+}
+
+macro_rules! step_result {
+    ($value:expr) => {
+        Some(ForwardStep::Result($value))
+    };
+}
+
+impl ForwardRunningState {
+    /// A forward who has just received it with a defender on him fires
+    /// first time.
+    fn snapshot(&self, ctx: &StateProcessingContext, distance_to_goal: f32) -> Option<ForwardStep> {
         // ── Snapshot under heavy pressure ──────────────────────────
         //
         // A forward who has JUST received the ball (his first 0.16 s
@@ -144,13 +242,23 @@ impl StateProcessingHandler for ForwardRunningState {
                             FwdVerdict::Approved,
                         );
                     }
-                    return Some(
+                    return step_result!(
                         StateChangeResult::with_forward_state(ForwardState::Shooting)
-                            .with_shot_reason("FWD_SNAPSHOT_PRESSED"),
+                            .with_shot_reason("FWD_SNAPSHOT_PRESSED")
                     );
                 }
             }
         }
+        None
+    }
+
+    /// PATIENT POSSESSION (forward recycle): only when the forward is
+    /// genuinely STUCK.
+    fn patient_recycle(
+        &self,
+        ctx: &StateProcessingContext,
+        distance_to_goal: f32,
+    ) -> Option<StateChangeResult> {
         // PATIENT POSSESSION (forward recycle): only fires when the
         // forward is genuinely STUCK — outside the finishing zone,
         // boxed in by multiple opponents, with no progressive path
@@ -221,7 +329,15 @@ impl StateProcessingHandler for ForwardRunningState {
                 ));
             }
         }
+        None
+    }
 
+    /// Priority 0: point blank, inside six metres.
+    fn point_blank(
+        &self,
+        ctx: &StateProcessingContext,
+        distance_to_goal: f32,
+    ) -> Option<ForwardStep> {
         // Priority 0: point blank, inside six metres
         // (`ForwardShot::POINT_BLANK`).
         // Routed through the centralised `evaluate_forward_shot_decision`
@@ -233,7 +349,7 @@ impl StateProcessingHandler for ForwardRunningState {
         // skip meant nothing else was checking these gates after
         // the transition.
         if distance_to_goal <= ForwardShot::POINT_BLANK {
-            let point_blank = evaluate_forward_shot_decision(ctx, "FWD_RUN_POINT_BLANK");
+            let point_blank = ShotDecision::evaluate(ctx, "FWD_RUN_POINT_BLANK");
             #[cfg(feature = "match-logs")]
             ForwardCensus::note_shot_site(ctx, FwdRequest::PointBlank, Self::verdict(&point_blank));
             match point_blank {
@@ -243,15 +359,17 @@ impl StateProcessingHandler for ForwardRunningState {
                     // abort gates, which is what a tap-in needs (the
                     // Shooting state would happily reject a six-yard
                     // chance from a sub-0.5 finisher).
-                    return Some(
+                    return step_result!(
                         StateChangeResult::with_forward_state(ForwardState::Finishing)
-                            .with_shot_reason(reason),
+                            .with_shot_reason(reason)
                     );
                 }
                 ShotDecision::Pass => {
                     #[cfg(feature = "match-logs")]
                     ForwardCensus::note_pass_site(ctx, FwdRequest::PassOther);
-                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                    return step_result!(StateChangeResult::with_forward_state(
+                        ForwardState::Passing
+                    ));
                 }
                 ShotDecision::Hold => {
                     // "Hesitated this tick — stay in Running and
@@ -290,22 +408,24 @@ impl StateProcessingHandler for ForwardRunningState {
                             ForwardCensus::note_limit(ctx, FwdLimit::PointBlankPatience);
                             ForwardCensus::note_pass_site(ctx, FwdRequest::PassOther);
                         }
-                        return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                        return step_result!(StateChangeResult::with_forward_state(
+                            ForwardState::Passing
+                        ));
                     }
-                    return None;
+                    return Some(ForwardStep::Hold);
                 }
             }
         }
+        None
+    }
 
-        // Teammate-in-better-position pass-over-shot heuristic.
-        // Real strikers pick PASS over SHOT when a teammate is in a
-        // significantly better position — even with a clear sight
-        // of goal. The old logic fired on any "clear shot in range"
-        // which produced hat-tricks every match; in real football
-        // only ~half of clear shooting opportunities become shots,
-        // the rest become assists.
-        let defer_to_teammate = self.has_teammate_with_much_better_shot(ctx, distance_to_goal);
-
+    /// Priority 0.5: a clear shot in range, through the unified helper.
+    fn clear_shot(
+        &self,
+        ctx: &StateProcessingContext,
+        distance_to_goal: f32,
+        defer_to_teammate: bool,
+    ) -> Option<StateChangeResult> {
         // Flat 320u (40 m) ceiling — every forward attempts, and the
         // xG/accuracy maths inside the helper decides whether the
         // shot is good. Skill-stratified caps double-punished low-fin
@@ -365,7 +485,7 @@ impl StateProcessingHandler for ForwardRunningState {
         let pre_gate_passed = !defer_to_teammate && distance_to_goal <= max_shot_distance;
 
         if pre_gate_passed {
-            let _decision = evaluate_forward_shot_decision(ctx, "FWD_RUN_PRIO05_CLEAR");
+            let _decision = ShotDecision::evaluate(ctx, "FWD_RUN_PRIO05_CLEAR");
             #[cfg(feature = "match-logs")]
             {
                 use std::sync::atomic::Ordering;
@@ -417,7 +537,17 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
         }
+        None
+    }
 
+    /// Priority 0.6: inside the penalty area, holding for a better look
+    /// but not for ever.
+    fn box_hold(
+        &self,
+        ctx: &StateProcessingContext,
+        distance_to_goal: f32,
+        defer_to_teammate: bool,
+    ) -> Option<ForwardStep> {
         // Priority 0.6: inside the penalty area (16.5 m,
         // `PENALTY_AREA_DEPTH`) with the helper having just held. It
         // is asked here as `FWD_RUN_PRIO06_BOX` whenever the clear-shot
@@ -458,19 +588,27 @@ impl StateProcessingHandler for ForwardRunningState {
         // — FWD goal share 60.7% → 49.1%, MID 38.5% → 50.4%, against a
         // real 58/32.
         if !defer_to_teammate && distance_to_goal < PENALTY_AREA_DEPTH {
-            if let ShotDecision::Pass = evaluate_forward_shot_decision(ctx, "FWD_RUN_PRIO06_BOX") {
+            if let ShotDecision::Pass = ShotDecision::evaluate(ctx, "FWD_RUN_PRIO06_BOX") {
                 #[cfg(feature = "match-logs")]
                 ForwardCensus::note_pass_site(ctx, FwdRequest::PassOther);
-                return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                return step_result!(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
             if Self::on_the_ball(ctx) <= Self::HOLD_PATIENCE {
                 stuck_exit_stats::note(2, ctx.in_state_time, ctx.player.velocity.norm());
-                return None;
+                return Some(ForwardStep::Hold);
             }
             #[cfg(feature = "match-logs")]
             ForwardCensus::note_limit(ctx, FwdLimit::BoxHoldPatience);
         }
+        None
+    }
 
+    /// The cutback to a central runner arriving unmarked.
+    fn cutback(
+        &self,
+        ctx: &StateProcessingContext,
+        distance_to_goal: f32,
+    ) -> Option<StateChangeResult> {
         // CUTBACK TO ARRIVING RUNNER. A central midfielder arriving
         // unmarked in the box is the textbook cutback target and a
         // major source of midfielder goals in real football. We reach
@@ -487,37 +625,35 @@ impl StateProcessingHandler for ForwardRunningState {
         let fwd_stuck = ctx.player().pressure().is_under_immediate_pressure()
             || !self.has_open_space_ahead(ctx);
         if distance_to_goal < 130.0 && fwd_stuck
-            && let Some(runner) =
-                crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::find_cutback_to_arriving_runner(ctx)
-            {
-                #[cfg(feature = "match-logs")]
-                {
-                    use std::sync::atomic::Ordering;
-                    crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::mid_run_diag::FWD_CUTBACK.fetch_add(1, Ordering::Relaxed);
-                    ForwardCensus::note_pass_site(ctx, FwdRequest::Cutback);
-                }
-                return Some(StateChangeResult::with_forward_state_and_event(
-                    ForwardRead::released(ctx),
-                    Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::builder()
-                            .with_from_player_id(ctx.player.id)
-                            .with_to_player_id(runner.id)
-                            .with_reason("FWD_RUNNING_CUTBACK_TO_RUNNER")
-                            .build(ctx),
-                    )),
-                ));
-            }
-
-        // If we deferred to a better-positioned teammate, route
-        // through Passing — the pass state picks the target. The
-        // pass-EV-beats-shot-xG case is now handled inside the
-        // unified helper (returns ShotDecision::Pass).
-        if defer_to_teammate {
+        && let Some(runner) =
+            crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::ShotDecision::cutback_to_arriving_runner(ctx)
+        {
             #[cfg(feature = "match-logs")]
-            ForwardCensus::note_pass_site(ctx, FwdRequest::PassOther);
-            return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+            {
+                use std::sync::atomic::Ordering;
+                crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::mid_run_diag::FWD_CUTBACK.fetch_add(1, Ordering::Relaxed);
+                ForwardCensus::note_pass_site(ctx, FwdRequest::Cutback);
+            }
+            return Some(StateChangeResult::with_forward_state_and_event(
+                ForwardRead::released(ctx),
+                Event::PlayerEvent(PlayerEvent::PassTo(
+                    PassingEventContext::builder()
+                        .with_from_player_id(ctx.player.id)
+                        .with_to_player_id(runner.id)
+                        .with_reason("FWD_RUNNING_CUTBACK_TO_RUNNER")
+                        .build(ctx),
+                )),
+            ));
         }
+        None
+    }
 
+    /// Priority 0.8: an open path to goal is a reason to keep running.
+    fn open_path(
+        &self,
+        ctx: &StateProcessingContext,
+        distance_to_goal: f32,
+    ) -> Option<ForwardStep> {
         // Priority 0.8: Open path to goal — KEEP RUNNING, don't pass or dribble
         // But only if still far from shooting range. Once in range, shooting
         // checks above should have triggered. If they didn't (no clear shot),
@@ -541,7 +677,10 @@ impl StateProcessingHandler for ForwardRunningState {
                 return None;
             }
         }
+        None
+    }
 
+    fn one_two(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // ONE-TWO COMBINATION: After just receiving ball, check if passer ran into space
         if ctx.ball().has_stable_possession() {
             let ownership_ticks = ctx.tick_context.ball.ownership_duration;
@@ -562,15 +701,18 @@ impl StateProcessingHandler for ForwardRunningState {
                 ));
             }
         }
+        None
+    }
 
+    fn hold_up(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // HOLD-UP PLAY: When facing away from goal with midfielders arriving,
         // draw defenders and lay off to a supporting teammate.
         // Only when forward genuinely can't advance (opponents blocking ahead).
         if ctx.ball().has_stable_possession()
-            && ctx.tick_context.ball.ownership_duration > 30
-            && !self.has_open_space_ahead(ctx)
-        // Don't lay off if can run forward
-            && let Some(layoff_target) = self.find_hold_up_layoff(ctx)
+        && ctx.tick_context.ball.ownership_duration > 30
+        && !self.has_open_space_ahead(ctx)
+    // Don't lay off if can run forward
+        && let Some(layoff_target) = self.find_hold_up_layoff(ctx)
         {
             #[cfg(feature = "match-logs")]
             ForwardCensus::note_pass_site(ctx, FwdRequest::HoldUpLayoff);
@@ -585,7 +727,10 @@ impl StateProcessingHandler for ForwardRunningState {
                 )),
             ));
         }
+        None
+    }
 
+    fn congestion(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Clear ball if congested far from goal — only after carrying for a while
         if ctx.tick_context.ball.ownership_duration > 15
             && (ctx.player().movement().is_congested_near_boundary()
@@ -596,7 +741,10 @@ impl StateProcessingHandler for ForwardRunningState {
             ForwardCensus::note_pass_site(ctx, FwdRequest::PassOther);
             return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }
+        None
+    }
 
+    fn under_pressure(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Under pressure - quick decision needed
         if ctx.player().pressure().is_under_immediate_pressure() {
             if self.should_pass_under_pressure(ctx) {
@@ -609,11 +757,12 @@ impl StateProcessingHandler for ForwardRunningState {
                 ));
             }
         }
+        None
+    }
 
-        // Evaluate best action based on game context
-        // Require minimum carry time to prevent instant pass-after-receive
+    /// The wide ladder, then the generic pass and carry.
+    fn wide_and_pass(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let ownership_ticks = ctx.tick_context.ball.ownership_duration;
-
         // THE WIDE AREA, above the generic pass.
         //
         // A wide forward in the final third is not looking for
@@ -661,7 +810,11 @@ impl StateProcessingHandler for ForwardRunningState {
                 ForwardState::Dribbling,
             ));
         }
+        None
+    }
 
+    /// Carrying too long without acting is a pass.
+    fn anti_oscillation(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // ANTI-OSCILLATION: carrying the ball too long without acting
         // (2.4 s on it) — he passes. It asked the shot helper
         // here as `FWD_RUN_ANTI_OSCILLATION`, and that never approved:
@@ -675,35 +828,9 @@ impl StateProcessingHandler for ForwardRunningState {
             }
             return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }
-
-        // Continue running with ball briefly while looking for an opening
-        stuck_exit_stats::note(4, ctx.in_state_time, ctx.player.velocity.norm());
         None
     }
 
-    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        if ctx.player.has_ball(ctx) {
-            return Some(self.calculate_ball_carrying_movement(ctx) * Self::carry_age_factor(ctx));
-        }
-        // The read moves him on the tick he is here without it; whatever is
-        // left of that tick he spends on his place.
-        Some(
-            SteeringBehavior::Arrive {
-                target: ctx.team().my_anchor(),
-                slowing_distance: 25.0,
-            }
-            .calculate(ctx.player)
-            .velocity,
-        )
-    }
-
-    fn process_conditions(&self, ctx: ConditionContext) {
-        // Forwards do a lot of intense running - high intensity with velocity
-        ForwardCondition::new(ActivityIntensity::High).process(ctx);
-    }
-}
-
-impl ForwardRunningState {
     /// 30% off the carry over 3.6 s in the state. Time on the ball is not
     /// tiredness, but this is the only brake on a carry the on-ball tree
     /// holds too long: without it goals rose from 2.88 to 3.74 a match.

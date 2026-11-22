@@ -22,20 +22,6 @@ use chrono::NaiveDateTime;
 use chrono::Weekday;
 use log::{Level, debug, log_enabled};
 
-mod calculations;
-pub(crate) mod conflict_escalation;
-mod discipline;
-mod dynamics;
-mod hierarchy;
-mod interactions;
-mod leadership;
-mod manager_credibility;
-mod manager_talks;
-mod morale;
-mod partnerships;
-mod relationships;
-mod training_direction;
-
 #[derive(Debug, Clone)]
 pub struct TeamBehaviour {
     last_full_update: Option<NaiveDateTime>,

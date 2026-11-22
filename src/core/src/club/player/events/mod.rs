@@ -19,7 +19,7 @@
 //! Existing call sites import the four free types
 //! (`MatchOutcome`, `MatchParticipation`, `TransferCompletion`,
 //! `LoanCompletion`) directly via `events::*` and the magnitude
-//! helpers via `events::scaling::*`. Both paths are preserved by
+//! helpers via `events::scaling::HappinessScaling`. Both paths are preserved by
 //! re-exports below — no caller changes needed.
 
 pub mod career;

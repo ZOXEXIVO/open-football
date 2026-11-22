@@ -471,242 +471,378 @@ impl GoalKind {
     }
 
     /// The catalog. One row per kind.
-    #[expect(clippy::too_many_lines)]
     pub fn spec(self) -> GoalSpec {
-        use GoalDirection as Dir;
-        use GoalDomain as D;
-        use GoalSpec as S;
+        Self::SPECS
+            .iter()
+            .find_map(|(kind, spec)| (*kind == self).then_some(*spec))
+            .expect("the catalog covers every kind")
+    }
 
-        match self {
-            GoalKind::None => S::ordinary(D::Career, Dir::Neutral),
-
-            // Where he plays
-            GoalKind::StepUpToABiggerClub => S::ordinary(D::Career, Dir::Leave)
+    /// The rows [`Self::spec`] reads.
+    const SPECS: &[(GoalKind, GoalSpec)] = &[
+        (
+            GoalKind::None,
+            GoalSpec::ordinary(GoalDomain::Career, GoalDirection::Neutral),
+        ),
+        // Where he plays
+        (
+            GoalKind::StepUpToABiggerClub,
+            GoalSpec::ordinary(GoalDomain::Career, GoalDirection::Leave)
                 .competing(WANTS_TO_STAY)
                 .about(GoalSubject::Himself),
-            GoalKind::PlayInAStrongerLeague => S::ordinary(D::Career, Dir::Leave)
+        ),
+        (
+            GoalKind::PlayInAStrongerLeague,
+            GoalSpec::ordinary(GoalDomain::Career, GoalDirection::Leave)
                 .competing(WANTS_TO_STAY)
                 .about(GoalSubject::ThisLeague),
-            GoalKind::PlayContinentalFootball => S::ordinary(D::Career, Dir::Leave)
+        ),
+        (
+            GoalKind::PlayContinentalFootball,
+            GoalSpec::ordinary(GoalDomain::Career, GoalDirection::Leave)
                 .competing(WANTS_TO_STAY)
                 .about(GoalSubject::Himself),
-            GoalKind::PlayInLibertadores => {
-                S::ordinary(D::Career, Dir::Leave).competing(WANTS_TO_STAY)
-            }
-            GoalKind::CompeteForTheTitle => {
-                S::private(D::Career, Dir::Leave).competing(WANTS_TO_STAY)
-            }
-            GoalKind::PlayWithBetterPlayers => S::private(D::Career, Dir::Neutral),
-            // A restlessness he has to sit with for a while before it
-            // becomes anything — and which he abandons if it passes.
-            GoalKind::FindANewChallenge => S::private(D::Career, Dir::Leave)
+        ),
+        (
+            GoalKind::PlayInLibertadores,
+            GoalSpec::ordinary(GoalDomain::Career, GoalDirection::Leave).competing(WANTS_TO_STAY),
+        ),
+        (
+            GoalKind::CompeteForTheTitle,
+            GoalSpec::private(GoalDomain::Career, GoalDirection::Leave).competing(WANTS_TO_STAY),
+        ),
+        (
+            GoalKind::PlayWithBetterPlayers,
+            GoalSpec::private(GoalDomain::Career, GoalDirection::Neutral),
+        ),
+        // A restlessness he has to sit with for a while before it
+        // becomes anything — and which he abandons if it passes.
+        (
+            GoalKind::FindANewChallenge,
+            GoalSpec::private(GoalDomain::Career, GoalDirection::Leave)
                 .competing(WANTS_TO_STAY)
                 .abandoned_after(36),
-            GoalKind::KeepPlayingAtThisLevel => S::grievance(D::Career, Dir::Leave)
+        ),
+        (
+            GoalKind::KeepPlayingAtThisLevel,
+            GoalSpec::grievance(GoalDomain::Career, GoalDirection::Leave)
                 .competing(WANTS_TO_STAY)
                 .about(GoalSubject::ThisLeague),
-            // The terminus of unresolved unhappiness. Slowest to fade of
-            // anything in the catalog: a man who has decided he wants out
-            // does not quietly stop wanting it.
-            GoalKind::LeaveThisClub => GoalSpec {
+        ),
+        // The terminus of unresolved unhappiness. Slowest to fade of
+        // anything in the catalog: a man who has decided he wants out
+        // does not quietly stop wanting it.
+        (
+            GoalKind::LeaveThisClub,
+            GoalSpec {
                 decay_per_month: 0.04,
-                ..S::grievance(D::Career, Dir::Leave).competing(WANTS_TO_STAY)
+                ..GoalSpec::grievance(GoalDomain::Career, GoalDirection::Leave)
+                    .competing(WANTS_TO_STAY)
             },
-            // The one club-shaped want that is not about the club he is
-            // at. Reading it off `direction` marked it achieved the day
-            // he was sold anywhere at all, and for the same reason a
-            // decision about this club neither feeds it nor wears it down.
-            GoalKind::PlayForMyBoyhoodClub => GoalSpec {
+        ),
+        // The one club-shaped want that is not about the club he is
+        // at. Reading it off `direction` marked it achieved the day
+        // he was sold anywhere at all, and for the same reason a
+        // decision about this club neither feeds it nor wears it down.
+        (
+            GoalKind::PlayForMyBoyhoodClub,
+            GoalSpec {
                 decay_per_month: 0.02,
-                ..S::private(D::Social, Dir::Leave)
+                ..GoalSpec::private(GoalDomain::Social, GoalDirection::Leave)
                     .about(GoalSubject::Himself)
                     .stands_apart()
             },
-
-            // Playing
-            // A man who moved to get first-team football still wants
-            // first-team football.
-            GoalKind::PlayFirstTeamFootball => S::grievance(D::Competitive, Dir::Leave)
+        ),
+        // Playing
+        // A man who moved to get first-team football still wants
+        // first-team football.
+        (
+            GoalKind::PlayFirstTeamFootball,
+            GoalSpec::grievance(GoalDomain::Competitive, GoalDirection::Leave)
                 .competing(WANTS_TO_STAY)
                 .about(GoalSubject::Himself),
-            GoalKind::WinBackMyPlace => S::ordinary(D::Competitive, Dir::Stay).competing(WANTS_OUT),
-            GoalKind::PlayInMyBestRole => {
-                S::grievance(D::Professional, Dir::Neutral).about(GoalSubject::ThisManager)
-            }
-            GoalKind::ProveMyselfAtMyParentClub => {
-                S::ordinary(D::Career, Dir::Neutral).about(GoalSubject::OwningClub)
-            }
-            GoalKind::StayAtThisLoanClub => S::ordinary(D::Career, Dir::Neutral),
-            // A loan moves where he plays, not who owns him.
-            GoalKind::GoOutOnLoan => S::fleeting(D::Career, Dir::Leave)
+        ),
+        (
+            GoalKind::WinBackMyPlace,
+            GoalSpec::ordinary(GoalDomain::Competitive, GoalDirection::Stay).competing(WANTS_OUT),
+        ),
+        (
+            GoalKind::PlayInMyBestRole,
+            GoalSpec::grievance(GoalDomain::Professional, GoalDirection::Neutral)
+                .about(GoalSubject::ThisManager),
+        ),
+        (
+            GoalKind::ProveMyselfAtMyParentClub,
+            GoalSpec::ordinary(GoalDomain::Career, GoalDirection::Neutral)
+                .about(GoalSubject::OwningClub),
+        ),
+        (
+            GoalKind::StayAtThisLoanClub,
+            GoalSpec::ordinary(GoalDomain::Career, GoalDirection::Neutral),
+        ),
+        // A loan moves where he plays, not who owns him.
+        (
+            GoalKind::GoOutOnLoan,
+            GoalSpec::fleeting(GoalDomain::Career, GoalDirection::Leave)
                 .about(GoalSubject::Himself)
                 .stands_apart(),
-            // Defending a shirt is quieter than chasing one. He does not
-            // announce it and he never demands anything over it — he
-            // just trains harder and plays like a man who can hear
-            // footsteps.
-            GoalKind::HoldOntoMyPlace => GoalSpec {
+        ),
+        // Defending a shirt is quieter than chasing one. He does not
+        // announce it and he never demands anything over it — he
+        // just trains harder and plays like a man who can hear
+        // footsteps.
+        (
+            GoalKind::HoldOntoMyPlace,
+            GoalSpec {
                 voice_at: 0.80,
                 press_at: 0.99,
-                ..S::ordinary(D::Competitive, Dir::Stay).competing(WANTS_OUT)
+                ..GoalSpec::ordinary(GoalDomain::Competitive, GoalDirection::Stay)
+                    .competing(WANTS_OUT)
             },
-
-            // Getting better. Neither of these is a grievance and
-            // neither points anywhere on its own, which is the whole
-            // point of having them: they are the two rungs a club still
-            // gets to answer before a player starts looking at the door.
-            GoalKind::KeepImproving => GoalSpec {
+        ),
+        // Getting better. Neither of these is a grievance and
+        // neither points anywhere on its own, which is the whole
+        // point of having them: they are the two rungs a club still
+        // gets to answer before a player starts looking at the door.
+        (
+            GoalKind::KeepImproving,
+            GoalSpec {
                 decay_per_month: 0.08,
-                ..S::private(D::Career, Dir::Neutral)
+                ..GoalSpec::private(GoalDomain::Career, GoalDirection::Neutral)
                     .competing(WANTS_A_BETTER_COACH)
                     .about(GoalSubject::Himself)
             },
-            GoalKind::WorkWithABetterCoach => GoalSpec {
+        ),
+        (
+            GoalKind::WorkWithABetterCoach,
+            GoalSpec {
                 decay_per_month: 0.06,
-                ..S::private(D::Career, Dir::Neutral).competing(JUST_WANTS_TO_IMPROVE)
+                ..GoalSpec::private(GoalDomain::Career, GoalDirection::Neutral)
+                    .competing(JUST_WANTS_TO_IMPROVE)
             },
-
-            // The manager, and standing
-            GoalKind::WinTheManagersTrust => S::ordinary(D::Professional, Dir::Stay)
+        ),
+        // The manager, and standing
+        (
+            GoalKind::WinTheManagersTrust,
+            GoalSpec::ordinary(GoalDomain::Professional, GoalDirection::Stay)
                 .competing(WANTS_OUT)
                 .about(GoalSubject::ThisManager),
-            GoalKind::BeCaptain => S::private(D::Professional, Dir::Stay).competing(WANTS_OUT),
-            GoalKind::BeAllowedToLeave => {
-                S::ordinary(D::Professional, Dir::Leave).competing(WANTS_TO_STAY)
-            }
-            // The loyalist's anchor. Never fades on its own.
-            GoalKind::StayAtThisClub => GoalSpec {
+        ),
+        (
+            GoalKind::BeCaptain,
+            GoalSpec::private(GoalDomain::Professional, GoalDirection::Stay).competing(WANTS_OUT),
+        ),
+        (
+            GoalKind::BeAllowedToLeave,
+            GoalSpec::ordinary(GoalDomain::Professional, GoalDirection::Leave)
+                .competing(WANTS_TO_STAY),
+        ),
+        // The loyalist's anchor. Never fades on its own.
+        (
+            GoalKind::StayAtThisClub,
+            GoalSpec {
                 decay_per_month: 0.02,
-                ..S::private(D::Social, Dir::Stay).competing(WANTS_OUT)
+                ..GoalSpec::private(GoalDomain::Social, GoalDirection::Stay).competing(WANTS_OUT)
             },
-
-            // The long server's want. It fades even slower than the
-            // decision to stay that produced it, and he says it out loud
-            // sooner than he would say anything about money — because
-            // what he is asking for is not money.
-            GoalKind::BecomeAClubLegend => GoalSpec {
+        ),
+        // The long server's want. It fades even slower than the
+        // decision to stay that produced it, and he says it out loud
+        // sooner than he would say anything about money — because
+        // what he is asking for is not money.
+        (
+            GoalKind::BecomeAClubLegend,
+            GoalSpec {
                 decay_per_month: 0.02,
                 voice_at: 0.50,
                 press_at: 0.85,
-                ..S::ordinary(D::Social, Dir::Stay).competing(WANTS_OUT)
+                ..GoalSpec::ordinary(GoalDomain::Social, GoalDirection::Stay).competing(WANTS_OUT)
             },
-
-            // Money
-            GoalKind::BePaidWhatImWorth => {
-                S::grievance(D::Financial, Dir::Neutral).about(GoalSubject::Himself)
-            }
-            GoalKind::SecureMyFuture => {
-                S::private(D::Financial, Dir::Neutral).about(GoalSubject::Himself)
-            }
-            GoalKind::GetAReleaseClause => S::fleeting(D::Financial, Dir::Neutral),
-            // A decision, not a grievance: it hardly fades, it is never
-            // said out loud until it is a fact, and it is answered only
-            // by the calendar. `press_at` above 1.0 makes that structural
-            // — there is no demand to make, because he already has what
-            // he wants simply by waiting.
-            GoalKind::RunDownMyContract => GoalSpec {
+        ),
+        // Money
+        (
+            GoalKind::BePaidWhatImWorth,
+            GoalSpec::grievance(GoalDomain::Financial, GoalDirection::Neutral)
+                .about(GoalSubject::Himself),
+        ),
+        (
+            GoalKind::SecureMyFuture,
+            GoalSpec::private(GoalDomain::Financial, GoalDirection::Neutral)
+                .about(GoalSubject::Himself),
+        ),
+        (
+            GoalKind::GetAReleaseClause,
+            GoalSpec::fleeting(GoalDomain::Financial, GoalDirection::Neutral),
+        ),
+        // A decision, not a grievance: it hardly fades, it is never
+        // said out loud until it is a fact, and it is answered only
+        // by the calendar. `press_at` above 1.0 makes that structural
+        // — there is no demand to make, because he already has what
+        // he wants simply by waiting.
+        (
+            GoalKind::RunDownMyContract,
+            GoalSpec {
                 decay_per_month: 0.03,
                 voice_at: 0.75,
                 press_at: 0.95,
-                ..S::private(D::Financial, Dir::Leave).competing(WANTS_TO_STAY)
+                ..GoalSpec::private(GoalDomain::Financial, GoalDirection::Leave)
+                    .competing(WANTS_TO_STAY)
             },
-
-            // Life
-            GoalKind::GoHome => GoalSpec {
+        ),
+        // Life
+        (
+            GoalKind::GoHome,
+            GoalSpec {
                 decay_per_month: 0.06,
-                ..S::private(D::Social, Dir::Leave)
+                ..GoalSpec::private(GoalDomain::Social, GoalDirection::Leave)
                     .competing(WANTS_TO_STAY)
                     .about(GoalSubject::Himself)
             },
-            GoalKind::SettleMyFamily => {
-                S::ordinary(D::Social, Dir::Neutral).about(GoalSubject::Himself)
-            }
-            // Settling in argues for nothing about leaving: learning the
-            // language does not wear down wanting a bigger club.
-            GoalKind::LearnTheLanguage => S::fleeting(D::Social, Dir::Stay)
+        ),
+        (
+            GoalKind::SettleMyFamily,
+            GoalSpec::ordinary(GoalDomain::Social, GoalDirection::Neutral)
+                .about(GoalSubject::Himself),
+        ),
+        // Settling in argues for nothing about leaving: learning the
+        // language does not wear down wanting a bigger club.
+        (
+            GoalKind::LearnTheLanguage,
+            GoalSpec::fleeting(GoalDomain::Social, GoalDirection::Stay)
                 .about(GoalSubject::Himself)
                 .stands_apart(),
-            GoalKind::FindAMentor => S::fleeting(D::Social, Dir::Stay).stands_apart(),
-            GoalKind::EscapeThePressure => {
-                S::private(D::Social, Dir::Leave).competing(WANTS_TO_STAY)
-            }
-
-            // Achievement, and the end of it
-            GoalKind::WinATrophy => {
-                S::private(D::Competitive, Dir::Neutral).about(GoalSubject::Himself)
-            }
-            GoalKind::GetIntoTheNationalSquad => {
-                S::private(D::Competitive, Dir::Neutral).about(GoalSubject::Himself)
-            }
-            // Form, not the club.
-            GoalKind::EndTheDrought => S::fleeting(D::Competitive, Dir::Stay).stands_apart(),
-            GoalKind::RetireOnMyTerms => {
-                S::private(D::Career, Dir::Neutral).about(GoalSubject::Himself)
-            }
-            GoalKind::MoveIntoCoaching => {
-                S::private(D::Career, Dir::Neutral).about(GoalSubject::Himself)
-            }
-
-            // This job. A manager keeps almost all of this to himself —
-            // `private` is the default here rather than the exception,
-            // because saying any of it out loud is itself an event.
-            GoalKind::KeepThisJob => GoalSpec {
+        ),
+        (
+            GoalKind::FindAMentor,
+            GoalSpec::fleeting(GoalDomain::Social, GoalDirection::Stay).stands_apart(),
+        ),
+        (
+            GoalKind::EscapeThePressure,
+            GoalSpec::private(GoalDomain::Social, GoalDirection::Leave).competing(WANTS_TO_STAY),
+        ),
+        // Achievement, and the end of it
+        (
+            GoalKind::WinATrophy,
+            GoalSpec::private(GoalDomain::Competitive, GoalDirection::Neutral)
+                .about(GoalSubject::Himself),
+        ),
+        (
+            GoalKind::GetIntoTheNationalSquad,
+            GoalSpec::private(GoalDomain::Competitive, GoalDirection::Neutral)
+                .about(GoalSubject::Himself),
+        ),
+        // Form, not the club.
+        (
+            GoalKind::EndTheDrought,
+            GoalSpec::fleeting(GoalDomain::Competitive, GoalDirection::Stay).stands_apart(),
+        ),
+        (
+            GoalKind::RetireOnMyTerms,
+            GoalSpec::private(GoalDomain::Career, GoalDirection::Neutral)
+                .about(GoalSubject::Himself),
+        ),
+        (
+            GoalKind::MoveIntoCoaching,
+            GoalSpec::private(GoalDomain::Career, GoalDirection::Neutral)
+                .about(GoalSubject::Himself),
+        ),
+        // This job. A manager keeps almost all of this to himself —
+        // `private` is the default here rather than the exception,
+        // because saying any of it out loud is itself an event.
+        (
+            GoalKind::KeepThisJob,
+            GoalSpec {
                 decay_per_month: 0.06,
-                ..S::private(D::Management, Dir::Stay).competing(MANAGER_WANTS_OUT)
+                ..GoalSpec::private(GoalDomain::Management, GoalDirection::Stay)
+                    .competing(MANAGER_WANTS_OUT)
             },
-            GoalKind::WinSomethingHere => {
-                S::private(D::Management, Dir::Stay).competing(MANAGER_WANTS_OUT)
-            }
-            // Season-bounded by construction: it is answered, one way or
-            // the other, by May.
-            GoalKind::SurviveTheSeason => S::ordinary(D::Management, Dir::Stay)
+        ),
+        (
+            GoalKind::WinSomethingHere,
+            GoalSpec::private(GoalDomain::Management, GoalDirection::Stay)
+                .competing(MANAGER_WANTS_OUT),
+        ),
+        // Season-bounded by construction: it is answered, one way or
+        // the other, by May.
+        (
+            GoalKind::SurviveTheSeason,
+            GoalSpec::ordinary(GoalDomain::Management, GoalDirection::Stay)
                 .competing(MANAGER_WANTS_OUT)
                 .abandoned_after(12),
-            GoalKind::GetABiggerJob => {
-                S::private(D::Management, Dir::Leave).competing(MANAGER_WANTS_TO_STAY)
-            }
-            GoalKind::GetOutOfHere => GoalSpec {
+        ),
+        (
+            GoalKind::GetABiggerJob,
+            GoalSpec::private(GoalDomain::Management, GoalDirection::Leave)
+                .competing(MANAGER_WANTS_TO_STAY),
+        ),
+        (
+            GoalKind::GetOutOfHere,
+            GoalSpec {
                 decay_per_month: 0.04,
-                ..S::grievance(D::Management, Dir::Leave).competing(MANAGER_WANTS_TO_STAY)
+                ..GoalSpec::grievance(GoalDomain::Management, GoalDirection::Leave)
+                    .competing(MANAGER_WANTS_TO_STAY)
             },
-            GoalKind::TakeANationalJob => GoalSpec {
+        ),
+        (
+            GoalKind::TakeANationalJob,
+            GoalSpec {
                 decay_per_month: 0.04,
-                ..S::private(D::Management, Dir::Leave)
+                ..GoalSpec::private(GoalDomain::Management, GoalDirection::Leave)
                     .competing(MANAGER_WANTS_TO_STAY)
                     .about(GoalSubject::Himself)
             },
-            // Slowest fade in the manager rows. Being sacked is not
-            // something a man quietly stops minding.
-            // Pointed at the club that sacked him, which is never the
-            // club he is at — it has to survive taking the next job.
-            GoalKind::ProveThemWrong => GoalSpec {
+        ),
+        // Slowest fade in the manager rows. Being sacked is not
+        // something a man quietly stops minding.
+        // Pointed at the club that sacked him, which is never the
+        // club he is at — it has to survive taking the next job.
+        (
+            GoalKind::ProveThemWrong,
+            GoalSpec {
                 decay_per_month: 0.03,
-                ..S::grievance(D::Management, Dir::Neutral).about(GoalSubject::Himself)
+                ..GoalSpec::grievance(GoalDomain::Management, GoalDirection::Neutral)
+                    .about(GoalSubject::Himself)
             },
-
-            // The people above him
-            GoalKind::BeBackedInTheMarket => S::grievance(D::Boardroom, Dir::Neutral),
-            GoalKind::BeGivenTime => {
-                S::private(D::Boardroom, Dir::Stay).competing(MANAGER_WANTS_OUT)
-            }
-
-            // The squad
-            GoalKind::KeepMyBestPlayer => S::grievance(D::Squad, Dir::Neutral).abandoned_after(9),
-            GoalKind::SignThePlayerIWant => S::fleeting(D::Squad, Dir::Neutral).abandoned_after(12),
-            GoalKind::GetMyOwnSquad => S::ordinary(D::Squad, Dir::Stay)
+        ),
+        // The people above him
+        (
+            GoalKind::BeBackedInTheMarket,
+            GoalSpec::grievance(GoalDomain::Boardroom, GoalDirection::Neutral),
+        ),
+        (
+            GoalKind::BeGivenTime,
+            GoalSpec::private(GoalDomain::Boardroom, GoalDirection::Stay)
+                .competing(MANAGER_WANTS_OUT),
+        ),
+        // The squad
+        (
+            GoalKind::KeepMyBestPlayer,
+            GoalSpec::grievance(GoalDomain::Squad, GoalDirection::Neutral).abandoned_after(9),
+        ),
+        (
+            GoalKind::SignThePlayerIWant,
+            GoalSpec::fleeting(GoalDomain::Squad, GoalDirection::Neutral).abandoned_after(12),
+        ),
+        (
+            GoalKind::GetMyOwnSquad,
+            GoalSpec::ordinary(GoalDomain::Squad, GoalDirection::Stay)
                 .competing(MANAGER_WANTS_OUT)
                 .abandoned_after(36),
-            GoalKind::RestoreOrderInTheRoom => {
-                S::grievance(D::Squad, Dir::Stay).competing(MANAGER_WANTS_OUT)
-            }
-
-            // Himself
-            GoalKind::RetireFromTheGame => GoalSpec {
+        ),
+        (
+            GoalKind::RestoreOrderInTheRoom,
+            GoalSpec::grievance(GoalDomain::Squad, GoalDirection::Stay)
+                .competing(MANAGER_WANTS_OUT),
+        ),
+        // Himself
+        (
+            GoalKind::RetireFromTheGame,
+            GoalSpec {
                 decay_per_month: 0.03,
-                ..S::private(D::Welfare, Dir::Neutral).about(GoalSubject::Himself)
+                ..GoalSpec::private(GoalDomain::Welfare, GoalDirection::Neutral)
+                    .about(GoalSubject::Himself)
             },
-        }
-    }
+        ),
+    ];
 
     #[inline]
     pub fn direction(self) -> GoalDirection {

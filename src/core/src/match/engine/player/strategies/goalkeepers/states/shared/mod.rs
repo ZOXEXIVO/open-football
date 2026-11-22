@@ -793,6 +793,7 @@ impl KeeperSweepLimit {
         prof: &GoalkeeperSkillProfile,
     ) -> Vector3<f32> {
         let goal = ctx.ball().direction_to_own_goal();
+        let _ = goal;
         let strain = Self::strain(goal, point, Self::axes(prof));
         if strain <= 1.0 {
             return point;
@@ -858,6 +859,7 @@ impl KeeperCarrierThreat {
         corridor: f32,
     ) -> bool {
         let goal = ctx.ball().direction_to_own_goal();
+        let _ = goal;
         let to_goal = goal - carrier.position;
         let run = to_goal.magnitude();
         if run < 1.0 {
@@ -1854,6 +1856,7 @@ impl KeeperSmother {
         // line is not defending anything, and one who does it having swept
         // twenty-five metres out leaves an empty net behind him.
         let goal = ctx.ball().direction_to_own_goal();
+        let _ = goal;
         if (ball.x - goal.x).abs() > Self::DANGER_DEPTH {
             return None;
         }
@@ -2082,6 +2085,7 @@ impl KeeperSmother {
         prof: &GoalkeeperSkillProfile,
     ) -> Vector3<f32> {
         let goal = ctx.ball().direction_to_own_goal();
+        let _ = goal;
         let out = (attempt.ball - goal)
             .try_normalize(1e-3)
             .unwrap_or_else(|| {
@@ -2240,6 +2244,7 @@ impl KeeperOneOnOne {
         }
         let ball = ctx.tick_context.positions.ball.position;
         let goal = ctx.ball().direction_to_own_goal();
+        let _ = goal;
         let risk = GoalkeeperSkillProfile::from_ctx(ctx)
             .eccentricity
             .clamp(0.0, 1.0)
@@ -2301,6 +2306,7 @@ impl KeeperOneOnOne {
     /// A man standing still reads as coming.
     fn run_at_goal(ctx: &StateProcessingContext, carrier: &MatchPlayerLite) -> f32 {
         let goal = ctx.ball().direction_to_own_goal();
+        let _ = goal;
         let run = ctx.tick_context.positions.players.velocity(carrier.id);
         (goal - carrier.position)
             .try_normalize(1e-3)
@@ -2397,6 +2403,180 @@ impl KeeperOneOnOne {
 /// the dive is not decoration on top of a save the keeper was going to make
 /// anyway, it is the only way he covers ground once the ball is struck.
 pub struct KeeperShotReaction;
+
+/// The reach model for a dive: how far across and up the ball is, and
+/// whether it is worth leaving his feet for.
+struct LaunchModel {
+    base_reach: f32,
+    #[cfg_attr(not(feature = "match-logs"), allow(dead_code))]
+    climb: f32,
+    gap: f32,
+    walkable: f32,
+    #[cfg_attr(not(feature = "match-logs"), allow(dead_code))]
+    range_band: usize,
+}
+
+impl LaunchModel {
+    fn read(
+        ctx: &StateProcessingContext,
+        target: &ShotTarget,
+        goal: Vector3<f32>,
+        ticks: f32,
+        prof: &GoalkeeperSkillProfile,
+        range_band: usize,
+    ) -> Option<Self> {
+        let ball = &ctx.tick_context.positions.ball;
+        // How far across he actually has to travel. Asked through the SAME
+        // wedge the save itself is scored with, so the dive and the save can
+        // never disagree about the geometry.
+        let base_reach = KeeperShotSave::base_reach(prof);
+        let (lateral_error, reach) = SaveModel::wedge(
+            target.struck_from,
+            ball.velocity.norm(),
+            ctx.player.position,
+            base_reach,
+            goal.x,
+            target.goal_line_y,
+        );
+        if reach <= 1e-3 {
+            return None;
+        }
+        #[cfg(feature = "match-logs")]
+        KeeperDiveDiag::note(3);
+
+        // `wedge` works in goal-line space, where both terms are magnified
+        // by the projection; their RATIO scaled back through his real reach
+        // gives the units he has to cover from where he is standing.
+        //
+        // Deliberately NOT clamped at 1.0 the way the save model's
+        // `stretch` is: past full stretch is exactly the shot he has to go
+        // for and will not get, and clamping it there is what made the
+        // corner the one place he never dived. See `DESPAIR_REACH`.
+        let across = lateral_error * base_reach / reach;
+        // …and HOW HIGH it is going, which nothing here could see. A ball
+        // over his head is a ball he has to leave his feet for however
+        // straight at him it is — see [`SaveModel::climb_gap`], which is the
+        // whole of why a top-corner shot from range used to be the one he
+        // never moved for.
+        //
+        // ⚠ Read off `ShotTarget::goal_line_z` and NOT re-projected from
+        // the ball's live vertical state. Re-projecting was tried first and
+        // reported the mean long shot arriving **15 cm off the deck**: the
+        // gravity term over a 45-tick window is a whole metre, and a shot
+        // that has already flattened out clamps straight to zero.
+        let climb = SaveModel::climb_gap(target.goal_line_z, SaveModel::set_ceiling(prof));
+        let gap = (across * across + climb * climb).sqrt();
+        #[cfg(feature = "match-logs")]
+        {
+            use crate::mid_run_diag::KeeperRangeDiag as R;
+            R::add(range_band, 23, (target.goal_line_z * 100.0).max(0.0) as u64);
+            if climb > 0.0 {
+                R::note(range_band, 16);
+                R::add(range_band, 19, (climb * 10.0) as u64);
+            }
+        }
+        let walkable = KeeperShotReaction::ground_left(ctx, prof, ticks);
+        #[cfg(feature = "match-logs")]
+        {
+            use crate::mid_run_diag::KeeperRangeDiag as R;
+            KeeperDiveDiag::add(8, (gap.max(0.0) * 10.0) as u64);
+            KeeperDiveDiag::add(9, (walkable.max(0.0) * 10.0) as u64);
+            R::add(range_band, 14, (gap.max(0.0) * 10.0) as u64);
+            R::add(range_band, 15, (walkable.max(0.0) * 10.0) as u64);
+        }
+        Some(Self {
+            base_reach,
+            climb,
+            gap,
+            walkable,
+            range_band,
+        })
+    }
+
+    fn is_dive(&self, ctx: &StateProcessingContext) -> bool {
+        if self.gap < KeeperShotDive::STANDING_GAP {
+            #[cfg(feature = "match-logs")]
+            {
+                crate::mid_run_diag::KeeperRangeDiag::note(self.range_band, 10);
+                if self.climb > 0.0 {
+                    crate::mid_run_diag::KeeperRangeDiag::note(self.range_band, 18);
+                }
+            }
+            return false;
+        }
+        #[cfg(feature = "match-logs")]
+        KeeperDiveDiag::note(4);
+        if self.gap > self.base_reach * KeeperShotDive::DESPAIR_REACH {
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::KeeperRangeDiag::note(self.range_band, 11);
+            return false;
+        }
+        #[cfg(feature = "match-logs")]
+        KeeperDiveDiag::note(5);
+
+        if self.gap <= self.walkable * KeeperShotDive::ON_FOOT_SHARE {
+            // He can step to this one. Staying on his feet is the better
+            // save and the more common picture.
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::KeeperRangeDiag::note(self.range_band, 12);
+            return false;
+        }
+        #[cfg(feature = "match-logs")]
+        {
+            KeeperDiveDiag::note(6);
+            KeeperActionDiag::note(15);
+            use crate::mid_run_diag::{KeeperQualityDiag as Q, KeeperRangeDiag as R};
+            R::note(self.range_band, 5);
+            R::note(self.range_band, 13);
+            if self.climb > 0.0 {
+                R::note(self.range_band, 17);
+            }
+            // …and by the keeper, on the same composite `try_save_shot`
+            // bands the ARRIVAL by, so "did quality decide whether he went
+            // for it" and "did quality decide whether he stopped it" are
+            // answered on one axis. See `KeeperQualityDiag`.
+            Q::note(
+                Q::band(sc::gk_shot_stopping(
+                    ctx.player,
+                    sc::minute_from_ms(ctx.context.total_match_time),
+                )),
+                5,
+            );
+        }
+        true
+    }
+
+    #[cfg(feature = "match-logs")]
+    fn note_launch(&self, ctx: &StateProcessingContext, target: &ShotTarget, goal: Vector3<f32>) {
+        use crate::mid_run_diag::KeeperCommitDiag as C;
+        let b = &ctx.tick_context.positions.ball;
+        let to_plane = (ctx.player.position.x - b.position.x) / b.velocity.x;
+        if to_plane.is_finite() && to_plane > 0.0 {
+            let true_y = b.position.y + b.velocity.y * to_plane;
+            let aim = KeeperShotDive::crossing_at(
+                ctx.player.position.x,
+                target.struck_from,
+                goal.x,
+                target.goal_line_y,
+            );
+            C::note_launch(
+                self.range_band,
+                aim.y - true_y,
+                aim.y - ctx.player.position.y,
+                true_y - ctx.player.position.y,
+            );
+        }
+    }
+
+    #[cfg(not(feature = "match-logs"))]
+    fn note_launch(
+        &self,
+        _ctx: &StateProcessingContext,
+        _target: &ShotTarget,
+        _goal: Vector3<f32>,
+    ) {
+    }
+}
 
 impl KeeperShotReaction {
     /// Reaction time, in ENGINE ticks (10 ms), for a keeper at the bottom
@@ -2758,6 +2938,7 @@ impl KeeperShotReaction {
             return f32::MAX;
         }
         let goal = ctx.ball().direction_to_own_goal();
+        let _ = goal;
         let crossing = KeeperShotDive::crossing_at(
             ctx.player.position.x,
             target.struck_from,
@@ -2874,7 +3055,6 @@ impl KeeperShotDive {
     /// point it is aiming at every tick through [`Self::crossing_at`] —
     /// carrying a snapshot of it across the transition would be a second
     /// copy that goes stale the moment the projection updates.
-    #[expect(clippy::too_many_lines)]
     pub fn should_launch(ctx: &StateProcessingContext) -> bool {
         let Some(target) = ctx.tick_context.ball.cached_shot_target.as_ref() else {
             return false;
@@ -2885,77 +3065,97 @@ impl KeeperShotDive {
         #[cfg(feature = "match-logs")]
         KeeperDiveDiag::note(0);
 
-        let ball = &ctx.tick_context.positions.ball;
         let goal: Vector3<f32> = ctx.ball().direction_to_own_goal();
         #[cfg(feature = "match-logs")]
-        let early_band = {
+        {
             use crate::mid_run_diag::KeeperRangeDiag as R;
             let strike = (target.struck_from - Vector3::new(goal.x, goal.y, target.struck_from.z))
                 .magnitude();
             let band = R::band(strike);
             R::note(band, 20);
-            band
+        }
+
+        if !Self::in_frame(target, goal) {
+            return false;
+        }
+        let Some((ticks, range_band, prof)) = Self::reaction(ctx) else {
+            return false;
         };
-        // Over the bar, and clear of it. Nothing to dive at, and going
-        // anyway is how a keeper ends up on the floor for the follow-up —
-        // but the margin matters and it has to be the SAME margin the save
-        // uses, or he declines to move for shots the physics still resolves.
-        // See [`Self::CROSSBAR_MARGIN`].
+        let Some(model) = LaunchModel::read(ctx, target, goal, ticks, &prof, range_band) else {
+            return false;
+        };
+        if !model.is_dive(ctx) {
+            return false;
+        }
+        model.note_launch(ctx, target, goal);
+        true
+    }
+
+    /// Over the bar, or wide of the post, is a ball he never moves for.
+    fn in_frame(target: &ShotTarget, goal: Vector3<f32>) -> bool {
+        // `SHOULDER` is one dive's worth of reach — the ball that clips the
+        // outside of the post is one he still has to be seen to go for.
+        const SHOULDER: f32 = 12.0;
         if target.goal_line_z > GOAL_HEIGHT + Self::CROSSBAR_MARGIN {
             #[cfg(feature = "match-logs")]
-            crate::mid_run_diag::KeeperRangeDiag::note(early_band, 21);
-            return false;
-        }
-        // …and PAST THE POST is the same answer, which this had no test
-        // for at all. `goal_line_y` is documented as falling outside the
-        // frame when the shot is going wide, and it does: measured, the
-        // mean crossing point over every tick that got this far was
-        // **9.85 m off the middle of a 7.32 m goal**. A keeper does not
-        // throw himself at a ball flying past the upright, and leaving
-        // those in made the funnel below unreadable — 92% of it was shots
-        // that were never going in. `SHOULDER` is one dive's worth of
-        // margin: the ball that clips the outside of the post is one he
-        // still has to be seen to go for.
-        const SHOULDER: f32 = 12.0;
-        if (target.goal_line_y - goal.y).abs() > GOAL_WIDTH + SHOULDER {
-            #[cfg(feature = "match-logs")]
-            crate::mid_run_diag::KeeperRangeDiag::note(early_band, 22);
-            return false;
-        }
-        // Ticks until it reaches HIM — see `KeeperShotReaction::ticks_left`
-        // for why this is measured to the point it crosses his own depth
-        // rather than to the goal line.
-        //
-        // Asked FIRST of the physical gates, and the funnel below therefore
-        // counts only ticks on which a launch was possible at all. Anything
-        // further out is "not yet" rather than "no", and mixing the two made
-        // the whole funnel unreadable — the overwhelming majority of ticks
-        // with a live shot are ticks where he is right to still be standing.
-        let ticks = KeeperShotReaction::ticks_left(ctx);
-        if !ticks.is_finite() || ticks > Self::FLIGHT_TICKS {
-            // He has to go, but not yet — every tick he spends on his feet
-            // is a tick of the gap closed by stepping rather than by
-            // throwing himself. The finite test is not defensive: a ball
-            // crawling toward goal reports an infinite window on purpose,
-            // and it belongs in the same bucket.
+            {
+                use crate::mid_run_diag::KeeperRangeDiag as R;
+                let strike = (target.struck_from
+                    - Vector3::new(goal.x, goal.y, target.struck_from.z))
+                .magnitude();
+                R::note(R::band(strike), 7);
+            }
             return false;
         }
         #[cfg(feature = "match-logs")]
-        KeeperDiveDiag::note(1);
-        // …and the same funnel split by how far the shot was struck from.
-        // The aggregate cannot say whether "he never dives" is a
-        // reaction-time answer or a he-already-walked-there answer, and
-        // those have opposite fixes. See `KeeperRangeDiag`.
-        #[cfg(feature = "match-logs")]
-        let range_band = {
+        {
             use crate::mid_run_diag::KeeperRangeDiag as R;
             let strike = (target.struck_from - Vector3::new(goal.x, goal.y, target.struck_from.z))
                 .magnitude();
-            let band = R::band(strike);
-            R::note(band, 8);
-            band
-        };
+            R::note(R::band(strike), 6);
+        }
+        if (target.goal_line_y - goal.y).abs() > GOAL_WIDTH + SHOULDER {
+            #[cfg(feature = "match-logs")]
+            {
+                use crate::mid_run_diag::KeeperRangeDiag as R;
+                let strike = (target.struck_from
+                    - Vector3::new(goal.x, goal.y, target.struck_from.z))
+                .magnitude();
+                R::note(R::band(strike), 8);
+            }
+            return false;
+        }
+        #[cfg(feature = "match-logs")]
+        {
+            use crate::mid_run_diag::KeeperRangeDiag as R;
+            let strike = (target.struck_from - Vector3::new(goal.x, goal.y, target.struck_from.z))
+                .magnitude();
+            R::note(R::band(strike), 7);
+        }
+        true
+    }
 
+    /// The reaction window: is the ball still in flight long enough for
+    /// him to have seen it strike?
+    fn reaction(ctx: &StateProcessingContext) -> Option<(f32, usize, GoalkeeperSkillProfile)> {
+        let ticks = KeeperShotReaction::ticks_left(ctx);
+        if !ticks.is_finite() || ticks > Self::FLIGHT_TICKS {
+            #[cfg(feature = "match-logs")]
+            KeeperDiveDiag::note(1);
+            return None;
+        }
+        let goal = ctx.ball().direction_to_own_goal();
+        let _ = goal;
+        #[cfg(feature = "match-logs")]
+        let range_band = {
+            use crate::mid_run_diag::KeeperRangeDiag as R;
+            let target = ctx.tick_context.ball.cached_shot_target.as_ref()?;
+            let strike = (target.struck_from - Vector3::new(goal.x, goal.y, target.struck_from.z))
+                .magnitude();
+            R::band(strike)
+        };
+        #[cfg(not(feature = "match-logs"))]
+        let range_band = 0;
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
         // He has not seen it yet. A keeper who leaves his feet inside his
         // own reaction time is reading the shot before it is struck, and
@@ -2964,153 +3164,12 @@ impl KeeperShotDive {
         if !KeeperShotReaction::has_reacted(ctx, &prof) {
             #[cfg(feature = "match-logs")]
             crate::mid_run_diag::KeeperRangeDiag::note(range_band, 9);
-            return false;
+            return None;
         }
         #[cfg(feature = "match-logs")]
         KeeperDiveDiag::note(2);
-
-        // How far across he actually has to travel. Asked through the SAME
-        // wedge the save itself is scored with, so the dive and the save can
-        // never disagree about the geometry — the projection and the
-        // reaction window are both properties of the angle it came from.
-        let base_reach = KeeperShotSave::base_reach(&prof);
-        let (lateral_error, reach) = SaveModel::wedge(
-            target.struck_from,
-            ball.velocity.norm(),
-            ctx.player.position,
-            base_reach,
-            goal.x,
-            target.goal_line_y,
-        );
-        if reach <= 1e-3 {
-            return false;
-        }
-        #[cfg(feature = "match-logs")]
-        KeeperDiveDiag::note(3);
-
-        // `wedge` works in goal-line space, where both terms are magnified
-        // by the projection; their RATIO scaled back through his real reach
-        // gives the units he has to cover from where he is standing.
-        //
-        // Deliberately NOT clamped at 1.0 the way the save model's
-        // `stretch` is: past full stretch is exactly the shot he has to go
-        // for and will not get, and clamping it there is what made the
-        // corner the one place he never dived. See `DESPAIR_REACH`.
-        let across = lateral_error * base_reach / reach;
-        // …and HOW HIGH it is going, which nothing here could see. A ball
-        // over his head is a ball he has to leave his feet for however
-        // straight at him it is — see [`SaveModel::climb_gap`], which is the
-        // whole of why a top-corner shot from range used to be the one he
-        // never moved for. Pythagoras because his gloves have to get to a
-        // point that is both across him and above him.
-        //
-        // ⚠ Read off `ShotTarget::goal_line_z` and NOT re-projected from
-        // the ball's live vertical state. Re-projecting was tried first and
-        // reported the mean long shot arriving **15 cm off the deck**: the
-        // gravity term over a 45-tick window is a whole metre, and a shot
-        // that has already flattened out clamps straight to zero. The
-        // strike-time arc is the height every other part of the keeper
-        // model uses — the over-bar gate above, and
-        // `PlayerMatchState::leap_apex`, which decides how high the dive
-        // this returns will actually climb — so using it here is what keeps
-        // the decision and the leap talking about the same ball.
-        let climb = SaveModel::climb_gap(target.goal_line_z, SaveModel::set_ceiling(&prof));
-        let gap = (across * across + climb * climb).sqrt();
-        #[cfg(feature = "match-logs")]
-        {
-            use crate::mid_run_diag::KeeperRangeDiag as R;
-            R::add(range_band, 23, (target.goal_line_z * 100.0).max(0.0) as u64);
-            if climb > 0.0 {
-                R::note(range_band, 16);
-                R::add(range_band, 19, (climb * 10.0) as u64);
-            }
-        }
-        let walkable = KeeperShotReaction::ground_left(ctx, &prof, ticks);
-        #[cfg(feature = "match-logs")]
-        {
-            use crate::mid_run_diag::KeeperRangeDiag as R;
-            KeeperDiveDiag::add(8, (gap.max(0.0) * 10.0) as u64);
-            KeeperDiveDiag::add(9, (walkable.max(0.0) * 10.0) as u64);
-            R::add(range_band, 14, (gap.max(0.0) * 10.0) as u64);
-            R::add(range_band, 15, (walkable.max(0.0) * 10.0) as u64);
-        }
-        if gap < Self::STANDING_GAP {
-            #[cfg(feature = "match-logs")]
-            {
-                crate::mid_run_diag::KeeperRangeDiag::note(range_band, 10);
-                if climb > 0.0 {
-                    crate::mid_run_diag::KeeperRangeDiag::note(range_band, 18);
-                }
-            }
-            return false;
-        }
-        #[cfg(feature = "match-logs")]
-        KeeperDiveDiag::note(4);
-        if gap > base_reach * Self::DESPAIR_REACH {
-            #[cfg(feature = "match-logs")]
-            crate::mid_run_diag::KeeperRangeDiag::note(range_band, 11);
-            return false;
-        }
-        #[cfg(feature = "match-logs")]
-        KeeperDiveDiag::note(5);
-
-        if gap <= walkable * Self::ON_FOOT_SHARE {
-            // He can step to this one. Staying on his feet is the better
-            // save and the more common picture.
-            #[cfg(feature = "match-logs")]
-            crate::mid_run_diag::KeeperRangeDiag::note(range_band, 12);
-            return false;
-        }
-        #[cfg(feature = "match-logs")]
-        {
-            KeeperDiveDiag::note(6);
-            KeeperActionDiag::note(15);
-            use crate::mid_run_diag::{KeeperQualityDiag as Q, KeeperRangeDiag as R};
-            R::note(range_band, 5);
-            R::note(range_band, 13);
-            if climb > 0.0 {
-                R::note(range_band, 17);
-            }
-            // …and by the keeper, on the same composite `try_save_shot`
-            // bands the ARRIVAL by, so "did quality decide whether he went
-            // for it" and "did quality decide whether he stopped it" are
-            // answered on one axis. See `KeeperQualityDiag`.
-            Q::note(
-                Q::band(sc::gk_shot_stopping(
-                    ctx.player,
-                    sc::minute_from_ms(ctx.context.total_match_time),
-                )),
-                5,
-            );
-            // …and WHERE HE IS THROWING HIMSELF against where the ball is
-            // actually going. Every other counter here scores him against
-            // `target.goal_line_y`, which is the crossing point as he READ
-            // it — so the read error cancels and no save statistic can see
-            // a keeper diving away from the ball. See `KeeperCommitDiag`.
-            {
-                use crate::mid_run_diag::KeeperCommitDiag as C;
-                let b = &ctx.tick_context.positions.ball;
-                let to_plane = (ctx.player.position.x - b.position.x) / b.velocity.x;
-                if to_plane.is_finite() && to_plane > 0.0 {
-                    let true_y = b.position.y + b.velocity.y * to_plane;
-                    let aim = Self::crossing_at(
-                        ctx.player.position.x,
-                        target.struck_from,
-                        goal.x,
-                        target.goal_line_y,
-                    );
-                    C::note_launch(
-                        range_band,
-                        aim.y - true_y,
-                        aim.y - ctx.player.position.y,
-                        true_y - ctx.player.position.y,
-                    );
-                }
-            }
-        }
-        true
+        Some((ticks, range_band, prof))
     }
-
     /// The `y` the dive is aimed at on the goal line: the crossing point
     /// as he read it, unless he has COMMITTED to a side — a penalty guess
     /// — in which case that side, for the life of the dive. See

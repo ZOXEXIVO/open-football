@@ -4,8 +4,8 @@
 //! coordinator. Each connection runs through one `Handshake` exchange
 //! and then a stream of `PlayBatch` requests.
 
-use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND};
 use crate::r#match::stores::MatchStore;
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND};
 use crate::worker::protocol::{
     MatchEnvelope, MatchOutcome, PROTOCOL_VERSION, RecordingSettings, Request, Response,
 };
@@ -14,8 +14,7 @@ use crate::worker::transport::Frame;
 use core::MatchRuntime;
 use core::r#match::{
     FixtureContext, Match, MatchResult, MatchResultRaw, MatchSquad, RecordingArtifacts,
-    RecordingScope,
-    ResultMatchPositionData, Score,
+    RecordingScope, ResultMatchPositionData, Score,
 };
 use log::{debug, error, info, warn};
 use rayon::prelude::*;
@@ -108,8 +107,14 @@ impl WorkerConnection {
         WorkerConnection { stream }
     }
 
-    #[expect(clippy::too_many_lines)]
     async fn serve(mut self) -> std::io::Result<()> {
+        if !self.handshake().await? {
+            return Ok(());
+        }
+        self.service_loop().await
+    }
+
+    async fn handshake(&mut self) -> std::io::Result<bool> {
         // Handshake is the mandatory first frame on every connection.
         let first: Request = Frame::read(&mut self.stream).await?;
         match first {
@@ -136,7 +141,7 @@ impl WorkerConnection {
                     };
                     warn!("worker: rejecting handshake — {}", reason);
                     Frame::write(&mut self.stream, &Response::HandshakeRejected { reason }).await?;
-                    return Ok(());
+                    return Ok(false);
                 }
 
                 WorkerServer::apply_recording(recording);
@@ -167,10 +172,13 @@ impl WorkerConnection {
                 );
                 warn!("worker: protocol violation — {}", reason);
                 Frame::write(&mut self.stream, &Response::HandshakeRejected { reason }).await?;
-                return Ok(());
+                return Ok(false);
             }
         }
+        Ok(true)
+    }
 
+    async fn service_loop(&mut self) -> std::io::Result<()> {
         // Service loop — one Request → one Response, in order, until
         // the coordinator drops the connection.
         loop {
@@ -179,71 +187,78 @@ impl WorkerConnection {
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
                 Err(e) => return Err(e),
             };
-            match req {
-                Request::PlayBatch { items } => {
-                    // `play_batch` is CPU-bound (it runs the full match
-                    // engine for every item). Run it on the blocking
-                    // pool so this connection's tokio worker thread
-                    // stays free to accept new connections and service
-                    // heartbeat tickers — otherwise a long matchday
-                    // would freeze every other concurrent batch and
-                    // the listener's accept loop.
-                    // `items` moves into the closure, so grab the count
-                    // first and time just the processing (not the response
-                    // write) for the completion log below.
-                    let count = items.len();
-                    let timer = LatencyTimer::start();
-                    let (outcomes, replays) =
-                        match tokio::task::spawn_blocking(move || Self::play_batch(items)).await {
-                            Ok(o) => o,
-                            Err(e) => {
-                                let resp = Response::Error {
-                                    reason: format!("worker task panicked: {}", e),
-                                };
-                                Frame::write(&mut self.stream, &resp).await?;
-                                continue;
-                            }
-                        };
-                    let replay_bytes: usize = replays.iter().map(|(_, a)| a.byte_len()).sum();
-                    info!(
-                        "worker: processed batch matches={} in {} ms ({} replay(s), {} KiB)",
-                        count,
-                        timer.elapsed_ms(),
-                        replays.len(),
-                        replay_bytes / 1024,
-                    );
+            self.handle_request(req).await?;
+        }
+    }
 
-                    // Replays first, one frame each, then the batch itself. The
-                    // coordinator reads frames until it sees a terminal one, so
-                    // the order only has to be consistent — and sending them
-                    // ahead means a batch whose write dies part-way costs the
-                    // replays rather than the results.
-                    for (pos, artifacts) in replays {
-                        Frame::write(&mut self.stream, &Response::Artifacts { pos, artifacts })
-                            .await?;
-                    }
-                    let resp = Response::PlayBatch { items: outcomes };
-                    Frame::write(&mut self.stream, &resp).await?;
-                }
-                Request::Ping => {
-                    // Liveness probe — answer immediately. The worker's
-                    // serve loop is single-threaded per connection, so a
-                    // prompt pong proves both the socket and this task are
-                    // healthy and not wedged.
-                    Frame::write(&mut self.stream, &Response::Pong).await?;
-                }
-                Request::Handshake { .. } => {
-                    // Already handshaked. A second handshake is a
-                    // protocol violation; reply with an error and
-                    // continue serving so the coordinator's side can
-                    // log it.
-                    let resp = Response::Error {
-                        reason: "duplicate handshake".to_string(),
-                    };
-                    Frame::write(&mut self.stream, &resp).await?;
-                }
+    async fn handle_request(&mut self, req: Request) -> std::io::Result<()> {
+        match req {
+            Request::PlayBatch { items } => self.handle_play_batch(items).await?,
+            Request::Ping => {
+                // Liveness probe — answer immediately. The worker's
+                // serve loop is single-threaded per connection, so a
+                // prompt pong proves both the socket and this task are
+                // healthy and not wedged.
+                Frame::write(&mut self.stream, &Response::Pong).await?;
+            }
+            Request::Handshake { .. } => {
+                // Already handshaked. A second handshake is a
+                // protocol violation; reply with an error and
+                // continue serving so the coordinator's side can
+                // log it.
+                let resp = Response::Error {
+                    reason: "duplicate handshake".to_string(),
+                };
+                Frame::write(&mut self.stream, &resp).await?;
             }
         }
+        Ok(())
+    }
+
+    async fn handle_play_batch(&mut self, items: Vec<MatchEnvelope>) -> std::io::Result<()> {
+        // `play_batch` is CPU-bound (it runs the full match
+        // engine for every item). Run it on the blocking
+        // pool so this connection's tokio worker thread
+        // stays free to accept new connections and service
+        // heartbeat tickers — otherwise a long matchday
+        // would freeze every other concurrent batch and
+        // the listener's accept loop.
+        // `items` moves into the closure, so grab the count
+        // first and time just the processing (not the response
+        // write) for the completion log below.
+        let count = items.len();
+        let timer = LatencyTimer::start();
+        let (outcomes, replays) =
+            match tokio::task::spawn_blocking(move || Self::play_batch(items)).await {
+                Ok(o) => o,
+                Err(e) => {
+                    let resp = Response::Error {
+                        reason: format!("worker task panicked: {}", e),
+                    };
+                    Frame::write(&mut self.stream, &resp).await?;
+                    return Ok(());
+                }
+            };
+        let replay_bytes: usize = replays.iter().map(|(_, a)| a.byte_len()).sum();
+        info!(
+            "worker: processed batch matches={} in {} ms ({} replay(s), {} KiB)",
+            count,
+            timer.elapsed_ms(),
+            replays.len(),
+            replay_bytes / 1024,
+        );
+
+        // Replays first, one frame each, then the batch itself. The
+        // coordinator reads frames until it sees a terminal one, so
+        // the order only has to be consistent — and sending them
+        // ahead means a batch whose write dies part-way costs the
+        // replays rather than the results.
+        for (pos, artifacts) in replays {
+            Frame::write(&mut self.stream, &Response::Artifacts { pos, artifacts }).await?;
+        }
+        let resp = Response::PlayBatch { items: outcomes };
+        Frame::write(&mut self.stream, &resp).await?;
+        Ok(())
     }
 
     /// Run a batch through the worker's local engine pool, in

@@ -484,7 +484,7 @@ impl PlayerHappiness {
         partner_player_id: Option<u32>,
         context: Option<HappinessEventContext>,
     ) {
-        if requires_partner_id(&event_type) && partner_player_id.is_none() {
+        if event_type.requires_partner_id() && partner_player_id.is_none() {
             debug_assert!(
                 false,
                 "{:?} requires a partner_player_id; use add_event_with_partner",
@@ -665,7 +665,7 @@ impl PlayerHappiness {
     /// his manager or the dressing room.
     pub fn settle_wage_grievance(&mut self) {
         self.recent_events
-            .retain(|e| !is_wage_grievance(&e.event_type));
+            .retain(|e| !e.event_type.is_wage_grievance());
         self.factors.salary_satisfaction = 0.0;
         self.last_salary_negotiation = None;
         self.unhappy_streak = 0;
@@ -714,32 +714,34 @@ impl PlayerHappiness {
     }
 }
 
-/// Events a player only carries because of what he earns. Rewriting the
-/// contract answers exactly these and nothing else — a pay rise is not a
-/// reason to forget he was dropped or fell out with the manager.
-fn is_wage_grievance(event_type: &HappinessEventType) -> bool {
-    matches!(
-        event_type,
-        HappinessEventType::SalaryShock
-            | HappinessEventType::SalaryGapNoticed
-            | HappinessEventType::RejectedContractOffer
-    )
-}
+impl HappinessEventType {
+    /// Events a player only carries because of what he earns. Rewriting the
+    /// contract answers exactly these and nothing else — a pay rise is not a
+    /// reason to forget he was dropped or fell out with the manager.
+    fn is_wage_grievance(&self) -> bool {
+        matches!(
+            self,
+            HappinessEventType::SalaryShock
+                | HappinessEventType::SalaryGapNoticed
+                | HappinessEventType::RejectedContractOffer
+        )
+    }
 
-/// Event types that name a specific teammate and therefore must carry a
-/// `partner_player_id`. Mirrors the web layer's `is_partner_required`
-/// gate — kept here as the source of truth so emit-side and render-side
-/// agree. Adding a new partner-style event type means listing it both
-/// here (to enforce at emit) and in the web filter (to render the link).
-fn requires_partner_id(event_type: &HappinessEventType) -> bool {
-    matches!(
-        event_type,
-        HappinessEventType::TeammateBonding
-            | HappinessEventType::ConflictWithTeammate
-            | HappinessEventType::CloseFriendSold
-            | HappinessEventType::MentorDeparted
-            | HappinessEventType::CompatriotJoined
-    )
+    /// Event types that name a specific teammate and therefore must carry a
+    /// `partner_player_id`. Mirrors the web layer's `is_partner_required`
+    /// gate — kept here as the source of truth so emit-side and render-side
+    /// agree. Adding a new partner-style event type means listing it both
+    /// here (to enforce at emit) and in the web filter (to render the link).
+    fn requires_partner_id(&self) -> bool {
+        matches!(
+            self,
+            HappinessEventType::TeammateBonding
+                | HappinessEventType::ConflictWithTeammate
+                | HappinessEventType::CloseFriendSold
+                | HappinessEventType::MentorDeparted
+                | HappinessEventType::CompatriotJoined
+        )
+    }
 }
 
 /// Kept for backward compatibility

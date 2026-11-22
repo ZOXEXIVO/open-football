@@ -47,6 +47,23 @@ pub struct PlayerTrainingResult {
     pub outcome: Option<TrainingOutcomeBreakdown>,
 }
 
+/// Pre-session body state the load and recovery decisions must read.
+struct SessionState {
+    pre_condition: i16,
+    pre_condition_pct: u32,
+    pre_recovery_debt: f32,
+}
+
+impl SessionState {
+    fn capture(player: &Player) -> Self {
+        SessionState {
+            pre_condition: player.player_attributes.condition,
+            pre_condition_pct: player.player_attributes.condition_percentage(),
+            pre_recovery_debt: player.load.recovery_debt,
+        }
+    }
+}
+
 impl PlayerTrainingResult {
     pub fn new(player_id: u32, effects: TrainingEffects) -> Self {
         PlayerTrainingResult {
@@ -90,348 +107,367 @@ impl PlayerTrainingResult {
     /// isolation without standing up a full `SimulatorData`. The
     /// `process()` entry point is still the canonical caller — it
     /// owns the data lookup and date threading.
-    #[expect(clippy::too_many_lines)]
     pub fn apply_to_player(&self, player: &mut Player, current_date: NaiveDate) {
-        {
-            player.on_training_session(&self.effects.work, current_date);
+        self.apply_session_stats(player, current_date);
+        let state = SessionState::capture(player);
+        let new_condition = self.apply_condition(player, current_date, &state);
+        self.apply_load_and_recovery(player, &state, new_condition);
+        self.apply_fitness(player, &state);
+        self.apply_injury(player, current_date);
+        self.apply_readiness(player);
+        if let Some(outcome) = self.outcome.as_ref() {
+            Self::maybe_emit_training_event(
+                player,
+                outcome,
+                self.effects.morale_change,
+                current_date,
+            );
+        }
+    }
 
-            // Update rolling training performance (exponential moving average)
-            // Alpha = 0.3 for first 5 sessions (fast warmup), then 0.15 (slower, more stable)
-            let alpha = if player.training.sessions_completed < 5 {
-                0.3
-            } else {
-                0.15
-            };
-            player.training.training_performance = player.training.training_performance
-                * (1.0 - alpha)
-                + self.session_performance * alpha;
-            player.training.sessions_completed =
-                player.training.sessions_completed.saturating_add(1);
+    fn apply_session_stats(&self, player: &mut Player, current_date: NaiveDate) {
+        player.on_training_session(&self.effects.work, current_date);
 
-            // ── PRE-SESSION STATE SNAPSHOT ──────────────────────────
-            // The session's load / debt / jadedness / fitness decisions
-            // must read the state the player walked INTO the session
-            // with, not the state after `fatigue_change` has been
-            // applied. Without this, a recovery session that lifts
-            // condition by +800 would "look" like the player started
-            // the day fresh (and stop scaling jadedness vulnerability),
-            // and a heavy drill that drops condition by +180 would
-            // appear to start the day with the post-session deficit
-            // already in place (double-counting the tiredness). Also
-            // critical for fitness gating: the freshly-incremented
-            // recovery_debt must not block this same session's chronic
-            // fitness gain — adaptation is decided by what the body
-            // brought to the session, not by the bill it leaves with.
-            let pre_condition = player.player_attributes.condition;
-            let pre_condition_pct = player.player_attributes.condition_percentage();
-            let pre_recovery_debt = player.load.recovery_debt;
+        // Update rolling training performance (exponential moving average)
+        // Alpha = 0.3 for first 5 sessions (fast warmup), then 0.15 (slower, more stable)
+        let alpha = if player.training.sessions_completed < 5 {
+            0.3
+        } else {
+            0.15
+        };
+        player.training.training_performance =
+            player.training.training_performance * (1.0 - alpha) + self.session_performance * alpha;
+        player.training.sessions_completed = player.training.sessions_completed.saturating_add(1);
+    }
 
-            // Apply fatigue changes.
-            //
-            // POSITIVE fatigue_change (heavy drill): subtracts from
-            // condition straight — no individualisation, intensity
-            // hurts everyone roughly the same.
-            //
-            // NEGATIVE fatigue_change (recovery session): the magnitude
-            // becomes a *potential* gain, not a guaranteed one. A
-            // genuinely depleted player banks most of it; a player
-            // already near their target gains barely anything. Elite
-            // recovery profiles (high NF / chronic fitness /
-            // professionalism, low recovery debt) absorb more of the
-            // potential than average bodies. An overloaded player can't
-            // reset on a single ice bath.
-            //
-            // The target is computed via the same `individualized_target`
-            // the daily-rest path uses so the training day and the
-            // rest day agree on what "fully recovered" means for this
-            // player today.
-            // Floor at 30% — condition never drops below this in training.
-            let new_condition = if self.effects.fatigue_change >= 0.0 {
-                // Individualise the acute cost: elite stamina / NF /
-                // chronic fitness pay less for the same heavy drill;
-                // overloaded / jaded / very young / veteran bodies pay
-                // more. Reads PRE-session debt / jadedness / condition
-                // so the same drill on a fresh squad and a battered
-                // squad doesn't cost the same. The recovery branch is
-                // already individualised via `individualized_target`,
-                // so the multiplier intentionally lives only here.
-                let age = DateUtils::age(player.birth_date, current_date);
-                let cost_mult = ConditionRecoveryModel::training_fatigue_cost_mult(
-                    player.skills.physical.stamina,
-                    player.skills.physical.natural_fitness,
-                    player.player_attributes.fitness,
-                    pre_recovery_debt,
-                    player.player_attributes.jadedness,
-                    age,
-                );
-                (pre_condition as f32 - self.effects.fatigue_change * cost_mult)
-                    .clamp(3_000.0, 10_000.0)
-            } else {
-                let recovery_potential = -self.effects.fatigue_change;
-                let age = DateUtils::age(player.birth_date, current_date);
-                let target = ConditionRecoveryModel::individualized_target(ConditionTargetInputs {
-                    natural_fitness: player.skills.physical.natural_fitness,
-                    stamina: player.skills.physical.stamina,
-                    chronic_fitness: player.player_attributes.fitness,
-                    match_readiness: player.skills.physical.match_readiness,
-                    physical_load_7: player.load.physical_load_7,
-                    recovery_debt: pre_recovery_debt,
-                    jadedness: player.player_attributes.jadedness,
-                    age,
-                });
-                let deficit = (target - pre_condition as f32).max(0.0);
-                let nf01 = (player.skills.physical.natural_fitness / 20.0).clamp(0.0, 1.0);
-                let chronic_fitness01 =
-                    (player.player_attributes.fitness as f32 / 10_000.0).clamp(0.0, 1.0);
-                let professionalism01 = (player.attributes.professionalism / 20.0).clamp(0.0, 1.0);
-                // The club's recovery-facility / sports-science quality
-                // is already folded into `recovery_potential` upstream
-                // (PlayerTraining::train scales recovery sessions by
-                // `TrainingFacilities::get_recovery_modifier`). To avoid
-                // double-counting, use a neutral 0.5 here — the design
-                // term lives in the formula so future per-player staff
-                // modelling can drop in without touching call sites.
-                let staff_fitness01 = 0.5_f32;
-                let efficiency = (0.45
-                    + nf01 * 0.18
-                    + chronic_fitness01 * 0.12
-                    + professionalism01 * 0.08
-                    + staff_fitness01 * 0.10
-                    - (pre_recovery_debt / 2_000.0).clamp(0.0, 1.0) * 0.15)
-                    .clamp(0.35, 1.15);
-                // ±5% deterministic noise — same per-(player, date)
-                // stability guarantee as the rest path. The training-
-                // recovery salt keeps this stream independent from the
-                // daily-rest stream so the same player isn't pushed in
-                // the same noise direction on a day that has both a
-                // recovery session and a rest pass.
-                let date_ordinal = current_date.num_days_from_ce();
-                let noise = ConditionRecoveryModel::deterministic_noise(
-                    player.id,
-                    date_ordinal,
-                    ConditionRecoveryModel::NOISE_TRAINING_RECOVERY,
-                    0.05,
-                );
-                let condition_gain = recovery_potential.min(deficit * 0.75) * efficiency * noise;
-                (pre_condition as f32 + condition_gain).clamp(3_000.0, 10_000.0)
-            };
-            player.player_attributes.condition = new_condition as i16;
-
-            // Workload bookkeeping into PlayerLoad. Heavy sessions add to
-            // physical_load_7/30 + recovery_debt; recovery sessions burn
-            // off accumulated debt. This is the single signal selection
-            // and injury-risk consult — keeping training and matches on
-            // the same scale.
-            //
-            // Condition-aware: training on tired legs adds more recovery
-            // debt and a touch more jadedness than the same session on
-            // fresh legs — read from PRE-session condition so the
-            // multiplier reflects the state the body actually started
-            // the drill in. Models the real-world cost of "the squad's
-            // gassed but the manager still ran a hard pressing drill".
-            if self.effects.physical_load_units > 0.0 {
-                let hi = self.effects.physical_load_units * self.effects.high_intensity_share;
-                player
-                    .load
-                    .record_training_load(self.effects.physical_load_units, hi);
-
-                // Per-spec debt formula:
-                //   training_debt_add = physical_load_units
-                //       * (0.12 + 0.18 * high_intensity_share)
-                // Condition multipliers (cumulative bands, not overlapping):
-                //   * <60% condition  → ×1.25
-                //   * <45% condition  → ×1.50 (replaces ×1.25)
-                // A tired squad accumulates debt faster than a fresh
-                // one for the same drill, which is the missing
-                // feedback loop between "we keep running hard
-                // sessions" and "injuries pile up".
-                let hi_share = self.effects.high_intensity_share.clamp(0.0, 1.0);
-                let mut training_debt_add =
-                    self.effects.physical_load_units * (0.12 + 0.18 * hi_share);
-                if pre_condition_pct < 45 {
-                    training_debt_add *= 1.50;
-                } else if pre_condition_pct < 60 {
-                    training_debt_add *= 1.25;
-                }
-                player.load.add_recovery_debt(training_debt_add);
-
-                // Jadedness from training: high-intensity work and
-                // sessions on tired legs both push harder. A 90-min
-                // pressing drill on a fresh midfielder adds ~50; on
-                // a 50%-condition midfielder it adds ~63. The
-                // vulnerability multiplier reads PRE-session condition
-                // so a recovery + heavy back-to-back doesn't artificially
-                // soften the heavy drill. Recovery sessions handle
-                // jadedness on the negative branch.
-                let hi_mult = 0.75 + hi_share * 1.25;
-                let fatigue_vulnerability = if pre_condition_pct < 60 { 1.25 } else { 1.0 };
-                let jadedness_gain =
-                    (self.effects.physical_load_units * hi_mult * fatigue_vulnerability).round()
-                        as i32;
-                let new_jad =
-                    (player.player_attributes.jadedness as i32 + jadedness_gain).clamp(0, 10_000);
-                player.player_attributes.jadedness = new_jad as i16;
-            }
-            if self.effects.fatigue_change < 0.0 {
-                // Blended drain: most of the debt / jadedness clearance
-                // is driven by the ACTUAL condition gain banked above,
-                // with a small floor of "raw potential". The two terms
-                // capture two different bits of real physiology:
-                //
-                //  * actual_condition_gain → the body did refill, so
-                //    soft-tissue and CNS bookkeeping wind down. Sized
-                //    so a Recovery worth -800 that lands as a +600 gain
-                //    burns ~132 debt and ~30 jadedness points — a real
-                //    bounce-back, but never a structural reset.
-                //  * recovery_potential → the session itself (ice bath,
-                //    massage, mobility) still touches the body even
-                //    when the player walked in near their daily target
-                //    and gained almost no condition. A small floor so
-                //    one Recovery on a near-fresh squad reads as
-                //    "tiny but non-zero", not "completely wasted".
-                //
-                // Net effect: a player at 93% with 900 debt drains far
-                // less debt from a Recovery than a player at 55% with
-                // the same session. Recovery sessions can no longer
-                // erase major overload on their own — the deep tank
-                // requires actual condition recovery to clear.
-                let recovery_potential = -self.effects.fatigue_change;
-                let actual_condition_gain = (new_condition - pre_condition as f32).max(0.0);
-                let debt_drain = actual_condition_gain * 0.22 + recovery_potential * 0.08;
-                player.load.consume_recovery_debt(debt_drain);
-                let jadedness_drain = actual_condition_gain * 0.05 + recovery_potential * 0.025;
-                let jad_reduction = jadedness_drain.round() as i32;
-                let new_jad = (player.player_attributes.jadedness as i32 - jad_reduction).max(0);
-                player.player_attributes.jadedness = new_jad as i16;
-            }
-
-            // ── FITNESS (chronic base) ──────────────────────────────
-            // Endurance / Strength / Speed / Pressing work builds the
-            // long-term aerobic / structural base — but only when the
-            // player can actually absorb it. The previous model used
-            // three hard cliffs (HI > 0.15, condition_pct ≥ 55,
-            // recovery_debt < 500) that caused the absorption to flip
-            // between "full adaptation" and "zero adaptation" on a
-            // single unit. We replace those with a smooth absorption
-            // multiplier so a player on the edge of any one criterion
-            // still adapts proportionally to how compromised they are.
-            //
-            // The PRE-session recovery_debt is the right denominator:
-            // a heavy pressing drill should not be allowed to block its
-            // OWN adaptation by booking debt before the absorption
-            // calculation reads it.
-            //
-            // Hard floor at pre_condition_pct < 45: even a smooth model
-            // refuses to certify "training on fumes" as adaptive load.
-            // The session still books load + debt + jadedness; the
-            // player just doesn't bank a chronic-fitness gain from it.
-            let load_units = self.effects.physical_load_units;
-            let hi_share = self.effects.high_intensity_share.clamp(0.0, 1.0);
-            if load_units > 0.0 && pre_condition_pct >= 45 {
-                // condition_absorption: 0 at 45%, 1 at ≥ 80% — a tired
-                // player completes the drill but adapts poorly.
-                let condition_absorption =
-                    (((pre_condition_pct as f32) - 45.0) / 35.0).clamp(0.0, 1.0);
-                // debt_absorption: 1 at debt 0, 0.15 at debt 1200+ —
-                // floors at 0.15 so chronic gains stay possible even
-                // with elevated debt, just heavily attenuated.
-                let debt_absorption = (1.0 - (pre_recovery_debt / 1200.0)).clamp(0.15, 1.0);
-                // intensity_absorption: a high-intensity drill is the
-                // canonical adaptation stimulus (0.65 + share*0.70 ≈
-                // 0.76..1.35); low-intensity recovery work still adds a
-                // tiny chronic gain (0.25) — sat in an ice bath builds
-                // no aerobic base, but a light tactical jog does some.
-                let intensity_absorption = if hi_share >= 0.15 {
-                    0.65 + hi_share * 0.70
-                } else {
-                    0.25
-                };
-                let fitness_gain = load_units
-                    * 0.45
-                    * condition_absorption
-                    * debt_absorption
-                    * intensity_absorption;
-                if fitness_gain > 0.0 {
-                    let new_fitness =
-                        (player.player_attributes.fitness as f32 + fitness_gain).min(10_000.0);
-                    player.player_attributes.fitness = new_fitness as i16;
-                }
-            }
-
-            // Apply injury risk — unified recipe. Translate the
-            // session-type base risk into the shared model so the same
-            // workload signals (jadedness, condition, ACWR spike,
-            // congestion, recovery phase) are read by spontaneous,
-            // training, and match paths consistently.
-            let intensity_factor =
-                ((self.effects.fatigue_change.abs() + self.effects.physical_load_units) / 60.0)
-                    .clamp(0.4, 2.0);
-            let in_recovery = player.player_attributes.is_in_recovery();
-            let chance = player.compute_injury_risk(InjuryRiskInputs {
-                base_rate: self.effects.injury_risk.max(0.0),
-                intensity: intensity_factor,
-                in_recovery,
-                medical_multiplier: 1.0,
-                now: current_date,
+    fn apply_condition(
+        &self,
+        player: &mut Player,
+        current_date: NaiveDate,
+        state: &SessionState,
+    ) -> f32 {
+        // Apply fatigue changes.
+        //
+        // POSITIVE fatigue_change (heavy drill): subtracts from
+        // condition straight — no individualisation, intensity
+        // hurts everyone roughly the same.
+        //
+        // NEGATIVE fatigue_change (recovery session): the magnitude
+        // becomes a *potential* gain, not a guaranteed one. A
+        // genuinely depleted player banks most of it; a player
+        // already near their target gains barely anything. Elite
+        // recovery profiles (high NF / chronic fitness /
+        // professionalism, low recovery debt) absorb more of the
+        // potential than average bodies. An overloaded player can't
+        // reset on a single ice bath.
+        //
+        // The target is computed via the same `individualized_target`
+        // the daily-rest path uses so the training day and the
+        // rest day agree on what "fully recovered" means for this
+        // player today.
+        // Floor at 30% — condition never drops below this in training.
+        let new_condition = if self.effects.fatigue_change >= 0.0 {
+            // Individualise the acute cost: elite stamina / NF /
+            // chronic fitness pay less for the same heavy drill;
+            // overloaded / jaded / very young / veteran bodies pay
+            // more. Reads PRE-session debt / jadedness / condition
+            // so the same drill on a fresh squad and a battered
+            // squad doesn't cost the same. The recovery branch is
+            // already individualised via `individualized_target`,
+            // so the multiplier intentionally lives only here.
+            let age = DateUtils::age(player.birth_date, current_date);
+            let cost_mult = ConditionRecoveryModel::training_fatigue_cost_mult(
+                player.skills.physical.stamina,
+                player.skills.physical.natural_fitness,
+                player.player_attributes.fitness,
+                state.pre_recovery_debt,
+                player.player_attributes.jadedness,
+                age,
+            );
+            (state.pre_condition as f32 - self.effects.fatigue_change * cost_mult)
+                .clamp(3_000.0, 10_000.0)
+        } else {
+            let recovery_potential = -self.effects.fatigue_change;
+            let age = DateUtils::age(player.birth_date, current_date);
+            let target = ConditionRecoveryModel::individualized_target(ConditionTargetInputs {
+                natural_fitness: player.skills.physical.natural_fitness,
+                stamina: player.skills.physical.stamina,
+                chronic_fitness: player.player_attributes.fitness,
+                match_readiness: player.skills.physical.match_readiness,
+                physical_load_7: player.load.physical_load_7,
+                recovery_debt: state.pre_recovery_debt,
+                jadedness: player.player_attributes.jadedness,
+                age,
             });
-            if RandomEngine::gen_f32() < chance {
-                let age = DateUtils::age(player.birth_date, current_date);
-                let condition_pct = player.player_attributes.condition_percentage();
-                let natural_fitness = player.skills.physical.natural_fitness;
-                let injury_proneness = player.player_attributes.injury_proneness;
+            let deficit = (target - state.pre_condition as f32).max(0.0);
+            let nf01 = (player.skills.physical.natural_fitness / 20.0).clamp(0.0, 1.0);
+            let chronic_fitness01 =
+                (player.player_attributes.fitness as f32 / 10_000.0).clamp(0.0, 1.0);
+            let professionalism01 = (player.attributes.professionalism / 20.0).clamp(0.0, 1.0);
+            // The club's recovery-facility / sports-science quality
+            // is already folded into `recovery_potential` upstream
+            // (PlayerTraining::train scales recovery sessions by
+            // `TrainingFacilities::get_recovery_modifier`). To avoid
+            // double-counting, use a neutral 0.5 here — the design
+            // term lives in the formula so future per-player staff
+            // modelling can drop in without touching call sites.
+            let staff_fitness01 = 0.5_f32;
+            let efficiency = (0.45
+                + nf01 * 0.18
+                + chronic_fitness01 * 0.12
+                + professionalism01 * 0.08
+                + staff_fitness01 * 0.10
+                - (state.pre_recovery_debt / 2_000.0).clamp(0.0, 1.0) * 0.15)
+                .clamp(0.35, 1.15);
+            // ±5% deterministic noise — same per-(player, date)
+            // stability guarantee as the rest path. The training-
+            // recovery salt keeps this stream independent from the
+            // daily-rest stream so the same player isn't pushed in
+            // the same noise direction on a day that has both a
+            // recovery session and a rest pass.
+            let date_ordinal = current_date.num_days_from_ce();
+            let noise = ConditionRecoveryModel::deterministic_noise(
+                player.id,
+                date_ordinal,
+                ConditionRecoveryModel::NOISE_TRAINING_RECOVERY,
+                0.05,
+            );
+            let condition_gain = recovery_potential.min(deficit * 0.75) * efficiency * noise;
+            (state.pre_condition as f32 + condition_gain).clamp(3_000.0, 10_000.0)
+        };
+        player.player_attributes.condition = new_condition as i16;
+        new_condition
+    }
 
-                let injury = InjuryType::random_training_injury(
-                    age,
-                    condition_pct,
-                    natural_fitness,
-                    injury_proneness,
-                );
-                player.player_attributes.set_injury(injury, age);
-                player.statuses.add(current_date, PlayerStatusType::Inj);
-            }
+    fn apply_load_and_recovery(
+        &self,
+        player: &mut Player,
+        state: &SessionState,
+        new_condition: f32,
+    ) {
+        // Workload bookkeeping into PlayerLoad. Heavy sessions add to
+        // physical_load_7/30 + recovery_debt; recovery sessions burn
+        // off accumulated debt. This is the single signal selection
+        // and injury-risk consult — keeping training and matches on
+        // the same scale.
+        //
+        // Condition-aware: training on tired legs adds more recovery
+        // debt and a touch more jadedness than the same session on
+        // fresh legs — read from PRE-session condition so the
+        // multiplier reflects the state the body actually started
+        // the drill in. Models the real-world cost of "the squad's
+        // gassed but the manager still ran a hard pressing drill".
+        if self.effects.physical_load_units > 0.0 {
+            let hi = self.effects.physical_load_units * self.effects.high_intensity_share;
+            player
+                .load
+                .record_training_load(self.effects.physical_load_units, hi);
 
-            // Update match readiness from the per-session readiness_change
-            // — replaces the old blanket "any negative fatigue gives +2"
-            // rule. PressingDrills / MatchPreparation now sharpen players
-            // properly; passive video / RestDay barely move the needle.
-            if self.effects.readiness_change != 0.0 {
-                player.skills.physical.match_readiness = (player.skills.physical.match_readiness
-                    + self.effects.readiness_change)
-                    .clamp(0.0, 20.0);
+            // Per-spec debt formula:
+            //   training_debt_add = physical_load_units
+            //       * (0.12 + 0.18 * high_intensity_share)
+            // Condition multipliers (cumulative bands, not overlapping):
+            //   * <60% condition  → ×1.25
+            //   * <45% condition  → ×1.50 (replaces ×1.25)
+            // A tired squad accumulates debt faster than a fresh
+            // one for the same drill, which is the missing
+            // feedback loop between "we keep running hard
+            // sessions" and "injuries pile up".
+            let hi_share = self.effects.high_intensity_share.clamp(0.0, 1.0);
+            let mut training_debt_add = self.effects.physical_load_units * (0.12 + 0.18 * hi_share);
+            if state.pre_condition_pct < 45 {
+                training_debt_add *= 1.50;
+            } else if state.pre_condition_pct < 60 {
+                training_debt_add *= 1.25;
             }
-            // Very intense sessions on already-tired legs blunt readiness
-            // (a hard pressing drill on a Friday with the legs gone).
-            if self.effects.fatigue_change > 120.0
-                && player.player_attributes.condition_percentage() < 60
-            {
-                player.skills.physical.match_readiness =
-                    (player.skills.physical.match_readiness - 0.5).max(0.0);
-            }
+            player.load.add_recovery_debt(training_debt_add);
 
-            // Emit GoodTraining / PoorTraining strictly from the
-            // session-outcome model. Sessions whose outcome is neutral —
-            // a routine, expected-quality day — produce *no* training
-            // event so the player's history doesn't fill up with
-            // GoodTraining lines for every TeamShape or RestDay.
-            if let Some(outcome) = self.outcome.as_ref() {
-                Self::maybe_emit_training_event(
-                    player,
-                    outcome,
-                    self.effects.morale_change,
-                    current_date,
-                );
+            // Jadedness from training: high-intensity work and
+            // sessions on tired legs both push harder. A 90-min
+            // pressing drill on a fresh midfielder adds ~50; on
+            // a 50%-condition midfielder it adds ~63. The
+            // vulnerability multiplier reads PRE-session condition
+            // so a recovery + heavy back-to-back doesn't artificially
+            // soften the heavy drill. Recovery sessions handle
+            // jadedness on the negative branch.
+            let hi_mult = 0.75 + hi_share * 1.25;
+            let fatigue_vulnerability = if state.pre_condition_pct < 60 {
+                1.25
+            } else {
+                1.0
+            };
+            let jadedness_gain =
+                (self.effects.physical_load_units * hi_mult * fatigue_vulnerability).round() as i32;
+            let new_jad =
+                (player.player_attributes.jadedness as i32 + jadedness_gain).clamp(0, 10_000);
+            player.player_attributes.jadedness = new_jad as i16;
+        }
+        if self.effects.fatigue_change < 0.0 {
+            // Blended drain: most of the debt / jadedness clearance
+            // is driven by the ACTUAL condition gain banked above,
+            // with a small floor of "raw potential". The two terms
+            // capture two different bits of real physiology:
+            //
+            //  * actual_condition_gain → the body did refill, so
+            //    soft-tissue and CNS bookkeeping wind down. Sized
+            //    so a Recovery worth -800 that lands as a +600 gain
+            //    burns ~132 debt and ~30 jadedness points — a real
+            //    bounce-back, but never a structural reset.
+            //  * recovery_potential → the session itself (ice bath,
+            //    massage, mobility) still touches the body even
+            //    when the player walked in near their daily target
+            //    and gained almost no condition. A small floor so
+            //    one Recovery on a near-fresh squad reads as
+            //    "tiny but non-zero", not "completely wasted".
+            //
+            // Net effect: a player at 93% with 900 debt drains far
+            // less debt from a Recovery than a player at 55% with
+            // the same session. Recovery sessions can no longer
+            // erase major overload on their own — the deep tank
+            // requires actual condition recovery to clear.
+            let recovery_potential = -self.effects.fatigue_change;
+            let actual_condition_gain = (new_condition - state.pre_condition as f32).max(0.0);
+            let debt_drain = actual_condition_gain * 0.22 + recovery_potential * 0.08;
+            player.load.consume_recovery_debt(debt_drain);
+            let jadedness_drain = actual_condition_gain * 0.05 + recovery_potential * 0.025;
+            let jad_reduction = jadedness_drain.round() as i32;
+            let new_jad = (player.player_attributes.jadedness as i32 - jad_reduction).max(0);
+            player.player_attributes.jadedness = new_jad as i16;
+        }
+    }
+
+    fn apply_fitness(&self, player: &mut Player, state: &SessionState) {
+        // ── FITNESS (chronic base) ──────────────────────────────
+        // Endurance / Strength / Speed / Pressing work builds the
+        // long-term aerobic / structural base — but only when the
+        // player can actually absorb it. The previous model used
+        // three hard cliffs (HI > 0.15, condition_pct ≥ 55,
+        // recovery_debt < 500) that caused the absorption to flip
+        // between "full adaptation" and "zero adaptation" on a
+        // single unit. We replace those with a smooth absorption
+        // multiplier so a player on the edge of any one criterion
+        // still adapts proportionally to how compromised they are.
+        //
+        // The PRE-session recovery_debt is the right denominator:
+        // a heavy pressing drill should not be allowed to block its
+        // OWN adaptation by booking debt before the absorption
+        // calculation reads it.
+        //
+        // Hard floor at state.pre_condition_pct < 45: even a smooth model
+        // refuses to certify "training on fumes" as adaptive load.
+        // The session still books load + debt + jadedness; the
+        // player just doesn't bank a chronic-fitness gain from it.
+        let load_units = self.effects.physical_load_units;
+        let hi_share = self.effects.high_intensity_share.clamp(0.0, 1.0);
+        if load_units > 0.0 && state.pre_condition_pct >= 45 {
+            // condition_absorption: 0 at 45%, 1 at ≥ 80% — a tired
+            // player completes the drill but adapts poorly.
+            let condition_absorption =
+                (((state.pre_condition_pct as f32) - 45.0) / 35.0).clamp(0.0, 1.0);
+            // debt_absorption: 1 at debt 0, 0.15 at debt 1200+ —
+            // floors at 0.15 so chronic gains stay possible even
+            // with elevated debt, just heavily attenuated.
+            let debt_absorption = (1.0 - (state.pre_recovery_debt / 1200.0)).clamp(0.15, 1.0);
+            // intensity_absorption: a high-intensity drill is the
+            // canonical adaptation stimulus (0.65 + share*0.70 ≈
+            // 0.76..1.35); low-intensity recovery work still adds a
+            // tiny chronic gain (0.25) — sat in an ice bath builds
+            // no aerobic base, but a light tactical jog does some.
+            let intensity_absorption = if hi_share >= 0.15 {
+                0.65 + hi_share * 0.70
+            } else {
+                0.25
+            };
+            let fitness_gain =
+                load_units * 0.45 * condition_absorption * debt_absorption * intensity_absorption;
+            if fitness_gain > 0.0 {
+                let new_fitness =
+                    (player.player_attributes.fitness as f32 + fitness_gain).min(10_000.0);
+                player.player_attributes.fitness = new_fitness as i16;
             }
         }
     }
 
-    #[expect(clippy::too_many_lines)]
+    fn apply_injury(&self, player: &mut Player, current_date: NaiveDate) {
+        // Apply injury risk — unified recipe. Translate the
+        // session-type base risk into the shared model so the same
+        // workload signals (jadedness, condition, ACWR spike,
+        // congestion, recovery phase) are read by spontaneous,
+        // training, and match paths consistently.
+        let intensity_factor =
+            ((self.effects.fatigue_change.abs() + self.effects.physical_load_units) / 60.0)
+                .clamp(0.4, 2.0);
+        let in_recovery = player.player_attributes.is_in_recovery();
+        let chance = player.compute_injury_risk(InjuryRiskInputs {
+            base_rate: self.effects.injury_risk.max(0.0),
+            intensity: intensity_factor,
+            in_recovery,
+            medical_multiplier: 1.0,
+            now: current_date,
+        });
+        if RandomEngine::gen_f32() < chance {
+            let age = DateUtils::age(player.birth_date, current_date);
+            let condition_pct = player.player_attributes.condition_percentage();
+            let natural_fitness = player.skills.physical.natural_fitness;
+            let injury_proneness = player.player_attributes.injury_proneness;
+
+            let injury = InjuryType::random_training_injury(
+                age,
+                condition_pct,
+                natural_fitness,
+                injury_proneness,
+            );
+            player.player_attributes.set_injury(injury, age);
+            player.statuses.add(current_date, PlayerStatusType::Inj);
+        }
+    }
+
+    fn apply_readiness(&self, player: &mut Player) {
+        // Update match readiness from the per-session readiness_change
+        // — replaces the old blanket "any negative fatigue gives +2"
+        // rule. PressingDrills / MatchPreparation now sharpen players
+        // properly; passive video / RestDay barely move the needle.
+        if self.effects.readiness_change != 0.0 {
+            player.skills.physical.match_readiness = (player.skills.physical.match_readiness
+                + self.effects.readiness_change)
+                .clamp(0.0, 20.0);
+        }
+        // Very intense sessions on already-tired legs blunt readiness
+        // (a hard pressing drill on a Friday with the legs gone).
+        if self.effects.fatigue_change > 120.0
+            && player.player_attributes.condition_percentage() < 60
+        {
+            player.skills.physical.match_readiness =
+                (player.skills.physical.match_readiness - 0.5).max(0.0);
+        }
+    }
+
     fn maybe_emit_training_event(
         player: &mut Player,
         outcome: &TrainingOutcomeBreakdown,
         morale_change: f32,
         current_date: NaiveDate,
     ) {
-        // Hard gates — outcome quality, not session-type morale.
+        let Some((event_type, magnitude)) =
+            Self::training_event_quality(player, outcome, morale_change, current_date)
+        else {
+            if morale_change.abs() > 0.001 {
+                player.happiness.adjust_morale(morale_change * 1.5);
+            }
+            return;
+        };
+
+        Self::emit_training_event(player, outcome, event_type, magnitude, morale_change);
+    }
+
+    /// Decide whether this session deserves a visible Good/PoorTraining
+    /// event, and at what magnitude.
+    fn training_event_quality(
+        player: &Player,
+        outcome: &TrainingOutcomeBreakdown,
+        morale_change: f32,
+        current_date: NaiveDate,
+    ) -> Option<(HappinessEventType, f32)> {
         let raw = outcome.raw_score;
         let delta = outcome.delta_from_baseline;
         let age = DateUtils::age(player.birth_date, current_date);
@@ -481,20 +517,25 @@ impl PlayerTrainingResult {
         let block_poor_for_fatigue =
             !recovery_or_fatigue_cause && physically_compromised && raw > 5.5 && !attitude_failure;
 
-        let (event_type, magnitude) = if positive_qualifies && morale_change > 0.0 {
-            (HappinessEventType::GoodTraining, morale_change * 5.0)
+        if positive_qualifies && morale_change > 0.0 {
+            Some((HappinessEventType::GoodTraining, morale_change * 5.0))
         } else if morale_change < 0.0
             && ((negative_qualifies && !block_poor_for_fatigue)
                 || (recovery_or_fatigue_cause && raw <= 6.5))
         {
-            (HappinessEventType::PoorTraining, morale_change * 5.0)
+            Some((HappinessEventType::PoorTraining, morale_change * 5.0))
         } else {
-            if morale_change.abs() > 0.001 {
-                player.happiness.adjust_morale(morale_change * 1.5);
-            }
-            return;
-        };
+            None
+        }
+    }
 
+    fn emit_training_event(
+        player: &mut Player,
+        outcome: &TrainingOutcomeBreakdown,
+        event_type: HappinessEventType,
+        magnitude: f32,
+        morale_change: f32,
+    ) {
         let positive = matches!(event_type, HappinessEventType::GoodTraining);
         let mut training_ctx = TrainingEventContext::new(
             outcome.primary_reason,
@@ -504,8 +545,6 @@ impl PlayerTrainingResult {
         for ev in &outcome.evidence {
             training_ctx = training_ctx.with_evidence(*ev);
         }
-        // PoorAttitude must never carry fatigue / recovery / overload
-        // evidence — copy would contradict itself.
         if outcome.primary_reason == TrainingEventReason::PoorAttitude {
             training_ctx.evidence.retain(|e| {
                 !matches!(
@@ -516,7 +555,6 @@ impl PlayerTrainingResult {
                 )
             });
         }
-
         // Visible-event cooldown. Morale still moves on every session;
         // only the timeline entry is suppressed when an event of the
         // same type with the same primary reason fired recently. This
@@ -544,6 +582,21 @@ impl PlayerTrainingResult {
                 happiness_ctx,
             );
         }
+
+        if !positive
+            && outcome.primary_reason == TrainingEventReason::PoorAttitude
+            && morale_change.abs() > 0.4
+        {
+            player.behaviour.state = match player.behaviour.state {
+                PersonBehaviourState::Good => PersonBehaviourState::Normal,
+                PersonBehaviourState::Normal => PersonBehaviourState::Poor,
+                other => other,
+            };
+        }
+        if positive && morale_change >= 0.4 {
+            player.behaviour.try_increase();
+        }
+
         player.happiness.adjust_morale(morale_change * 3.0);
 
         if !positive

@@ -17,8 +17,9 @@
 //!   the single source of truth for their role: a decision site that
 //!   branches on a raw `vision >= 14.0` belongs here instead.
 
+#[path = "skill_composites.rs"]
+mod composite;
 pub mod effective_skill;
-pub mod skill_composites;
 pub mod traits_bias;
 
 pub mod defender_skill;
@@ -26,9 +27,11 @@ pub mod goalkeeper_skill;
 pub mod midfielder_skill;
 pub mod shot_skill;
 
+pub use composite::*;
 pub use effective_skill::*;
-pub use skill_composites::*;
 pub use traits_bias::*;
+
+pub use composite::SkillComposite as skill_composites;
 
 pub use defender_skill::*;
 pub use goalkeeper_skill::*;

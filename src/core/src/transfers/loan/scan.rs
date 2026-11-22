@@ -41,8 +41,8 @@ use crate::transfers::squad::minutes::LoanPromise;
 use crate::transfers::value::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
-    Club, Country, PathwayStage, Person, PlayerFieldPositionGroup, PlayerSquadStatus,
-    ReputationLevel, TeamType,
+    Club, Country, PathwayStage, Person, Player, PlayerFieldPositionGroup, PlayerSquadStatus,
+    ReputationLevel, Team, TeamType,
 };
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -250,7 +250,6 @@ impl LoanBoard {
     /// bigger one about a player who has NOT been loan-listed — the badge is
     /// not a precondition for loan demand. Built weekly so the squad-wide scan
     /// stays cheap, while the listed market above is read daily.
-    #[expect(clippy::too_many_lines)]
     fn unsolicited(country: &Country, date: NaiveDate) -> Vec<LoanListing> {
         // ── Unsolicited loan targets (no `Loa` required) ─────────────
         //
@@ -272,164 +271,202 @@ impl LoanBoard {
         country
             .clubs
             .par_iter()
-            .map(|club| {
-                let mut unsolicited_targets: Vec<LoanListing> = Vec::new();
-                let parent_team = match club.teams.main().or_else(|| club.teams.teams.first()) {
-                    Some(t) => t,
-                    None => return unsolicited_targets,
-                };
-                let parent_rep = parent_team.reputation.world;
-                let asset_ctx = SquadAssetContext::build(club, date);
-                let (seller_league_rep, seller_club_rep) =
-                    PlayerValuationCalculator::seller_context(country, club);
-
-                for team in &club.teams.teams {
-                    for player in team.players.iter() {
-                        let age = player.age(date);
-                        let asset_class = asset_ctx.classify_in_squad(player, date, team.team_type);
-                        // The parent's own veto, read before anybody asks:
-                        // a club does not entertain a cold call about the
-                        // man who starts for it.
-                        let guard = LoanAssetGuard::for_player(
-                            club,
-                            player,
-                            date,
-                            seller_league_rep,
-                            seller_club_rep,
-                        );
-                        let willingness = LoanAssetGuard::willingness_for(club, player, date);
-                        let parent_holds = willingness.score < ParentWillingness::ENTERTAINS;
-                        if TransferTrace::is(player.id) {
-                            TransferTrace::line(
-                                player.id,
-                                "loan",
-                                format!(
-                                    "parent={} squad={:?} label={:?} asset={} rank={} \
-                             standing={:.2} first_choice={} development={} \
-                             parent_holds={parent_holds} willingness={:.2}",
-                                    club.name,
-                                    team.team_type,
-                                    player
-                                        .contract
-                                        .as_ref()
-                                        .map(|c| c.squad_status.clone())
-                                        .unwrap_or(PlayerSquadStatus::NotYetSet),
-                                    asset_class.label(),
-                                    PlayerView::position_group_rank(
-                                        club,
-                                        player.id,
-                                        player.position().position_group(),
-                                    ),
-                                    guard.map(|g| g.standing()).unwrap_or(0.0),
-                                    guard.map(|g| g.first_choice()).unwrap_or(false),
-                                    guard.map(|g| g.is_development()).unwrap_or(false),
-                                    willingness.score,
-                                ),
-                            );
-                        }
-                        let is_development = match UnsolicitedLoanTarget::classify(
-                            player,
-                            age,
-                            MAX_LOAN_TARGET_AGE,
-                            asset_class,
-                            parent_holds,
-                        ) {
-                            // A development loan is one the player NEEDS —
-                            // below his club's own level, not merely young.
-                            // The asset class says whether he is
-                            // approachable; the guard says whether the
-                            // development allowances belong to him.
-                            Some(dev) => {
-                                dev && LoanPipeline::is_development_loan(guard.as_ref(), age)
-                            }
-                            None => continue,
-                        };
-
-                        let group = player.position().position_group();
-
-                        // A YOUTH side's only keeper is never a cold-approach
-                        // target — losing him leaves that playing side with
-                        // zero goalkeepers. Mirrors the board loan-out
-                        // listing rule, and stays scoped to youth teams:
-                        // the club's senior depth covers a Main/B/Reserve
-                        // keeper's departure (a reserve keeper going out on
-                        // a development loan is exactly the intended
-                        // pipeline).
-                        if group == PlayerFieldPositionGroup::Goalkeeper
-                            && matches!(
-                                team.team_type,
-                                TeamType::U18
-                                    | TeamType::U19
-                                    | TeamType::U20
-                                    | TeamType::U21
-                                    | TeamType::U23
-                            )
-                        {
-                            let team_keepers = team
-                                .players
-                                .iter()
-                                .filter(|p| {
-                                    p.position().position_group()
-                                        == PlayerFieldPositionGroup::Goalkeeper
-                                })
-                                .count();
-                            if team_keepers <= 1 {
-                                continue;
-                            }
-                        }
-                        let parent_best_in_group = parent_team
-                            .players
-                            .iter()
-                            .filter(|p| p.position().position_group() == group)
-                            .map(|p| p.player_attributes.current_ability)
-                            .max()
-                            .unwrap_or(0);
-                        // Development loans go out FREE: the parent wants the
-                        // player developed, and a 10%-of-value fee would price
-                        // a valuable prospect out of exactly the smaller,
-                        // poorer clubs that actually have minutes for him (a
-                        // low `max_loan_fee` was silently filtering them). This
-                        // matches the main-squad board loan listing, which also
-                        // asks zero. Older cover loans keep the nominal fee.
-                        let asking_price = if is_development {
-                            0.0
-                        } else {
-                            let value = player.value(date, seller_league_rep, seller_club_rep);
-                            FormattingUtils::round_fee(value * 0.10)
-                        };
-
-                        unsolicited_targets.push(LoanListing {
-                            player_id: player.id,
-                            club_id: club.id,
-                            nationality_country_id: player.country_id,
-                            asking_price,
-                            ability: AbilityEstimator::observable_level(player),
-                            age,
-                            position_group: group,
-                            parent_rep,
-                            parent_best_in_group,
-                            is_development,
-                            parent_league_rep: seller_league_rep,
-                            guard,
-                            willingness,
-                            plan: player.mind.career.plan_view(MindClock::day(date)),
-                            parent_subsidy: player.loan_subsidy(),
-                            stage: player.pathway_stage(),
-                            club_band_target: club
-                                .transfer_plan
-                                .loan_out_candidates
-                                .iter()
-                                .find(|cand| cand.player_id == player.id)
-                                .and_then(|cand| cand.band_target),
-                        });
-                    }
-                }
-                unsolicited_targets
-            })
+            .map(|club| Self::unsolicited_targets(country, club, date))
             .collect::<Vec<Vec<LoanListing>>>()
             .into_iter()
             .flatten()
             .collect()
+    }
+
+    /// One club's cold-approach pool, read off its own roster.
+    fn unsolicited_targets(country: &Country, club: &Club, date: NaiveDate) -> Vec<LoanListing> {
+        let mut unsolicited_targets: Vec<LoanListing> = Vec::new();
+        let parent_team = match club.teams.main().or_else(|| club.teams.teams.first()) {
+            Some(t) => t,
+            None => return unsolicited_targets,
+        };
+        let asset_ctx = SquadAssetContext::build(club, date);
+        let (seller_league_rep, seller_club_rep) =
+            PlayerValuationCalculator::seller_context(country, club);
+
+        for team in &club.teams.teams {
+            for player in team.players.iter() {
+                if let Some(listing) = Self::unsolicited_target(
+                    club,
+                    parent_team,
+                    team,
+                    player,
+                    date,
+                    &asset_ctx,
+                    seller_league_rep,
+                    seller_club_rep,
+                ) {
+                    unsolicited_targets.push(listing);
+                }
+            }
+        }
+        unsolicited_targets
+    }
+
+    /// One cold-approach candidate: the parent's veto, the squad-asset
+    /// classification, and the price the parent would ask.
+    fn unsolicited_target(
+        club: &Club,
+        parent_team: &Team,
+        team: &Team,
+        player: &Player,
+        date: NaiveDate,
+        asset_ctx: &SquadAssetContext,
+        seller_league_rep: u16,
+        seller_club_rep: u16,
+    ) -> Option<LoanListing> {
+        let age = player.age(date);
+        let group = player.position().position_group();
+        let asset_class = asset_ctx.classify_in_squad(player, date, team.team_type);
+        // The parent's own veto, read before anybody asks: a club does
+        // not entertain a cold call about the man who starts for it.
+        let guard =
+            LoanAssetGuard::for_player(club, player, date, seller_league_rep, seller_club_rep);
+        let willingness = LoanAssetGuard::willingness_for(club, player, date);
+        let parent_holds = willingness.score < ParentWillingness::ENTERTAINS;
+        if TransferTrace::is(player.id) {
+            TransferTrace::line(
+                player.id,
+                "loan",
+                format!(
+                    "parent={} squad={:?} label={:?} asset={} rank={} \
+                     standing={:.2} first_choice={} development={} \
+                     parent_holds={parent_holds} willingness={:.2}",
+                    club.name,
+                    team.team_type,
+                    player
+                        .contract
+                        .as_ref()
+                        .map(|c| c.squad_status.clone())
+                        .unwrap_or(PlayerSquadStatus::NotYetSet),
+                    asset_class.label(),
+                    PlayerView::position_group_rank(club, player.id, group),
+                    guard.map(|g| g.standing()).unwrap_or(0.0),
+                    guard.map(|g| g.first_choice()).unwrap_or(false),
+                    guard.map(|g| g.is_development()).unwrap_or(false),
+                    willingness.score,
+                ),
+            );
+        }
+        // A development loan is one the player NEEDS — below his club's
+        // own level, not merely young. The asset class says whether he is
+        // approachable; the guard says whether the development allowances
+        // belong to him.
+        let is_development = {
+            let dev = UnsolicitedLoanTarget::classify(
+                player,
+                age,
+                MAX_LOAN_TARGET_AGE,
+                asset_class,
+                parent_holds,
+            )?;
+            dev && LoanPipeline::is_development_loan(guard.as_ref(), age)
+        };
+
+        // A YOUTH side's only keeper is never a cold-approach
+        // target — losing him leaves that playing side with
+        // zero goalkeepers. Mirrors the board loan-out
+        // listing rule, and stays scoped to youth teams:
+        // the club's senior depth covers a Main/B/Reserve
+        // keeper's departure (a reserve keeper going out on
+        // a development loan is exactly the intended
+        // pipeline).
+        if group == PlayerFieldPositionGroup::Goalkeeper
+            && matches!(
+                team.team_type,
+                TeamType::U18 | TeamType::U19 | TeamType::U20 | TeamType::U21 | TeamType::U23
+            )
+        {
+            let team_keepers = team
+                .players
+                .iter()
+                .filter(|p| p.position().position_group() == PlayerFieldPositionGroup::Goalkeeper)
+                .count();
+            if team_keepers <= 1 {
+                return None;
+            }
+        }
+        let parent_best_in_group = parent_team
+            .players
+            .iter()
+            .filter(|p| p.position().position_group() == group)
+            .map(|p| p.player_attributes.current_ability)
+            .max()
+            .unwrap_or(0);
+        // Development loans go out FREE: the parent wants the
+        // player developed, and a 10%-of-value fee would price
+        // a valuable prospect out of exactly the smaller,
+        // poorer clubs that actually have minutes for him (a
+        // low `max_loan_fee` was silently filtering them). This
+        // matches the main-squad board loan listing, which also
+        // asks zero. Older cover loans keep the nominal fee.
+        let asking_price = if is_development {
+            0.0
+        } else {
+            let value = player.value(date, seller_league_rep, seller_club_rep);
+            FormattingUtils::round_fee(value * 0.10)
+        };
+
+        Some(Self::unsolicited_listing(
+            club,
+            player,
+            date,
+            group,
+            age,
+            asking_price,
+            is_development,
+            parent_team.reputation.world,
+            parent_best_in_group,
+            seller_league_rep,
+            guard,
+            willingness,
+        ))
+    }
+
+    /// The listing a cold-approach candidate contributes to the board.
+    fn unsolicited_listing(
+        club: &Club,
+        player: &Player,
+        date: NaiveDate,
+        group: PlayerFieldPositionGroup,
+        age: u8,
+        asking_price: f64,
+        is_development: bool,
+        parent_rep: u16,
+        parent_best_in_group: u8,
+        parent_league_rep: u16,
+        guard: Option<LoanAssetGuard>,
+        willingness: ParentWillingness,
+    ) -> LoanListing {
+        LoanListing {
+            player_id: player.id,
+            club_id: club.id,
+            nationality_country_id: player.country_id,
+            asking_price,
+            ability: AbilityEstimator::observable_level(player),
+            age,
+            position_group: group,
+            parent_rep,
+            parent_best_in_group,
+            is_development,
+            parent_league_rep,
+            guard,
+            willingness,
+            plan: player.mind.career.plan_view(MindClock::day(date)),
+            parent_subsidy: player.loan_subsidy(),
+            stage: player.pathway_stage(),
+            club_band_target: club
+                .transfer_plan
+                .loan_out_candidates
+                .iter()
+                .find(|cand| cand.player_id == player.id)
+                .and_then(|cand| cand.band_target),
+        }
     }
 }
 
@@ -1093,120 +1130,16 @@ impl BorrowerTurn<'_> {
 struct LoanScanCommit;
 
 impl LoanScanCommit {
-    #[expect(clippy::too_many_lines)]
     fn apply(country: &mut Country, actions: Vec<LoanScanAction>, date: NaiveDate) {
         // Pass 2: Start loan negotiations
         for action in actions {
-            // Unsolicited approaches target players their club never loan-
-            // listed, so the market has no listing to negotiate against.
-            // Mirror the permanent-pipeline pattern: fabricate a synthetic
-            // loan listing (tagged so the resolver withholds the
-            // "seller-advertised" acceptance bonus), priced at the seller's
-            // asking. `start_negotiation` requires a listing, so this must
-            // come first.
-            if action.is_unsolicited
-                && country
-                    .transfer_market
-                    .get_listing_by_player(action.player_id)
-                    .is_none()
-            {
-                let selling_team_id = country
-                    .clubs
-                    .iter()
-                    .find(|c| c.id == action.selling_club_id)
-                    .and_then(|c| c.teams.teams.first())
-                    .map(|t| t.id)
-                    .unwrap_or(0);
-                country
-                    .transfer_market
-                    .add_listing(TransferListing::new_with_origin(
-                        action.player_id,
-                        action.selling_club_id,
-                        selling_team_id,
-                        CurrencyValue {
-                            amount: FormattingUtils::round_fee(action.seller_asking.max(0.0)),
-                            currency: Currency::Usd,
-                        },
-                        date,
-                        TransferListingType::Loan,
-                        TransferListingOrigin::SyntheticUnsolicited,
-                    ));
-            }
+            Self::ensure_listing(country, &action, date);
 
             let selling_rep = ClubView::get_club_reputation(country, action.selling_club_id);
             let buying_rep = ClubView::get_club_reputation(country, action.club_id);
             let (p_age, p_ambition) =
                 PlayerView::get_player_negotiation_data(country, action.player_id, date);
-
-            let mut clauses = Vec::new();
-
-            // Option to buy. A loan without one is a season the borrowing
-            // club spends developing somebody else's player and hands him
-            // straight back — which is why no AI loan in the world ever
-            // became a permanent move: the conversion machinery
-            // (`decide_loan_buyout`) is driven entirely by
-            // `loan_future_fee`, and nothing on this path had ever written
-            // one. In real football most loans of players with a future
-            // carry an option, and a good loan spell is one of the main
-            // routes a squad player finds a permanent home.
-            if let Some(option_fee) = LoanPipeline::loan_option_fee(country, &action, date) {
-                clauses.push(TransferClause::LoanOptionToBuy(CurrencyValue {
-                    amount: option_fee,
-                    currency: Currency::Usd,
-                }));
-            }
-
-            // Add appearance fee clause for high-reputation selling clubs
-            let selling_rep_level =
-                ClubView::get_club_reputation_level(country, action.selling_club_id);
-            match selling_rep_level {
-                ReputationLevel::Elite => {
-                    clauses.push(TransferClause::AppearanceFee(
-                        CurrencyValue {
-                            amount: FormattingUtils::round_fee(action.offer_amount * 0.30),
-                            currency: Currency::Usd,
-                        },
-                        10,
-                    ));
-                }
-                ReputationLevel::Continental => {
-                    clauses.push(TransferClause::AppearanceFee(
-                        CurrencyValue {
-                            amount: FormattingUtils::round_fee(action.offer_amount * 0.20),
-                            currency: Currency::Usd,
-                        },
-                        15,
-                    ));
-                }
-                _ => {}
-            }
-
-            // Loans run to the season end — set the explicit duration field
-            // (months) rather than the permanent-contract years field so
-            // the market history doesn't double-encode "1" as both 1 year
-            // and 1 month.
-            let offer = TransferOffer {
-                base_fee: CurrencyValue {
-                    amount: action.offer_amount,
-                    currency: Currency::Usd,
-                },
-                clauses,
-                contract_length_years: None,
-                loan_duration_months: Some(LoanPipeline::loan_duration_to_season_end(
-                    country,
-                    action.club_id,
-                    date,
-                )),
-                personal_terms: Some(PersonalTermsOffer {
-                    // A loan promises a shirt: minutes are what it is
-                    // for (B4 / [`LoanPromise`]). No wage — the borrower
-                    // picks up a share of the deal he already has.
-                    squad_status_promise: LoanPromise::for_loan(action.is_development),
-                    ..PersonalTermsOffer::default()
-                }),
-                offering_club_id: action.club_id,
-                offered_date: date,
-            };
+            let offer = Self::offer(country, &action, date);
 
             if let Some(neg_id) = country.transfer_market.start_negotiation(
                 action.player_id,
@@ -1238,6 +1171,118 @@ impl LoanScanCommit {
                     action.club_id, action.player_id
                 );
             }
+        }
+    }
+
+    /// Unsolicited approaches target players their club never loan-listed,
+    /// so the market has no listing to negotiate against. Mirror the
+    /// permanent-pipeline pattern: fabricate a synthetic loan listing
+    /// (tagged so the resolver withholds the "seller-advertised" acceptance
+    /// bonus), priced at the seller's asking. `start_negotiation` requires a
+    /// listing, so this must come first.
+    fn ensure_listing(country: &mut Country, action: &LoanScanAction, date: NaiveDate) {
+        if action.is_unsolicited
+            && country
+                .transfer_market
+                .get_listing_by_player(action.player_id)
+                .is_none()
+        {
+            let selling_team_id = country
+                .clubs
+                .iter()
+                .find(|c| c.id == action.selling_club_id)
+                .and_then(|c| c.teams.teams.first())
+                .map(|t| t.id)
+                .unwrap_or(0);
+            country
+                .transfer_market
+                .add_listing(TransferListing::new_with_origin(
+                    action.player_id,
+                    action.selling_club_id,
+                    selling_team_id,
+                    CurrencyValue {
+                        amount: FormattingUtils::round_fee(action.seller_asking.max(0.0)),
+                        currency: Currency::Usd,
+                    },
+                    date,
+                    TransferListingType::Loan,
+                    TransferListingOrigin::SyntheticUnsolicited,
+                ));
+        }
+    }
+
+    /// The loan offer: an option to buy where the pipeline writes one, a
+    /// sell-side appearance fee at the biggest clubs, and a shirt promise
+    /// for the minutes the loan exists to buy.
+    fn offer(country: &Country, action: &LoanScanAction, date: NaiveDate) -> TransferOffer {
+        let mut clauses = Vec::new();
+
+        // Option to buy. A loan without one is a season the borrowing
+        // club spends developing somebody else's player and hands him
+        // straight back — which is why no AI loan in the world ever
+        // became a permanent move: the conversion machinery
+        // (`decide_loan_buyout`) is driven entirely by
+        // `loan_future_fee`, and nothing on this path had ever written
+        // one. In real football most loans of players with a future
+        // carry an option, and a good loan spell is one of the main
+        // routes a squad player finds a permanent home.
+        if let Some(option_fee) = LoanPipeline::loan_option_fee(country, action, date) {
+            clauses.push(TransferClause::LoanOptionToBuy(CurrencyValue {
+                amount: option_fee,
+                currency: Currency::Usd,
+            }));
+        }
+
+        // Add appearance fee clause for high-reputation selling clubs
+        let selling_rep_level =
+            ClubView::get_club_reputation_level(country, action.selling_club_id);
+        match selling_rep_level {
+            ReputationLevel::Elite => {
+                clauses.push(TransferClause::AppearanceFee(
+                    CurrencyValue {
+                        amount: FormattingUtils::round_fee(action.offer_amount * 0.30),
+                        currency: Currency::Usd,
+                    },
+                    10,
+                ));
+            }
+            ReputationLevel::Continental => {
+                clauses.push(TransferClause::AppearanceFee(
+                    CurrencyValue {
+                        amount: FormattingUtils::round_fee(action.offer_amount * 0.20),
+                        currency: Currency::Usd,
+                    },
+                    15,
+                ));
+            }
+            _ => {}
+        }
+
+        // Loans run to the season end — set the explicit duration field
+        // (months) rather than the permanent-contract years field so
+        // the market history doesn't double-encode "1" as both 1 year
+        // and 1 month.
+        TransferOffer {
+            base_fee: CurrencyValue {
+                amount: action.offer_amount,
+                currency: Currency::Usd,
+            },
+            clauses,
+            contract_length_years: None,
+            loan_duration_months: Some(LoanPipeline::loan_duration_to_season_end(
+                country,
+                action.club_id,
+                date,
+            )),
+            personal_terms: Some(PersonalTermsOffer {
+                // A loan promises a shirt: minutes are what it is
+                // for (B4 / [`LoanPromise`]). No wage — the borrower
+                // picks up a share of the deal he already has.
+                squad_status_promise: LoanPromise::for_loan(action.is_development),
+                ..PersonalTermsOffer::default()
+            }),
+            offering_club_id: action.club_id,
+            offered_date: date,
         }
     }
 }

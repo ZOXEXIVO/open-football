@@ -561,7 +561,6 @@ impl Ball {
     /// owned/unowned counters) but the ball physically stays put.
     /// The anchor resets whenever the ball travels outside the radius,
     /// so normal play keeps advancing the anchor every few ticks.
-    #[expect(clippy::too_many_lines)]
     pub(in crate::r#match::engine::ball::ball) fn detect_position_stall(
         &mut self,
         players: &[MatchPlayer],
@@ -590,148 +589,158 @@ impl Ball {
         // 15u (1.9 m) circle for five seconds is not build-up play — the
         // ball is stuck, and whoever is standing on it is the bug.
         #[cfg(feature = "match-logs")]
-        {
-            use std::sync::atomic::Ordering;
-            const DEAD_AFTER: u32 = 250;
-            if self.stall_anchor_tick >= DEAD_AFTER {
-                let first = self.stall_anchor_tick == DEAD_AFTER;
-                let owner = self
-                    .current_owner
-                    .and_then(|id| players.iter().find(|p| p.id == id));
-                if let Some(p) = owner {
-                    let d = dead_ball_diag::dwell_bucket(p.in_state_time);
-                    dead_ball_diag::OWNER_DWELL[d].fetch_add(1, Ordering::Relaxed);
-                    if p.state.is_take_ball() {
-                        dead_ball_diag::TAKEBALL_DWELL[d].fetch_add(1, Ordering::Relaxed);
-                        let dist = (p.position - self.position).magnitude();
-                        dead_ball_diag::TAKEBALL_OWNER_DIST_X10
-                            .fetch_add((dist * 10.0) as u64, Ordering::Relaxed);
-                        dead_ball_diag::TAKEBALL_SAMPLES.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-                // Where, and whether a delivery is in the air.
-                let zone = {
-                    let x = self.position.x;
-                    let y = self.position.y;
-                    let w = self.field_width;
-                    let h = self.field_height;
-                    const FLAG: f32 = 80.0; // 10 m of the corner
-                    const TOUCH: f32 = 40.0; // 5 m of a touchline
-                    let near_end = x < FLAG || x > w - FLAG;
-                    let near_side = y < FLAG || y > h - FLAG;
-                    if near_end && near_side {
-                        0
-                    } else if (x < 132.0 || x > w - 132.0) && (y - h * 0.5).abs() < h * 0.35 {
-                        1
-                    } else if y < TOUCH || y > h - TOUCH {
-                        2
-                    } else {
-                        3
-                    }
-                };
-                dead_ball_diag::STALL_ZONE[zone].fetch_add(1, Ordering::Relaxed);
-                if self.flags.in_flight_state > 0 {
-                    dead_ball_diag::STALL_IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
-                }
-
-                let bucket = owner
-                    .map(|p| p.state.compact_id() as usize)
-                    .filter(|b| *b < dead_ball_diag::STATES);
-                match bucket {
-                    Some(b) => {
-                        dead_ball_diag::STUCK_TICKS_BY_STATE[b].fetch_add(1, Ordering::Relaxed);
-                        if let Some(p) = owner {
-                            let d = dead_ball_diag::dwell_bucket(p.in_state_time);
-                            dead_ball_diag::STUCK_DWELL_BY_STATE[b * 5 + d]
-                                .fetch_add(1, Ordering::Relaxed);
-                        }
-                        if first {
-                            dead_ball_diag::STUCK_EPISODES_BY_STATE[b]
-                                .fetch_add(1, Ordering::Relaxed);
-                        }
-                    }
-                    None => {
-                        dead_ball_diag::STUCK_TICKS_UNOWNED.fetch_add(1, Ordering::Relaxed);
-                        if first {
-                            dead_ball_diag::STUCK_EPISODES_UNOWNED.fetch_add(1, Ordering::Relaxed);
-                        }
-                    }
-                }
-                dead_ball_diag::LONGEST_STUCK
-                    .fetch_max(self.stall_anchor_tick as u64, Ordering::Relaxed);
-            }
-        }
+        self.note_position_stall_census(players);
 
         if self.stall_anchor_tick == STALL_TICKS {
-            #[cfg(feature = "match-logs")]
-            {
-                let owner_str = self
-                    .current_owner
-                    .map(|id| format!("Some({})", id))
-                    .unwrap_or_else(|| "None".to_string());
-                let owner_state = self
-                    .current_owner
-                    .and_then(|id| players.iter().find(|p| p.id == id))
-                    .map(|p| format!("{:?}", p.state))
-                    .unwrap_or_else(|| "-".to_string());
-                crate::match_log_debug!(
-                    "ball position-stall: stayed within {}u of ({:.1}, {:.1}) for {} ticks — owner={} state={} ball_vel=({:.2}, {:.2})",
-                    STALL_RADIUS,
-                    self.stall_anchor_pos.x,
-                    self.stall_anchor_pos.y,
-                    STALL_TICKS,
-                    owner_str,
-                    owner_state,
-                    self.velocity.x,
-                    self.velocity.y,
-                );
+            self.break_position_stall(players);
+        }
+    }
+
+    /// Attribute a position stall to the man and the zone it is happening
+    /// in, long before the safety net fires.
+    #[cfg(feature = "match-logs")]
+    fn note_position_stall_census(&self, players: &[MatchPlayer]) {
+        use std::sync::atomic::Ordering;
+        const DEAD_AFTER: u32 = 250;
+        if self.stall_anchor_tick < DEAD_AFTER {
+            return;
+        }
+        let first = self.stall_anchor_tick == DEAD_AFTER;
+        let owner = self
+            .current_owner
+            .and_then(|id| players.iter().find(|p| p.id == id));
+        if let Some(p) = owner {
+            let d = dead_ball_diag::dwell_bucket(p.in_state_time);
+            dead_ball_diag::OWNER_DWELL[d].fetch_add(1, Ordering::Relaxed);
+            if p.state.is_take_ball() {
+                dead_ball_diag::TAKEBALL_DWELL[d].fetch_add(1, Ordering::Relaxed);
+                let dist = (p.position - self.position).magnitude();
+                dead_ball_diag::TAKEBALL_OWNER_DIST_X10
+                    .fetch_add((dist * 10.0) as u64, Ordering::Relaxed);
+                dead_ball_diag::TAKEBALL_SAMPLES.fetch_add(1, Ordering::Relaxed);
             }
-            // Force-kick out of the zone. Previous attempts with a
-            // small push got immediately re-claimed by the same player
-            // in `process_ownership` the SAME tick — ball never
-            // escaped the 12-unit radius. Solution: kick harder AND
-            // set `in_flight_state` so normal ownership checks are
-            // suppressed long enough for the ball to actually leave.
-            let owner_side = self
+        }
+        // Where, and whether a delivery is in the air.
+        let zone = {
+            let x = self.position.x;
+            let y = self.position.y;
+            let w = self.field_width;
+            let h = self.field_height;
+            const FLAG: f32 = 80.0; // 10 m of the corner
+            const TOUCH: f32 = 40.0; // 5 m of a touchline
+            let near_end = x < FLAG || x > w - FLAG;
+            let near_side = y < FLAG || y > h - FLAG;
+            if near_end && near_side {
+                0
+            } else if (x < 132.0 || x > w - 132.0) && (y - h * 0.5).abs() < h * 0.35 {
+                1
+            } else if y < TOUCH || y > h - TOUCH {
+                2
+            } else {
+                3
+            }
+        };
+        dead_ball_diag::STALL_ZONE[zone].fetch_add(1, Ordering::Relaxed);
+        if self.flags.in_flight_state > 0 {
+            dead_ball_diag::STALL_IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
+        }
+
+        let bucket = owner
+            .map(|p| p.state.compact_id() as usize)
+            .filter(|b| *b < dead_ball_diag::STATES);
+        match bucket {
+            Some(b) => {
+                dead_ball_diag::STUCK_TICKS_BY_STATE[b].fetch_add(1, Ordering::Relaxed);
+                if let Some(p) = owner {
+                    let d = dead_ball_diag::dwell_bucket(p.in_state_time);
+                    dead_ball_diag::STUCK_DWELL_BY_STATE[b * 5 + d].fetch_add(1, Ordering::Relaxed);
+                }
+                if first {
+                    dead_ball_diag::STUCK_EPISODES_BY_STATE[b].fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            None => {
+                dead_ball_diag::STUCK_TICKS_UNOWNED.fetch_add(1, Ordering::Relaxed);
+                if first {
+                    dead_ball_diag::STUCK_EPISODES_UNOWNED.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+        dead_ball_diag::LONGEST_STUCK.fetch_max(self.stall_anchor_tick as u64, Ordering::Relaxed);
+    }
+
+    /// Force-kick a genuinely stuck ball out of its zone.
+    fn break_position_stall(&mut self, players: &[MatchPlayer]) {
+        #[cfg(feature = "match-logs")]
+        {
+            const STALL_RADIUS: f32 = 15.0;
+            const STALL_TICKS: u32 = 1000;
+            let owner_str = self
+                .current_owner
+                .map(|id| format!("Some({})", id))
+                .unwrap_or_else(|| "None".to_string());
+            let owner_state = self
                 .current_owner
                 .and_then(|id| players.iter().find(|p| p.id == id))
-                .and_then(|p| p.side);
-            // Both components were pre-metric. 7.0 u/tick is 87 m/s —
-            // faster than any ball in the history of football — and a
-            // `z` of 1.5 is 150 m/s straight up, an apex of 1.1 km. A
-            // stall-breaker firing on a ball nobody had touched is
-            // exactly the "the ball suddenly shot off for no reason"
-            // case: there is no player action behind it to explain it.
-            //
-            // It still has to be a decisive kick — the whole point is to
-            // clear the stall radius before the same player re-claims —
-            // so it is a firm 30 m outlet, solved from its apex like
-            // every other kick.
-            let push_x: f32 = match owner_side {
-                Some(PlayerSide::Left) => 1.0,
-                Some(PlayerSide::Right) => -1.0,
-                _ => 1.0,
-            };
-            const STALL_KICK_APEX_M: f32 = 8.0;
-            const STALL_KICK_RANGE_U: f32 = 240.0; // 30 m
-            let vz = Ball::launch_speed_for_apex(STALL_KICK_APEX_M);
-            let speed = STALL_KICK_RANGE_U / Ball::hang_ticks(vz).max(1.0);
-            self.velocity = Vector3::new(push_x * speed, 0.0, vz);
-            self.previous_owner = self.current_owner;
-            self.current_owner = None;
-            self.ownership_duration = 0;
-            self.claim_cooldown = 0;
-            // 40 ticks of protected flight — matches a short pass,
-            // long enough for the ball to clear the stall radius.
-            self.flags.in_flight_state = 40;
-            self.pass_target_player_id = None;
-            self.owned_stuck_ticks = 0;
-            self.owned_stuck_logged = false;
-            self.stall_anchor_tick = 0;
-            // Teleport anchor so post-release ball travel advances
-            // the anchor naturally instead of re-triggering.
-            self.stall_anchor_pos = self.position;
+                .map(|p| format!("{:?}", p.state))
+                .unwrap_or_else(|| "-".to_string());
+            crate::match_log_debug!(
+                "ball position-stall: stayed within {}u of ({:.1}, {:.1}) for {} ticks — owner={} state={} ball_vel=({:.2}, {:.2})",
+                STALL_RADIUS,
+                self.stall_anchor_pos.x,
+                self.stall_anchor_pos.y,
+                STALL_TICKS,
+                owner_str,
+                owner_state,
+                self.velocity.x,
+                self.velocity.y,
+            );
         }
+        // Force-kick out of the zone. Previous attempts with a
+        // small push got immediately re-claimed by the same player
+        // in `process_ownership` the SAME tick — ball never
+        // escaped the 12-unit radius. Solution: kick harder AND
+        // set `in_flight_state` so normal ownership checks are
+        // suppressed long enough for the ball to actually leave.
+        let owner_side = self
+            .current_owner
+            .and_then(|id| players.iter().find(|p| p.id == id))
+            .and_then(|p| p.side);
+        // Both components were pre-metric. 7.0 u/tick is 87 m/s —
+        // faster than any ball in the history of football — and a
+        // `z` of 1.5 is 150 m/s straight up, an apex of 1.1 km. A
+        // stall-breaker firing on a ball nobody had touched is
+        // exactly the "the ball suddenly shot off for no reason"
+        // case: there is no player action behind it to explain it.
+        //
+        // It still has to be a decisive kick — the whole point is to
+        // clear the stall radius before the same player re-claims —
+        // so it is a firm 30 m outlet, solved from its apex like
+        // every other kick.
+        let push_x: f32 = match owner_side {
+            Some(PlayerSide::Left) => 1.0,
+            Some(PlayerSide::Right) => -1.0,
+            _ => 1.0,
+        };
+        const STALL_KICK_APEX_M: f32 = 8.0;
+        const STALL_KICK_RANGE_U: f32 = 240.0; // 30 m
+        let vz = Ball::launch_speed_for_apex(STALL_KICK_APEX_M);
+        let speed = STALL_KICK_RANGE_U / Ball::hang_ticks(vz).max(1.0);
+        self.velocity = Vector3::new(push_x * speed, 0.0, vz);
+        self.previous_owner = self.current_owner;
+        self.current_owner = None;
+        self.ownership_duration = 0;
+        self.claim_cooldown = 0;
+        // 40 ticks of protected flight — matches a short pass,
+        // long enough for the ball to clear the stall radius.
+        self.flags.in_flight_state = 40;
+        self.pass_target_player_id = None;
+        self.owned_stuck_ticks = 0;
+        self.owned_stuck_logged = false;
+        self.stall_anchor_tick = 0;
+        // Teleport anchor so post-release ball travel advances
+        // the anchor naturally instead of re-triggering.
+        self.stall_anchor_pos = self.position;
     }
 
     /// Only the stall-resolution log (match-logs builds) consumes the

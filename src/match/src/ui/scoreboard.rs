@@ -537,7 +537,6 @@ impl FullTime {
     const SCORER: f32 = 12.0;
 
     /// Builds the card, hidden, at startup.
-    #[expect(clippy::too_many_lines)]
     pub fn spawn(mut commands: Commands, config: Res<ViewerConfig>, faces: Res<Faces>) {
         // The same two fallbacks the bug and the seek rail's markers take.
         let home_shirt = config.home.background_color(Color::srgb(0.0, 0.19, 0.49));
@@ -557,13 +556,27 @@ impl FullTime {
         // a box on screen whatever the lower-case letter was.
         let heading = config.labels.full_time.to_uppercase();
 
-        // **The scrim is its own root, and the card is another.** They are two
-        // depths, not one: the scrim belongs to the picture and goes UNDER the
-        // transport bar, which has to stay lit and usable; the card is
-        // furniture and takes the default depth beside the bar and the score
-        // plate, which is where every label in this crate that draws correctly
-        // lives. They never overlap on screen — the card is centred and the bar
-        // is along the bottom — so nothing is covered by the split.
+        Self::veil(&mut commands);
+        let kit = ((home_shirt, home_ink), (away_shirt, away_ink));
+        Self::root(
+            &mut commands,
+            &faces,
+            &config,
+            &heading,
+            kit,
+            (home_goals, away_goals),
+            (&home_scorers, &away_scorers),
+        );
+    }
+
+    /// The scrim is its own root, and the card is another. They are two depths,
+    /// not one: the scrim belongs to the picture and goes UNDER the transport
+    /// bar, which has to stay lit and usable; the card is furniture and takes
+    /// the default depth beside the bar and the score plate, which is where
+    /// every label in this crate that draws correctly lives. They never
+    /// overlap on screen — the card is centred and the bar is along the bottom
+    /// — so nothing is covered by the split.
+    fn veil(commands: &mut Commands) {
         commands.spawn((
             FullTimeVeil,
             Node {
@@ -580,7 +593,17 @@ impl FullTime {
             FocusPolicy::Pass,
             Visibility::Hidden,
         ));
+    }
 
+    fn root(
+        commands: &mut Commands,
+        faces: &Faces,
+        config: &ViewerConfig,
+        heading: &str,
+        kit: ((Color, Color), (Color, Color)),
+        goals: (u32, u32),
+        scorers: (&[String], &[String]),
+    ) {
         commands
             .spawn((
                 FullTimeCard,
@@ -616,116 +639,140 @@ impl FullTime {
                     FullTimeGround(Self::PANEL),
                 ))
                 .with_children(|card| {
-                    card.spawn(Node {
-                        width: percent(100),
-                        height: px(Self::BAND),
-                        flex_direction: FlexDirection::Row,
-                        flex_shrink: 0.0,
-                        // Held off the ends by the corner it would otherwise
-                        // have to be clipped to. Three pixels tall cannot
-                        // express a fourteen-pixel radius — a rounded corner is
-                        // clamped to half the height — so a full-bleed band
-                        // either needs the card to clip it or has to stop where
-                        // the curve starts. It stops.
-                        padding: UiRect::axes(px(Self::CORNER), px(0)),
-                        ..default()
-                    })
-                    .with_children(|band| {
-                        for shirt in [home_shirt, away_shirt] {
-                            band.spawn((
-                                Node {
-                                    width: percent(50),
-                                    height: percent(100),
-                                    ..default()
-                                },
-                                BackgroundColor(shirt),
-                                FullTimeGround(shirt),
-                            ));
-                        }
-                    });
-
-                    card.spawn(Node {
-                        width: percent(100),
-                        flex_direction: FlexDirection::Column,
-                        align_items: AlignItems::Center,
-                        padding: UiRect::axes(px(24), px(22)),
-                        ..default()
-                    })
-                    .with_children(|body| {
-                        body.spawn((
-                            Text::new(heading.clone()),
-                            TextFont {
-                                font: FontSource::Handle(faces.face_for(&heading)),
-                                font_size: FontSize::Px(Self::HEADING),
-                                ..default()
-                            },
-                            TextColor(Self::INK_MUTED),
-                            FullTimeInk(Self::INK_MUTED),
-                            Node {
-                                margin: UiRect::bottom(px(16)),
-                                ..default()
-                            },
-                        ));
-
-                        body.spawn(Node {
-                            width: percent(100),
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            justify_content: JustifyContent::Center,
-                            ..default()
-                        })
-                        .with_children(|score| {
-                            // **Outward from the middle**: the two figures meet
-                            // at the dash and a club's name reads away from it
-                            // on either side, which is how a televised result
-                            // is set and how the corner plate sets the same
-                            // thing all match.
-                            Self::club(score, &faces, &config.home_name, true);
-                            Self::chip(score, &faces, (home_shirt, home_ink), home_goals);
-                            score.spawn((
-                                Node {
-                                    width: px(Self::DASH.0),
-                                    height: px(Self::DASH.1),
-                                    flex_shrink: 0.0,
-                                    margin: UiRect::axes(px(9), px(0)),
-                                    border_radius: BorderRadius::all(px(Self::DASH.1 * 0.5)),
-                                    ..default()
-                                },
-                                BackgroundColor(Self::DASH_INK),
-                                FullTimeGround(Self::DASH_INK),
-                            ));
-                            Self::chip(score, &faces, (away_shirt, away_ink), away_goals);
-                            Self::club(score, &faces, &config.away_name, false);
-                        });
-
-                        // A rule with nothing under it is a line across an empty
-                        // card, so a goalless match simply ends on the score.
-                        if home_scorers.is_empty() && away_scorers.is_empty() {
-                            return;
-                        }
-                        body.spawn((
-                            Node {
-                                width: percent(100),
-                                height: px(1),
-                                margin: UiRect::axes(px(0), px(18)),
-                                ..default()
-                            },
-                            BackgroundColor(Self::HAIRLINE),
-                            FullTimeGround(Self::HAIRLINE),
-                        ));
-                        body.spawn(Node {
-                            width: percent(100),
-                            flex_direction: FlexDirection::Row,
-                            column_gap: px(18),
-                            ..default()
-                        })
-                        .with_children(|sides| {
-                            Self::column(sides, &faces, &home_scorers, true);
-                            Self::column(sides, &faces, &away_scorers, false);
-                        });
-                    });
+                    Self::band(card, kit.0.0, kit.1.0);
+                    Self::body(card, faces, config, heading, kit, goals, scorers);
                 });
             });
+    }
+
+    fn band(card: &mut RelatedSpawnerCommands<ChildOf>, home_shirt: Color, away_shirt: Color) {
+        card.spawn(Node {
+            width: percent(100),
+            height: px(Self::BAND),
+            flex_direction: FlexDirection::Row,
+            flex_shrink: 0.0,
+            // Held off the ends by the corner it would otherwise have to be
+            // clipped to. Three pixels tall cannot express a fourteen-pixel
+            // radius — a rounded corner is clamped to half the height — so a
+            // full-bleed band either needs the card to clip it or has to stop
+            // where the curve starts. It stops.
+            padding: UiRect::axes(px(Self::CORNER), px(0)),
+            ..default()
+        })
+        .with_children(|band| {
+            for shirt in [home_shirt, away_shirt] {
+                band.spawn((
+                    Node {
+                        width: percent(50),
+                        height: percent(100),
+                        ..default()
+                    },
+                    BackgroundColor(shirt),
+                    FullTimeGround(shirt),
+                ));
+            }
+        });
+    }
+
+    fn body(
+        card: &mut RelatedSpawnerCommands<ChildOf>,
+        faces: &Faces,
+        config: &ViewerConfig,
+        heading: &str,
+        kit: ((Color, Color), (Color, Color)),
+        goals: (u32, u32),
+        scorers: (&[String], &[String]),
+    ) {
+        card.spawn(Node {
+            width: percent(100),
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(px(24), px(22)),
+            ..default()
+        })
+        .with_children(|body| {
+            body.spawn((
+                Text::new(heading.to_string()),
+                TextFont {
+                    font: FontSource::Handle(faces.face_for(heading)),
+                    font_size: FontSize::Px(Self::HEADING),
+                    ..default()
+                },
+                TextColor(Self::INK_MUTED),
+                FullTimeInk(Self::INK_MUTED),
+                Node {
+                    margin: UiRect::bottom(px(16)),
+                    ..default()
+                },
+            ));
+
+            Self::score(body, faces, config, kit, goals);
+
+            // A rule with nothing under it is a line across an empty
+            // card, so a goalless match simply ends on the score.
+            if scorers.0.is_empty() && scorers.1.is_empty() {
+                return;
+            }
+            body.spawn((
+                Node {
+                    width: percent(100),
+                    height: px(1),
+                    margin: UiRect::axes(px(0), px(18)),
+                    ..default()
+                },
+                BackgroundColor(Self::HAIRLINE),
+                FullTimeGround(Self::HAIRLINE),
+            ));
+            body.spawn(Node {
+                width: percent(100),
+                flex_direction: FlexDirection::Row,
+                column_gap: px(18),
+                ..default()
+            })
+            .with_children(|sides| {
+                Self::column(sides, faces, scorers.0, true);
+                Self::column(sides, faces, scorers.1, false);
+            });
+        });
+    }
+
+    fn score(
+        body: &mut RelatedSpawnerCommands<ChildOf>,
+        faces: &Faces,
+        config: &ViewerConfig,
+        kit: ((Color, Color), (Color, Color)),
+        goals: (u32, u32),
+    ) {
+        body.spawn(Node {
+            width: percent(100),
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        })
+        .with_children(|score| {
+            // **Outward from the middle**: the two figures meet
+            // at the dash and a club's name reads away from it
+            // on either side, which is how a televised result
+            // is set and how the corner plate sets the same
+            // thing all match.
+            Self::club(score, faces, &config.home_name, true);
+            Self::chip(score, faces, kit.0, goals.0);
+            score.spawn((
+                Node {
+                    width: px(Self::DASH.0),
+                    height: px(Self::DASH.1),
+                    flex_shrink: 0.0,
+                    margin: UiRect::axes(px(9), px(0)),
+                    border_radius: BorderRadius::all(px(Self::DASH.1 * 0.5)),
+                    ..default()
+                },
+                BackgroundColor(Self::DASH_INK),
+                FullTimeGround(Self::DASH_INK),
+            ));
+            Self::chip(score, faces, kit.1, goals.1);
+            Self::club(score, faces, &config.away_name, false);
+        });
     }
 
     /// A club's name, reading away from the score.

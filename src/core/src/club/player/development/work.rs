@@ -6,7 +6,7 @@
 use super::blueprint::SkillBlueprint;
 use super::ceilings::PositionalSkillCeilings;
 use super::ledger::GrowthSource;
-use super::skills_array::{SKILL_COUNT, SkillKey, skills_to_array, write_array_into};
+use super::skills_array::{SKILL_COUNT, SkillKey};
 use crate::club::player::maturation::SkillMaturation;
 use crate::club::player::player::Player;
 use crate::utils::DateUtils;
@@ -103,7 +103,7 @@ impl PotentialBudget {
         let potential = player.player_attributes.potential_ability;
         let ca_of = |arr: &[f32; SKILL_COUNT]| -> u8 {
             let mut probe = player.skills;
-            write_array_into(&mut probe, arr);
+            probe.write_from_array(arr);
             probe.calculate_ability_for_position(position)
         };
         if ca_of(&after) <= potential {
@@ -164,7 +164,7 @@ impl Player {
             &weights,
         );
         let absorb = Absorption::of(self);
-        let before = skills_to_array(self);
+        let before = self.skills_to_array();
         let mut after = before;
         for i in 0..SKILL_COUNT {
             let value = before[i];
@@ -198,7 +198,7 @@ impl Player {
         source: GrowthSource,
     ) {
         let after = PotentialBudget::hold(self, &before, after);
-        write_array_into(&mut self.skills, &after);
+        self.skills.write_from_array(&after);
         self.development.ledger.record(source, &before, &after);
         self.player_attributes.current_ability = self
             .skills

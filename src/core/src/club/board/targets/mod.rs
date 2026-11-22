@@ -82,15 +82,93 @@ pub struct SeasonBudget;
 impl SeasonBudget {
     /// Size this season's transfer chest, wage mandate, squad limits and
     /// league expectation from the club's standing.
-    #[expect(clippy::too_many_lines)]
     pub fn derive(
         board_ctx: &BoardContext,
         vision: &ClubVision,
         chairman: &ChairmanProfile,
         ownership: &OwnershipModel,
     ) -> SeasonTargets {
-        let rep = board_ctx.reputation_score;
+        let budget = SeasonBudgetDerivation::new(board_ctx, vision, chairman, ownership);
+        let (min_squad_size, max_squad_size) = Self::squad_limits(board_ctx.reputation_score);
+        let (expected_position, min_acceptable_position) = budget.expected_positions();
 
+        SeasonTargets {
+            transfer_budget: budget.transfer_budget(),
+            wage_budget: budget.wage_budget(),
+            owner_subsidy: budget.owner_subsidy as i64,
+            owner_envelopes: OwnerEnvelopes::split(budget.owner_subsidy),
+            max_squad_size,
+            min_squad_size,
+            expected_position,
+            min_acceptable_position,
+            // A fresh mandate carries no history: whatever the board moved
+            // last season was a judgement on last season.
+            mandate_adjustment: 0,
+            wage_mandate_adjustment: 0,
+        }
+    }
+
+    /// Squad size limits based on reputation.
+    fn squad_limits(reputation_score: f32) -> (u8, u8) {
+        if reputation_score >= 0.8 {
+            (25u8, 50u8)
+        } else if reputation_score >= 0.6 {
+            (23, 45)
+        } else if reputation_score >= 0.4 {
+            (20, 38)
+        } else if reputation_score >= 0.2 {
+            (18, 30)
+        } else {
+            (16, 25)
+        }
+    }
+
+    /// Target wage-to-revenue ratio. Healthy clubs target 55-65%;
+    /// distressed clubs squeeze it to 45-50%; reckless owners at the elite
+    /// tier are allowed up to 70%.
+    fn wage_revenue_target(
+        ffp: FfpStatus,
+        ambition: ChairmanAmbition,
+        reputation_score: f32,
+    ) -> f64 {
+        let base: f64 = match ffp {
+            FfpStatus::Clean => 0.62,
+            FfpStatus::Watchlist => 0.55,
+            FfpStatus::Breach => 0.48,
+        };
+        if matches!(ambition, ChairmanAmbition::Reckless) && reputation_score >= 0.75 {
+            return 0.70;
+        }
+        if matches!(ambition, ChairmanAmbition::Conservative) {
+            return (base - 0.05_f64).max(0.35);
+        }
+        base
+    }
+}
+
+/// One season's budget arithmetic, holding the projected figures and the
+/// owner cheque each step reads. Built once per [`SeasonBudget::derive`] so
+/// the transfer and wage mandates are sized from the same inputs.
+struct SeasonBudgetDerivation<'a> {
+    board_ctx: &'a BoardContext,
+    vision: &'a ClubVision,
+    chairman: &'a ChairmanProfile,
+    ownership: &'a OwnershipModel,
+    projected_income: f64,
+    projected_free_cash: f64,
+    ffp_mult: f64,
+    idle_cash: f64,
+    owner_fee_headroom: f64,
+    owner_subsidy: f64,
+}
+
+impl<'a> SeasonBudgetDerivation<'a> {
+    fn new(
+        board_ctx: &'a BoardContext,
+        vision: &'a ClubVision,
+        chairman: &'a ChairmanProfile,
+        ownership: &'a OwnershipModel,
+    ) -> Self {
         // Revenue-based budgets: a club's transfer war chest comes from
         // the slack between projected income and projected expenses, not
         // from the cash balance. Clubs that spent the offseason hauling
@@ -116,94 +194,12 @@ impl SeasonBudget {
             .max(0) as f64;
         let projected_free_cash = (projected_income - projected_expenses).max(0.0);
 
-        let ambition_mult = vision.budget_multiplier();
-        let chair_mult = chairman.budget_multiplier() as f64;
         let ffp_mult = match board_ctx.ffp_status {
             FfpStatus::Clean => 1.00,
             FfpStatus::Watchlist => 0.70,
             FfpStatus::Breach => 0.35,
         };
 
-        // No-revenue fallback: a club whose own revenue model cannot even
-        // project a year — it has no main team — would have free_cash == 0
-        // and never get a budget. Seed the calculation with a
-        // reputation-scaled allowance so it can still make signings.
-        //
-        // Since `projected_income` reads the PROJECTION, this is no longer
-        // the whole world's first season; it is the handful of clubs with
-        // nothing to project from.
-        let seed_budget = if projected_income < 1.0 {
-            let cash = board_ctx.balance.max(0) as f64;
-            let seed_pct = if rep >= 0.8 {
-                0.30
-            } else if rep >= 0.6 {
-                0.25
-            } else if rep >= 0.4 {
-                0.20
-            } else {
-                0.15
-            };
-            cash * seed_pct
-        } else {
-            0.0
-        };
-
-        // Ownership wealth/risk multiplier. Neutral owners resolve to 1.0
-        // so the legacy budget tests are unchanged; a deep-pocketed
-        // risk-taker can inflate the war chest, a cautious one throttles it.
-        let owner_mult = ownership.budget_multiplier();
-        let revenue_budget =
-            projected_free_cash * ambition_mult * chair_mult * ffp_mult * owner_mult;
-
-        // Reserve floor: a solvent club that merely BREAKS EVEN on the P&L
-        // (revenue_budget ≈ 0) can still spend a bounded slice of its cash
-        // reserves on transfers — directly, or via installments against future
-        // revenue. Without this every established break-even club got a zero
-        // transfer budget and was frozen out of the market for the whole
-        // season, the single biggest cause of a stuck market. Gated on real,
-        // positive cash (never an owner-loan overdraft) and on FFP so a
-        // constrained club can't tap it freely; the division-tier ceiling
-        // below still caps the result. It's a FLOOR, not mandated spend —
-        // a rich club's revenue budget already exceeds it, so nothing changes
-        // for clubs that were never frozen.
-        const RESERVE_FLOOR_PCT: f64 = 0.10;
-        let reserve_floor = if board_ctx.balance > 0 {
-            board_ctx.balance as f64 * RESERVE_FLOOR_PCT * ffp_mult
-        } else {
-            0.0
-        };
-        // Income floor: what a going concern finances against its
-        // TURNOVER. The revenue budget above is the P&L surplus, and for
-        // every established club the P&L is roughly flat — wages, the
-        // amortization of past fees and the ground eat the income — so the
-        // surplus is zero and the reserve floor was the whole budget. Ten
-        // per cent of the cash pile is a war chest for a club with no
-        // revenue; for a giant earning $800M it froze the top of the
-        // market: the 2032 census read every solvent giant at 52–95M
-        // against strikers valued 83–307M, while the same clubs banked
-        // half a billion. A fee is not paid out of last year's profit — it
-        // is financed over the contract against next year's turnover,
-        // which is why real clubs of that size gross-spend 15–25 % of
-        // revenue in an ordinary year. The floor is that share, scaled by
-        // how much of a wage-cover cushion the club actually holds (six
-        // months of wages in the bank = full cover, nothing = none), so a
-        // club living hand-to-mouth gets nothing from it and an indebted
-        // one nothing at all. Gated on FFP like the reserve floor; the
-        // ceiling below still caps it.
-        const INCOME_FLOOR_SHARE: f64 = 0.15;
-        const CASH_COVER_WAGE_MONTHS: f64 = 6.0;
-        let income_floor = {
-            let cover_bar = board_ctx.total_annual_wages as f64 * CASH_COVER_WAGE_MONTHS / 12.0;
-            let cash_cover = if board_ctx.balance > 0 && cover_bar > 0.0 {
-                (board_ctx.balance as f64 / cover_bar).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            board_ctx.trailing_annual_income.max(0) as f64
-                * INCOME_FLOOR_SHARE
-                * cash_cover
-                * ffp_mult
-        };
         // An owner-funded club spends its owner's cash on fees as well as
         // on wages: the 8 % idle-cash share below is what a club prudently
         // reinvests, and it is nothing like what a benefactor will write a
@@ -213,68 +209,7 @@ impl SeasonBudget {
             ClubBenefactor::idle_cash(board_ctx.balance, board_ctx.total_annual_wages as i64);
         let owner_fee_headroom =
             ClubBenefactor::subsidy_per_year(ownership.benefactor, 1.0, idle_cash);
-        // …and the cheque is SPENDABLE, not merely permitted. Lifting only
-        // the ceiling left it nowhere to land: a low-income cash-rich club
-        // sits on the reserve floor, far under its ceiling, so a $53M ask
-        // was priced affordable by `spend_power` and then never bid,
-        // because bids are sized against `season_targets.transfer_budget`.
-        let raw_budget = (revenue_budget + seed_budget)
-            .max(reserve_floor)
-            .max(income_floor)
-            .max(owner_fee_headroom)
-            .max(0.0);
 
-        let eco = board_ctx.country_economic_factor as f64;
-        let price = board_ctx.country_price_level as f64;
-        let price_ceiling = price * price * 80_000_000.0;
-        let eco_ceiling = eco * eco * 300_000_000.0;
-        // Division tier caps the war chest: lower leagues simply don't move
-        // the same money. Top flight (tier 1) is unconstrained here.
-        let tier_factor = match board_ctx.league_tier {
-            0 | 1 => 1.0,
-            2 => 0.6,
-            3 => 0.35,
-            _ => 0.2,
-        };
-        // The country ceiling above is a property of the LEAGUE, not of the
-        // club, so every top-flight side in a country shared one number.
-        // For the biggest clubs it was the binding constraint and it never
-        // moved: a club could win everything, treble its revenue and pile
-        // up two billion in cash, and its transfer budget stayed pinned to
-        // the same ~$115M as its mid-table neighbour. Money that is never
-        // spendable is a finance leak — it accumulates on the balance sheet
-        // for ever and never reaches the market.
-        //
-        // So the ceiling grows with the club as well as with the country:
-        // a share of what it EARNS, plus a share of the cash genuinely idle
-        // behind its wage commitments. A rep-6000 club with modest revenue
-        // and no reserves barely moves; a giant reaches the gross-spend band
-        // real clubs of that size actually operate in.
-        const INCOME_SHARE: f64 = 0.25;
-        const IDLE_CASH_SHARE: f64 = 0.08;
-        let annual_income = board_ctx.trailing_annual_income.max(0) as f64;
-        let club_headroom =
-            INCOME_SHARE * annual_income + IDLE_CASH_SHARE * idle_cash + owner_fee_headroom;
-        let budget_ceiling = (price_ceiling.min(eco_ceiling) + club_headroom) * tier_factor;
-        let mut transfer_budget = raw_budget.min(budget_ceiling) as i32;
-
-        // A club trading in emergency measures or administration cannot buy
-        // players for a fee, whatever its revenue says.
-        if board_ctx.debt_standing.blocks_transfer_spending() {
-            transfer_budget = 0;
-        }
-
-        // Wage budget: target wage/revenue ratio. Healthy clubs run
-        // 55–65% wages on revenue; distressed clubs squeeze that down to
-        // 45–50%; reckless elite owners are allowed to push to 70%. The
-        // debt standing supplies a hard ceiling on top.
-        let target_ratio =
-            (Self::wage_revenue_target(board_ctx.ffp_status, chairman.ambition, rep)
-                + ownership.wage_ratio_bonus())
-            .clamp(0.30, 0.80)
-            .min(board_ctx.debt_standing.wage_ratio_ceiling());
-
-        let current_wages = board_ctx.total_annual_wages as f64;
         // What the owner is putting into the wage bill this year. Held on
         // the targets as well as folded into the mandate, because the
         // negotiation's wage power has to take it back OUT before adding a
@@ -288,10 +223,189 @@ impl SeasonBudget {
         } else {
             ownership.owner_subsidy_per_year(idle_cash)
         };
-        let wage_budget = if projected_income < 1.0 {
+
+        Self {
+            board_ctx,
+            vision,
+            chairman,
+            ownership,
+            projected_income,
+            projected_free_cash,
+            ffp_mult,
+            idle_cash,
+            owner_fee_headroom,
+            owner_subsidy,
+        }
+    }
+
+    fn revenue_budget(&self) -> f64 {
+        let ambition_mult = self.vision.budget_multiplier();
+        let chair_mult = self.chairman.budget_multiplier() as f64;
+        // Ownership wealth/risk multiplier. Neutral owners resolve to 1.0
+        // so the legacy budget tests are unchanged; a deep-pocketed
+        // risk-taker can inflate the war chest, a cautious one throttles it.
+        let owner_mult = self.ownership.budget_multiplier();
+        self.projected_free_cash * ambition_mult * chair_mult * self.ffp_mult * owner_mult
+    }
+
+    /// No-revenue fallback: a club whose own revenue model cannot even
+    /// project a year — it has no main team — would have free_cash == 0
+    /// and never get a budget. Seed the calculation with a
+    /// reputation-scaled allowance so it can still make signings.
+    ///
+    /// Since `projected_income` reads the PROJECTION, this is no longer
+    /// the whole world's first season; it is the handful of clubs with
+    /// nothing to project from.
+    fn seed_budget(&self) -> f64 {
+        if self.projected_income >= 1.0 {
+            return 0.0;
+        }
+        let cash = self.board_ctx.balance.max(0) as f64;
+        let rep = self.board_ctx.reputation_score;
+        let seed_pct = if rep >= 0.8 {
+            0.30
+        } else if rep >= 0.6 {
+            0.25
+        } else if rep >= 0.4 {
+            0.20
+        } else {
+            0.15
+        };
+        cash * seed_pct
+    }
+
+    /// Reserve floor: a solvent club that merely BREAKS EVEN on the P&L
+    /// (revenue_budget ≈ 0) can still spend a bounded slice of its cash
+    /// reserves on transfers — directly, or via installments against future
+    /// revenue. Without this every established break-even club got a zero
+    /// transfer budget and was frozen out of the market for the whole
+    /// season, the single biggest cause of a stuck market. Gated on real,
+    /// positive cash (never an owner-loan overdraft) and on FFP so a
+    /// constrained club can't tap it freely; the division-tier ceiling
+    /// below still caps the result. It's a FLOOR, not mandated spend —
+    /// a rich club's revenue budget already exceeds it, so nothing changes
+    /// for clubs that were never frozen.
+    fn reserve_floor(&self) -> f64 {
+        const RESERVE_FLOOR_PCT: f64 = 0.10;
+        if self.board_ctx.balance > 0 {
+            self.board_ctx.balance as f64 * RESERVE_FLOOR_PCT * self.ffp_mult
+        } else {
+            0.0
+        }
+    }
+
+    /// Income floor: what a going concern finances against its
+    /// TURNOVER. The revenue budget above is the P&L surplus, and for
+    /// every established club the P&L is roughly flat — wages, the
+    /// amortization of past fees and the ground eat the income — so the
+    /// surplus is zero and the reserve floor was the whole budget. Ten
+    /// per cent of the cash pile is a war chest for a club with no
+    /// revenue; for a giant earning $800M it froze the top of the
+    /// market: the 2032 census read every solvent giant at 52–95M
+    /// against strikers valued 83–307M, while the same clubs banked
+    /// half a billion. A fee is not paid out of last year's profit — it
+    /// is financed over the contract against next year's turnover,
+    /// which is why real clubs of that size gross-spend 15–25 % of
+    /// revenue in an ordinary year. The floor is that share, scaled by
+    /// how much of a wage-cover cushion the club actually holds (six
+    /// months of wages in the bank = full cover, nothing = none), so a
+    /// club living hand-to-mouth gets nothing from it and an indebted
+    /// one nothing at all. Gated on FFP like the reserve floor; the
+    /// ceiling below still caps it.
+    fn income_floor(&self) -> f64 {
+        const INCOME_FLOOR_SHARE: f64 = 0.15;
+        const CASH_COVER_WAGE_MONTHS: f64 = 6.0;
+        let cover_bar = self.board_ctx.total_annual_wages as f64 * CASH_COVER_WAGE_MONTHS / 12.0;
+        let cash_cover = if self.board_ctx.balance > 0 && cover_bar > 0.0 {
+            (self.board_ctx.balance as f64 / cover_bar).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        self.board_ctx.trailing_annual_income.max(0) as f64
+            * INCOME_FLOOR_SHARE
+            * cash_cover
+            * self.ffp_mult
+    }
+
+    /// …and the cheque is SPENDABLE, not merely permitted. Lifting only
+    /// the ceiling left it nowhere to land: a low-income cash-rich club
+    /// sits on the reserve floor, far under its ceiling, so a $53M ask
+    /// was priced affordable by `spend_power` and then never bid,
+    /// because bids are sized against `season_targets.transfer_budget`.
+    fn raw_budget(&self) -> f64 {
+        (self.revenue_budget() + self.seed_budget())
+            .max(self.reserve_floor())
+            .max(self.income_floor())
+            .max(self.owner_fee_headroom)
+            .max(0.0)
+    }
+
+    /// The country ceiling above is a property of the LEAGUE, not of the
+    /// club, so every top-flight side in a country shared one number.
+    /// For the biggest clubs it was the binding constraint and it never
+    /// moved: a club could win everything, treble its revenue and pile
+    /// up two billion in cash, and its transfer budget stayed pinned to
+    /// the same ~$115M as its mid-table neighbour. Money that is never
+    /// spendable is a finance leak — it accumulates on the balance sheet
+    /// for ever and never reaches the market.
+    ///
+    /// So the ceiling grows with the club as well as with the country:
+    /// a share of what it EARNS, plus a share of the cash genuinely idle
+    /// behind its wage commitments. A rep-6000 club with modest revenue
+    /// and no reserves barely moves; a giant reaches the gross-spend band
+    /// real clubs of that size actually operate in.
+    fn budget_ceiling(&self) -> f64 {
+        let eco = self.board_ctx.country_economic_factor as f64;
+        let price = self.board_ctx.country_price_level as f64;
+        let price_ceiling = price * price * 80_000_000.0;
+        let eco_ceiling = eco * eco * 300_000_000.0;
+        // Division tier caps the war chest: lower leagues simply don't move
+        // the same money. Top flight (tier 1) is unconstrained here.
+        let tier_factor = match self.board_ctx.league_tier {
+            0 | 1 => 1.0,
+            2 => 0.6,
+            3 => 0.35,
+            _ => 0.2,
+        };
+        const INCOME_SHARE: f64 = 0.25;
+        const IDLE_CASH_SHARE: f64 = 0.08;
+        let annual_income = self.board_ctx.trailing_annual_income.max(0) as f64;
+        let club_headroom = INCOME_SHARE * annual_income
+            + IDLE_CASH_SHARE * self.idle_cash
+            + self.owner_fee_headroom;
+        (price_ceiling.min(eco_ceiling) + club_headroom) * tier_factor
+    }
+
+    fn transfer_budget(&self) -> i32 {
+        let mut transfer_budget = self.raw_budget().min(self.budget_ceiling()) as i32;
+
+        // A club trading in emergency measures or administration cannot buy
+        // players for a fee, whatever its revenue says.
+        if self.board_ctx.debt_standing.blocks_transfer_spending() {
+            transfer_budget = 0;
+        }
+
+        transfer_budget
+    }
+
+    fn wage_budget(&self) -> i32 {
+        // Wage budget: target wage/revenue ratio. Healthy clubs run
+        // 55–65% wages on revenue; distressed clubs squeeze that down to
+        // 45–50%; reckless elite owners are allowed to push to 70%. The
+        // debt standing supplies a hard ceiling on top.
+        let target_ratio = (SeasonBudget::wage_revenue_target(
+            self.board_ctx.ffp_status,
+            self.chairman.ambition,
+            self.board_ctx.reputation_score,
+        ) + self.ownership.wage_ratio_bonus())
+        .clamp(0.30, 0.80)
+        .min(self.board_ctx.debt_standing.wage_ratio_ceiling());
+
+        let current_wages = self.board_ctx.total_annual_wages as f64;
+        if self.projected_income < 1.0 {
             // Nothing to project from (a club with no main team): hold the
             // mandate at the existing bill rather than inventing a cut.
-            current_wages
+            current_wages as i32
         } else {
             // Size the mandate off *revenue*, not off the wage bill.
             //
@@ -318,107 +432,62 @@ impl SeasonBudget {
             // Saudi, Chinese, Russian and MLS windows, and it needs no
             // league list to express (memory
             // `feedback_balance_system_not_cases`).
-            (projected_income * target_ratio).max(current_wages * 0.85) + owner_subsidy
-        } as i32;
-
-        // Squad size limits based on reputation
-        let (min_squad, max_squad) = if rep >= 0.8 {
-            (25u8, 50u8)
-        } else if rep >= 0.6 {
-            (23, 45)
-        } else if rep >= 0.4 {
-            (20, 38)
-        } else if rep >= 0.2 {
-            (18, 30)
-        } else {
-            (16, 25)
-        };
-
-        // Expected league position. Reputation sets the baseline, then the
-        // owner's ambition and the long-term goal pull it up or down, and a
-        // lower division nudges a reputable club towards the promotion mix.
-        //
-        // TODO: previous-season finish and a league-relative wage / squad-
-        // ability rank would sharpen this. Neither is threaded into
-        // `BoardContext` yet, so we fall back to the reputation baseline
-        // rather than invent a rank.
-        let (expected, min_acceptable) = if board_ctx.league_size > 0 {
-            let league_sz = board_ctx.league_size as f32;
-
-            // Baseline: 0.0 = champions, 1.0 = bottom of the table.
-            let mut frac = 1.0 - rep;
-
-            // Owner ambition shifts the bar; reckless owners demand more.
-            frac += match chairman.ambition {
-                ChairmanAmbition::Reckless => -0.10,
-                ChairmanAmbition::Ambitious => -0.05,
-                ChairmanAmbition::Balanced => 0.0,
-                ChairmanAmbition::Conservative => 0.06,
-            };
-
-            // The long-term goal anchors a ceiling (or floor) on the brief.
-            if let Some(goal) = vision.long_term_goal {
-                match goal {
-                    LongTermGoal::WinLeague
-                    | LongTermGoal::WinContinental
-                    | LongTermGoal::PromotionToTopFlight => frac = frac.min(0.10),
-                    LongTermGoal::EstablishTopHalf => frac = frac.min(0.45),
-                    LongTermGoal::Survive => frac = frac.max(0.72),
-                    LongTermGoal::WinDomesticCup => {}
-                }
-            }
-
-            // A reputable club in a lower division is expected to push up.
-            if board_ctx.league_tier >= 2 {
-                frac -= 0.05;
-            }
-
-            frac = frac.clamp(0.02, 0.97);
-            let expected = ((frac * league_sz).round() as u8).clamp(1, board_ctx.league_size);
-            // Acceptable floor sits a quarter-table below the target.
-            let buffer = (league_sz * 0.25).max(2.0) as u8;
-            let min_acceptable = expected.saturating_add(buffer).min(board_ctx.league_size);
-            (expected, min_acceptable)
-        } else {
-            (1, 1)
-        };
-
-        SeasonTargets {
-            transfer_budget,
-            wage_budget,
-            owner_subsidy: owner_subsidy as i64,
-            owner_envelopes: OwnerEnvelopes::split(owner_subsidy),
-            max_squad_size: max_squad,
-            min_squad_size: min_squad,
-            expected_position: expected,
-            min_acceptable_position: min_acceptable,
-            // A fresh mandate carries no history: whatever the board moved
-            // last season was a judgement on last season.
-            mandate_adjustment: 0,
-            wage_mandate_adjustment: 0,
+            ((self.projected_income * target_ratio).max(current_wages * 0.85) + self.owner_subsidy)
+                as i32
         }
     }
 
-    /// Target wage-to-revenue ratio. Healthy clubs target 55-65%;
-    /// distressed clubs squeeze it to 45-50%; reckless owners at the elite
-    /// tier are allowed up to 70%.
-    fn wage_revenue_target(
-        ffp: FfpStatus,
-        ambition: ChairmanAmbition,
-        reputation_score: f32,
-    ) -> f64 {
-        let base: f64 = match ffp {
-            FfpStatus::Clean => 0.62,
-            FfpStatus::Watchlist => 0.55,
-            FfpStatus::Breach => 0.48,
+    /// Expected league position. Reputation sets the baseline, then the
+    /// owner's ambition and the long-term goal pull it up or down, and a
+    /// lower division nudges a reputable club towards the promotion mix.
+    ///
+    /// TODO: previous-season finish and a league-relative wage / squad-
+    /// ability rank would sharpen this. Neither is threaded into
+    /// `BoardContext` yet, so we fall back to the reputation baseline
+    /// rather than invent a rank.
+    fn expected_positions(&self) -> (u8, u8) {
+        if self.board_ctx.league_size == 0 {
+            return (1, 1);
+        }
+
+        let league_sz = self.board_ctx.league_size as f32;
+
+        // Baseline: 0.0 = champions, 1.0 = bottom of the table.
+        let mut frac = 1.0 - self.board_ctx.reputation_score;
+
+        // Owner ambition shifts the bar; reckless owners demand more.
+        frac += match self.chairman.ambition {
+            ChairmanAmbition::Reckless => -0.10,
+            ChairmanAmbition::Ambitious => -0.05,
+            ChairmanAmbition::Balanced => 0.0,
+            ChairmanAmbition::Conservative => 0.06,
         };
-        if matches!(ambition, ChairmanAmbition::Reckless) && reputation_score >= 0.75 {
-            return 0.70;
+
+        // The long-term goal anchors a ceiling (or floor) on the brief.
+        if let Some(goal) = self.vision.long_term_goal {
+            match goal {
+                LongTermGoal::WinLeague
+                | LongTermGoal::WinContinental
+                | LongTermGoal::PromotionToTopFlight => frac = frac.min(0.10),
+                LongTermGoal::EstablishTopHalf => frac = frac.min(0.45),
+                LongTermGoal::Survive => frac = frac.max(0.72),
+                LongTermGoal::WinDomesticCup => {}
+            }
         }
-        if matches!(ambition, ChairmanAmbition::Conservative) {
-            return (base - 0.05_f64).max(0.35);
+
+        // A reputable club in a lower division is expected to push up.
+        if self.board_ctx.league_tier >= 2 {
+            frac -= 0.05;
         }
-        base
+
+        frac = frac.clamp(0.02, 0.97);
+        let expected = ((frac * league_sz).round() as u8).clamp(1, self.board_ctx.league_size);
+        // Acceptable floor sits a quarter-table below the target.
+        let buffer = (league_sz * 0.25).max(2.0) as u8;
+        let min_acceptable = expected
+            .saturating_add(buffer)
+            .min(self.board_ctx.league_size);
+        (expected, min_acceptable)
     }
 }
 

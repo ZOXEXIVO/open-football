@@ -1,6 +1,7 @@
 use crate::Staff;
 use crate::club::staff::CoachingStyle;
 use crate::club::staff::StaffCoaching;
+use crate::club::staff::StaffKnowledge;
 use crate::club::staff::StaffMental;
 
 // ─── PerceptionLens ─────────────────────────────────────────────────
@@ -117,97 +118,28 @@ impl CoachProfile {
         }
     }
 
-    #[expect(clippy::too_many_lines)]
     pub fn from_staff(staff: &Staff) -> Self {
         let mental = &staff.staff_attributes.mental;
         let knowledge = &staff.staff_attributes.knowledge;
         let coaching = &staff.staff_attributes.coaching;
-
-        let style_youth_bonus = match staff.coaching_style {
-            CoachingStyle::Transformational => 0.1,
-            CoachingStyle::Democratic => 0.05,
-            CoachingStyle::LaissezFaire => 0.0,
-            CoachingStyle::Tactical => -0.05,
-            CoachingStyle::Authoritarian => -0.05,
-        };
+        let style = staff.coaching_style;
 
         let adaptability_norm = mental.adaptability as f32 / 20.0;
         let determination_norm = mental.determination as f32 / 20.0;
         let discipline_norm = mental.discipline as f32 / 20.0;
         let man_management_norm = mental.man_management as f32 / 20.0;
 
-        let conf_style_mod = match staff.coaching_style {
-            CoachingStyle::Authoritarian => 0.1,
-            CoachingStyle::Democratic => -0.05,
-            _ => 0.0,
-        };
         let confirmation_bias =
-            (determination_norm * 0.4 + (1.0 - adaptability_norm) * 0.6 + conf_style_mod)
-                .clamp(0.0, 1.0);
+            Self::confirmation_bias(determination_norm, adaptability_norm, style);
+        let negativity_bias = Self::negativity_bias(discipline_norm, man_management_norm, style);
+        let physical_bias_youth = Self::physical_bias_youth(coaching, style);
+        let readiness_intuition = Self::readiness_intuition(coaching, knowledge, style);
+        let attitude_weight = Self::attitude_weight(style, discipline_norm);
+        let tactical_blindness = Self::tactical_blindness(coaching, style);
+        let recency_bias = Self::recency_bias(knowledge, man_management_norm, style);
 
-        let neg_style_mod = match staff.coaching_style {
-            CoachingStyle::Authoritarian => 0.15,
-            CoachingStyle::Transformational => -0.1,
-            _ => 0.0,
-        };
-        let negativity_bias =
-            (discipline_norm * 0.5 + (1.0 - man_management_norm) * 0.5 + neg_style_mod)
-                .clamp(0.0, 1.0);
-
-        let phys_style_base = match staff.coaching_style {
-            CoachingStyle::Authoritarian => 0.7,
-            CoachingStyle::Tactical => 0.3,
-            CoachingStyle::Transformational => 0.2,
-            CoachingStyle::Democratic => 0.4,
-            CoachingStyle::LaissezFaire => 0.5,
-        };
-        let physical_bias_youth = (phys_style_base
-            * (1.0 - coaching.working_with_youngsters as f32 / 20.0 * 0.5))
-            .clamp(0.1, 0.9);
-
-        let readiness_style_bonus = match staff.coaching_style {
-            CoachingStyle::Tactical => 0.1,
-            CoachingStyle::Authoritarian => 0.05,
-            CoachingStyle::LaissezFaire => -0.1,
-            _ => 0.0,
-        };
-        let readiness_intuition = (coaching.fitness as f32 / 20.0 * 0.5
-            + coaching.mental as f32 / 20.0 * 0.3
-            + knowledge.judging_player_ability as f32 / 20.0 * 0.2
-            + readiness_style_bonus)
-            .clamp(0.1, 1.0);
-
-        let attitude_base = match staff.coaching_style {
-            CoachingStyle::Authoritarian => 0.8,
-            CoachingStyle::Tactical => 0.5,
-            CoachingStyle::Democratic => 0.4,
-            CoachingStyle::Transformational => 0.3,
-            CoachingStyle::LaissezFaire => 0.2,
-        };
-        let attitude_weight = (attitude_base * (0.5 + discipline_norm * 0.5)).clamp(0.1, 0.9);
-
-        let tact_style_mod = match staff.coaching_style {
-            CoachingStyle::Tactical => -0.2,
-            CoachingStyle::Authoritarian => 0.1,
-            CoachingStyle::LaissezFaire => 0.15,
-            _ => 0.0,
-        };
-        let tactical_blindness =
-            (1.0 - coaching.tactical as f32 / 20.0 * 0.7 + tact_style_mod).clamp(0.0, 0.8);
-
-        let recency_style_mod = match staff.coaching_style {
-            CoachingStyle::LaissezFaire => 0.1,
-            CoachingStyle::Tactical => -0.1,
-            CoachingStyle::Authoritarian => 0.05,
-            _ => 0.0,
-        };
-        let recency_bias = ((1.0 - knowledge.judging_player_ability as f32 / 20.0) * 0.5
-            + (1.0 - man_management_norm) * 0.3
-            + recency_style_mod)
-            .clamp(0.1, 0.9);
-
-        let temperament = Self::temperament_of(mental, staff.coaching_style);
-        let perception_lens = PerceptionLens::from_style_and_staff(&staff.coaching_style, coaching);
+        let temperament = Self::temperament_of(mental, style);
+        let perception_lens = PerceptionLens::from_style_and_staff(&style, coaching);
 
         CoachProfile {
             judging_accuracy: (knowledge.judging_player_ability as f32 / 20.0).clamp(0.0, 1.0),
@@ -215,8 +147,9 @@ impl CoachProfile {
             risk_tolerance: temperament.risk_tolerance,
             stubbornness: temperament.stubbornness,
             trust_in_decisions: determination_norm.clamp(0.0, 1.0),
-            youth_preference: (coaching.working_with_youngsters as f32 / 20.0 + style_youth_bonus)
-                .clamp(0.0, 1.0),
+            youth_preference: (coaching.working_with_youngsters as f32 / 20.0
+                + Self::style_youth_bonus(style))
+            .clamp(0.0, 1.0),
             conservatism: temperament.conservatism,
             man_management: (man_management_norm * 0.6 + mental.motivating as f32 / 20.0 * 0.4)
                 .clamp(0.0, 1.0),
@@ -231,6 +164,120 @@ impl CoachProfile {
             recency_bias,
             emotional_volatility: temperament.emotional_volatility,
         }
+    }
+
+    /// How much a style adds to the preference for working with young
+    /// players.
+    fn style_youth_bonus(style: CoachingStyle) -> f32 {
+        match style {
+            CoachingStyle::Transformational => 0.1,
+            CoachingStyle::Democratic => 0.05,
+            CoachingStyle::LaissezFaire => 0.0,
+            CoachingStyle::Tactical => -0.05,
+            CoachingStyle::Authoritarian => -0.05,
+        }
+    }
+
+    /// How much a coach reads new evidence as confirmation of what he
+    /// already believed.
+    fn confirmation_bias(
+        determination_norm: f32,
+        adaptability_norm: f32,
+        style: CoachingStyle,
+    ) -> f32 {
+        let style_mod = match style {
+            CoachingStyle::Authoritarian => 0.1,
+            CoachingStyle::Democratic => -0.05,
+            _ => 0.0,
+        };
+        (determination_norm * 0.4 + (1.0 - adaptability_norm) * 0.6 + style_mod).clamp(0.0, 1.0)
+    }
+
+    /// How heavily bad news weighs against good news.
+    fn negativity_bias(
+        discipline_norm: f32,
+        man_management_norm: f32,
+        style: CoachingStyle,
+    ) -> f32 {
+        let style_mod = match style {
+            CoachingStyle::Authoritarian => 0.15,
+            CoachingStyle::Transformational => -0.1,
+            _ => 0.0,
+        };
+        (discipline_norm * 0.5 + (1.0 - man_management_norm) * 0.5 + style_mod).clamp(0.0, 1.0)
+    }
+
+    /// How strongly a coach judges young players through their body
+    /// rather than through what they can already do.
+    fn physical_bias_youth(coaching: &StaffCoaching, style: CoachingStyle) -> f32 {
+        let style_base = match style {
+            CoachingStyle::Authoritarian => 0.7,
+            CoachingStyle::Tactical => 0.3,
+            CoachingStyle::Transformational => 0.2,
+            CoachingStyle::Democratic => 0.4,
+            CoachingStyle::LaissezFaire => 0.5,
+        };
+        (style_base * (1.0 - coaching.working_with_youngsters as f32 / 20.0 * 0.5)).clamp(0.1, 0.9)
+    }
+
+    /// How well a coach can tell whether a player is ready today.
+    fn readiness_intuition(
+        coaching: &StaffCoaching,
+        knowledge: &StaffKnowledge,
+        style: CoachingStyle,
+    ) -> f32 {
+        let style_bonus = match style {
+            CoachingStyle::Tactical => 0.1,
+            CoachingStyle::Authoritarian => 0.05,
+            CoachingStyle::LaissezFaire => -0.1,
+            _ => 0.0,
+        };
+        (coaching.fitness as f32 / 20.0 * 0.5
+            + coaching.mental as f32 / 20.0 * 0.3
+            + knowledge.judging_player_ability as f32 / 20.0 * 0.2
+            + style_bonus)
+            .clamp(0.1, 1.0)
+    }
+
+    /// How much weight a coach gives a player's attitude.
+    fn attitude_weight(style: CoachingStyle, discipline_norm: f32) -> f32 {
+        let base = match style {
+            CoachingStyle::Authoritarian => 0.8,
+            CoachingStyle::Tactical => 0.5,
+            CoachingStyle::Democratic => 0.4,
+            CoachingStyle::Transformational => 0.3,
+            CoachingStyle::LaissezFaire => 0.2,
+        };
+        (base * (0.5 + discipline_norm * 0.5)).clamp(0.1, 0.9)
+    }
+
+    /// How much of the tactical picture a coach misses.
+    fn tactical_blindness(coaching: &StaffCoaching, style: CoachingStyle) -> f32 {
+        let style_mod = match style {
+            CoachingStyle::Tactical => -0.2,
+            CoachingStyle::Authoritarian => 0.1,
+            CoachingStyle::LaissezFaire => 0.15,
+            _ => 0.0,
+        };
+        (1.0 - coaching.tactical as f32 / 20.0 * 0.7 + style_mod).clamp(0.0, 0.8)
+    }
+
+    /// How much the most recent evidence outweighs the rest.
+    fn recency_bias(
+        knowledge: &StaffKnowledge,
+        man_management_norm: f32,
+        style: CoachingStyle,
+    ) -> f32 {
+        let style_mod = match style {
+            CoachingStyle::LaissezFaire => 0.1,
+            CoachingStyle::Tactical => -0.1,
+            CoachingStyle::Authoritarian => 0.05,
+            _ => 0.0,
+        };
+        ((1.0 - knowledge.judging_player_ability as f32 / 20.0) * 0.5
+            + (1.0 - man_management_norm) * 0.3
+            + style_mod)
+            .clamp(0.1, 0.9)
     }
 
     /// How a coach of this mind and this style decides: the four readings

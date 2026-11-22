@@ -1,12 +1,13 @@
 pub mod routes;
 
+use crate::countries::{CountryLookup, CountryMenu};
 use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::views::{self, MenuSection, SubTitleFlag};
+use crate::views::{MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use core::{Country, NationalTeamLevel};
+use core::{Country, NationalTeam, NationalTeamLevel};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -54,157 +55,130 @@ pub struct CountryScheduleResult {
     pub away_goals: u8,
 }
 
-pub async fn country_schedule_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<CountryScheduleRequest>,
-) -> ApiResult<impl IntoResponse> {
-    render_country_schedule(state, route_params, NationalTeamLevel::Senior).await
+pub struct CountrySchedulePage;
+
+impl CountrySchedulePage {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<CountryScheduleRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        Self::render(state, route_params, NationalTeamLevel::Senior).await
+    }
+
+    pub async fn u21(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<CountryScheduleRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        Self::render(state, route_params, NationalTeamLevel::Under21).await
+    }
+
+    async fn render(
+        state: GameAppData,
+        route_params: CountryScheduleRequest,
+        level: NationalTeamLevel,
+    ) -> ApiResult<impl IntoResponse> {
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let guard = state.data.read().await;
+
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+
+        let (country, continent) =
+            CountryLookup::by_slug(simulator_data, &route_params.country_slug)?;
+
+        Ok(Self::template(
+            simulator_data,
+            country,
+            continent,
+            i18n,
+            &route_params,
+            level,
+        ))
+    }
+
+    fn template(
+        data: &core::SimulatorData,
+        country: &Country,
+        continent: &core::continent::Continent,
+        i18n: I18n,
+        route_params: &CountryScheduleRequest,
+        level: NationalTeamLevel,
+    ) -> CountryScheduleTemplate {
+        let (team, team_suffix) = match level {
+            NationalTeamLevel::Senior => (&country.national_team, ""),
+            NationalTeamLevel::Under21 => (&country.u21_national_team, "/u21"),
+        };
+        let items = ScheduleItems::of(data, team);
+
+        let current_path = format!(
+            "/{}/countries/{}{}/schedule",
+            route_params.lang, route_params.country_slug, team_suffix
+        );
+
+        CountryScheduleTemplate {
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
+            cpu_brand: &CPU_BRAND,
+            cores_count: *CPU_CORES,
+            title: country.name.clone(),
+            sub_title_prefix: String::new(),
+            sub_title_suffix: String::new(),
+            sub_title: continent.name.clone(),
+            sub_title_link: format!("/{}/countries", route_params.lang),
+            sub_title_flag: None,
+            header_color: country.background_color.clone(),
+            foreground_color: country.foreground_color.clone(),
+            menu_sections: CountryMenu::sections(
+                country,
+                &i18n,
+                &route_params.lang,
+                &route_params.country_slug,
+                &current_path,
+            ),
+            lang: route_params.lang.clone(),
+            i18n,
+            active_tab: "schedule",
+            country_slug: route_params.country_slug.clone(),
+            team_suffix,
+            items,
+        }
+    }
 }
 
-pub async fn country_u21_schedule_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<CountryScheduleRequest>,
-) -> ApiResult<impl IntoResponse> {
-    render_country_schedule(state, route_params, NationalTeamLevel::Under21).await
-}
+struct ScheduleItems;
 
-#[expect(clippy::too_many_lines)]
-async fn render_country_schedule(
-    state: GameAppData,
-    route_params: CountryScheduleRequest,
-    level: NationalTeamLevel,
-) -> ApiResult<impl IntoResponse> {
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let guard = state.data.read().await;
+impl ScheduleItems {
+    fn of(data: &core::SimulatorData, team: &NationalTeam) -> Vec<CountryScheduleItem> {
+        team.schedule
+            .iter()
+            .map(|fixture| {
+                let opponent_name = if !fixture.opponent_country_name.is_empty() {
+                    fixture.opponent_country_name.clone()
+                } else {
+                    data.country(fixture.opponent_country_id)
+                        .map(|c| c.name.clone())
+                        .unwrap_or_default()
+                };
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
-
-    let indexes = simulator_data
-        .indexes
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Indexes not available".to_string()))?;
-
-    let country_id = indexes
-        .slug_indexes
-        .get_country_by_slug(&route_params.country_slug)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("Country '{}' not found", route_params.country_slug))
-        })?;
-
-    let country: &Country = simulator_data
-        .continents
-        .iter()
-        .flat_map(|c| &c.countries)
-        .find(|country| country.id == country_id)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!(
-                "Country with ID {} not found in continents",
-                country_id
-            ))
-        })?;
-
-    let continent = simulator_data
-        .continent(country.continent_id)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!(
-                "Continent with ID {} not found",
-                country.continent_id
-            ))
-        })?;
-
-    let (team, team_suffix) = match level {
-        NationalTeamLevel::Senior => (&country.national_team, ""),
-        NationalTeamLevel::Under21 => (&country.u21_national_team, "/u21"),
-    };
-
-    let items: Vec<CountryScheduleItem> = team
-        .schedule
-        .iter()
-        .map(|fixture| {
-            let opponent_name = if !fixture.opponent_country_name.is_empty() {
-                fixture.opponent_country_name.clone()
-            } else {
-                simulator_data
+                let opponent_slug = data
                     .country(fixture.opponent_country_id)
-                    .map(|c| c.name.clone())
-                    .unwrap_or_default()
-            };
+                    .map(|c| c.slug.clone())
+                    .unwrap_or_default();
 
-            let opponent_slug = simulator_data
-                .country(fixture.opponent_country_id)
-                .map(|c| c.slug.clone())
-                .unwrap_or_default();
-
-            CountryScheduleItem {
-                date: fixture.date.format("%d.%m.%Y").to_string(),
-                opponent_name,
-                opponent_slug,
-                is_home: fixture.is_home,
-                competition_name: fixture.competition_name.clone(),
-                result: fixture.result.as_ref().map(|res| CountryScheduleResult {
-                    match_id: fixture.match_id.clone(),
-                    home_goals: res.home_score,
-                    away_goals: res.away_score,
-                }),
-            }
-        })
-        .collect();
-
-    let current_path = format!(
-        "/{}/countries/{}{}/schedule",
-        route_params.lang, route_params.country_slug, team_suffix
-    );
-    let cl: Vec<(&str, &str)> = country
-        .leagues
-        .leagues
-        .iter()
-        .filter(|l| !l.friendly)
-        .map(|l| (l.name.as_str(), l.slug.as_str()))
-        .collect();
-
-    Ok(CountryScheduleTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        title: country.name.clone(),
-        sub_title_prefix: String::new(),
-        sub_title_suffix: String::new(),
-        sub_title: continent.name.clone(),
-        sub_title_link: format!("/{}/countries", route_params.lang),
-        sub_title_flag: None,
-        header_color: country.background_color.clone(),
-        foreground_color: country.foreground_color.clone(),
-        menu_sections: {
-            let mp = views::MenuParams {
-                i18n: &i18n,
-                lang: &route_params.lang,
-                current_path: &current_path,
-                country_name: &country.name,
-                country_slug: &route_params.country_slug,
-            };
-            views::country_menu(
-                &mp,
-                &cl,
-                country
-                    .domestic_cup
-                    .as_ref()
-                    .map(|c| (c.league.name.as_str(), c.league.slug.as_str())),
-                &country
-                    .playoffs
-                    .iter()
-                    .map(|p| (p.league.name.as_str(), p.league.slug.as_str()))
-                    .collect::<Vec<_>>(),
-                country.continent_id,
-            )
-        },
-        lang: route_params.lang,
-        i18n,
-        active_tab: "schedule",
-        country_slug: route_params.country_slug,
-        team_suffix,
-        items,
-    })
+                CountryScheduleItem {
+                    date: fixture.date.format("%d.%m.%Y").to_string(),
+                    opponent_name,
+                    opponent_slug,
+                    is_home: fixture.is_home,
+                    competition_name: fixture.competition_name.clone(),
+                    result: fixture.result.as_ref().map(|res| CountryScheduleResult {
+                        match_id: fixture.match_id.clone(),
+                        home_goals: res.home_score,
+                        away_goals: res.away_score,
+                    }),
+                }
+            })
+            .collect()
+    }
 }

@@ -9,102 +9,18 @@
 use crate::Club;
 use crate::club::ClubResult;
 use crate::club::board::FfpStatus;
+use crate::club::board::context::BoardContext;
 use crate::club::news::ClubAffair;
 use crate::context::GlobalContext;
+use chrono::NaiveDate;
 
 use super::boardroom::LeagueStanding;
 
 impl Club {
-    #[expect(clippy::too_many_lines)]
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> ClubResult {
         let date = ctx.simulation.date.date();
 
-        let country_economic_factor = ctx
-            .country
-            .as_ref()
-            .map(|c| c.tv_revenue_multiplier)
-            .unwrap_or(1.0);
-        let country_price_level = ctx.country.as_ref().map(|c| c.price_level).unwrap_or(1.0);
-        // League position from country-level context. `league_played` is
-        // the count for THIS season — the club's own match history is never
-        // truncated at a season turn, so it is the only honest source for
-        // how far into a campaign the board is judging.
-        let (league_pos, league_sz, league_played, total_matches, league_tier) = ctx
-            .club
-            .as_ref()
-            .map(|c| {
-                (
-                    c.league_position,
-                    c.league_size,
-                    c.league_matches_played,
-                    c.total_league_matches,
-                    c.main_league_tier,
-                )
-            })
-            .unwrap_or((0, 0, 0, 0, 1));
-
-        let mut board_ctx = self.build_board_context(
-            country_economic_factor,
-            country_price_level,
-            league_played,
-            date,
-        );
-        board_ctx.league_position = league_pos;
-        board_ctx.league_size = league_sz;
-        board_ctx.total_matches = total_matches;
-        board_ctx.league_tier = league_tier.max(1);
-        // Annualised by funded months: in a world's first year the raw
-        // trailing sums cover only the months lived so far, and budgets or
-        // debt ratios sized off them read every young club as broke.
-        board_ctx.trailing_annual_income = self.finance.estimated_annual_income(date);
-        board_ctx.trailing_annual_outcome = self.finance.estimated_annual_outcome(date);
-        // …and a figure that exists even before the first month closes, so
-        // the ratios whose denominator is a year of revenue fail closed
-        // instead of dividing by nothing.
-        board_ctx.projected_annual_income =
-            self.projected_annual_income(&ctx, board_ctx.league_tier, date);
-        board_ctx.ffp_status = if self.finance.is_ffp_breach(date) {
-            FfpStatus::Breach
-        } else if self.finance.is_ffp_watchlist(date) {
-            FfpStatus::Watchlist
-        } else {
-            FfpStatus::Clean
-        };
-
-        // Derived finance signals for the board's component scoring.
-        board_ctx.profit_loss_12m =
-            board_ctx.trailing_annual_income - board_ctx.trailing_annual_outcome;
-        let debt = (-board_ctx.balance).max(0) as f64;
-        let revenue = board_ctx.trailing_annual_income.max(1) as f64;
-        board_ctx.debt_ratio = (debt / revenue) as f32;
-
-        // League-position-relative distances (top-tier conventions: bottom
-        // 3 relegate, top ~5 reach Europe / a playoff spot).
-        if league_sz > 0 && league_pos > 0 {
-            let relegation_edge = league_sz.saturating_sub(3);
-            board_ctx.distance_to_relegation = relegation_edge as i16 - league_pos as i16 + 1;
-            let europe_edge: u8 = 5.min(league_sz);
-            board_ctx.distance_to_europe_or_playoff = league_pos as i16 - europe_edge as i16;
-        }
-
-        // Attendance demand + supporter mood from recent form and standing.
-        let win_ratio = self
-            .teams
-            .main()
-            .map(|t| t.match_history.recent_wins_ratio(5))
-            .unwrap_or(0.5);
-        board_ctx.attendance_ratio = self.facilities.dynamic_attendance_multiplier(
-            win_ratio,
-            league_pos as u16,
-            league_sz as u16,
-        );
-        let standing = if league_sz > 0 && league_pos > 0 {
-            1.0 - (league_pos as f32 / league_sz as f32)
-        } else {
-            0.5
-        };
-        board_ctx.supporter_mood = (win_ratio * 0.55 + standing * 0.45).clamp(0.0, 1.0);
-
+        let board_ctx = self.board_context_for_tick(&ctx, date);
         // Build club context with facility data for training/academy + best
         // staff attribute scores so per-player systems can consult them
         // without walking the whole staff list each call.
@@ -196,6 +112,28 @@ impl Club {
             );
         }
 
+        self.run_weekly_operations(&ctx, date, table, &mut result);
+
+        self.run_monthly_operations(&ctx, date);
+
+        self.judge_key_departures(date);
+
+        // After every weekly and monthly move between the squads, so
+        // tomorrow's sides are read off the rosters as they now stand.
+        self.assign_matchday_sides(date);
+
+        self.run_season_start(&ctx, date, &mut result);
+
+        result
+    }
+
+    fn run_weekly_operations(
+        &mut self,
+        ctx: &GlobalContext<'_>,
+        date: NaiveDate,
+        table: LeagueStanding,
+        result: &mut ClubResult,
+    ) {
         if ctx.simulation.is_week_beginning() {
             if self.teams.ensure_coach_state(date) {
                 self.open_manager_review_window(date);
@@ -226,7 +164,9 @@ impl Club {
         } else {
             self.teams.manage_critical_squad_moves(date);
         }
+    }
 
+    fn run_monthly_operations(&mut self, ctx: &GlobalContext<'_>, date: NaiveDate) {
         if ctx.simulation.is_month_beginning() {
             if self.teams.ensure_coach_state(date) {
                 self.open_manager_review_window(date);
@@ -281,19 +221,22 @@ impl Club {
             // standing that month.
             self.review_goalkeeping_department(date);
         }
+    }
 
-        self.judge_key_departures(date);
-
-        // After every weekly and monthly move between the squads, so
-        // tomorrow's sides are read off the rosters as they now stand.
-        self.assign_matchday_sides(date);
-
-        // Season start: reset player states and graduate academy players
+    fn run_season_start(
+        &mut self,
+        ctx: &GlobalContext<'_>,
+        date: NaiveDate,
+        result: &mut ClubResult,
+    ) {
         let season = ctx
             .country
             .as_ref()
             .map(|c| c.season_dates)
             .unwrap_or_default();
+        if !ctx.simulation.is_season_start(&season) {
+            return;
+        }
         if ctx.simulation.is_season_start(&season) {
             // A new campaign's trading starts from nothing, and so do the
             // board's one-shot guards on the money it may move. The
@@ -320,8 +263,96 @@ impl Club {
             result.academy_released_players = released_players;
             self.trim_positional_surplus(date);
         }
+    }
 
-        result
+    fn board_context_for_tick(&self, ctx: &GlobalContext<'_>, date: NaiveDate) -> BoardContext {
+        let country_economic_factor = ctx
+            .country
+            .as_ref()
+            .map(|c| c.tv_revenue_multiplier)
+            .unwrap_or(1.0);
+        let country_price_level = ctx.country.as_ref().map(|c| c.price_level).unwrap_or(1.0);
+        // League position from country-level context. `league_played` is
+        // the count for THIS season — the club's own match history is never
+        // truncated at a season turn, so it is the only honest source for
+        // how far into a campaign the board is judging.
+        let (league_pos, league_sz, league_played, total_matches, league_tier) = ctx
+            .club
+            .as_ref()
+            .map(|c| {
+                (
+                    c.league_position,
+                    c.league_size,
+                    c.league_matches_played,
+                    c.total_league_matches,
+                    c.main_league_tier,
+                )
+            })
+            .unwrap_or((0, 0, 0, 0, 1));
+
+        let mut board_ctx = self.build_board_context(
+            country_economic_factor,
+            country_price_level,
+            league_played,
+            date,
+        );
+        board_ctx.league_position = league_pos;
+        board_ctx.league_size = league_sz;
+        board_ctx.total_matches = total_matches;
+        board_ctx.league_tier = league_tier.max(1);
+        // Annualised by funded months: in a world's first year the raw
+        // trailing sums cover only the months lived so far, and budgets or
+        // debt ratios sized off them read every young club as broke.
+        board_ctx.trailing_annual_income = self.finance.estimated_annual_income(date);
+        board_ctx.trailing_annual_outcome = self.finance.estimated_annual_outcome(date);
+        // …and a figure that exists even before the first month closes, so
+        // the ratios whose denominator is a year of revenue fail closed
+        // instead of dividing by nothing.
+        board_ctx.projected_annual_income =
+            self.projected_annual_income(&ctx, board_ctx.league_tier, date);
+        board_ctx.ffp_status = if self.finance.is_ffp_breach(date) {
+            FfpStatus::Breach
+        } else if self.finance.is_ffp_watchlist(date) {
+            FfpStatus::Watchlist
+        } else {
+            FfpStatus::Clean
+        };
+
+        // Derived finance signals for the board's component scoring.
+        board_ctx.profit_loss_12m =
+            board_ctx.trailing_annual_income - board_ctx.trailing_annual_outcome;
+        let debt = (-board_ctx.balance).max(0) as f64;
+        let revenue = board_ctx.trailing_annual_income.max(1) as f64;
+        board_ctx.debt_ratio = (debt / revenue) as f32;
+
+        // League-position-relative distances (top-tier conventions: bottom
+        // 3 relegate, top ~5 reach Europe / a playoff spot).
+        if league_sz > 0 && league_pos > 0 {
+            let relegation_edge = league_sz.saturating_sub(3);
+            board_ctx.distance_to_relegation = relegation_edge as i16 - league_pos as i16 + 1;
+            let europe_edge: u8 = 5.min(league_sz);
+            board_ctx.distance_to_europe_or_playoff = league_pos as i16 - europe_edge as i16;
+        }
+
+        // Attendance demand + supporter mood from recent form and standing.
+        let win_ratio = self
+            .teams
+            .main()
+            .map(|t| t.match_history.recent_wins_ratio(5))
+            .unwrap_or(0.5);
+        board_ctx.attendance_ratio = self.facilities.dynamic_attendance_multiplier(
+            win_ratio,
+            league_pos as u16,
+            league_sz as u16,
+        );
+        let standing = if league_sz > 0 && league_pos > 0 {
+            1.0 - (league_pos as f32 / league_sz as f32)
+        } else {
+            0.5
+        };
+        board_ctx.supporter_mood = (win_ratio * 0.55 + standing * 0.45).clamp(0.0, 1.0);
+
+        board_ctx
     }
 
     /// A new season opens. Every player reports to pre-season; what that does

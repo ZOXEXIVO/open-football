@@ -1,7 +1,6 @@
 mod about;
 mod ai;
 mod champions_league;
-mod shared;
 mod conference_league;
 mod copa_libertadores;
 mod countries;
@@ -20,6 +19,7 @@ mod playoffs;
 mod routes;
 mod search;
 pub mod settings;
+mod shared;
 mod staff;
 mod teams;
 mod views;

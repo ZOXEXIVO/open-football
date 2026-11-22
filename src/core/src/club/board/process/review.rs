@@ -18,7 +18,6 @@ impl ClubBoard {
     /// four independent dimensions (sporting / financial / squad-building /
     /// strategy), folds in supporter & financial pressure, drifts the
     /// manager relationship, and gates meetings / sackings / budget moves.
-    #[expect(clippy::too_many_lines)]
     pub(crate) fn evaluate_performance(
         &mut self,
         board_ctx: &BoardContext,
@@ -51,10 +50,51 @@ impl ClubBoard {
             None => 0,
         };
 
+        let scores = self.apply_component_scores(board_ctx, &targets, phase, style_drag);
+
+        // Position-vs-expectation delta retained for backing / meetings.
+        let performance_delta = self.performance_delta(board_ctx, &targets);
+
+        self.apply_mood();
+        self.apply_manager_satisfaction(style_drag, result);
+        self.apply_squad_status(board_ctx, &targets, phase, result);
+
+        result.mood = self.mood.state.clone();
+        result.confidence = self.confidence.level;
+
+        // ── Budget / FFP / owner-injection decisions. Single source of
+        // truth: emits at most one cut OR one increase per tick, and sets
+        // the legacy `cut_transfer_budget` / `bonus_transfer_funds` flags
+        // purely for the UI — `process` no longer applies them itself. ──
+        self.emit_budget_decisions(board_ctx, &targets, performance_delta, result);
+
+        if result.underperforming || matches!(self.mood.state, BoardMoodState::Poor) {
+            debug!(
+                "Board unhappy at confidence {} (weakest: {}): pos {}/{} expected {}",
+                self.confidence.level,
+                scores.headline(),
+                board_ctx.league_position,
+                board_ctx.league_size,
+                targets.expected_position
+            );
+        }
+
+        self.apply_sacking_ladder(board_ctx, phase, performance_delta, result);
+    }
+
+    /// Score the review, refresh the pressure gauges, and move confidence
+    /// and the manager relationship by what they say.
+    fn apply_component_scores(
+        &mut self,
+        board_ctx: &BoardContext,
+        targets: &SeasonTargets,
+        phase: SeasonPhase,
+        style_drag: i32,
+    ) -> BoardComponentScores {
         // ── Component scores ──
         let scores = BoardComponentScores::evaluate(
             board_ctx,
-            &targets,
+            targets,
             &self.vision,
             &self.promises,
             phase,
@@ -80,14 +120,20 @@ impl ClubBoard {
                 .clamp(0, 100) as u8;
         self.chairman.manager_loyalty = blended;
 
-        // Position-vs-expectation delta retained for backing / meetings.
-        let performance_delta = if board_ctx.league_position > 0 && board_ctx.matches_played >= 5 {
+        scores
+    }
+
+    /// Position-vs-expectation delta retained for backing / meetings.
+    fn performance_delta(&self, board_ctx: &BoardContext, targets: &SeasonTargets) -> i32 {
+        if board_ctx.league_position > 0 && board_ctx.matches_played >= 5 {
             targets.expected_position as i32 - board_ctx.league_position as i32
         } else {
             0
-        };
+        }
+    }
 
-        // ── Mood from confidence ──
+    /// ── Mood from confidence ──
+    fn apply_mood(&mut self) {
         let new_mood = if self.confidence.level >= 80 {
             BoardMoodState::Excellent
         } else if self.confidence.level >= 55 {
@@ -103,8 +149,10 @@ impl ClubBoard {
             self.poor_mood_months = 0;
         }
         self.mood.state = new_mood;
+    }
 
-        // ── Manager satisfaction (mood + style friction) ──
+    /// ── Manager satisfaction (mood + style friction) ──
+    fn apply_manager_satisfaction(&mut self, style_drag: i32, result: &mut BoardResult) {
         let mood_delta = match self.mood.state {
             BoardMoodState::Excellent => 1.5,
             BoardMoodState::Good => 0.5,
@@ -113,8 +161,16 @@ impl ClubBoard {
         };
         let style_friction = (style_drag as f32 * 0.35).min(1.5);
         result.manager_satisfaction_delta = mood_delta - style_friction;
+    }
 
-        // ── Squad limits ──
+    /// ── Squad limits and underperformance alarm ──
+    fn apply_squad_status(
+        &self,
+        board_ctx: &BoardContext,
+        targets: &SeasonTargets,
+        phase: SeasonPhase,
+        result: &mut BoardResult,
+    ) {
         let total_squad = board_ctx.main_squad_size + board_ctx.reserve_squad_size;
         if total_squad > targets.max_squad_size as usize + 5 {
             result.squad_over_limit = true;
@@ -124,39 +180,26 @@ impl ClubBoard {
             result.squad_under_limit = true;
         }
 
-        // ── Underperformance alarm ──
         if board_ctx.league_position > 0
             && board_ctx.league_position > targets.min_acceptable_position
             && phase.can_judge_table()
         {
             result.underperforming = true;
         }
+    }
 
-        result.mood = self.mood.state.clone();
-        result.confidence = self.confidence.level;
-
-        // ── Budget / FFP / owner-injection decisions. Single source of
-        // truth: emits at most one cut OR one increase per tick, and sets
-        // the legacy `cut_transfer_budget` / `bonus_transfer_funds` flags
-        // purely for the UI — `process` no longer applies them itself. ──
-        self.emit_budget_decisions(board_ctx, &targets, performance_delta, result);
-
-        if result.underperforming || matches!(self.mood.state, BoardMoodState::Poor) {
-            debug!(
-                "Board unhappy at confidence {} (weakest: {}): pos {}/{} expected {}",
-                self.confidence.level,
-                scores.headline(),
-                board_ctx.league_position,
-                board_ctx.league_size,
-                targets.expected_position
-            );
-        }
-
-        // ── Sacking gate ──
-        // Triggers: zero confidence; sustained poor mood (+ underperformance);
-        // sustained poor mood regardless; or a full relationship breakdown.
-        // Patience is the chairman's threshold adjusted by manager autonomy.
-        // Early-season grace via `phase.can_sack_manager()`.
+    /// ── Sacking gate ──
+    /// Triggers: zero confidence; sustained poor mood (+ underperformance);
+    /// sustained poor mood regardless; or a full relationship breakdown.
+    /// Patience is the chairman's threshold adjusted by manager autonomy.
+    /// Early-season grace via `phase.can_sack_manager()`.
+    fn apply_sacking_ladder(
+        &mut self,
+        board_ctx: &BoardContext,
+        phase: SeasonPhase,
+        performance_delta: i32,
+        result: &mut BoardResult,
+    ) {
         let enough_data = phase.can_sack_manager();
         let zero_confidence = self.confidence.level <= 0;
         let patience_threshold = self.patience_threshold(board_ctx);

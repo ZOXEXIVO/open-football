@@ -251,150 +251,431 @@ impl EpisodeSpec {
 impl EpisodeKind {
     /// The catalog. One row per kind — adding a remembered event means
     /// adding a variant and a row here, nothing else.
-    #[expect(clippy::too_many_lines)]
     pub fn spec(self) -> EpisodeSpec {
-        use EpisodeDomain as D;
-        use EpisodeSpec as S;
-
-        match self {
-            EpisodeKind::None => S::ordinary(0.0, 0.0, D::Career),
-
-            // Career landmarks
-            EpisodeKind::SeniorDebut => S::defining(0.95, 0.90, D::Career),
-            EpisodeKind::FirstGoalForClub => S::ordinary(0.70, 0.75, D::Career),
-            EpisodeKind::WonLeagueTitle => S::defining(1.00, 1.00, D::Career),
-            EpisodeKind::WonDomesticCup => S::ordinary(0.75, 0.80, D::Career),
-            EpisodeKind::WonContinentalTrophy => S::defining(1.00, 1.00, D::Career),
-            EpisodeKind::Relegated => S::defining(0.90, -0.90, D::Career),
-            EpisodeKind::Promoted => S::ordinary(0.80, 0.80, D::Career),
-            EpisodeKind::SignedForClub => S::ordinary(0.55, 0.35, D::Career),
-            EpisodeKind::SoldAgainstWill => S::defining(0.90, -0.85, D::Career),
-            EpisodeKind::ReleasedByClub => S::ordinary(0.75, -0.70, D::Career),
-            EpisodeKind::LoanedOut => S::ordinary(0.50, -0.25, D::Career),
-            EpisodeKind::ContractRenewed => S::ordinary(0.45, 0.50, D::Career),
-            EpisodeKind::CaptaincyAwarded => S::defining(0.80, 0.85, D::Career),
-            EpisodeKind::CaptaincyRemoved => S::ordinary(0.70, -0.70, D::Career),
-            EpisodeKind::ClubServantMilestone => S::defining(0.75, 0.80, D::Career),
-
-            // The manager
-            EpisodeKind::ManagerPromiseKept => S::ordinary(0.55, 0.65, D::Professional),
-            EpisodeKind::ManagerPromiseBroken => S::betrayal(0.85, -0.85, D::Professional),
-            EpisodeKind::ManagerPublicPraise => S::ordinary(0.45, 0.55, D::Professional),
-            EpisodeKind::ManagerPublicCriticism => S::ordinary(0.60, -0.65, D::Professional),
-            EpisodeKind::ManagerPrivateBacking => S::ordinary(0.50, 0.60, D::Professional),
-            EpisodeKind::ManagerFrozenOut => S::ordinary(0.80, -0.80, D::Professional),
-            EpisodeKind::ManagerSignedARival => S::ordinary(0.50, -0.40, D::Professional),
-            EpisodeKind::ManagerLeftClub => S::ordinary(0.45, 0.00, D::Professional),
-            EpisodeKind::ManagerArrived => S::ordinary(0.40, 0.00, D::Professional),
-
-            // Selection and role
-            EpisodeKind::StartedBigMatch => S::ordinary(0.55, 0.60, D::Competitive),
-            EpisodeKind::LeftOutOfBigMatch => S::ordinary(0.70, -0.70, D::Competitive),
-            EpisodeKind::DroppedToBench => S::ordinary(0.55, -0.55, D::Competitive),
-            EpisodeKind::WonStartingPlace => S::ordinary(0.65, 0.70, D::Competitive),
-            EpisodeKind::LostStartingPlace => S::ordinary(0.65, -0.65, D::Competitive),
-            EpisodeKind::SubbedOffEarly => S::ordinary(0.40, -0.45, D::Competitive),
-            EpisodeKind::RoleDowngraded => S::ordinary(0.60, -0.60, D::Professional),
-            EpisodeKind::RoleUpgraded => S::ordinary(0.55, 0.60, D::Professional),
-
-            // On the pitch
-            EpisodeKind::DecisiveGoal => S::ordinary(0.75, 0.85, D::Competitive),
-            EpisodeKind::ManOfTheMatch => S::ordinary(0.50, 0.60, D::Competitive),
-            EpisodeKind::CostlyError => S::ordinary(0.70, -0.75, D::Competitive),
-            EpisodeKind::SentOff => S::ordinary(0.65, -0.70, D::Competitive),
-            EpisodeKind::MissedDecisivePenalty => S::defining(0.85, -0.85, D::Competitive),
-            EpisodeKind::PenaltySaved => S::ordinary(0.60, 0.65, D::Competitive),
-            EpisodeKind::MatchSavingDisplay => S::ordinary(0.55, 0.60, D::Competitive),
-            EpisodeKind::HeavyDefeat => S::ordinary(0.45, -0.50, D::Competitive),
-            EpisodeKind::DerbyWin => S::ordinary(0.65, 0.75, D::Competitive),
-            EpisodeKind::DerbyDefeat => S::ordinary(0.60, -0.65, D::Competitive),
-
-            // The dressing room
-            EpisodeKind::TeammateBefriended => S::ordinary(0.45, 0.55, D::Social),
-            EpisodeKind::TeammateConflict => S::ordinary(0.60, -0.60, D::Social),
-            EpisodeKind::MentorSupport => S::ordinary(0.55, 0.65, D::Social),
-            EpisodeKind::FeltIsolated => S::ordinary(0.55, -0.60, D::Social),
-            EpisodeKind::WelcomedBySquad => S::ordinary(0.50, 0.60, D::Social),
-            EpisodeKind::SquadBackedHim => S::ordinary(0.60, 0.70, D::Social),
-            EpisodeKind::SquadTurnedOnHim => S::ordinary(0.75, -0.80, D::Social),
-
-            // Fans and media
-            EpisodeKind::FansAdoration => S::ordinary(0.60, 0.70, D::Social),
-            EpisodeKind::FansHostility => S::ordinary(0.65, -0.70, D::Social),
-            EpisodeKind::MediaPraise => S::ordinary(0.35, 0.40, D::Social),
-            EpisodeKind::MediaAttack => S::ordinary(0.50, -0.55, D::Social),
-
-            // Money
-            EpisodeKind::BigPayRise => S::ordinary(0.50, 0.60, D::Financial),
-            EpisodeKind::WageBelowPeers => S::ordinary(0.55, -0.55, D::Financial),
-            EpisodeKind::ClubRefusedTerms => S::ordinary(0.60, -0.60, D::Financial),
-            EpisodeKind::ClubBrokeWagePromise => S::betrayal(0.80, -0.80, D::Financial),
-
-            // The body
-            EpisodeKind::SeriousInjury => S::ordinary(0.70, -0.70, D::Body),
-            EpisodeKind::CareerThreateningInjury => S::defining(0.95, -0.95, D::Body),
-            EpisodeKind::ReturnedFromLongInjury => S::ordinary(0.65, 0.70, D::Body),
-
-            // International
-            EpisodeKind::FirstCap => S::defining(0.95, 0.90, D::Career),
-            EpisodeKind::NationalSnub => S::ordinary(0.60, -0.60, D::Career),
-            EpisodeKind::MajorTournamentSquad => S::ordinary(0.70, 0.75, D::Career),
-            EpisodeKind::NationalTeamGlory => S::defining(1.00, 1.00, D::Career),
-
-            // Life
-            EpisodeKind::FamilySettled => S::ordinary(0.50, 0.55, D::Life),
-            EpisodeKind::FamilyUnsettled => S::ordinary(0.60, -0.60, D::Life),
-            EpisodeKind::Bereavement => S::defining(0.95, -0.90, D::Life),
-            EpisodeKind::ChildBorn => S::defining(0.90, 0.95, D::Life),
-
-            // His career
-            EpisodeKind::AppointedManager => S::defining(0.85, 0.80, D::Management),
-            EpisodeKind::SackedByClub => S::defining(0.95, -0.90, D::Management),
-            EpisodeKind::ResignedFromClub => S::ordinary(0.70, -0.30, D::Management),
-            EpisodeKind::CaretakerSpell => S::ordinary(0.45, 0.10, D::Management),
-            EpisodeKind::PromotedFromWithin => S::defining(0.80, 0.85, D::Management),
-            EpisodeKind::WonManagerOfTheMonth => S::ordinary(0.40, 0.55, D::Management),
-            EpisodeKind::SurvivedARelegationFight => S::defining(0.85, 0.85, D::Management),
-            EpisodeKind::FailedToSurviveIt => S::defining(0.90, -0.90, D::Management),
-
-            // The board. Three of these are betrayals rather than
-            // setbacks: a refused target is a decision he disagrees
-            // with, a broken promise is a different thing entirely.
-            EpisodeKind::BoardKeptItsPromise => S::ordinary(0.55, 0.65, D::Boardroom),
-            EpisodeKind::BoardBrokeItsPromise => S::betrayal(0.85, -0.85, D::Boardroom),
-            EpisodeKind::BoardRefusedMyTarget => S::ordinary(0.55, -0.50, D::Boardroom),
-            EpisodeKind::BoardBackedMeInTheWindow => S::ordinary(0.60, 0.70, D::Boardroom),
-            EpisodeKind::BoardSoldMyBestPlayer => S::betrayal(0.80, -0.80, D::Boardroom),
-            // The public vote of confidence. Faintly negative on
-            // purpose — in football it is what a board says on the way
-            // to sacking someone, and every manager knows it.
-            EpisodeKind::GivenAVoteOfConfidence => S::ordinary(0.50, -0.10, D::Boardroom),
-            EpisodeKind::ChairmanUndercutMePublicly => S::ordinary(0.75, -0.75, D::Boardroom),
-
-            // The squad
-            EpisodeKind::LostTheDressingRoom => S::defining(0.90, -0.90, D::Squad),
-            EpisodeKind::SquadFoughtForMe => S::ordinary(0.70, 0.80, D::Squad),
-            EpisodeKind::PlayerRefusedToPlayForMe => S::betrayal(0.80, -0.80, D::Squad),
-            EpisodeKind::PlayerRepaidMyFaith => S::ordinary(0.60, 0.75, D::Squad),
-            EpisodeKind::PlayerWalkedOutOnMe => S::ordinary(0.55, -0.55, D::Squad),
-            EpisodeKind::PlayerLeftWithMyBlessing => S::ordinary(0.35, 0.30, D::Squad),
-            // Sign supplied by the emit site: how a reunion feels is the
-            // whole question, and the catalog cannot answer it.
-            EpisodeKind::ReunitedWithAPlayerIKnow => S::ordinary(0.40, 0.0, D::Squad),
-            EpisodeKind::SignedAPlayerIWanted => S::ordinary(0.50, 0.55, D::Squad),
-            EpisodeKind::SignedAPlayerIDidNotWant => S::ordinary(0.55, -0.50, D::Squad),
-
-            // His football
-            EpisodeKind::MyGambleCameOff => S::ordinary(0.65, 0.75, D::Philosophy),
-            EpisodeKind::MyGambleBackfired => S::ordinary(0.70, -0.70, D::Philosophy),
-
-            // Standing. Shares the social domain with the player rows —
-            // supporters and the press treat both the same way.
-            EpisodeKind::SupportersTurnedOnMe => S::ordinary(0.75, -0.80, D::Social),
-            EpisodeKind::SupportersSangMyName => S::ordinary(0.65, 0.80, D::Social),
-            EpisodeKind::MediaWroteMeOff => S::ordinary(0.50, -0.55, D::Social),
-        }
+        Self::SPECS
+            .iter()
+            .find_map(|(kind, spec)| (*kind == self).then_some(*spec))
+            .expect("the catalog covers every kind")
     }
+
+    /// The rows [`Self::spec`] reads.
+    const SPECS: &[(EpisodeKind, EpisodeSpec)] = &[
+        (
+            EpisodeKind::None,
+            EpisodeSpec::ordinary(0.0, 0.0, EpisodeDomain::Career),
+        ),
+        // Career landmarks
+        (
+            EpisodeKind::SeniorDebut,
+            EpisodeSpec::defining(0.95, 0.90, EpisodeDomain::Career),
+        ),
+        (
+            EpisodeKind::FirstGoalForClub,
+            EpisodeSpec::ordinary(0.70, 0.75, EpisodeDomain::Career),
+        ),
+        (
+            EpisodeKind::WonLeagueTitle,
+            EpisodeSpec::defining(1.00, 1.00, EpisodeDomain::Career),
+        ),
+        (
+            EpisodeKind::WonDomesticCup,
+            EpisodeSpec::ordinary(0.75, 0.80, EpisodeDomain::Career),
+        ),
+        (
+            EpisodeKind::WonContinentalTrophy,
+            EpisodeSpec::defining(1.00, 1.00, EpisodeDomain::Career),
+        ),
+        (
+            EpisodeKind::Relegated,
+            EpisodeSpec::defining(0.90, -0.90, EpisodeDomain::Career),
+        ),
+        (
+            EpisodeKind::Promoted,
+            EpisodeSpec::ordinary(0.80, 0.80, EpisodeDomain::Career),
+        ),
+        (
+            EpisodeKind::SignedForClub,
+            EpisodeSpec::ordinary(0.55, 0.35, EpisodeDomain::Career),
+        ),
+        (
+            EpisodeKind::SoldAgainstWill,
+            EpisodeSpec::defining(0.90, -0.85, EpisodeDomain::Career),
+        ),
+        (
+            EpisodeKind::ReleasedByClub,
+            EpisodeSpec::ordinary(0.75, -0.70, EpisodeDomain::Career),
+        ),
+        (
+            EpisodeKind::LoanedOut,
+            EpisodeSpec::ordinary(0.50, -0.25, EpisodeDomain::Career),
+        ),
+        (
+            EpisodeKind::ContractRenewed,
+            EpisodeSpec::ordinary(0.45, 0.50, EpisodeDomain::Career),
+        ),
+        (
+            EpisodeKind::CaptaincyAwarded,
+            EpisodeSpec::defining(0.80, 0.85, EpisodeDomain::Career),
+        ),
+        (
+            EpisodeKind::CaptaincyRemoved,
+            EpisodeSpec::ordinary(0.70, -0.70, EpisodeDomain::Career),
+        ),
+        (
+            EpisodeKind::ClubServantMilestone,
+            EpisodeSpec::defining(0.75, 0.80, EpisodeDomain::Career),
+        ),
+        // The manager
+        (
+            EpisodeKind::ManagerPromiseKept,
+            EpisodeSpec::ordinary(0.55, 0.65, EpisodeDomain::Professional),
+        ),
+        (
+            EpisodeKind::ManagerPromiseBroken,
+            EpisodeSpec::betrayal(0.85, -0.85, EpisodeDomain::Professional),
+        ),
+        (
+            EpisodeKind::ManagerPublicPraise,
+            EpisodeSpec::ordinary(0.45, 0.55, EpisodeDomain::Professional),
+        ),
+        (
+            EpisodeKind::ManagerPublicCriticism,
+            EpisodeSpec::ordinary(0.60, -0.65, EpisodeDomain::Professional),
+        ),
+        (
+            EpisodeKind::ManagerPrivateBacking,
+            EpisodeSpec::ordinary(0.50, 0.60, EpisodeDomain::Professional),
+        ),
+        (
+            EpisodeKind::ManagerFrozenOut,
+            EpisodeSpec::ordinary(0.80, -0.80, EpisodeDomain::Professional),
+        ),
+        (
+            EpisodeKind::ManagerSignedARival,
+            EpisodeSpec::ordinary(0.50, -0.40, EpisodeDomain::Professional),
+        ),
+        (
+            EpisodeKind::ManagerLeftClub,
+            EpisodeSpec::ordinary(0.45, 0.00, EpisodeDomain::Professional),
+        ),
+        (
+            EpisodeKind::ManagerArrived,
+            EpisodeSpec::ordinary(0.40, 0.00, EpisodeDomain::Professional),
+        ),
+        // Selection and role
+        (
+            EpisodeKind::StartedBigMatch,
+            EpisodeSpec::ordinary(0.55, 0.60, EpisodeDomain::Competitive),
+        ),
+        (
+            EpisodeKind::LeftOutOfBigMatch,
+            EpisodeSpec::ordinary(0.70, -0.70, EpisodeDomain::Competitive),
+        ),
+        (
+            EpisodeKind::DroppedToBench,
+            EpisodeSpec::ordinary(0.55, -0.55, EpisodeDomain::Competitive),
+        ),
+        (
+            EpisodeKind::WonStartingPlace,
+            EpisodeSpec::ordinary(0.65, 0.70, EpisodeDomain::Competitive),
+        ),
+        (
+            EpisodeKind::LostStartingPlace,
+            EpisodeSpec::ordinary(0.65, -0.65, EpisodeDomain::Competitive),
+        ),
+        (
+            EpisodeKind::SubbedOffEarly,
+            EpisodeSpec::ordinary(0.40, -0.45, EpisodeDomain::Competitive),
+        ),
+        (
+            EpisodeKind::RoleDowngraded,
+            EpisodeSpec::ordinary(0.60, -0.60, EpisodeDomain::Professional),
+        ),
+        (
+            EpisodeKind::RoleUpgraded,
+            EpisodeSpec::ordinary(0.55, 0.60, EpisodeDomain::Professional),
+        ),
+        // On the pitch
+        (
+            EpisodeKind::DecisiveGoal,
+            EpisodeSpec::ordinary(0.75, 0.85, EpisodeDomain::Competitive),
+        ),
+        (
+            EpisodeKind::ManOfTheMatch,
+            EpisodeSpec::ordinary(0.50, 0.60, EpisodeDomain::Competitive),
+        ),
+        (
+            EpisodeKind::CostlyError,
+            EpisodeSpec::ordinary(0.70, -0.75, EpisodeDomain::Competitive),
+        ),
+        (
+            EpisodeKind::SentOff,
+            EpisodeSpec::ordinary(0.65, -0.70, EpisodeDomain::Competitive),
+        ),
+        (
+            EpisodeKind::MissedDecisivePenalty,
+            EpisodeSpec::defining(0.85, -0.85, EpisodeDomain::Competitive),
+        ),
+        (
+            EpisodeKind::PenaltySaved,
+            EpisodeSpec::ordinary(0.60, 0.65, EpisodeDomain::Competitive),
+        ),
+        (
+            EpisodeKind::MatchSavingDisplay,
+            EpisodeSpec::ordinary(0.55, 0.60, EpisodeDomain::Competitive),
+        ),
+        (
+            EpisodeKind::HeavyDefeat,
+            EpisodeSpec::ordinary(0.45, -0.50, EpisodeDomain::Competitive),
+        ),
+        (
+            EpisodeKind::DerbyWin,
+            EpisodeSpec::ordinary(0.65, 0.75, EpisodeDomain::Competitive),
+        ),
+        (
+            EpisodeKind::DerbyDefeat,
+            EpisodeSpec::ordinary(0.60, -0.65, EpisodeDomain::Competitive),
+        ),
+        // The dressing room
+        (
+            EpisodeKind::TeammateBefriended,
+            EpisodeSpec::ordinary(0.45, 0.55, EpisodeDomain::Social),
+        ),
+        (
+            EpisodeKind::TeammateConflict,
+            EpisodeSpec::ordinary(0.60, -0.60, EpisodeDomain::Social),
+        ),
+        (
+            EpisodeKind::MentorSupport,
+            EpisodeSpec::ordinary(0.55, 0.65, EpisodeDomain::Social),
+        ),
+        (
+            EpisodeKind::FeltIsolated,
+            EpisodeSpec::ordinary(0.55, -0.60, EpisodeDomain::Social),
+        ),
+        (
+            EpisodeKind::WelcomedBySquad,
+            EpisodeSpec::ordinary(0.50, 0.60, EpisodeDomain::Social),
+        ),
+        (
+            EpisodeKind::SquadBackedHim,
+            EpisodeSpec::ordinary(0.60, 0.70, EpisodeDomain::Social),
+        ),
+        (
+            EpisodeKind::SquadTurnedOnHim,
+            EpisodeSpec::ordinary(0.75, -0.80, EpisodeDomain::Social),
+        ),
+        // Fans and media
+        (
+            EpisodeKind::FansAdoration,
+            EpisodeSpec::ordinary(0.60, 0.70, EpisodeDomain::Social),
+        ),
+        (
+            EpisodeKind::FansHostility,
+            EpisodeSpec::ordinary(0.65, -0.70, EpisodeDomain::Social),
+        ),
+        (
+            EpisodeKind::MediaPraise,
+            EpisodeSpec::ordinary(0.35, 0.40, EpisodeDomain::Social),
+        ),
+        (
+            EpisodeKind::MediaAttack,
+            EpisodeSpec::ordinary(0.50, -0.55, EpisodeDomain::Social),
+        ),
+        // Money
+        (
+            EpisodeKind::BigPayRise,
+            EpisodeSpec::ordinary(0.50, 0.60, EpisodeDomain::Financial),
+        ),
+        (
+            EpisodeKind::WageBelowPeers,
+            EpisodeSpec::ordinary(0.55, -0.55, EpisodeDomain::Financial),
+        ),
+        (
+            EpisodeKind::ClubRefusedTerms,
+            EpisodeSpec::ordinary(0.60, -0.60, EpisodeDomain::Financial),
+        ),
+        (
+            EpisodeKind::ClubBrokeWagePromise,
+            EpisodeSpec::betrayal(0.80, -0.80, EpisodeDomain::Financial),
+        ),
+        // The body
+        (
+            EpisodeKind::SeriousInjury,
+            EpisodeSpec::ordinary(0.70, -0.70, EpisodeDomain::Body),
+        ),
+        (
+            EpisodeKind::CareerThreateningInjury,
+            EpisodeSpec::defining(0.95, -0.95, EpisodeDomain::Body),
+        ),
+        (
+            EpisodeKind::ReturnedFromLongInjury,
+            EpisodeSpec::ordinary(0.65, 0.70, EpisodeDomain::Body),
+        ),
+        // International
+        (
+            EpisodeKind::FirstCap,
+            EpisodeSpec::defining(0.95, 0.90, EpisodeDomain::Career),
+        ),
+        (
+            EpisodeKind::NationalSnub,
+            EpisodeSpec::ordinary(0.60, -0.60, EpisodeDomain::Career),
+        ),
+        (
+            EpisodeKind::MajorTournamentSquad,
+            EpisodeSpec::ordinary(0.70, 0.75, EpisodeDomain::Career),
+        ),
+        (
+            EpisodeKind::NationalTeamGlory,
+            EpisodeSpec::defining(1.00, 1.00, EpisodeDomain::Career),
+        ),
+        // Life
+        (
+            EpisodeKind::FamilySettled,
+            EpisodeSpec::ordinary(0.50, 0.55, EpisodeDomain::Life),
+        ),
+        (
+            EpisodeKind::FamilyUnsettled,
+            EpisodeSpec::ordinary(0.60, -0.60, EpisodeDomain::Life),
+        ),
+        (
+            EpisodeKind::Bereavement,
+            EpisodeSpec::defining(0.95, -0.90, EpisodeDomain::Life),
+        ),
+        (
+            EpisodeKind::ChildBorn,
+            EpisodeSpec::defining(0.90, 0.95, EpisodeDomain::Life),
+        ),
+        // His career
+        (
+            EpisodeKind::AppointedManager,
+            EpisodeSpec::defining(0.85, 0.80, EpisodeDomain::Management),
+        ),
+        (
+            EpisodeKind::SackedByClub,
+            EpisodeSpec::defining(0.95, -0.90, EpisodeDomain::Management),
+        ),
+        (
+            EpisodeKind::ResignedFromClub,
+            EpisodeSpec::ordinary(0.70, -0.30, EpisodeDomain::Management),
+        ),
+        (
+            EpisodeKind::CaretakerSpell,
+            EpisodeSpec::ordinary(0.45, 0.10, EpisodeDomain::Management),
+        ),
+        (
+            EpisodeKind::PromotedFromWithin,
+            EpisodeSpec::defining(0.80, 0.85, EpisodeDomain::Management),
+        ),
+        (
+            EpisodeKind::WonManagerOfTheMonth,
+            EpisodeSpec::ordinary(0.40, 0.55, EpisodeDomain::Management),
+        ),
+        (
+            EpisodeKind::SurvivedARelegationFight,
+            EpisodeSpec::defining(0.85, 0.85, EpisodeDomain::Management),
+        ),
+        (
+            EpisodeKind::FailedToSurviveIt,
+            EpisodeSpec::defining(0.90, -0.90, EpisodeDomain::Management),
+        ),
+        // The board. Three of these are betrayals rather than
+        // setbacks: a refused target is a decision he disagrees
+        // with, a broken promise is a different thing entirely.
+        (
+            EpisodeKind::BoardKeptItsPromise,
+            EpisodeSpec::ordinary(0.55, 0.65, EpisodeDomain::Boardroom),
+        ),
+        (
+            EpisodeKind::BoardBrokeItsPromise,
+            EpisodeSpec::betrayal(0.85, -0.85, EpisodeDomain::Boardroom),
+        ),
+        (
+            EpisodeKind::BoardRefusedMyTarget,
+            EpisodeSpec::ordinary(0.55, -0.50, EpisodeDomain::Boardroom),
+        ),
+        (
+            EpisodeKind::BoardBackedMeInTheWindow,
+            EpisodeSpec::ordinary(0.60, 0.70, EpisodeDomain::Boardroom),
+        ),
+        (
+            EpisodeKind::BoardSoldMyBestPlayer,
+            EpisodeSpec::betrayal(0.80, -0.80, EpisodeDomain::Boardroom),
+        ),
+        // The public vote of confidence. Faintly negative on
+        // purpose — in football it is what a board says on the way
+        // to sacking someone, and every manager knows it.
+        (
+            EpisodeKind::GivenAVoteOfConfidence,
+            EpisodeSpec::ordinary(0.50, -0.10, EpisodeDomain::Boardroom),
+        ),
+        (
+            EpisodeKind::ChairmanUndercutMePublicly,
+            EpisodeSpec::ordinary(0.75, -0.75, EpisodeDomain::Boardroom),
+        ),
+        // The squad
+        (
+            EpisodeKind::LostTheDressingRoom,
+            EpisodeSpec::defining(0.90, -0.90, EpisodeDomain::Squad),
+        ),
+        (
+            EpisodeKind::SquadFoughtForMe,
+            EpisodeSpec::ordinary(0.70, 0.80, EpisodeDomain::Squad),
+        ),
+        (
+            EpisodeKind::PlayerRefusedToPlayForMe,
+            EpisodeSpec::betrayal(0.80, -0.80, EpisodeDomain::Squad),
+        ),
+        (
+            EpisodeKind::PlayerRepaidMyFaith,
+            EpisodeSpec::ordinary(0.60, 0.75, EpisodeDomain::Squad),
+        ),
+        (
+            EpisodeKind::PlayerWalkedOutOnMe,
+            EpisodeSpec::ordinary(0.55, -0.55, EpisodeDomain::Squad),
+        ),
+        (
+            EpisodeKind::PlayerLeftWithMyBlessing,
+            EpisodeSpec::ordinary(0.35, 0.30, EpisodeDomain::Squad),
+        ),
+        // Sign supplied by the emit site: how a reunion feels is the
+        // whole question, and the catalog cannot answer it.
+        (
+            EpisodeKind::ReunitedWithAPlayerIKnow,
+            EpisodeSpec::ordinary(0.40, 0.0, EpisodeDomain::Squad),
+        ),
+        (
+            EpisodeKind::SignedAPlayerIWanted,
+            EpisodeSpec::ordinary(0.50, 0.55, EpisodeDomain::Squad),
+        ),
+        (
+            EpisodeKind::SignedAPlayerIDidNotWant,
+            EpisodeSpec::ordinary(0.55, -0.50, EpisodeDomain::Squad),
+        ),
+        // His football
+        (
+            EpisodeKind::MyGambleCameOff,
+            EpisodeSpec::ordinary(0.65, 0.75, EpisodeDomain::Philosophy),
+        ),
+        (
+            EpisodeKind::MyGambleBackfired,
+            EpisodeSpec::ordinary(0.70, -0.70, EpisodeDomain::Philosophy),
+        ),
+        // Standing. Shares the social domain with the player rows —
+        // supporters and the press treat both the same way.
+        (
+            EpisodeKind::SupportersTurnedOnMe,
+            EpisodeSpec::ordinary(0.75, -0.80, EpisodeDomain::Social),
+        ),
+        (
+            EpisodeKind::SupportersSangMyName,
+            EpisodeSpec::ordinary(0.65, 0.80, EpisodeDomain::Social),
+        ),
+        (
+            EpisodeKind::MediaWroteMeOff,
+            EpisodeSpec::ordinary(0.50, -0.55, EpisodeDomain::Social),
+        ),
+    ];
 
     #[inline]
     pub fn domain(self) -> EpisodeDomain {

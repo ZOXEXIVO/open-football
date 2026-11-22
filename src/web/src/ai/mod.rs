@@ -100,58 +100,74 @@ pub struct AiConfigDto {
     pub api_key: String,
 }
 
-/// Read the current AI contract so the dialog can pre-fill and the badge
-/// can decide ON/OFF without a page render.
-pub async fn ai_config_get_action(State(state): State<GameAppData>) -> impl IntoResponse {
-    let saved = state.ai.get().await;
-    let configured = saved.is_some();
-    let settings = saved.unwrap_or_else(LlmSettings::defaults);
-    Json(AiConfigDto {
-        configured,
-        base_url: settings.base_url,
-        model: settings.model,
-        api_key: settings.api_key,
-    })
-}
+pub struct AiApi;
 
-/// Store the LLM contract typed into the dialog in memory. `base_url` and
-/// `model` are required; `api_key` is optional (local endpoints rarely
-/// need one). Once saved, the home badge flips to ON.
-pub async fn ai_config_save_action(
-    State(state): State<GameAppData>,
-    Json(body): Json<SaveAiRequest>,
-) -> impl IntoResponse {
-    let base_url = body.base_url.trim().to_string();
-    let model = body.model.trim().to_string();
-    if base_url.is_empty() || model.is_empty() {
-        return Json(SaveAiResult {
-            status: "error",
-            detail: "base_url and model are required".to_string(),
-        });
-    }
-    state
-        .ai
-        .set(LlmSettings {
-            base_url,
-            model,
-            api_key: body.api_key.trim().to_string(),
+impl AiApi {
+    /// Read the current AI contract so the dialog can pre-fill and the badge
+    /// can decide ON/OFF without a page render.
+    pub async fn config_get(State(state): State<GameAppData>) -> impl IntoResponse {
+        let saved = state.ai.get().await;
+        let configured = saved.is_some();
+        let settings = saved.unwrap_or_else(LlmSettings::defaults);
+        Json(AiConfigDto {
+            configured,
+            base_url: settings.base_url,
+            model: settings.model,
+            api_key: settings.api_key,
         })
-        .await;
-    Json(SaveAiResult {
-        status: "ok",
-        detail: String::new(),
-    })
-}
+    }
 
-/// Clear the in-memory LLM contract — the dialog's "Disable" action. After
-/// this the home badge reads OFF and AI features stay hidden until settings
-/// are saved again.
-pub async fn ai_config_delete_action(State(state): State<GameAppData>) -> impl IntoResponse {
-    state.ai.clear().await;
-    Json(SaveAiResult {
-        status: "ok",
-        detail: String::new(),
-    })
+    /// Store the LLM contract typed into the dialog in memory. `base_url` and
+    /// `model` are required; `api_key` is optional (local endpoints rarely
+    /// need one). Once saved, the home badge flips to ON.
+    pub async fn config_save(
+        State(state): State<GameAppData>,
+        Json(body): Json<SaveAiRequest>,
+    ) -> impl IntoResponse {
+        let base_url = body.base_url.trim().to_string();
+        let model = body.model.trim().to_string();
+        if base_url.is_empty() || model.is_empty() {
+            return Json(SaveAiResult {
+                status: "error",
+                detail: "base_url and model are required".to_string(),
+            });
+        }
+        state
+            .ai
+            .set(LlmSettings {
+                base_url,
+                model,
+                api_key: body.api_key.trim().to_string(),
+            })
+            .await;
+        Json(SaveAiResult {
+            status: "ok",
+            detail: String::new(),
+        })
+    }
+
+    /// Clear the in-memory LLM contract — the dialog's "Disable" action. After
+    /// this the home badge reads OFF and AI features stay hidden until settings
+    /// are saved again.
+    pub async fn config_delete(State(state): State<GameAppData>) -> impl IntoResponse {
+        state.ai.clear().await;
+        Json(SaveAiResult {
+            status: "ok",
+            detail: String::new(),
+        })
+    }
+
+    /// Generic progress endpoint shared by every page's AI feature: it only
+    /// speaks in job ids, so per-page start handlers own their own prompts.
+    pub async fn progress(
+        State(state): State<GameAppData>,
+        Query(query): Query<ProgressQuery>,
+    ) -> impl IntoResponse {
+        match state.ai_jobs.wait(query.job_id, query.cursor).await {
+            Some(snapshot) => Json(snapshot).into_response(),
+            None => (StatusCode::NOT_FOUND, "unknown job").into_response(),
+        }
+    }
 }
 
 /// Long-poll query for a running agent job. `cursor` is the number of tool
@@ -162,16 +178,4 @@ pub struct ProgressQuery {
     pub job_id: u64,
     #[serde(default)]
     pub cursor: usize,
-}
-
-/// Generic progress endpoint shared by every page's AI feature: it only
-/// speaks in job ids, so per-page start handlers own their own prompts.
-pub async fn ai_progress_action(
-    State(state): State<GameAppData>,
-    Query(query): Query<ProgressQuery>,
-) -> impl IntoResponse {
-    match state.ai_jobs.wait(query.job_id, query.cursor).await {
-        Some(snapshot) => Json(snapshot).into_response(),
-        None => (StatusCode::NOT_FOUND, "unknown job").into_response(),
-    }
 }

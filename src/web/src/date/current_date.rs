@@ -12,19 +12,21 @@ pub struct CurrentDateModel {
     pub iso: String,
 }
 
-pub async fn current_date_action(State(state): State<GameAppData>) -> Response {
-    let data = state.data.read().await;
+impl CurrentDateModel {
+    pub async fn action(State(state): State<GameAppData>) -> Response {
+        let data = state.data.read().await;
 
-    let date = match data.as_ref() {
-        None => Utc::now().naive_utc(),
-        Some(data) => data.date,
-    };
+        let date = match data.as_ref() {
+            None => Utc::now().naive_utc(),
+            Some(data) => data.date,
+        };
 
-    let model = CurrentDateModel {
-        date: date.format("%d %b %Y").to_string(),
-        time: date.format("%a %R").to_string(),
-        iso: date.format("%Y-%m-%dT%H:%M:%S").to_string(),
-    };
+        let model = Self {
+            date: date.format("%d %b %Y").to_string(),
+            time: date.format("%a %R").to_string(),
+            iso: date.format("%Y-%m-%dT%H:%M:%S").to_string(),
+        };
 
-    Json(model).into_response()
+        Json(model).into_response()
+    }
 }

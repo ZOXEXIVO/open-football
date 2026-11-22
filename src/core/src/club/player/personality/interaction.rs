@@ -176,21 +176,23 @@ impl ManagerInteractionLog {
 /// long-term anxieties (transfer, contract, loan) reset slowly; routine
 /// form talks reset quickly. Used by talk processing to set
 /// `cooldown_until` when an interaction is recorded.
-pub fn default_cooldown_days(topic: InteractionTopic) -> i64 {
-    use InteractionTopic::*;
-    match topic {
-        PlayingTime => 21,
-        TacticalRole => 28,
-        PoorForm => 14,
-        GoodForm => 14,
-        Discipline => 28,
-        LoanRequest => 60,
-        TransferRequest => 60,
-        ContractStatus => 90,
-        IntegrationSupport => 14,
-        Leadership => 60,
-        MediaPressure => 14,
-        PersonalIssue => 21,
+impl InteractionTopic {
+    pub fn default_cooldown_days(self) -> i64 {
+        use InteractionTopic::*;
+        match self {
+            PlayingTime => 21,
+            TacticalRole => 28,
+            PoorForm => 14,
+            GoodForm => 14,
+            Discipline => 28,
+            LoanRequest => 60,
+            TransferRequest => 60,
+            ContractStatus => 90,
+            IntegrationSupport => 14,
+            Leadership => 60,
+            MediaPressure => 14,
+            PersonalIssue => 21,
+        }
     }
 }
 

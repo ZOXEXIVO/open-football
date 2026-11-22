@@ -1,13 +1,11 @@
 pub mod ai_report;
 pub mod routes;
 
-use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::player::{PlayerPageChrome, PlayerPageColors};
 use crate::shared::friendly_source::FriendlySourceSlug;
 use crate::shared::potential_stars::{PotentialStarsView, StarRating};
-use crate::shared::slug::{PlayerPage, resolve_player_page};
-use crate::player::events::PlayerEventsCounter;
-use crate::player::newspaper::PlayerNewsCounter;
-use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
+use crate::shared::slug::{PlayerPage, PlayerSlug};
+use crate::views::{MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, Query, State};
@@ -17,7 +15,7 @@ use core::utils::FormattingUtils;
 // two would otherwise collide.
 use core::PlayerStatistics as SeasonStatistics;
 use core::{
-    DomesticCupOverride, InternationalStatistics, LiveCupSlice, Person, Player,
+    DomesticCupOverride, InternationalStatistics, LiveCupSlice, Person, Player, PlayerClubContract,
     PlayerLiveStatsInput, PlayerPositionType, PlayerStatCompetitionKind,
     PlayerStatisticsProjection, PlayerStatusType, SimulatorData, Team, TeamType,
 };
@@ -297,496 +295,343 @@ impl PlayerStatusDto {
     }
 }
 
-#[expect(clippy::too_many_lines)]
-pub async fn player_get_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<PlayerGetRequest>,
-    Query(query): Query<PlayerGetQuery>,
-) -> ApiResult<Response> {
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let guard = state.data.read().await;
-    let debug_enabled = query.debug.is_some();
-    let ai_enabled = state.ai.is_configured().await;
+pub struct PlayerGetPage;
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+impl PlayerGetPage {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<PlayerGetRequest>,
+        Query(query): Query<PlayerGetQuery>,
+    ) -> ApiResult<Response> {
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let guard = state.data.read().await;
+        let debug_enabled = query.debug.is_some();
+        let ai_enabled = state.ai.is_configured().await;
 
-    let (player, team_opt, canonical) = match resolve_player_page(
-        simulator_data,
-        &route_params.player_slug,
-        &route_params.lang,
-        "",
-    )? {
-        PlayerPage::Found {
-            player,
-            team,
-            canonical_slug,
-        } => (player, team, canonical_slug),
-        PlayerPage::Redirect(r) => return Ok(r),
-    };
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let now = simulator_data.date.date();
-
-    // Active player branch (team is Some) uses the full country+neighbors flow;
-    // retired players (team is None) follow the compact flow below.
-    if let Some(team) = team_opt {
-        // Resolve country: try simulation participant first, fall back to country_info map
-        let (country_slug, country_code, country_name) =
-            if let Some(country) = simulator_data.country(player.country_id) {
-                (
-                    country.slug.clone(),
-                    country.code.clone(),
-                    country.name.clone(),
-                )
-            } else if let Some(info) = simulator_data.country_info.get(&player.country_id) {
-                (info.slug.clone(), info.code.clone(), info.name.clone())
-            } else {
-                (String::new(), String::new(), String::new())
-            };
-
-        let (neighbor_teams, country_leagues) =
-            get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
-        let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
-            .iter()
-            .map(|(n, s)| (n.as_str(), s.as_str()))
-            .collect();
-        let league_refs: Vec<(&str, &str)> = country_leagues
-            .iter()
-            .map(|(n, s)| (n.as_str(), s.as_str()))
-            .collect();
-
-        let contract = player.contract.as_ref().map(|c| PlayerContractDto {
-            salary: format_salary(c.salary),
-            expiration: c.expiration.format("%d.%m.%Y").to_string(),
-            squad_status: c.squad_status.i18n_key().to_string(),
-        });
-
-        let title = format!(
-            "{} {}",
-            player.full_name.display_first_name(),
-            player.full_name.display_last_name()
-        );
-        let loan_status = get_loan_status(player, team, simulator_data);
-
-        let head_coach = team.staffs.head_coach();
-
-        let (main_team_name, main_team_slug) = simulator_data
-            .club(team.club_id)
-            .and_then(|c| c.teams.teams.iter().find(|t| t.team_type == TeamType::Main))
-            .map(|t| (t.name.clone(), t.slug.clone()))
-            .unwrap_or_else(|| (team.name.clone(), team.slug.clone()));
-
-        let statistics_rows =
-            PlayerOverviewStatsBuilder::new(simulator_data, &i18n).build(player, Some(team));
-
-        let player_vm = PlayerViewModel {
-            id: player.id,
-            contract,
-            age: player.age(now),
-            team_slug: main_team_slug,
-            team_name: main_team_name,
-            country_slug,
-            country_code,
-            country_name,
-            skills: get_skills(player),
-            conditions: get_conditions(player),
-            current_ability: PotentialStarsView::current(player),
-            potential_ability: PotentialStarsView::potential_by_staff(
+        let (player, team_opt, canonical) = match PlayerSlug::resolve_page(
+            simulator_data,
+            &route_params.player_slug,
+            &route_params.lang,
+            "",
+        )? {
+            PlayerPage::Found {
                 player,
-                head_coach,
-                team.team_type == TeamType::Main,
-                now,
-            ),
-            value: FormattingUtils::format_money(
-                player.value(
-                    now,
-                    team.league_id
-                        .and_then(|lid| simulator_data.league(lid))
-                        .map(|l| l.reputation)
-                        .unwrap_or(0),
-                    team.reputation.market_value_score(),
-                ),
-            ),
-            preferred_foot: i18n.t(player.preferred_foot.as_i18n_key()).to_string(),
-            player_attributes: get_attributes(player),
-            statistics_rows,
-            status: PlayerStatusDto::new(player.statuses.get()),
-            position_map: get_position_map(player),
-            loan_status,
-            injury_days: if player.player_attributes.is_injured {
-                Some(player.player_attributes.injury_days_remaining)
-            } else {
-                None
-            },
-            generated: player.is_generated(),
+                team,
+                canonical_slug,
+            } => (player, team, canonical_slug),
+            PlayerPage::Redirect(r) => return Ok(r),
         };
 
-        let is_goalkeeper = player.position().is_goalkeeper();
-        let is_on_loan = player.is_on_loan();
-        let is_injured = player.player_attributes.is_injured;
-        let is_unhappy = player.statuses.get().contains(&PlayerStatusType::Unh);
-        let is_on_watchlist = simulator_data.watchlist.contains(&player.id);
-        let debug = if debug_enabled {
-            Some(build_debug_dto(player))
-        } else {
-            None
+        let now = simulator_data.date.date();
+        // Active player branch (team is Some) uses the full country+neighbors flow;
+        // retired players (team is None) follow the compact flow below.
+        let template = match team_opt {
+            Some(team) => {
+                let player_vm =
+                    PlayerViewModel::for_active(simulator_data, &i18n, player, team, now);
+                let is_goalkeeper = player.position().is_goalkeeper();
+                let debug = debug_enabled.then(|| PlayerDebugDto::build(player));
+                let chrome = PlayerPageChrome::build(
+                    simulator_data,
+                    i18n,
+                    player,
+                    Some(team),
+                    &route_params.lang,
+                    &canonical,
+                    "overview",
+                    PlayerPageColors::Empty,
+                )?;
+                Self::active_template(player_vm, is_goalkeeper, debug, chrome, ai_enabled)
+            }
+            None => {
+                let player_vm = PlayerViewModel::for_retired(simulator_data, &i18n, player, now);
+                let is_goalkeeper = player.position().is_goalkeeper();
+                let debug = debug_enabled.then(|| PlayerDebugDto::build(player));
+                let chrome = PlayerPageChrome::build(
+                    simulator_data,
+                    i18n,
+                    player,
+                    None,
+                    &route_params.lang,
+                    &canonical,
+                    "overview",
+                    PlayerPageColors::Grey,
+                )?
+                .without_club_activity();
+                Self::retired_template(player_vm, is_goalkeeper, debug, chrome, ai_enabled)
+            }
         };
 
-        return Ok(PlayerGetTemplate {
-            css_version: CSS_VERSION,
-            computer_name: &COMPUTER_NAME,
-            cpu_brand: &CPU_BRAND,
-            cores_count: *CPU_CORES,
-            title,
-            sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
-            sub_title_suffix: String::new(),
-            sub_title: team.name.clone(),
-            sub_title_link: format!("/{}/teams/{}", route_params.lang, team.slug),
-            sub_title_flag: None,
-            header_color: simulator_data
-                .club(team.club_id)
-                .map(|c| c.colors.background.clone())
-                .unwrap_or_default(),
-            foreground_color: simulator_data
-                .club(team.club_id)
-                .map(|c| c.colors.foreground.clone())
-                .unwrap_or_default(),
-            menu_sections: {
-                let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-                let current_path = format!("/{}/teams/{}", route_params.lang, team.slug);
-                let mp = views::MenuParams {
-                    i18n: &i18n,
-                    lang: &route_params.lang,
-                    current_path: &current_path,
-                    country_name: cn,
-                    country_slug: cs,
-                };
-                views::team_menu(&mp, &neighbor_refs, &league_refs)
-            },
-            i18n,
-            lang: route_params.lang.clone(),
-            active_tab: "overview",
-            player_id: player.id,
-            player_slug: canonical,
-            club_id: team.club_id,
+        Ok(template.into_response())
+    }
+
+    fn active_template(
+        player: PlayerViewModel,
+        is_goalkeeper: bool,
+        debug: Option<PlayerDebugDto>,
+        chrome: PlayerPageChrome,
+        ai_enabled: bool,
+    ) -> PlayerGetTemplate {
+        PlayerGetTemplate {
+            css_version: chrome.css_version,
+            computer_name: chrome.computer_name,
+            cpu_brand: chrome.cpu_brand,
+            cores_count: chrome.cores_count,
+            title: chrome.title,
+            sub_title_prefix: chrome.sub_title_prefix,
+            sub_title_suffix: chrome.sub_title_suffix,
+            sub_title: chrome.sub_title,
+            sub_title_link: chrome.sub_title_link,
+            sub_title_flag: chrome.sub_title_flag,
+            header_color: chrome.header_color,
+            foreground_color: chrome.foreground_color,
+            menu_sections: chrome.menu_sections,
+            i18n: chrome.i18n,
+            lang: chrome.lang,
+            active_tab: chrome.active_tab,
+            player_id: chrome.player_id,
+            player_slug: chrome.player_slug,
+            club_id: chrome.club_id,
             ai_enabled,
-            player: player_vm,
+            player,
             is_goalkeeper,
-            is_on_loan,
-            is_injured,
-            is_unhappy,
-            is_force_match_selection: player.is_force_match_selection,
-            is_on_watchlist,
-            events_count: PlayerEventsCounter::count(player),
-            interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
-            awards_count: player.awards_count.total(),
-            news_count: PlayerNewsCounter::count(simulator_data, player),
+            is_on_loan: chrome.is_on_loan,
+            is_injured: chrome.is_injured,
+            is_unhappy: chrome.is_unhappy,
+            is_force_match_selection: chrome.is_force_match_selection,
+            is_on_watchlist: chrome.is_on_watchlist,
+            events_count: chrome.events_count,
+            interested_clubs_count: chrome.interested_clubs_count,
+            awards_count: chrome.awards_count,
+            news_count: chrome.news_count,
             debug,
         }
-        .into_response());
     }
 
-    // Retired player branch (team is None)
-    let (country_slug, country_code, country_name) =
-        if let Some(country) = simulator_data.country(player.country_id) {
-            (
-                country.slug.clone(),
-                country.code.clone(),
-                country.name.clone(),
-            )
-        } else if let Some(info) = simulator_data.country_info.get(&player.country_id) {
-            (info.slug.clone(), info.code.clone(), info.name.clone())
+    fn retired_template(
+        player: PlayerViewModel,
+        is_goalkeeper: bool,
+        debug: Option<PlayerDebugDto>,
+        chrome: PlayerPageChrome,
+        ai_enabled: bool,
+    ) -> PlayerGetTemplate {
+        PlayerGetTemplate {
+            css_version: chrome.css_version,
+            computer_name: chrome.computer_name,
+            cpu_brand: chrome.cpu_brand,
+            cores_count: chrome.cores_count,
+            title: chrome.title,
+            sub_title_prefix: chrome.sub_title_prefix,
+            sub_title_suffix: chrome.sub_title_suffix,
+            sub_title: chrome.sub_title,
+            sub_title_link: chrome.sub_title_link,
+            sub_title_flag: chrome.sub_title_flag,
+            header_color: chrome.header_color,
+            foreground_color: chrome.foreground_color,
+            menu_sections: chrome.menu_sections,
+            i18n: chrome.i18n,
+            lang: chrome.lang,
+            active_tab: chrome.active_tab,
+            player_id: chrome.player_id,
+            player_slug: chrome.player_slug,
+            club_id: chrome.club_id,
+            ai_enabled,
+            player,
+            is_goalkeeper,
+            is_on_loan: chrome.is_on_loan,
+            is_injured: chrome.is_injured,
+            is_unhappy: chrome.is_unhappy,
+            is_force_match_selection: chrome.is_force_match_selection,
+            is_on_watchlist: chrome.is_on_watchlist,
+            events_count: chrome.events_count,
+            interested_clubs_count: chrome.interested_clubs_count,
+            awards_count: chrome.awards_count,
+            news_count: chrome.news_count,
+            debug,
+        }
+    }
+}
+
+impl PlayerDebugDto {
+    fn build(player: &Player) -> PlayerDebugDto {
+        let attrs = &player.player_attributes;
+        let load = &player.load;
+
+        let days_since = attrs.days_since_last_match as f32;
+        let sharpness = if days_since <= 3.0 {
+            1.0
+        } else if days_since <= 7.0 {
+            0.95
+        } else if days_since <= 14.0 {
+            0.85
+        } else if days_since <= 28.0 {
+            0.70
         } else {
-            (String::new(), String::new(), String::new())
+            0.55
         };
 
-    let title = format!(
-        "{} {}",
-        player.full_name.display_first_name(),
-        player.full_name.display_last_name()
-    );
+        let apps = player.statistics.played + player.statistics.played_subs;
+        let form_bonus = if load.form_rating > 0.0 {
+            (load.form_rating - 6.5).clamp(-1.5, 1.5)
+        } else if apps > 3 {
+            // Pre-form-EMA fallback: use the sample-size-regressed season
+            // average so a 9-app 8.2 prospect doesn't show a +1.5 form
+            // bonus when the engine has no rolling form reading yet.
+            let pos = player.position().position_group();
+            (player.statistics.average_rating_realistic(pos) - 6.5).clamp(-1.5, 1.5)
+        } else {
+            0.0
+        };
 
-    let statistics_rows =
-        PlayerOverviewStatsBuilder::new(simulator_data, &i18n).build(player, None);
+        let squad_status = player
+            .contract
+            .as_ref()
+            .map(|c| format!("{:?}", c.squad_status))
+            .unwrap_or_else(|| "None".to_string());
 
-    let player_vm = PlayerViewModel {
-        id: player.id,
-        contract: None,
-        age: player.age(now),
-        team_slug: String::new(),
-        team_name: String::new(),
-        country_slug,
-        country_code,
-        country_name,
-        skills: get_skills(player),
-        conditions: get_conditions(player),
-        current_ability: PotentialStarsView::current(player),
-        potential_ability: PotentialStarsView::potential_absolute(player, now),
-        value: String::from("-"),
-        preferred_foot: i18n.t(player.preferred_foot.as_i18n_key()).to_string(),
-        player_attributes: get_attributes(player),
-        statistics_rows,
-        status: PlayerStatusDto::new(player.statuses.get()),
-        position_map: get_position_map(player),
-        loan_status: None,
-        injury_days: None,
-        generated: player.is_generated(),
-    };
+        let last_transfer_date = player
+            .last_transfer_date()
+            .map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| "-".to_string());
 
-    let is_goalkeeper = player.position().is_goalkeeper();
-    let sub_title = if player.is_retired() {
-        i18n.t("player_status_retired").to_string()
-    } else {
-        i18n.t("free_agent").to_string()
-    };
-    let debug = if debug_enabled {
-        Some(build_debug_dto(player))
-    } else {
-        None
-    };
+        let primary = player.position();
+        let primary_level = player
+            .positions
+            .positions
+            .iter()
+            .find(|p| p.position == primary)
+            .map(|p| p.level)
+            .unwrap_or(0);
 
-    Ok(PlayerGetTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        title,
-        sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
-        sub_title_suffix: String::new(),
-        sub_title,
-        sub_title_link: String::new(),
-        sub_title_flag: None,
-        header_color: "#808080".to_string(),
-        foreground_color: "#ffffff".to_string(),
-        menu_sections: Vec::new(),
-        i18n,
-        lang: route_params.lang.clone(),
-        active_tab: "overview",
-        player_id: player.id,
-        player_slug: canonical,
-        club_id: 0,
-        ai_enabled,
-        player: player_vm,
-        is_goalkeeper,
-        is_on_loan: false,
-        is_injured: false,
-        is_unhappy: false,
-        is_force_match_selection: player.is_force_match_selection,
-        is_on_watchlist: simulator_data.watchlist.contains(&player.id),
-        events_count: PlayerEventsCounter::count(player),
-        interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
-        awards_count: player.awards_count.total(),
-        news_count: PlayerNewsCounter::count(simulator_data, player),
-        debug,
-    }
-    .into_response())
-}
+        let statuses = player
+            .statuses
+            .get()
+            .iter()
+            .map(|s| format!("{:?}", s))
+            .collect::<Vec<_>>()
+            .join(",");
 
-fn build_debug_dto(player: &Player) -> PlayerDebugDto {
-    let attrs = &player.player_attributes;
-    let load = &player.load;
-
-    let days_since = attrs.days_since_last_match as f32;
-    let sharpness = if days_since <= 3.0 {
-        1.0
-    } else if days_since <= 7.0 {
-        0.95
-    } else if days_since <= 14.0 {
-        0.85
-    } else if days_since <= 28.0 {
-        0.70
-    } else {
-        0.55
-    };
-
-    let apps = player.statistics.played + player.statistics.played_subs;
-    let form_bonus = if load.form_rating > 0.0 {
-        (load.form_rating - 6.5).clamp(-1.5, 1.5)
-    } else if apps > 3 {
-        // Pre-form-EMA fallback: use the sample-size-regressed season
-        // average so a 9-app 8.2 prospect doesn't show a +1.5 form
-        // bonus when the engine has no rolling form reading yet.
-        let pos = player.position().position_group();
-        (player.statistics.average_rating_realistic(pos) - 6.5).clamp(-1.5, 1.5)
-    } else {
-        0.0
-    };
-
-    let squad_status = player
-        .contract
-        .as_ref()
-        .map(|c| format!("{:?}", c.squad_status))
-        .unwrap_or_else(|| "None".to_string());
-
-    let last_transfer_date = player
-        .last_transfer_date()
-        .map(|d| d.format("%Y-%m-%d").to_string())
-        .unwrap_or_else(|| "-".to_string());
-
-    let primary = player.position();
-    let primary_level = player
-        .positions
-        .positions
-        .iter()
-        .find(|p| p.position == primary)
-        .map(|p| p.level)
-        .unwrap_or(0);
-
-    let statuses = player
-        .statuses
-        .get()
-        .iter()
-        .map(|s| format!("{:?}", s))
-        .collect::<Vec<_>>()
-        .join(",");
-
-    PlayerDebugDto {
-        current_ability: attrs.current_ability,
-        potential_ability: attrs.potential_ability,
-        current_reputation: attrs.current_reputation,
-        home_reputation: attrs.home_reputation,
-        world_reputation: attrs.world_reputation,
-        condition_raw: attrs.condition,
-        condition_pct: attrs.condition_percentage(),
-        fitness_raw: attrs.fitness,
-        jadedness_raw: attrs.jadedness,
-        natural_fitness: player.skills.physical.natural_fitness,
-        match_readiness_skill: player.skills.physical.match_readiness,
-        days_since_last_match: attrs.days_since_last_match,
-        sharpness_derived: sharpness,
-        is_injured: attrs.is_injured,
-        injury_days_remaining: attrs.injury_days_remaining,
-        recovery_days_remaining: attrs.recovery_days_remaining,
-        is_in_recovery: attrs.is_in_recovery(),
-        injury_proneness: attrs.injury_proneness,
-        injury_count: attrs.injury_count,
-        form_rating: load.form_rating,
-        form_bonus_derived: form_bonus,
-        minutes_last_7: load.minutes_last_7,
-        minutes_last_30: load.minutes_last_30,
-        matches_last_14: load.matches_last_14(),
-        is_fatigued: load.is_fatigued(),
-        is_overloaded: load.is_overloaded(),
-        played: player.statistics.played,
-        played_subs: player.statistics.played_subs,
-        average_rating: player.statistics.average_rating,
-        squad_status,
-        last_transfer_date,
-        training_performance: player.training.training_performance,
-        sessions_completed: player.training.sessions_completed,
-        work_rate: player.skills.mental.work_rate,
-        determination: player.skills.mental.determination,
-        teamwork: player.skills.mental.teamwork,
-        position_primary: primary.get_short_name().to_string(),
-        position_primary_level: primary_level,
-        statuses,
+        PlayerDebugDto {
+            current_ability: attrs.current_ability,
+            potential_ability: attrs.potential_ability,
+            current_reputation: attrs.current_reputation,
+            home_reputation: attrs.home_reputation,
+            world_reputation: attrs.world_reputation,
+            condition_raw: attrs.condition,
+            condition_pct: attrs.condition_percentage(),
+            fitness_raw: attrs.fitness,
+            jadedness_raw: attrs.jadedness,
+            natural_fitness: player.skills.physical.natural_fitness,
+            match_readiness_skill: player.skills.physical.match_readiness,
+            days_since_last_match: attrs.days_since_last_match,
+            sharpness_derived: sharpness,
+            is_injured: attrs.is_injured,
+            injury_days_remaining: attrs.injury_days_remaining,
+            recovery_days_remaining: attrs.recovery_days_remaining,
+            is_in_recovery: attrs.is_in_recovery(),
+            injury_proneness: attrs.injury_proneness,
+            injury_count: attrs.injury_count,
+            form_rating: load.form_rating,
+            form_bonus_derived: form_bonus,
+            minutes_last_7: load.minutes_last_7,
+            minutes_last_30: load.minutes_last_30,
+            matches_last_14: load.matches_last_14(),
+            is_fatigued: load.is_fatigued(),
+            is_overloaded: load.is_overloaded(),
+            played: player.statistics.played,
+            played_subs: player.statistics.played_subs,
+            average_rating: player.statistics.average_rating,
+            squad_status,
+            last_transfer_date,
+            training_performance: player.training.training_performance,
+            sessions_completed: player.training.sessions_completed,
+            work_rate: player.skills.mental.work_rate,
+            determination: player.skills.mental.determination,
+            teamwork: player.skills.mental.teamwork,
+            position_primary: primary.get_short_name().to_string(),
+            position_primary_level: primary_level,
+            statuses,
+        }
     }
 }
 
-fn get_attributes(player: &Player) -> PlayerAttributesDto {
-    PlayerAttributesDto {
-        international_apps: player.player_attributes.international_apps,
-        international_goals: player.player_attributes.international_goals,
-        under_21_international_apps: player.player_attributes.under_21_international_apps,
-        under_21_international_goals: player.player_attributes.under_21_international_goals,
+impl PlayerAttributesDto {
+    fn build(player: &Player) -> PlayerAttributesDto {
+        PlayerAttributesDto {
+            international_apps: player.player_attributes.international_apps,
+            international_goals: player.player_attributes.international_goals,
+            under_21_international_apps: player.player_attributes.under_21_international_apps,
+            under_21_international_goals: player.player_attributes.under_21_international_goals,
+        }
     }
 }
 
-fn get_skills(player: &Player) -> PlayerSkillsDto {
-    PlayerSkillsDto {
-        technical: TechnicalDto {
-            corners: player.skills.technical.corners.floor() as u8,
-            crossing: player.skills.technical.crossing.floor() as u8,
-            dribbling: player.skills.technical.dribbling.floor() as u8,
-            finishing: player.skills.technical.finishing.floor() as u8,
-            first_touch: player.skills.technical.first_touch.floor() as u8,
-            free_kick_taking: player.skills.technical.free_kicks.floor() as u8,
-            heading: player.skills.technical.heading.floor() as u8,
-            long_shots: player.skills.technical.long_shots.floor() as u8,
-            long_throws: player.skills.technical.long_throws.floor() as u8,
-            marking: player.skills.technical.marking.floor() as u8,
-            passing: player.skills.technical.passing.floor() as u8,
-            penalty_taking: player.skills.technical.penalty_taking.floor() as u8,
-            tackling: player.skills.technical.tackling.floor() as u8,
-            technique: player.skills.technical.technique.floor() as u8,
-        },
-        mental: MentalDto {
-            aggression: player.skills.mental.aggression.floor() as u8,
-            anticipation: player.skills.mental.anticipation.floor() as u8,
-            bravery: player.skills.mental.bravery.floor() as u8,
-            composure: player.skills.mental.composure.floor() as u8,
-            concentration: player.skills.mental.concentration.floor() as u8,
-            decisions: player.skills.mental.decisions.floor() as u8,
-            determination: player.skills.mental.determination.floor() as u8,
-            flair: player.skills.mental.flair.floor() as u8,
-            leadership: player.skills.mental.leadership.floor() as u8,
-            off_the_ball: player.skills.mental.off_the_ball.floor() as u8,
-            positioning: player.skills.mental.positioning.floor() as u8,
-            teamwork: player.skills.mental.teamwork.floor() as u8,
-            vision: player.skills.mental.vision.floor() as u8,
-            work_rate: player.skills.mental.work_rate.floor() as u8,
-        },
-        physical: PhysicalDto {
-            acceleration: player.skills.physical.acceleration.floor() as u8,
-            agility: player.skills.physical.agility.floor() as u8,
-            jumping_reach: player.skills.physical.jumping.floor() as u8,
-            natural_fitness: player.skills.physical.natural_fitness.floor() as u8,
-            pace: player.skills.physical.pace.floor() as u8,
-            stamina: player.skills.physical.stamina.floor() as u8,
-            strength: player.skills.physical.strength.floor() as u8,
-        },
-        goalkeeping: GoalkeepingDto {
-            aerial_reach: player.skills.goalkeeping.aerial_reach.floor() as u8,
-            command_of_area: player.skills.goalkeeping.command_of_area.floor() as u8,
-            communication: player.skills.goalkeeping.communication.floor() as u8,
-            eccentricity: player.skills.goalkeeping.eccentricity.floor() as u8,
-            first_touch: player.skills.goalkeeping.first_touch.floor() as u8,
-            handling: player.skills.goalkeeping.handling.floor() as u8,
-            kicking: player.skills.goalkeeping.kicking.floor() as u8,
-            one_on_ones: player.skills.goalkeeping.one_on_ones.floor() as u8,
-            passing: player.skills.goalkeeping.passing.floor() as u8,
-            punching: player.skills.goalkeeping.punching.floor() as u8,
-            reflexes: player.skills.goalkeeping.reflexes.floor() as u8,
-            rushing_out: player.skills.goalkeeping.rushing_out.floor() as u8,
-            throwing: player.skills.goalkeeping.throwing.floor() as u8,
-        },
-        is_goalkeeper: player.position().is_goalkeeper(),
+impl PlayerSkillsDto {
+    fn build(player: &Player) -> PlayerSkillsDto {
+        PlayerSkillsDto {
+            technical: TechnicalDto {
+                corners: player.skills.technical.corners.floor() as u8,
+                crossing: player.skills.technical.crossing.floor() as u8,
+                dribbling: player.skills.technical.dribbling.floor() as u8,
+                finishing: player.skills.technical.finishing.floor() as u8,
+                first_touch: player.skills.technical.first_touch.floor() as u8,
+                free_kick_taking: player.skills.technical.free_kicks.floor() as u8,
+                heading: player.skills.technical.heading.floor() as u8,
+                long_shots: player.skills.technical.long_shots.floor() as u8,
+                long_throws: player.skills.technical.long_throws.floor() as u8,
+                marking: player.skills.technical.marking.floor() as u8,
+                passing: player.skills.technical.passing.floor() as u8,
+                penalty_taking: player.skills.technical.penalty_taking.floor() as u8,
+                tackling: player.skills.technical.tackling.floor() as u8,
+                technique: player.skills.technical.technique.floor() as u8,
+            },
+            mental: MentalDto {
+                aggression: player.skills.mental.aggression.floor() as u8,
+                anticipation: player.skills.mental.anticipation.floor() as u8,
+                bravery: player.skills.mental.bravery.floor() as u8,
+                composure: player.skills.mental.composure.floor() as u8,
+                concentration: player.skills.mental.concentration.floor() as u8,
+                decisions: player.skills.mental.decisions.floor() as u8,
+                determination: player.skills.mental.determination.floor() as u8,
+                flair: player.skills.mental.flair.floor() as u8,
+                leadership: player.skills.mental.leadership.floor() as u8,
+                off_the_ball: player.skills.mental.off_the_ball.floor() as u8,
+                positioning: player.skills.mental.positioning.floor() as u8,
+                teamwork: player.skills.mental.teamwork.floor() as u8,
+                vision: player.skills.mental.vision.floor() as u8,
+                work_rate: player.skills.mental.work_rate.floor() as u8,
+            },
+            physical: PhysicalDto {
+                acceleration: player.skills.physical.acceleration.floor() as u8,
+                agility: player.skills.physical.agility.floor() as u8,
+                jumping_reach: player.skills.physical.jumping.floor() as u8,
+                natural_fitness: player.skills.physical.natural_fitness.floor() as u8,
+                pace: player.skills.physical.pace.floor() as u8,
+                stamina: player.skills.physical.stamina.floor() as u8,
+                strength: player.skills.physical.strength.floor() as u8,
+            },
+            goalkeeping: GoalkeepingDto {
+                aerial_reach: player.skills.goalkeeping.aerial_reach.floor() as u8,
+                command_of_area: player.skills.goalkeeping.command_of_area.floor() as u8,
+                communication: player.skills.goalkeeping.communication.floor() as u8,
+                eccentricity: player.skills.goalkeeping.eccentricity.floor() as u8,
+                first_touch: player.skills.goalkeeping.first_touch.floor() as u8,
+                handling: player.skills.goalkeeping.handling.floor() as u8,
+                kicking: player.skills.goalkeeping.kicking.floor() as u8,
+                one_on_ones: player.skills.goalkeeping.one_on_ones.floor() as u8,
+                passing: player.skills.goalkeeping.passing.floor() as u8,
+                punching: player.skills.goalkeeping.punching.floor() as u8,
+                reflexes: player.skills.goalkeeping.reflexes.floor() as u8,
+                rushing_out: player.skills.goalkeeping.rushing_out.floor() as u8,
+                throwing: player.skills.goalkeeping.throwing.floor() as u8,
+            },
+            is_goalkeeper: player.position().is_goalkeeper(),
+        }
     }
-}
-
-fn get_neighbor_teams(
-    club_id: u32,
-    data: &SimulatorData,
-    i18n: &I18n,
-) -> Result<NeighborMenus, ApiError> {
-    let club = data
-        .club(club_id)
-        .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
-
-    let teams = views::neighbor_teams(club, i18n);
-
-    let mut country_leagues: Vec<(u32, String, String)> = data
-        .country_by_club(club_id)
-        .map(|country| {
-            country
-                .leagues
-                .leagues
-                .iter()
-                .filter(|l| !l.friendly)
-                .map(|l| (l.id, l.name.clone(), l.slug.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
-    country_leagues.sort_by_key(|(id, _, _)| *id);
-
-    Ok((
-        teams,
-        country_leagues
-            .into_iter()
-            .map(|(_, name, slug)| (name, slug))
-            .collect(),
-    ))
 }
 
 /// One-shot Overview-stats builder. Wraps the projection call plus the
@@ -1102,83 +947,211 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
     }
 }
 
-pub fn get_conditions(player: &Player) -> u8 {
-    (100f32 * ((player.player_attributes.condition as f32) / 10000.0)) as u8
-}
+struct PlayerConditions;
 
-fn format_salary(salary: u32) -> String {
-    if salary >= 1_000_000 {
-        format!("{:.1}M", salary as f64 / 1_000_000.0)
-    } else if salary >= 1_000 {
-        format!("{}K", salary / 1_000)
-    } else {
-        format!("{}", salary)
+impl PlayerConditions {
+    fn of(player: &Player) -> u8 {
+        (100f32 * ((player.player_attributes.condition as f32) / 10000.0)) as u8
     }
 }
 
-fn get_loan_status(player: &Player, team: &Team, data: &SimulatorData) -> Option<PlayerLoanDto> {
-    let loan = player.contract_loan.as_ref()?;
+impl PlayerContractDto {
+    fn from_contract(contract: &PlayerClubContract) -> PlayerContractDto {
+        PlayerContractDto {
+            salary: Self::format_salary(contract.salary),
+            expiration: contract.expiration.format("%d.%m.%Y").to_string(),
+            squad_status: contract.squad_status.i18n_key().to_string(),
+        }
+    }
 
-    // Direction is decided by where the player currently sits. If the
-    // player's team belongs to the lending club, it's a loan OUT (view
-    // the destination). If it belongs to the borrowing club, loan IN
-    // (view the origin). A contract with neither side set is malformed
-    // and renders nothing.
-    let at_borrower = loan.loan_to_club_id == Some(team.club_id);
-    let at_parent = loan.loan_from_club_id == Some(team.club_id);
-
-    let (target_club_id, is_loan_in) = if at_borrower {
-        (loan.loan_from_club_id.or(Some(team.club_id)), true)
-    } else if at_parent {
-        (loan.loan_to_club_id, false)
-    } else {
-        let to_id = loan.loan_to_club_id?;
-        // Fallback: no direction hint matches — treat `loan_to` as the
-        // destination, which means this side is the parent.
-        (Some(to_id), false)
-    };
-
-    let (club_name, club_slug) = target_club_id
-        .and_then(|id| data.club(id))
-        .and_then(|c| c.teams.teams.first())
-        .map(|t| (t.name.clone(), t.slug.clone()))
-        .unwrap_or_default();
-
-    Some(PlayerLoanDto {
-        is_loan_in,
-        club_name,
-        club_slug,
-    })
+    fn format_salary(salary: u32) -> String {
+        if salary >= 1_000_000 {
+            format!("{:.1}M", salary as f64 / 1_000_000.0)
+        } else if salary >= 1_000 {
+            format!("{}K", salary / 1_000)
+        } else {
+            format!("{}", salary)
+        }
+    }
 }
 
-fn get_position_map(player: &Player) -> PositionMapDto {
-    let active = player.positions();
-    let primary = player.position().get_short_name().to_string();
+impl PlayerLoanDto {
+    fn from_player(player: &Player, team: &Team, data: &SimulatorData) -> Option<PlayerLoanDto> {
+        let loan = player.contract_loan.as_ref()?;
 
-    PositionMapDto {
-        gk: active.contains(&PlayerPositionType::Goalkeeper),
-        sw: active.contains(&PlayerPositionType::Sweeper),
-        dl: active.contains(&PlayerPositionType::DefenderLeft),
-        dcl: active.contains(&PlayerPositionType::DefenderCenterLeft),
-        dc: active.contains(&PlayerPositionType::DefenderCenter),
-        dcr: active.contains(&PlayerPositionType::DefenderCenterRight),
-        dr: active.contains(&PlayerPositionType::DefenderRight),
-        dm: active.contains(&PlayerPositionType::DefensiveMidfielder),
-        wl: active.contains(&PlayerPositionType::WingbackLeft),
-        wr: active.contains(&PlayerPositionType::WingbackRight),
-        ml: active.contains(&PlayerPositionType::MidfielderLeft),
-        mcl: active.contains(&PlayerPositionType::MidfielderCenterLeft),
-        mc: active.contains(&PlayerPositionType::MidfielderCenter),
-        mcr: active.contains(&PlayerPositionType::MidfielderCenterRight),
-        mr: active.contains(&PlayerPositionType::MidfielderRight),
-        aml: active.contains(&PlayerPositionType::AttackingMidfielderLeft),
-        amc: active.contains(&PlayerPositionType::AttackingMidfielderCenter),
-        amr: active.contains(&PlayerPositionType::AttackingMidfielderRight),
-        fl: active.contains(&PlayerPositionType::ForwardLeft),
-        fc: active.contains(&PlayerPositionType::ForwardCenter),
-        fr: active.contains(&PlayerPositionType::ForwardRight),
-        st: active.contains(&PlayerPositionType::Striker),
-        primary,
+        // Direction is decided by where the player currently sits. If the
+        // player's team belongs to the lending club, it's a loan OUT (view
+        // the destination). If it belongs to the borrowing club, loan IN
+        // (view the origin). A contract with neither side set is malformed
+        // and renders nothing.
+        let at_borrower = loan.loan_to_club_id == Some(team.club_id);
+        let at_parent = loan.loan_from_club_id == Some(team.club_id);
+
+        let (target_club_id, is_loan_in) = if at_borrower {
+            (loan.loan_from_club_id.or(Some(team.club_id)), true)
+        } else if at_parent {
+            (loan.loan_to_club_id, false)
+        } else {
+            let to_id = loan.loan_to_club_id?;
+            // Fallback: no direction hint matches — treat `loan_to` as the
+            // destination, which means this side is the parent.
+            (Some(to_id), false)
+        };
+
+        let (club_name, club_slug) = target_club_id
+            .and_then(|id| data.club(id))
+            .and_then(|c| c.teams.teams.first())
+            .map(|t| (t.name.clone(), t.slug.clone()))
+            .unwrap_or_default();
+
+        Some(PlayerLoanDto {
+            is_loan_in,
+            club_name,
+            club_slug,
+        })
+    }
+}
+
+impl PositionMapDto {
+    fn build(player: &Player) -> PositionMapDto {
+        let active = player.positions();
+        let primary = player.position().get_short_name().to_string();
+
+        PositionMapDto {
+            gk: active.contains(&PlayerPositionType::Goalkeeper),
+            sw: active.contains(&PlayerPositionType::Sweeper),
+            dl: active.contains(&PlayerPositionType::DefenderLeft),
+            dcl: active.contains(&PlayerPositionType::DefenderCenterLeft),
+            dc: active.contains(&PlayerPositionType::DefenderCenter),
+            dcr: active.contains(&PlayerPositionType::DefenderCenterRight),
+            dr: active.contains(&PlayerPositionType::DefenderRight),
+            dm: active.contains(&PlayerPositionType::DefensiveMidfielder),
+            wl: active.contains(&PlayerPositionType::WingbackLeft),
+            wr: active.contains(&PlayerPositionType::WingbackRight),
+            ml: active.contains(&PlayerPositionType::MidfielderLeft),
+            mcl: active.contains(&PlayerPositionType::MidfielderCenterLeft),
+            mc: active.contains(&PlayerPositionType::MidfielderCenter),
+            mcr: active.contains(&PlayerPositionType::MidfielderCenterRight),
+            mr: active.contains(&PlayerPositionType::MidfielderRight),
+            aml: active.contains(&PlayerPositionType::AttackingMidfielderLeft),
+            amc: active.contains(&PlayerPositionType::AttackingMidfielderCenter),
+            amr: active.contains(&PlayerPositionType::AttackingMidfielderRight),
+            fl: active.contains(&PlayerPositionType::ForwardLeft),
+            fc: active.contains(&PlayerPositionType::ForwardCenter),
+            fr: active.contains(&PlayerPositionType::ForwardRight),
+            st: active.contains(&PlayerPositionType::Striker),
+            primary,
+        }
+    }
+}
+
+impl PlayerViewModel {
+    fn for_active(
+        data: &SimulatorData,
+        i18n: &I18n,
+        player: &Player,
+        team: &Team,
+        now: chrono::NaiveDate,
+    ) -> PlayerViewModel {
+        let (country_slug, country_code, country_name) = Self::country(data, player);
+        let main_team = data
+            .club(team.club_id)
+            .and_then(|c| c.teams.teams.iter().find(|t| t.team_type == TeamType::Main))
+            .map(|t| (t.name.clone(), t.slug.clone()))
+            .unwrap_or_else(|| (team.name.clone(), team.slug.clone()));
+        let head_coach = team.staffs.head_coach();
+        let league_reputation = team
+            .league_id
+            .and_then(|lid| data.league(lid))
+            .map(|l| l.reputation)
+            .unwrap_or(0);
+
+        PlayerViewModel {
+            id: player.id,
+            contract: player
+                .contract
+                .as_ref()
+                .map(PlayerContractDto::from_contract),
+            age: player.age(now),
+            team_slug: main_team.1,
+            team_name: main_team.0,
+            country_slug,
+            country_code,
+            country_name,
+            skills: PlayerSkillsDto::build(player),
+            conditions: PlayerConditions::of(player),
+            current_ability: PotentialStarsView::current(player),
+            potential_ability: PotentialStarsView::potential_by_staff(
+                player,
+                head_coach,
+                team.team_type == TeamType::Main,
+                now,
+            ),
+            value: FormattingUtils::format_money(player.value(
+                now,
+                league_reputation,
+                team.reputation.market_value_score(),
+            )),
+            preferred_foot: i18n.t(player.preferred_foot.as_i18n_key()).to_string(),
+            player_attributes: PlayerAttributesDto::build(player),
+            statistics_rows: PlayerOverviewStatsBuilder::new(data, i18n).build(player, Some(team)),
+            status: PlayerStatusDto::new(player.statuses.get()),
+            position_map: PositionMapDto::build(player),
+            loan_status: PlayerLoanDto::from_player(player, team, data),
+            injury_days: if player.player_attributes.is_injured {
+                Some(player.player_attributes.injury_days_remaining)
+            } else {
+                None
+            },
+            generated: player.is_generated(),
+        }
+    }
+
+    fn for_retired(
+        data: &SimulatorData,
+        i18n: &I18n,
+        player: &Player,
+        now: chrono::NaiveDate,
+    ) -> PlayerViewModel {
+        let (country_slug, country_code, country_name) = Self::country(data, player);
+
+        PlayerViewModel {
+            id: player.id,
+            contract: None,
+            age: player.age(now),
+            team_slug: String::new(),
+            team_name: String::new(),
+            country_slug,
+            country_code,
+            country_name,
+            skills: PlayerSkillsDto::build(player),
+            conditions: PlayerConditions::of(player),
+            current_ability: PotentialStarsView::current(player),
+            potential_ability: PotentialStarsView::potential_absolute(player, now),
+            value: String::from("-"),
+            preferred_foot: i18n.t(player.preferred_foot.as_i18n_key()).to_string(),
+            player_attributes: PlayerAttributesDto::build(player),
+            statistics_rows: PlayerOverviewStatsBuilder::new(data, i18n).build(player, None),
+            status: PlayerStatusDto::new(player.statuses.get()),
+            position_map: PositionMapDto::build(player),
+            loan_status: None,
+            injury_days: None,
+            generated: player.is_generated(),
+        }
+    }
+
+    fn country(data: &SimulatorData, player: &Player) -> (String, String, String) {
+        if let Some(country) = data.country(player.country_id) {
+            (
+                country.slug.clone(),
+                country.code.clone(),
+                country.name.clone(),
+            )
+        } else if let Some(info) = data.country_info.get(&player.country_id) {
+            (info.slug.clone(), info.code.clone(), info.name.clone())
+        } else {
+            (String::new(), String::new(), String::new())
+        }
     }
 }
 

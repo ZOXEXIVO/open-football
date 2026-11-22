@@ -16,7 +16,7 @@ use crate::club::player::calculators::FreeAgentReleaseReason;
 use crate::club::player::transfer::SettlementOutlook;
 use crate::transfers::pipeline::LoanOutReason;
 use crate::transfers::squad::ledger::{LedgerContext, LedgerPressure};
-use crate::{Club, PathwayStage, Person};
+use crate::{Club, PathwayStage, Person, Player};
 
 /// One of the club's listings, as the market saw it through the window.
 #[derive(Debug, Clone, Copy)]
@@ -49,8 +49,48 @@ pub enum StrandedEffect {
     Retire { player_id: u32 },
 }
 
+struct StrandedOutcome {
+    effect: StrandedEffect,
+    released: Option<(u32, SigningMandate, f32)>,
+}
+
+impl StrandedCase {
+    #[allow(clippy::too_many_arguments)]
+    fn read(
+        player: &Player,
+        team_slug: &str,
+        listing: &StrandedListing,
+        market: &StrandedMarket,
+        outlook: &SettlementOutlook,
+        date: NaiveDate,
+        average_wage: f64,
+        annual_wage_bill: u32,
+    ) -> Option<StrandedCase> {
+        let contract = player.contract.as_ref()?;
+        let contract_days_left = (contract.expiration - date).num_days();
+        Some(StrandedCase {
+            exposure_days: listing.exposure_days,
+            annual_wage: contract.salary as f64,
+            average_wage,
+            annual_wage_bill,
+            contract_days_left,
+            current_ask: listing.current_ask,
+            market_value: player.value(date, market.league_reputation, market.club_reputation),
+            still_asking: player.is_asking_to_leave(date),
+            start_share: player.start_share_at(team_slug, date),
+            best_rejected_bid: listing.best_rejected_bid,
+            book_value: player.book_value(date),
+            has_loan_runway: ClubBoard::has_loan_runway(
+                Some((contract_days_left / 30) as i32),
+                player.age(date),
+                player.plan.as_ref().map_or(0, |p| p.loans_used),
+            ),
+            settlement: player.settlement_ask(date, outlook),
+        })
+    }
+}
+
 impl Club {
-    #[expect(clippy::too_many_lines)]
     pub fn on_listings_stranded(
         &mut self,
         listings: &[StrandedListing],
@@ -75,111 +115,138 @@ impl Club {
         let mut effects = Vec::with_capacity(listings.len());
         let mut released: Vec<(u32, SigningMandate, f32)> = Vec::new();
         for listing in listings {
-            let Some(team) = self
-                .teams
-                .teams
-                .iter_mut()
-                .find(|t| t.players.players.iter().any(|p| p.id == listing.player_id))
-            else {
-                continue;
-            };
-            let Some(player) = team
-                .players
-                .players
-                .iter_mut()
-                .find(|p| p.id == listing.player_id)
-            else {
-                continue;
-            };
-            if player.is_on_loan() {
-                continue;
-            }
-            let Some(contract) = player.contract.as_ref() else {
-                continue;
-            };
-            let contract_days_left = (contract.expiration - date).num_days();
-            let case = StrandedCase {
-                exposure_days: listing.exposure_days,
-                annual_wage: contract.salary as f64,
+            let Some(outcome) = self.process_stranded_listing(
+                listing,
+                market,
+                &outlook,
+                date,
                 average_wage,
                 annual_wage_bill,
-                contract_days_left,
-                current_ask: listing.current_ask,
-                market_value: player.value(date, market.league_reputation, market.club_reputation),
-                still_asking: player.is_asking_to_leave(date),
-                start_share: player.start_share_at(&team.slug, date),
-                best_rejected_bid: listing.best_rejected_bid,
-                book_value: player.book_value(date),
-                has_loan_runway: ClubBoard::has_loan_runway(
-                    Some((contract_days_left / 30) as i32),
-                    player.age(date),
-                    player.plan.as_ref().map_or(0, |p| p.loans_used),
-                ),
-                settlement: player.settlement_ask(date, &outlook),
+                &pressure,
+            ) else {
+                continue;
             };
-            let verdict = self.board.review_stranded(&case, &pressure);
-            if verdict.route == StrandedRoute::KeepHim {
-                self.transfer_plan
-                    .kept_in_the_side
-                    .insert(listing.player_id);
-            } else {
-                self.transfer_plan
-                    .kept_in_the_side
-                    .remove(&listing.player_id);
+            if let Some(mandate) = outcome.released {
+                released.push(mandate);
             }
-
-            match verdict.route {
-                StrandedRoute::Settle { amount } => {
-                    debug!(
-                        "stranded settlement: player {} leaves club {} for {:.0} of {:.0} owed \
-                         (asked {:.0}, resolve {:.2})",
-                        player.id,
-                        self.id,
-                        amount,
-                        case.settlement.carry,
-                        case.settlement.ask,
-                        verdict.resolve.value(),
-                    );
-                    if let Some(mandate) = player.mandate().filter(|m| m.is_purchase()) {
-                        released.push((player.id, *mandate, player.delivered_minutes().0));
-                    }
-                    player.on_contract_terminated(date, FreeAgentReleaseReason::MutualTermination);
-                    team.transfer_list.remove(listing.player_id);
-                    self.finance
-                        .balance
-                        .push_expense_player_wages(amount.round() as i64);
-                    effects.push(StrandedEffect::Retire {
-                        player_id: listing.player_id,
-                    });
-                    continue;
-                }
-                StrandedRoute::KeepHim => {
-                    player.on_kept_by_club(date);
-                    team.transfer_list.remove(listing.player_id);
-                    self.transfer_plan
-                        .transfer_broadcasts
-                        .remove(&listing.player_id);
-                    effects.push(StrandedEffect::Retire {
-                        player_id: listing.player_id,
-                    });
-                    continue;
-                }
-                StrandedRoute::LoanOut { subsidy } => {
-                    self.on_stranded_loan_staged(listing.player_id, subsidy, date);
-                }
-                StrandedRoute::KeepSelling => {}
-            }
-            effects.push(StrandedEffect::Reanchor {
-                player_id: listing.player_id,
-                anchor: verdict.anchor,
-                board_floor: verdict.board_floor,
-            });
+            effects.push(outcome.effect);
         }
 
         for (player_id, mandate, delivered) in released {
             self.on_mandate_closed(player_id, mandate, delivered, MandateExit::Released, date);
         }
         effects
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn process_stranded_listing(
+        &mut self,
+        listing: &StrandedListing,
+        market: &StrandedMarket,
+        outlook: &SettlementOutlook,
+        date: NaiveDate,
+        average_wage: f64,
+        annual_wage_bill: u32,
+        pressure: &LedgerPressure,
+    ) -> Option<StrandedOutcome> {
+        let Some(team) = self
+            .teams
+            .teams
+            .iter_mut()
+            .find(|t| t.players.players.iter().any(|p| p.id == listing.player_id))
+        else {
+            return None;
+        };
+        let team_slug = team.slug.clone();
+        let Some(player) = team
+            .players
+            .players
+            .iter_mut()
+            .find(|p| p.id == listing.player_id)
+        else {
+            return None;
+        };
+        if player.is_on_loan() {
+            return None;
+        }
+        let Some(case) = StrandedCase::read(
+            player,
+            &team_slug,
+            listing,
+            market,
+            outlook,
+            date,
+            average_wage,
+            annual_wage_bill,
+        ) else {
+            return None;
+        };
+        let verdict = self.board.review_stranded(&case, pressure);
+        if verdict.route == StrandedRoute::KeepHim {
+            self.transfer_plan
+                .kept_in_the_side
+                .insert(listing.player_id);
+        } else {
+            self.transfer_plan
+                .kept_in_the_side
+                .remove(&listing.player_id);
+        }
+
+        match verdict.route {
+            StrandedRoute::Settle { amount } => {
+                debug!(
+                    "stranded settlement: player {} leaves club {} for {:.0} of {:.0} owed \
+                     (asked {:.0}, resolve {:.2})",
+                    player.id,
+                    self.id,
+                    amount,
+                    case.settlement.carry,
+                    case.settlement.ask,
+                    verdict.resolve.value(),
+                );
+                let released = player
+                    .mandate()
+                    .filter(|m| m.is_purchase())
+                    .map(|m| (*m, player.delivered_minutes().0))
+                    .map(|(m, delivered)| (player.id, m, delivered));
+                player.on_contract_terminated(date, FreeAgentReleaseReason::MutualTermination);
+                team.transfer_list.remove(listing.player_id);
+                self.finance
+                    .balance
+                    .push_expense_player_wages(amount.round() as i64);
+                return Some(StrandedOutcome {
+                    effect: StrandedEffect::Retire {
+                        player_id: listing.player_id,
+                    },
+                    released,
+                });
+            }
+            StrandedRoute::KeepHim => {
+                player.on_kept_by_club(date);
+                team.transfer_list.remove(listing.player_id);
+                self.transfer_plan
+                    .transfer_broadcasts
+                    .remove(&listing.player_id);
+                return Some(StrandedOutcome {
+                    effect: StrandedEffect::Retire {
+                        player_id: listing.player_id,
+                    },
+                    released: None,
+                });
+            }
+            StrandedRoute::LoanOut { subsidy } => {
+                self.on_stranded_loan_staged(listing.player_id, subsidy, date);
+            }
+            StrandedRoute::KeepSelling => {}
+        }
+        Some(StrandedOutcome {
+            effect: StrandedEffect::Reanchor {
+                player_id: listing.player_id,
+                anchor: verdict.anchor,
+                board_floor: verdict.board_floor,
+            },
+            released: None,
+        })
     }
 
     /// Staged as any other loan the club wants, with the share of his wage

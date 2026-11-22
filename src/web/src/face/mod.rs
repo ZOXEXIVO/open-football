@@ -32,15 +32,22 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
 use core::utils::DateUtils;
-use generator::{FaceFrame, generate_face_svg};
+use generator::{FaceFrame, FacePortrait};
 use skin::CountrySkin;
 
 use crate::GameAppData;
 use axum::Router;
 
-pub fn face_routes() -> Router<GameAppData> {
-    routes::routes()
+pub struct FaceRoutes;
+
+impl FaceRoutes {
+    pub fn router() -> Router<GameAppData> {
+        routes::FaceGetRoutes::router()
+    }
 }
+
+#[allow(non_upper_case_globals)]
+pub const face_routes: fn() -> Router<GameAppData> = FaceRoutes::router;
 
 #[derive(Deserialize)]
 struct FacePathParams {
@@ -56,74 +63,77 @@ struct FaceQuery {
     cutout: u8,
 }
 
-async fn face_action(
-    State(state): State<GameAppData>,
-    Path(path): Path<FacePathParams>,
-    Query(query): Query<FaceQuery>,
-) -> Response {
-    let guard = state.data.read().await;
-    let Some(simulator_data) = guard.as_ref() else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    };
+impl FacePortrait {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(path): Path<FacePathParams>,
+        Query(query): Query<FaceQuery>,
+    ) -> Response {
+        let guard = state.data.read().await;
+        let Some(simulator_data) = guard.as_ref() else {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        };
 
-    let Some(player) = simulator_data.player(path.player_id) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
+        let Some(player) = simulator_data.player(path.player_id) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
 
-    let age = DateUtils::age(player.birth_date, simulator_data.date.date());
+        let age = DateUtils::age(player.birth_date, simulator_data.date.date());
 
-    let skin_dist = CountrySkin::for_country(simulator_data, player.country_id);
+        let skin_dist = CountrySkin::for_country(simulator_data, player.country_id);
 
-    // Weight-for-height drives facial fullness; fall back to an average
-    // build when the record carries no plausible body data
-    let height_cm = if player.player_attributes.height >= 150 {
-        player.player_attributes.height as f32
-    } else {
-        180.0
-    };
-    let weight_kg = if player.player_attributes.weight >= 45 {
-        player.player_attributes.weight as f32
-    } else {
-        75.0
-    };
-    let athletic_kg = 23.0 * (height_cm / 100.0) * (height_cm / 100.0);
-    let heft = (weight_kg - athletic_kg) / 6.0;
+        // Weight-for-height drives facial fullness; fall back to an average
+        // build when the record carries no plausible body data
+        let height_cm = if player.player_attributes.height >= 150 {
+            player.player_attributes.height as f32
+        } else {
+            180.0
+        };
+        let weight_kg = if player.player_attributes.weight >= 45 {
+            player.player_attributes.weight as f32
+        } else {
+            75.0
+        };
+        let athletic_kg = 23.0 * (height_cm / 100.0) * (height_cm / 100.0);
+        let heft = (weight_kg - athletic_kg) / 6.0;
 
-    // Expression: short fuse (low temperament) + dirty tackling read as a
-    // harder face; both attributes are on the 0..20 scale
-    let aggression =
-        (((20.0 - player.attributes.temperament) * 0.6 + player.attributes.dirtiness * 0.4) / 20.0)
+        // Expression: short fuse (low temperament) + dirty tackling read as a
+        // harder face; both attributes are on the 0..20 scale
+        let aggression = (((20.0 - player.attributes.temperament) * 0.6
+            + player.attributes.dirtiness * 0.4)
+            / 20.0)
             .clamp(0.0, 1.0);
 
-    // Real club shirt color; free agents keep the per-player fallback hue
-    let jersey = simulator_data
-        .indexes
-        .as_ref()
-        .and_then(|idx| idx.get_player_location(path.player_id))
-        .and_then(|(_, _, club_id, _)| simulator_data.club(club_id))
-        .map(|club| club.colors.background.clone());
+        // Real club shirt color; free agents keep the per-player fallback hue
+        let jersey = simulator_data
+            .indexes
+            .as_ref()
+            .and_then(|idx| idx.get_player_location(path.player_id))
+            .and_then(|(_, _, club_id, _)| simulator_data.club(club_id))
+            .map(|club| club.colors.background.clone());
 
-    let svg = generate_face_svg(
-        path.player_id,
-        age,
-        skin_dist,
-        heft,
-        aggression,
-        jersey.as_deref(),
-        if query.cutout == 1 {
-            FaceFrame::Cutout
-        } else {
-            FaceFrame::Portrait
-        },
-    );
+        let svg = Self::svg(
+            path.player_id,
+            age,
+            skin_dist,
+            heft,
+            aggression,
+            jersey.as_deref(),
+            if query.cutout == 1 {
+                FaceFrame::Cutout
+            } else {
+                FaceFrame::Portrait
+            },
+        );
 
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "image/svg+xml"),
-            (header::CACHE_CONTROL, "public, max-age=86400, immutable"),
-        ],
-        svg,
-    )
-        .into_response()
+        (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "image/svg+xml"),
+                (header::CACHE_CONTROL, "public, max-age=86400, immutable"),
+            ],
+            svg,
+        )
+            .into_response()
+    }
 }

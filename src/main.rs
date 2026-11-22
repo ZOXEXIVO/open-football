@@ -34,7 +34,10 @@ async fn main() {
 
     env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
 
-    info!("SIMD: {}", simulator_core::utils::cpu::simd_kernel_name());
+    info!(
+        "SIMD: {}",
+        simulator_core::utils::cpu::CpuFeatures::simd_kernel_name()
+    );
 
     let settings = Settings::from_env();
 

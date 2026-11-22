@@ -95,6 +95,283 @@ impl ClubAccounts {
     }
 }
 
+/// One diary entry reduced to the story it files and the facts that story
+/// carries.
+struct AffairStory {
+    kind: NewsStoryKind,
+    staff: Option<u32>,
+    player: Option<u32>,
+    other: Option<u32>,
+    numbers: Option<(i32, i32)>,
+    money: Option<i64>,
+    weight: Option<i32>,
+}
+
+impl AffairStory {
+    const fn new(kind: NewsStoryKind) -> Self {
+        AffairStory {
+            kind,
+            staff: None,
+            player: None,
+            other: None,
+            numbers: None,
+            money: None,
+            weight: None,
+        }
+    }
+
+    const fn by_staff(mut self, staff_id: u32) -> Self {
+        self.staff = Some(staff_id);
+        self
+    }
+
+    const fn about(mut self, player_id: u32) -> Self {
+        self.player = Some(player_id);
+        self
+    }
+
+    const fn against(mut self, other_id: u32) -> Self {
+        self.other = Some(other_id);
+        self
+    }
+
+    const fn with_numbers(mut self, a: i32, b: i32) -> Self {
+        self.numbers = Some((a, b));
+        self
+    }
+
+    const fn with_money(mut self, money: i64) -> Self {
+        self.money = Some(money);
+        self
+    }
+
+    const fn weighted(mut self, delta: i32) -> Self {
+        self.weight = Some(delta);
+        self
+    }
+
+    /// The story each dated happening in the club's diary files.
+    fn of(affair: ClubAffair) -> Self {
+        match affair {
+            ClubAffair::ManagerSacked { .. }
+            | ClubAffair::SeverancePaid { .. }
+            | ClubAffair::ManagerPoached { .. }
+            | ClubAffair::ManagerAppointed { .. }
+            | ClubAffair::CaretakerAppointed { .. }
+            | ClubAffair::CaretakerConfirmed { .. }
+            | ClubAffair::ManagerContractExtended { .. }
+            | ClubAffair::ManagerUltimatum { .. } => Self::dugout_story(affair),
+            ClubAffair::TakeoverRumour
+            | ClubAffair::TakeoverCompleted
+            | ClubAffair::TakeoverCollapsed
+            | ClubAffair::StadiumExpansion { .. }
+            | ClubAffair::FacilityUpgrade { .. }
+            | ClubAffair::WarChest { .. }
+            | ClubAffair::BudgetCut { .. }
+            | ClubAffair::PromiseBroken
+            | ClubAffair::AdministrationEntered { .. }
+            | ClubAffair::AdministrationExited
+            | ClubAffair::OwnerBailout { .. }
+            | ClubAffair::SponsorSigned { .. }
+            | ClubAffair::SponsorshipLost { .. }
+            | ClubAffair::CrisisMeetingHeld => Self::boardroom_story(affair),
+            ClubAffair::MandateWrittenOff { .. }
+            | ClubAffair::TransferExceptionApproved { .. }
+            | ClubAffair::ClauseWindfall { .. }
+            | ClubAffair::PreContractAgreed { .. }
+            | ClubAffair::PlayerSaleDemanded { .. }
+            | ClubAffair::TransferBlocked { .. }
+            | ClubAffair::FacilityUpgradeRejected { .. } => Self::deal_story(affair),
+            ClubAffair::AcademyIntake { .. }
+            | ClubAffair::AcademyGraduationBatch { .. }
+            | ClubAffair::BackroomEmpty => Self::academy_story(affair),
+        }
+    }
+
+    /// The dugout's own dated mornings.
+    fn dugout_story(affair: ClubAffair) -> Self {
+        match affair {
+            ClubAffair::ManagerSacked { staff_id } => {
+                Self::new(NewsStoryKind::ManagerSacked).by_staff(staff_id)
+            }
+            ClubAffair::SeverancePaid { staff_id, amount } => {
+                Self::new(NewsStoryKind::SeverancePaid)
+                    .by_staff(staff_id)
+                    .with_money(amount)
+            }
+            ClubAffair::ManagerPoached {
+                staff_id,
+                to_club_id,
+            } => Self::new(NewsStoryKind::ManagerPoached)
+                .by_staff(staff_id)
+                .against(to_club_id),
+            ClubAffair::ManagerAppointed {
+                staff_id,
+                from_club_id,
+            } => Self::new(NewsStoryKind::NewManagerArrives)
+                .by_staff(staff_id)
+                .against(from_club_id),
+            ClubAffair::CaretakerAppointed { staff_id } => {
+                Self::new(NewsStoryKind::CaretakerTakesCharge).by_staff(staff_id)
+            }
+            ClubAffair::CaretakerConfirmed { staff_id } => {
+                Self::new(NewsStoryKind::CaretakerConfirmed).by_staff(staff_id)
+            }
+            ClubAffair::ManagerContractExtended { staff_id } => {
+                Self::new(NewsStoryKind::ManagerContractExtended).by_staff(staff_id)
+            }
+            ClubAffair::ManagerUltimatum { staff_id } => {
+                Self::new(NewsStoryKind::ManagerUltimatum).by_staff(staff_id)
+            }
+            _ => unreachable!("only dugout affairs are filed here"),
+        }
+    }
+
+    /// The boardroom's own decisions and the ground it spends on.
+    fn boardroom_story(affair: ClubAffair) -> Self {
+        match affair {
+            ClubAffair::TakeoverRumour => Self::new(NewsStoryKind::TakeoverRumour),
+            ClubAffair::TakeoverCompleted => Self::new(NewsStoryKind::TakeoverCompleted),
+            ClubAffair::TakeoverCollapsed => Self::new(NewsStoryKind::TakeoverCollapsed),
+            ClubAffair::StadiumExpansion { capacity } => {
+                Self::new(NewsStoryKind::StadiumExpansion).with_numbers(capacity as i32, 0)
+            }
+            ClubAffair::FacilityUpgrade { facility } => {
+                // Which facility, so the fact survives even though every
+                // one of them shares a piece of copy. Weighted so the
+                // training ground — the one supporters argue about —
+                // outranks the scouting network.
+                Self::new(NewsStoryKind::FacilityUpgrade)
+                    .with_numbers(BoardroomDesk::facility_index(facility), 0)
+                    .weighted(BoardroomDesk::facility_weight(facility))
+            }
+            ClubAffair::WarChest { amount } => {
+                Self::new(NewsStoryKind::WarChest).with_money(amount)
+            }
+            ClubAffair::BudgetCut { amount } => {
+                Self::new(NewsStoryKind::BudgetCut).with_money(amount)
+            }
+            ClubAffair::PromiseBroken => Self::new(NewsStoryKind::BoardPromiseBroken),
+            ClubAffair::AdministrationEntered { points_deduction } => {
+                Self::new(NewsStoryKind::AdministrationEntered)
+                    .with_numbers(points_deduction as i32, 0)
+            }
+            ClubAffair::AdministrationExited => Self::new(NewsStoryKind::AdministrationExited),
+            ClubAffair::OwnerBailout { amount } => {
+                Self::new(NewsStoryKind::OwnerBailout).with_money(amount)
+            }
+            ClubAffair::SponsorSigned { annual_value } => {
+                Self::new(NewsStoryKind::SponsorSigned).with_money(annual_value)
+            }
+            ClubAffair::SponsorshipLost { count } => {
+                Self::new(NewsStoryKind::SponsorshipLost).with_numbers(count as i32, 0)
+            }
+            ClubAffair::CrisisMeetingHeld => Self::new(NewsStoryKind::CrisisTalks),
+            _ => unreachable!("only boardroom affairs are filed here"),
+        }
+    }
+
+    /// The deals, clauses and sales the board signs off.
+    fn deal_story(affair: ClubAffair) -> Self {
+        match affair {
+            ClubAffair::MandateWrittenOff { player_id, loss } => {
+                Self::new(NewsStoryKind::FeeWrittenOff)
+                    .about(player_id)
+                    .with_money(loss)
+            }
+            ClubAffair::TransferExceptionApproved { player_id, fee } => {
+                Self::new(NewsStoryKind::BoardRaisesItsOffer)
+                    .about(player_id)
+                    .with_money(fee)
+            }
+            // A clause the club fought for at the time, paying out years
+            // later. It names the player it was written about, because
+            // that is the whole point of the story.
+            ClubAffair::ClauseWindfall {
+                player_id,
+                kind,
+                amount,
+            } => Self::new(match kind {
+                ClauseWindfallKind::Promotion => NewsStoryKind::PromotionBonusDue,
+                ClauseWindfallKind::SellOn | ClauseWindfallKind::Milestone => {
+                    NewsStoryKind::SellOnWindfall
+                }
+            })
+            .about(player_id)
+            .with_money(amount),
+            // The same day, filed twice and read completely differently at
+            // each end.
+            ClubAffair::PreContractAgreed {
+                player_id,
+                other_club_id,
+                arriving,
+            } => Self::new(if arriving {
+                NewsStoryKind::PreContractAgreed
+            } else {
+                NewsStoryKind::BosmanDepartureLooms
+            })
+            .about(player_id)
+            .against(other_club_id),
+            // Names him, because the whole story is which one.
+            ClubAffair::PlayerSaleDemanded { player_id } => {
+                Self::new(NewsStoryKind::BoardDemandsSale).about(player_id)
+            }
+            // Names the player, because the whole grievance is about which
+            // one.
+            ClubAffair::TransferBlocked { player_id } => {
+                Self::new(NewsStoryKind::BoardBlocksDeal).about(player_id)
+            }
+            ClubAffair::FacilityUpgradeRejected { facility } => {
+                Self::new(NewsStoryKind::FacilityPlanRejected).with_numbers(facility as i32, 0)
+            }
+            _ => unreachable!("only deal affairs are filed here"),
+        }
+    }
+
+    /// The one morning a year the academy is visible from outside.
+    fn academy_story(affair: ClubAffair) -> Self {
+        match affair {
+            // Intake day. The special-class framing is the recruitment
+            // department's own verdict on the boys it has just signed, never
+            // a reading of what any of them might become.
+            ClubAffair::AcademyIntake { count, golden } => Self::new(if golden {
+                NewsStoryKind::GoldenGeneration
+            } else {
+                NewsStoryKind::IntakeDay
+            })
+            .with_numbers(count as i32, 0),
+            ClubAffair::AcademyGraduationBatch { count } => {
+                Self::new(NewsStoryKind::GraduationDay).with_numbers(count as i32, 0)
+            }
+            ClubAffair::BackroomEmpty => Self::new(NewsStoryKind::BackroomEmpty),
+            _ => unreachable!("only academy affairs are filed here"),
+        }
+    }
+
+    fn into_story(self, date: NaiveDate) -> NewsStory {
+        let mut story = NewsStory::new(self.kind, date);
+        if let Some(staff_id) = self.staff {
+            story = story.by_staff(staff_id);
+        }
+        if let Some(player_id) = self.player {
+            story = story.about(player_id);
+        }
+        if let Some(other_id) = self.other {
+            story = story.against(other_id);
+        }
+        if let Some((a, b)) = self.numbers {
+            story = story.with_numbers(a, b);
+        }
+        if let Some(money) = self.money {
+            story = story.with_money(money);
+        }
+        if let Some(delta) = self.weight {
+            story = story.weighted(delta);
+        }
+        story
+    }
+}
+
 pub struct BoardroomDesk;
 
 impl BoardroomDesk {
@@ -162,7 +439,6 @@ impl BoardroomDesk {
     /// speculative pieces (the hunt, the pursuit, the manager's future)
     /// stand down on any week it was not, because a paper does not run
     /// "will he survive?" beside the news that he did not.
-    #[expect(clippy::too_many_lines)]
     fn file_affairs(
         out: &mut Vec<NewsStory>,
         affairs: &ClubAffairLog,
@@ -173,165 +449,7 @@ impl BoardroomDesk {
 
         for entry in affairs.between(week_start, date) {
             settled &= !entry.affair.is_dugout_change();
-
-            let story = match entry.affair {
-                ClubAffair::ManagerSacked { staff_id } => {
-                    NewsStory::new(NewsStoryKind::ManagerSacked, date).by_staff(staff_id)
-                }
-                ClubAffair::SeverancePaid { staff_id, amount } => {
-                    NewsStory::new(NewsStoryKind::SeverancePaid, date)
-                        .by_staff(staff_id)
-                        .with_money(amount)
-                }
-                ClubAffair::ManagerPoached {
-                    staff_id,
-                    to_club_id,
-                } => NewsStory::new(NewsStoryKind::ManagerPoached, date)
-                    .by_staff(staff_id)
-                    .against(to_club_id),
-                ClubAffair::ManagerAppointed {
-                    staff_id,
-                    from_club_id,
-                } => NewsStory::new(NewsStoryKind::NewManagerArrives, date)
-                    .by_staff(staff_id)
-                    .against(from_club_id),
-                ClubAffair::CaretakerAppointed { staff_id } => {
-                    NewsStory::new(NewsStoryKind::CaretakerTakesCharge, date).by_staff(staff_id)
-                }
-                ClubAffair::CaretakerConfirmed { staff_id } => {
-                    NewsStory::new(NewsStoryKind::CaretakerConfirmed, date).by_staff(staff_id)
-                }
-                ClubAffair::ManagerContractExtended { staff_id } => {
-                    NewsStory::new(NewsStoryKind::ManagerContractExtended, date).by_staff(staff_id)
-                }
-                ClubAffair::ManagerUltimatum { staff_id } => {
-                    NewsStory::new(NewsStoryKind::ManagerUltimatum, date).by_staff(staff_id)
-                }
-                ClubAffair::MandateWrittenOff { player_id, loss } => {
-                    NewsStory::new(NewsStoryKind::FeeWrittenOff, date)
-                        .about(player_id)
-                        .with_money(loss)
-                }
-                ClubAffair::TransferExceptionApproved { player_id, fee } => {
-                    NewsStory::new(NewsStoryKind::BoardRaisesItsOffer, date)
-                        .about(player_id)
-                        .with_money(fee)
-                }
-                ClubAffair::TakeoverRumour => NewsStory::new(NewsStoryKind::TakeoverRumour, date),
-                ClubAffair::TakeoverCompleted => {
-                    NewsStory::new(NewsStoryKind::TakeoverCompleted, date)
-                }
-                ClubAffair::TakeoverCollapsed => {
-                    NewsStory::new(NewsStoryKind::TakeoverCollapsed, date)
-                }
-                ClubAffair::StadiumExpansion { capacity } => {
-                    NewsStory::new(NewsStoryKind::StadiumExpansion, date)
-                        .with_numbers(capacity as i32, 0)
-                }
-                ClubAffair::FacilityUpgrade { facility } => {
-                    NewsStory::new(NewsStoryKind::FacilityUpgrade, date)
-                        // Which facility, so the fact survives even
-                        // though every one of them shares a piece of
-                        // copy. Weighted so the training ground — the
-                        // one supporters argue about — outranks the
-                        // scouting network.
-                        .with_numbers(Self::facility_index(facility), 0)
-                        .weighted(Self::facility_weight(facility))
-                }
-                ClubAffair::WarChest { amount } => {
-                    NewsStory::new(NewsStoryKind::WarChest, date).with_money(amount)
-                }
-                ClubAffair::BudgetCut { amount } => {
-                    NewsStory::new(NewsStoryKind::BudgetCut, date).with_money(amount)
-                }
-                ClubAffair::PromiseBroken => {
-                    NewsStory::new(NewsStoryKind::BoardPromiseBroken, date)
-                }
-                ClubAffair::AdministrationEntered { points_deduction } => {
-                    NewsStory::new(NewsStoryKind::AdministrationEntered, date)
-                        .with_numbers(points_deduction as i32, 0)
-                }
-                ClubAffair::AdministrationExited => {
-                    NewsStory::new(NewsStoryKind::AdministrationExited, date)
-                }
-                ClubAffair::OwnerBailout { amount } => {
-                    NewsStory::new(NewsStoryKind::OwnerBailout, date).with_money(amount)
-                }
-                ClubAffair::SponsorSigned { annual_value } => {
-                    NewsStory::new(NewsStoryKind::SponsorSigned, date).with_money(annual_value)
-                }
-                ClubAffair::SponsorshipLost { count } => {
-                    NewsStory::new(NewsStoryKind::SponsorshipLost, date)
-                        .with_numbers(count as i32, 0)
-                }
-                // A clause the club fought for at the time, paying out
-                // years later. It names the player it was written
-                // about, because that is the whole point of the story.
-                ClubAffair::ClauseWindfall {
-                    player_id,
-                    kind,
-                    amount,
-                } => NewsStory::new(
-                    match kind {
-                        ClauseWindfallKind::Promotion => NewsStoryKind::PromotionBonusDue,
-                        ClauseWindfallKind::SellOn | ClauseWindfallKind::Milestone => {
-                            NewsStoryKind::SellOnWindfall
-                        }
-                    },
-                    date,
-                )
-                .about(player_id)
-                .with_money(amount),
-                // The same day, filed twice and read completely
-                // differently at each end.
-                ClubAffair::PreContractAgreed {
-                    player_id,
-                    other_club_id,
-                    arriving,
-                } => NewsStory::new(
-                    if arriving {
-                        NewsStoryKind::PreContractAgreed
-                    } else {
-                        NewsStoryKind::BosmanDepartureLooms
-                    },
-                    date,
-                )
-                .about(player_id)
-                .against(other_club_id),
-                ClubAffair::CrisisMeetingHeld => NewsStory::new(NewsStoryKind::CrisisTalks, date),
-                // Names him, because the whole story is which one.
-                ClubAffair::PlayerSaleDemanded { player_id } => {
-                    NewsStory::new(NewsStoryKind::BoardDemandsSale, date).about(player_id)
-                }
-                // Names the player, because the whole grievance is
-                // about which one.
-                ClubAffair::TransferBlocked { player_id } => {
-                    NewsStory::new(NewsStoryKind::BoardBlocksDeal, date).about(player_id)
-                }
-                ClubAffair::FacilityUpgradeRejected { facility } => {
-                    NewsStory::new(NewsStoryKind::FacilityPlanRejected, date)
-                        .with_numbers(facility as i32, 0)
-                }
-                // Intake day. The special-class framing is the
-                // recruitment department's own verdict on the boys it
-                // has just signed, never a reading of what any of them
-                // might become.
-                ClubAffair::AcademyIntake { count, golden } => NewsStory::new(
-                    if golden {
-                        NewsStoryKind::GoldenGeneration
-                    } else {
-                        NewsStoryKind::IntakeDay
-                    },
-                    date,
-                )
-                .with_numbers(count as i32, 0),
-                ClubAffair::AcademyGraduationBatch { count } => {
-                    NewsStory::new(NewsStoryKind::GraduationDay, date).with_numbers(count as i32, 0)
-                }
-                ClubAffair::BackroomEmpty => NewsStory::new(NewsStoryKind::BackroomEmpty, date),
-            };
-
-            out.push(story);
+            out.push(AffairStory::of(entry.affair).into_story(date));
         }
 
         settled

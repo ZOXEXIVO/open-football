@@ -124,163 +124,189 @@ impl BenchScenarioPlan {
 pub struct BenchScenarioScorer;
 
 impl BenchScenarioScorer {
-    #[expect(clippy::too_many_lines)]
     pub fn coverage(player: &Player, scenario: BenchScenario, date: NaiveDate) -> f32 {
-        let t = &player.skills.technical;
-        let m = &player.skills.mental;
-        let p = &player.skills.physical;
-        let positions = &player.positions;
-        let age = DateUtils::age(player.birth_date, date);
-
-        let has = |pos: PlayerPositionType| positions.get_level(pos) > 0;
-        let has_any = |targets: &[PlayerPositionType]| targets.iter().any(|&p| has(p));
-
         match scenario {
             BenchScenario::BackupGoalkeeper => {
-                if has(PlayerPositionType::Goalkeeper) {
+                if player.positions.get_level(PlayerPositionType::Goalkeeper) > 0 {
                     1.0
                 } else {
                     0.0
                 }
             }
-            BenchScenario::ProtectLead => {
-                if has_any(&[
-                    PlayerPositionType::DefenderCenter,
-                    PlayerPositionType::DefenderCenterLeft,
-                    PlayerPositionType::DefenderCenterRight,
-                    PlayerPositionType::DefensiveMidfielder,
-                    PlayerPositionType::DefenderLeft,
-                    PlayerPositionType::DefenderRight,
-                    PlayerPositionType::WingbackLeft,
-                    PlayerPositionType::WingbackRight,
-                ]) {
-                    let attr = (t.tackling + t.marking + m.positioning + m.concentration) / 80.0;
-                    (0.5 + attr * 0.5).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                }
+            BenchScenario::ProtectLead => Self::protect_lead(player),
+            BenchScenario::ChaseGoal => Self::chase_goal(player),
+            BenchScenario::TacticalSwitchWide | BenchScenario::TacticalSwitchCentral => {
+                Self::tactical_switch(player, scenario)
             }
-            BenchScenario::ChaseGoal => {
-                let attacking = (t.finishing + t.dribbling + m.flair + m.off_the_ball) / 80.0;
-                let attacker_pos = has_any(&[
-                    PlayerPositionType::Striker,
-                    PlayerPositionType::ForwardCenter,
-                    PlayerPositionType::ForwardLeft,
-                    PlayerPositionType::ForwardRight,
-                    PlayerPositionType::AttackingMidfielderCenter,
-                ]);
-                if attacker_pos {
-                    (0.55 + attacking * 0.45).clamp(0.0, 1.0)
-                } else {
-                    attacking.clamp(0.0, 0.6)
-                }
-            }
-            BenchScenario::TacticalSwitchWide => {
-                if has_any(&[
-                    PlayerPositionType::DefenderLeft,
-                    PlayerPositionType::DefenderRight,
-                    PlayerPositionType::WingbackLeft,
-                    PlayerPositionType::WingbackRight,
-                    PlayerPositionType::MidfielderLeft,
-                    PlayerPositionType::MidfielderRight,
-                    PlayerPositionType::AttackingMidfielderLeft,
-                    PlayerPositionType::AttackingMidfielderRight,
-                    PlayerPositionType::ForwardLeft,
-                    PlayerPositionType::ForwardRight,
-                ]) {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
-            BenchScenario::TacticalSwitchCentral => {
-                if has_any(&[
-                    PlayerPositionType::DefensiveMidfielder,
-                    PlayerPositionType::MidfielderCenter,
-                    PlayerPositionType::AttackingMidfielderCenter,
-                ]) {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
-            BenchScenario::FreshLegsPress => {
-                let pressing = (m.work_rate + p.stamina + p.pace + m.aggression) / 80.0;
-                let condition = player.player_attributes.condition_percentage() as f32 / 100.0;
-                (pressing * 0.7 + condition * 0.3).clamp(0.0, 1.0)
-            }
-            BenchScenario::AerialPlanB => {
-                if has_any(&[
-                    PlayerPositionType::DefenderCenter,
-                    PlayerPositionType::DefenderCenterLeft,
-                    PlayerPositionType::DefenderCenterRight,
-                    PlayerPositionType::Striker,
-                    PlayerPositionType::ForwardCenter,
-                ]) {
-                    let aerial = (t.heading + p.jumping + p.strength) / 60.0;
-                    aerial.clamp(0.0, 1.0)
-                } else {
-                    0.0
-                }
-            }
-            BenchScenario::PenaltyShootout => {
-                let take = (t.penalty_taking + m.composure + t.technique) / 60.0;
-                take.clamp(0.0, 1.0)
-            }
-            BenchScenario::YouthCameo => {
-                if age <= 19 {
-                    1.0
-                } else if age <= 22 {
-                    0.6
-                } else {
-                    0.0
-                }
-            }
-            BenchScenario::InjuryCoverDefence => {
-                if has_any(&[
-                    PlayerPositionType::DefenderCenter,
-                    PlayerPositionType::DefenderCenterLeft,
-                    PlayerPositionType::DefenderCenterRight,
-                    PlayerPositionType::DefenderLeft,
-                    PlayerPositionType::DefenderRight,
-                    PlayerPositionType::WingbackLeft,
-                    PlayerPositionType::WingbackRight,
-                    PlayerPositionType::Sweeper,
-                ]) {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
-            BenchScenario::InjuryCoverMidfield => {
-                if has_any(&[
-                    PlayerPositionType::DefensiveMidfielder,
-                    PlayerPositionType::MidfielderCenter,
-                    PlayerPositionType::MidfielderCenterLeft,
-                    PlayerPositionType::MidfielderCenterRight,
-                    PlayerPositionType::MidfielderLeft,
-                    PlayerPositionType::MidfielderRight,
-                    PlayerPositionType::AttackingMidfielderCenter,
-                ]) {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
-            BenchScenario::InjuryCoverAttack => {
-                if has_any(&[
-                    PlayerPositionType::Striker,
-                    PlayerPositionType::ForwardCenter,
-                    PlayerPositionType::ForwardLeft,
-                    PlayerPositionType::ForwardRight,
-                    PlayerPositionType::AttackingMidfielderLeft,
-                    PlayerPositionType::AttackingMidfielderRight,
-                ]) {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
+            BenchScenario::FreshLegsPress => Self::fresh_legs_press(player),
+            BenchScenario::AerialPlanB => Self::aerial_plan_b(player),
+            BenchScenario::PenaltyShootout => Self::penalty_shootout(player),
+            BenchScenario::YouthCameo => Self::youth_cameo(player.birth_date, date),
+            BenchScenario::InjuryCoverDefence
+            | BenchScenario::InjuryCoverMidfield
+            | BenchScenario::InjuryCoverAttack => Self::injury_cover(player, scenario),
+        }
+    }
+
+    fn has_any(player: &Player, targets: &[PlayerPositionType]) -> bool {
+        targets
+            .iter()
+            .any(|&pos| player.positions.get_level(pos) > 0)
+    }
+
+    fn protect_lead(player: &Player) -> f32 {
+        let t = &player.skills.technical;
+        let m = &player.skills.mental;
+        if Self::has_any(
+            player,
+            &[
+                PlayerPositionType::DefenderCenter,
+                PlayerPositionType::DefenderCenterLeft,
+                PlayerPositionType::DefenderCenterRight,
+                PlayerPositionType::DefensiveMidfielder,
+                PlayerPositionType::DefenderLeft,
+                PlayerPositionType::DefenderRight,
+                PlayerPositionType::WingbackLeft,
+                PlayerPositionType::WingbackRight,
+            ],
+        ) {
+            let attr = (t.tackling + t.marking + m.positioning + m.concentration) / 80.0;
+            (0.5 + attr * 0.5).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    fn chase_goal(player: &Player) -> f32 {
+        let t = &player.skills.technical;
+        let m = &player.skills.mental;
+        let attacking = (t.finishing + t.dribbling + m.flair + m.off_the_ball) / 80.0;
+        let attacker_pos = Self::has_any(
+            player,
+            &[
+                PlayerPositionType::Striker,
+                PlayerPositionType::ForwardCenter,
+                PlayerPositionType::ForwardLeft,
+                PlayerPositionType::ForwardRight,
+                PlayerPositionType::AttackingMidfielderCenter,
+            ],
+        );
+        if attacker_pos {
+            (0.55 + attacking * 0.45).clamp(0.0, 1.0)
+        } else {
+            attacking.clamp(0.0, 0.6)
+        }
+    }
+
+    fn tactical_switch(player: &Player, scenario: BenchScenario) -> f32 {
+        let targets: &[PlayerPositionType] = match scenario {
+            BenchScenario::TacticalSwitchWide => &[
+                PlayerPositionType::DefenderLeft,
+                PlayerPositionType::DefenderRight,
+                PlayerPositionType::WingbackLeft,
+                PlayerPositionType::WingbackRight,
+                PlayerPositionType::MidfielderLeft,
+                PlayerPositionType::MidfielderRight,
+                PlayerPositionType::AttackingMidfielderLeft,
+                PlayerPositionType::AttackingMidfielderRight,
+                PlayerPositionType::ForwardLeft,
+                PlayerPositionType::ForwardRight,
+            ],
+            BenchScenario::TacticalSwitchCentral => &[
+                PlayerPositionType::DefensiveMidfielder,
+                PlayerPositionType::MidfielderCenter,
+                PlayerPositionType::AttackingMidfielderCenter,
+            ],
+            _ => return 0.0,
+        };
+        if Self::has_any(player, targets) {
+            1.0
+        } else {
+            0.0
+        }
+    }
+
+    fn fresh_legs_press(player: &Player) -> f32 {
+        let m = &player.skills.mental;
+        let p = &player.skills.physical;
+        let pressing = (m.work_rate + p.stamina + p.pace + m.aggression) / 80.0;
+        let condition = player.player_attributes.condition_percentage() as f32 / 100.0;
+        (pressing * 0.7 + condition * 0.3).clamp(0.0, 1.0)
+    }
+
+    fn aerial_plan_b(player: &Player) -> f32 {
+        let t = &player.skills.technical;
+        let p = &player.skills.physical;
+        if Self::has_any(
+            player,
+            &[
+                PlayerPositionType::DefenderCenter,
+                PlayerPositionType::DefenderCenterLeft,
+                PlayerPositionType::DefenderCenterRight,
+                PlayerPositionType::Striker,
+                PlayerPositionType::ForwardCenter,
+            ],
+        ) {
+            let aerial = (t.heading + p.jumping + p.strength) / 60.0;
+            aerial.clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    fn penalty_shootout(player: &Player) -> f32 {
+        let t = &player.skills.technical;
+        let m = &player.skills.mental;
+        let take = (t.penalty_taking + m.composure + t.technique) / 60.0;
+        take.clamp(0.0, 1.0)
+    }
+
+    fn youth_cameo(birth_date: NaiveDate, date: NaiveDate) -> f32 {
+        let age = DateUtils::age(birth_date, date);
+        if age <= 19 {
+            1.0
+        } else if age <= 22 {
+            0.6
+        } else {
+            0.0
+        }
+    }
+
+    fn injury_cover(player: &Player, scenario: BenchScenario) -> f32 {
+        let targets: &[PlayerPositionType] = match scenario {
+            BenchScenario::InjuryCoverDefence => &[
+                PlayerPositionType::DefenderCenter,
+                PlayerPositionType::DefenderCenterLeft,
+                PlayerPositionType::DefenderCenterRight,
+                PlayerPositionType::DefenderLeft,
+                PlayerPositionType::DefenderRight,
+                PlayerPositionType::WingbackLeft,
+                PlayerPositionType::WingbackRight,
+                PlayerPositionType::Sweeper,
+            ],
+            BenchScenario::InjuryCoverMidfield => &[
+                PlayerPositionType::DefensiveMidfielder,
+                PlayerPositionType::MidfielderCenter,
+                PlayerPositionType::MidfielderCenterLeft,
+                PlayerPositionType::MidfielderCenterRight,
+                PlayerPositionType::MidfielderLeft,
+                PlayerPositionType::MidfielderRight,
+                PlayerPositionType::AttackingMidfielderCenter,
+            ],
+            BenchScenario::InjuryCoverAttack => &[
+                PlayerPositionType::Striker,
+                PlayerPositionType::ForwardCenter,
+                PlayerPositionType::ForwardLeft,
+                PlayerPositionType::ForwardRight,
+                PlayerPositionType::AttackingMidfielderLeft,
+                PlayerPositionType::AttackingMidfielderRight,
+            ],
+            _ => return 0.0,
+        };
+        if Self::has_any(player, targets) {
+            1.0
+        } else {
+            0.0
         }
     }
 

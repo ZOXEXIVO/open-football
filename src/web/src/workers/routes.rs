@@ -1,15 +1,16 @@
 use crate::GameAppData;
+use crate::workers::{WorkersApi, WorkersPageTemplate};
 use axum::Router;
 use axum::routing::{get, post};
 
-pub fn routes() -> Router<GameAppData> {
-    Router::new()
-        .route("/{lang}/workers", get(super::workers_page_action))
-        .route("/api/workers/add", post(super::workers_add_action))
-        .route("/api/workers/remove", post(super::workers_remove_action))
-        .route("/api/workers/status", get(super::workers_status_action))
-}
+pub struct WorkersRoutes;
 
-pub fn workers_routes() -> Router<GameAppData> {
-    routes()
+impl WorkersRoutes {
+    pub fn routes() -> Router<GameAppData> {
+        Router::new()
+            .route("/{lang}/workers", get(WorkersPageTemplate::action))
+            .route("/api/workers/add", post(WorkersApi::add))
+            .route("/api/workers/remove", post(WorkersApi::remove))
+            .route("/api/workers/status", get(WorkersApi::status))
+    }
 }

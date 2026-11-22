@@ -110,7 +110,6 @@ impl SelectionScoringContext<'_> {
     }
 
     /// Select the best starting 11 for competitive matches.
-    #[expect(clippy::too_many_lines)]
     pub(crate) fn select_starting_eleven(
         &self,
         team_id: u32,
@@ -118,8 +117,38 @@ impl SelectionScoringContext<'_> {
     ) -> Vec<MatchPlayer> {
         let mut squad: Vec<MatchPlayer> = Vec::with_capacity(helpers::DEFAULT_SQUAD_SIZE);
         let mut used_ids: Vec<u32> = Vec::new();
-        let required = self.tactics.positions();
 
+        self.select_goalkeeper(team_id, available, &mut squad, &mut used_ids);
+        self.fill_outfield_slots(team_id, available, &mut squad, &mut used_ids);
+        self.fill_remaining_slots(team_id, available, &mut squad, &mut used_ids);
+        self.fill_last_resort(team_id, available, &mut squad, &mut used_ids);
+
+        if squad.len() < helpers::DEFAULT_SQUAD_SIZE {
+            debug!("Could only select {} of 11 starting players", squad.len());
+        }
+
+        // STEP 4.5: Cohesion local-swap pass. The DP scores each slot on its
+        // own merit and can't see that a marginally lower-rated candidate would
+        // knit the unit together better — so flip only genuinely close calls.
+        self.apply_cohesion_swaps(team_id, &mut squad, &mut used_ids, available);
+
+        // STEP 4.6: XI-level balance pass. The DP / cohesion passes optimise
+        // per-slot quality and unit chemistry; this pass evaluates the whole
+        // XI against the spec's balance bands (defensive security, ball
+        // progression, pressing, …) and applies same-group swaps when they
+        // improve the balance more than they cost in raw slot score.
+        self.apply_balance_swaps(team_id, &mut squad, &mut used_ids, available);
+
+        squad
+    }
+
+    fn select_goalkeeper(
+        &self,
+        team_id: u32,
+        available: &[&Player],
+        squad: &mut Vec<MatchPlayer>,
+        used_ids: &mut Vec<u32>,
+    ) {
         // STEP 1: Goalkeeper. Fallback order:
         //   0. Manager-pinned keeper. A force-selected, available keeper is a
         //      hard pin — the manager wants him between the sticks, so he takes
@@ -144,9 +173,9 @@ impl SelectionScoringContext<'_> {
         // 0%, and the league generated repeatable 10+ goal blowouts. This
         // order keeps a real keeper in goal whenever possible.
         let picked_gk = self
-            .pick_forced_goalkeeper(available, &used_ids)
-            .or_else(|| self.pick_best_goalkeeper(available, &used_ids, true))
-            .or_else(|| Self::pick_any_goalkeeper_fallback(available, &used_ids));
+            .pick_forced_goalkeeper(available, used_ids)
+            .or_else(|| self.pick_best_goalkeeper(available, used_ids, true))
+            .or_else(|| Self::pick_any_goalkeeper_fallback(available, used_ids));
         if let Some(gk) = picked_gk {
             squad.push(MatchPlayer::from_player(
                 team_id,
@@ -158,7 +187,7 @@ impl SelectionScoringContext<'_> {
             used_ids.push(gk.id);
         } else {
             debug!("No goalkeeper found at all — picking any player as GK");
-            if let Some(any) = SlotFit::pick_best_unused(available, &used_ids) {
+            if let Some(any) = SlotFit::pick_best_unused(available, used_ids) {
                 squad.push(MatchPlayer::from_player(
                     team_id,
                     any,
@@ -169,16 +198,26 @@ impl SelectionScoringContext<'_> {
                 used_ids.push(any.id);
             }
         }
+    }
 
+    fn fill_outfield_slots(
+        &self,
+        team_id: u32,
+        available: &[&Player],
+        squad: &mut Vec<MatchPlayer>,
+        used_ids: &mut Vec<u32>,
+    ) {
         // STEP 2: Fill outfield positions as one assignment problem. This avoids
         // burning a versatile player in an early slot when a specialist is needed
         // later in the shape.
-        let outfield_slots: Vec<PlayerPositionType> = required
+        let outfield_slots: Vec<PlayerPositionType> = self
+            .tactics
+            .positions()
             .iter()
             .copied()
             .filter(|p| *p != PlayerPositionType::Goalkeeper)
             .collect();
-        let assignments = self.assign_outfield_slots(available, &used_ids, &outfield_slots);
+        let assignments = self.assign_outfield_slots(available, used_ids, &outfield_slots);
 
         for (pos, player) in assignments {
             squad.push(MatchPlayer::from_player(
@@ -190,7 +229,15 @@ impl SelectionScoringContext<'_> {
             ));
             used_ids.push(player.id);
         }
+    }
 
+    fn fill_remaining_slots(
+        &self,
+        team_id: u32,
+        available: &[&Player],
+        squad: &mut Vec<MatchPlayer>,
+        used_ids: &mut Vec<u32>,
+    ) {
         // STEP 3: Fill remaining slots with best available
         while squad.len() < helpers::DEFAULT_SQUAD_SIZE {
             let best = available
@@ -229,7 +276,15 @@ impl SelectionScoringContext<'_> {
                 None => break,
             }
         }
+    }
 
+    fn fill_last_resort(
+        &self,
+        team_id: u32,
+        available: &[&Player],
+        squad: &mut Vec<MatchPlayer>,
+        used_ids: &mut Vec<u32>,
+    ) {
         // STEP 4: LAST RESORT — use ANY remaining player
         while squad.len() < helpers::DEFAULT_SQUAD_SIZE {
             let best = available
@@ -257,24 +312,6 @@ impl SelectionScoringContext<'_> {
                 None => break,
             }
         }
-
-        if squad.len() < helpers::DEFAULT_SQUAD_SIZE {
-            debug!("Could only select {} of 11 starting players", squad.len());
-        }
-
-        // STEP 4.5: Cohesion local-swap pass. The DP scores each slot on its
-        // own merit and can't see that a marginally lower-rated candidate would
-        // knit the unit together better — so flip only genuinely close calls.
-        self.apply_cohesion_swaps(team_id, &mut squad, &mut used_ids, available);
-
-        // STEP 4.6: XI-level balance pass. The DP / cohesion passes optimise
-        // per-slot quality and unit chemistry; this pass evaluates the whole
-        // XI against the spec's balance bands (defensive security, ball
-        // progression, pressing, …) and applies same-group swaps when they
-        // improve the balance more than they cost in raw slot score.
-        self.apply_balance_swaps(team_id, &mut squad, &mut used_ids, available);
-
-        squad
     }
 
     /// Post-assignment cohesion swap pass. The DP scores each slot
@@ -1112,112 +1149,146 @@ impl SelectionScoringContext<'_> {
         bonus
     }
 
-    #[expect(clippy::too_many_lines)]
     pub(crate) fn bench_role_fit(&self, player: &Player, role: BenchRole) -> f32 {
-        let has = |pos: PlayerPositionType| player.positions.has_position(pos);
-        let has_any = |targets: &[PlayerPositionType]| targets.iter().any(|&p| has(p));
-
         match role {
-            BenchRole::DefensiveCover => {
-                let center = has_any(&[
-                    PlayerPositionType::DefenderCenter,
-                    PlayerPositionType::DefenderCenterLeft,
-                    PlayerPositionType::DefenderCenterRight,
-                    PlayerPositionType::DefensiveMidfielder,
-                ]);
-                let wide = has_any(&[
-                    PlayerPositionType::DefenderLeft,
-                    PlayerPositionType::DefenderRight,
-                    PlayerPositionType::WingbackLeft,
-                    PlayerPositionType::WingbackRight,
-                ]);
-                if center && wide {
-                    1.0
-                } else if center || wide {
-                    0.75
-                } else {
-                    0.0
-                }
-            }
-            BenchRole::MidfieldControl => {
-                if has_any(&[
-                    PlayerPositionType::DefensiveMidfielder,
-                    PlayerPositionType::MidfielderCenter,
-                    PlayerPositionType::MidfielderCenterLeft,
-                    PlayerPositionType::MidfielderCenterRight,
-                ]) {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
-            BenchRole::Creator => {
-                let positional = has_any(&[
-                    PlayerPositionType::AttackingMidfielderCenter,
-                    PlayerPositionType::AttackingMidfielderLeft,
-                    PlayerPositionType::AttackingMidfielderRight,
-                    PlayerPositionType::MidfielderCenter,
-                ]);
-                let creative = (player.skills.mental.vision
-                    + player.skills.technical.passing
-                    + player.skills.technical.technique)
-                    / 60.0;
-                if positional {
-                    creative.max(0.45)
-                } else {
-                    creative * 0.5
-                }
-            }
-            BenchRole::WideOption => {
-                if has_any(&[
-                    PlayerPositionType::DefenderLeft,
-                    PlayerPositionType::DefenderRight,
-                    PlayerPositionType::WingbackLeft,
-                    PlayerPositionType::WingbackRight,
-                    PlayerPositionType::MidfielderLeft,
-                    PlayerPositionType::MidfielderRight,
-                    PlayerPositionType::AttackingMidfielderLeft,
-                    PlayerPositionType::AttackingMidfielderRight,
-                    PlayerPositionType::ForwardLeft,
-                    PlayerPositionType::ForwardRight,
-                ]) {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
-            BenchRole::Striker => {
-                if has_any(&[
-                    PlayerPositionType::Striker,
-                    PlayerPositionType::ForwardCenter,
-                    PlayerPositionType::ForwardLeft,
-                    PlayerPositionType::ForwardRight,
-                ]) {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
-            BenchRole::Utility => {
-                let covered = self
-                    .tactics
-                    .positions()
-                    .iter()
-                    .filter(|&&pos| {
-                        pos != PlayerPositionType::Goalkeeper && player.positions.get_level(pos) > 0
-                    })
-                    .count();
-                (covered as f32 / 3.0).clamp(0.0, 1.0)
-            }
-            BenchRole::Impact => {
-                let attacking = (player.skills.technical.dribbling
-                    + player.skills.technical.finishing
-                    + player.skills.mental.flair
-                    + player.skills.physical.pace)
-                    / 80.0;
-                attacking.clamp(0.0, 1.0)
-            }
+            BenchRole::DefensiveCover => Self::defensive_cover(player),
+            BenchRole::MidfieldControl => Self::midfield_control(player),
+            BenchRole::Creator => Self::creator(player),
+            BenchRole::WideOption => Self::wide_option(player),
+            BenchRole::Striker => Self::striker(player),
+            BenchRole::Utility => self.utility(player),
+            BenchRole::Impact => Self::impact(player),
         }
+    }
+
+    fn has_any(player: &Player, targets: &[PlayerPositionType]) -> bool {
+        targets
+            .iter()
+            .any(|&pos| player.positions.has_position(pos))
+    }
+
+    fn defensive_cover(player: &Player) -> f32 {
+        let center = Self::has_any(
+            player,
+            &[
+                PlayerPositionType::DefenderCenter,
+                PlayerPositionType::DefenderCenterLeft,
+                PlayerPositionType::DefenderCenterRight,
+                PlayerPositionType::DefensiveMidfielder,
+            ],
+        );
+        let wide = Self::has_any(
+            player,
+            &[
+                PlayerPositionType::DefenderLeft,
+                PlayerPositionType::DefenderRight,
+                PlayerPositionType::WingbackLeft,
+                PlayerPositionType::WingbackRight,
+            ],
+        );
+        if center && wide {
+            1.0
+        } else if center || wide {
+            0.75
+        } else {
+            0.0
+        }
+    }
+
+    fn midfield_control(player: &Player) -> f32 {
+        if Self::has_any(
+            player,
+            &[
+                PlayerPositionType::DefensiveMidfielder,
+                PlayerPositionType::MidfielderCenter,
+                PlayerPositionType::MidfielderCenterLeft,
+                PlayerPositionType::MidfielderCenterRight,
+            ],
+        ) {
+            1.0
+        } else {
+            0.0
+        }
+    }
+
+    fn creator(player: &Player) -> f32 {
+        let positional = Self::has_any(
+            player,
+            &[
+                PlayerPositionType::AttackingMidfielderCenter,
+                PlayerPositionType::AttackingMidfielderLeft,
+                PlayerPositionType::AttackingMidfielderRight,
+                PlayerPositionType::MidfielderCenter,
+            ],
+        );
+        let creative = (player.skills.mental.vision
+            + player.skills.technical.passing
+            + player.skills.technical.technique)
+            / 60.0;
+        if positional {
+            creative.max(0.45)
+        } else {
+            creative * 0.5
+        }
+    }
+
+    fn wide_option(player: &Player) -> f32 {
+        if Self::has_any(
+            player,
+            &[
+                PlayerPositionType::DefenderLeft,
+                PlayerPositionType::DefenderRight,
+                PlayerPositionType::WingbackLeft,
+                PlayerPositionType::WingbackRight,
+                PlayerPositionType::MidfielderLeft,
+                PlayerPositionType::MidfielderRight,
+                PlayerPositionType::AttackingMidfielderLeft,
+                PlayerPositionType::AttackingMidfielderRight,
+                PlayerPositionType::ForwardLeft,
+                PlayerPositionType::ForwardRight,
+            ],
+        ) {
+            1.0
+        } else {
+            0.0
+        }
+    }
+
+    fn striker(player: &Player) -> f32 {
+        if Self::has_any(
+            player,
+            &[
+                PlayerPositionType::Striker,
+                PlayerPositionType::ForwardCenter,
+                PlayerPositionType::ForwardLeft,
+                PlayerPositionType::ForwardRight,
+            ],
+        ) {
+            1.0
+        } else {
+            0.0
+        }
+    }
+
+    fn utility(&self, player: &Player) -> f32 {
+        let covered = self
+            .tactics
+            .positions()
+            .iter()
+            .filter(|&&pos| {
+                pos != PlayerPositionType::Goalkeeper && player.positions.get_level(pos) > 0
+            })
+            .count();
+        (covered as f32 / 3.0).clamp(0.0, 1.0)
+    }
+
+    fn impact(player: &Player) -> f32 {
+        let attacking = (player.skills.technical.dribbling
+            + player.skills.technical.finishing
+            + player.skills.mental.flair
+            + player.skills.physical.pace)
+            / 80.0;
+        attacking.clamp(0.0, 1.0)
     }
 
     /// Best manager-pinned goalkeeper, or `None` when no force-selected keeper

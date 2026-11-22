@@ -7,7 +7,7 @@
 //! to [`super::role`]; physical exertion / injury rolls live in
 //! [`super::match_exertion`].
 
-use super::scaling;
+use super::scaling::HappinessScaling;
 use super::types::{MatchOutcome, MatchParticipation};
 use crate::Person;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
@@ -763,12 +763,13 @@ impl Player {
         // needing minute-of-goal data. Cooldown 14d so a hot scoring run
         // still feels punctuated rather than fired every weekend.
         if had_contribution && o.team_won && o.goal_margin() == 1 {
-            let pressure_mul = scaling::pressure_amplifier(
+            let pressure_mul = HappinessScaling::pressure_amplifier(
                 self.attributes.important_matches,
                 self.attributes.pressure,
             );
             let scene_mul = if o.is_cup || o.is_derby { 1.25 } else { 1.0 };
-            let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
+            let rep_mul =
+                HappinessScaling::reputation_amplifier(self.player_attributes.current_reputation);
             let mag = cfg.catalog.decisive_goal * pressure_mul * scene_mul * rep_mul;
             self.happiness
                 .add_event_with_cooldown(HappinessEventType::DecisiveGoal, mag, 14);
@@ -789,7 +790,8 @@ impl Player {
             o.is_motm || o.effective_rating >= 8.0 || (o.team_won && had_contribution);
         if fan_praise_trigger {
             self.remember_match(EpisodeKind::FansAdoration, Self::crowd(o), o);
-            let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
+            let rep_mul =
+                HappinessScaling::reputation_amplifier(self.player_attributes.current_reputation);
             let scene_mul = if o.is_cup || o.is_derby { 1.2 } else { 1.0 };
             let mag = cfg.catalog.fan_praise * rep_mul * scene_mul;
             let event_ctx = MatchSupportContextBuilder::fan_praise(self, o, had_contribution, mag);
@@ -812,12 +814,13 @@ impl Player {
             || (o.team_lost && o.effective_rating < 6.2);
         if fan_criticism_trigger {
             self.remember_match(EpisodeKind::FansHostility, Self::crowd(o), o);
-            let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
-            let provoke_mul = scaling::criticism_amplifier(
+            let rep_mul =
+                HappinessScaling::reputation_amplifier(self.player_attributes.current_reputation);
+            let provoke_mul = HappinessScaling::criticism_amplifier(
                 self.attributes.controversy,
                 self.attributes.temperament,
             );
-            let prof_dampen = scaling::criticism_dampener(self.attributes.professionalism);
+            let prof_dampen = HappinessScaling::criticism_dampener(self.attributes.professionalism);
             let mag = cfg.catalog.fan_criticism * rep_mul * provoke_mul * prof_dampen;
             let mfctx = MediaFanEventContext::new(
                 MediaFanEventKind::AwayFansHostile,
@@ -853,7 +856,8 @@ impl Player {
             || exceptional_gk_shutout;
         if media_praise_trigger {
             self.remember_match(EpisodeKind::MediaPraise, ActorRef::NONE, o);
-            let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
+            let rep_mul =
+                HappinessScaling::reputation_amplifier(self.player_attributes.current_reputation);
             let mag = cfg.catalog.media_praise * rep_mul;
             let mfctx = MediaFanEventContext::new(
                 MediaFanEventKind::MediaNarrativeChanged,
@@ -988,8 +992,9 @@ impl Player {
                 && o.effective_rating < 6.8
             {
                 let cfg = HappinessConfig::default();
-                let prof_dampen = scaling::criticism_dampener(self.attributes.professionalism);
-                let amb_amp = scaling::ambition_amplifier(self.attributes.ambition);
+                let prof_dampen =
+                    HappinessScaling::criticism_dampener(self.attributes.professionalism);
+                let amb_amp = HappinessScaling::ambition_amplifier(self.attributes.ambition);
                 let mag = cfg.catalog.scoring_drought_concern * prof_dampen * amb_amp;
                 self.happiness.add_event_with_cooldown(
                     HappinessEventType::ScoringDroughtConcern,
@@ -1073,7 +1078,8 @@ impl Player {
     fn record_hat_tricks(&mut self, o: &MatchOutcome<'_>) {
         let cfg = HappinessConfig::default();
         let scene_mul = if o.is_cup || o.is_derby { 1.35 } else { 1.0 };
-        let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
+        let rep_mul =
+            HappinessScaling::reputation_amplifier(self.player_attributes.current_reputation);
 
         if o.stats.goals >= 3 {
             let mag = cfg.catalog.hat_trick * scene_mul * rep_mul;
@@ -1093,7 +1099,8 @@ impl Player {
     /// performances or a red-card disgrace in a marquee fixture.
     fn record_fans_chant_and_media_pressure(&mut self, o: &MatchOutcome<'_>) {
         let cfg = HappinessConfig::default();
-        let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
+        let rep_mul =
+            HappinessScaling::reputation_amplifier(self.player_attributes.current_reputation);
         let scene_mul = if o.is_cup || o.is_derby { 1.35 } else { 1.0 };
 
         let derby_hero_now = o.is_derby
@@ -1130,11 +1137,11 @@ impl Player {
             && self.happiness.recent_low_rating_mask.count_ones() >= 2;
 
         if high_profile && (two_of_five || poor_marquee) {
-            let provoke_mul = scaling::criticism_amplifier(
+            let provoke_mul = HappinessScaling::criticism_amplifier(
                 self.attributes.controversy,
                 self.attributes.temperament,
             );
-            let prof_dampen = scaling::criticism_dampener(self.attributes.professionalism);
+            let prof_dampen = HappinessScaling::criticism_dampener(self.attributes.professionalism);
             let mag = cfg.catalog.media_pressure_mounting * provoke_mul * prof_dampen;
             self.happiness.add_event_with_cooldown(
                 HappinessEventType::MediaPressureMounting,
@@ -1158,8 +1165,8 @@ impl Player {
             return;
         }
         let cfg = HappinessConfig::default();
-        let mag =
-            cfg.catalog.leadership_emergence * scaling::loyalty_amplifier(self.attributes.loyalty);
+        let mag = cfg.catalog.leadership_emergence
+            * HappinessScaling::loyalty_amplifier(self.attributes.loyalty);
         self.happiness
             .add_event_with_cooldown(HappinessEventType::LeadershipEmergence, mag, 120);
     }

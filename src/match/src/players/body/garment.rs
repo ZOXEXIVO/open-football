@@ -7,28 +7,34 @@
 use super::*;
 use std::collections::HashMap;
 
-pub(super) fn shoulder(side: f32) -> Mat4 {
-    Mat4::from_rotation_translation(
-        Quat::from_rotation_z(side * 0.75),
-        Vec3::new(side * Physique::SHOULDER_SPREAD, Physique::SHOULDER, 0.0),
-    )
+pub(super) struct Garment;
+
+impl Garment {
+    pub(super) fn shoulder(side: f32) -> Mat4 {
+        Mat4::from_rotation_translation(
+            Quat::from_rotation_z(side * 0.75),
+            Vec3::new(side * Physique::SHOULDER_SPREAD, Physique::SHOULDER, 0.0),
+        )
+    }
+
+    pub(super) fn binds() -> Vec<Mat4> {
+        vec![
+            Mat4::IDENTITY,
+            Self::shoulder(-1.0).inverse(),
+            Self::shoulder(1.0).inverse(),
+        ]
+    }
+
+    pub(super) fn shorts_binds() -> Vec<Mat4> {
+        vec![
+            Mat4::IDENTITY,
+            Mat4::from_translation(Vec3::X * Physique::HIP_SPREAD),
+            Mat4::from_translation(Vec3::NEG_X * Physique::HIP_SPREAD),
+        ]
+    }
 }
 
-pub(super) fn binds() -> Vec<Mat4> {
-    vec![
-        Mat4::IDENTITY,
-        shoulder(-1.0).inverse(),
-        shoulder(1.0).inverse(),
-    ]
-}
-
-pub(super) fn shorts_binds() -> Vec<Mat4> {
-    vec![
-        Mat4::IDENTITY,
-        Mat4::from_translation(Vec3::X * Physique::HIP_SPREAD),
-        Mat4::from_translation(Vec3::NEG_X * Physique::HIP_SPREAD),
-    ]
-}
+type Surface = (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<u32>);
 
 /// The same ownership field is used for surface construction and deformation.
 struct Pattern {
@@ -73,7 +79,7 @@ impl Pattern {
         Self {
             trunk: BodyParts::shirt(grain),
             sleeve: Sculptor::curved(grain, &sleeve),
-            arm: shoulder(1.0).inverse(),
+            arm: Garment::shoulder(1.0).inverse(),
             shorts: false,
         }
     }
@@ -171,345 +177,361 @@ impl Pattern {
     }
 }
 
-pub(super) fn shirt(grain: Grain, keeper: bool) -> Mesh {
-    // Tests build the same pattern many times; production makes each once.
-    #[cfg(test)]
-    {
-        use std::sync::OnceLock;
-        static MESHES: [OnceLock<Mesh>; 6] = [const { OnceLock::new() }; 6];
-        let index = grain.rank() * 2 + usize::from(keeper);
-        MESHES[index].get_or_init(|| cut(grain, keeper)).clone()
-    }
-    #[cfg(not(test))]
-    cut(grain, keeper)
-}
-
-fn cut(grain: Grain, keeper: bool) -> Mesh {
-    let pattern = Pattern::new(grain, keeper);
-    let origin = Vec3::new(-0.39, -0.035, -0.155);
-    let size = Vec3::new(0.78, 0.65, 0.31);
-    surface(grain, &pattern, origin, size, !keeper)
-}
-
-pub(super) fn shorts(grain: Grain) -> Mesh {
-    let make = || {
-        surface(
-            grain,
-            &Pattern::shorts(grain),
-            Vec3::new(-0.24, -0.35, -0.14),
-            Vec3::new(0.48, 0.40, 0.28),
-            false,
-        )
-    };
-    #[cfg(test)]
-    {
-        use std::sync::OnceLock;
-        static MESHES: [OnceLock<Mesh>; 3] = [const { OnceLock::new() }; 3];
-        MESHES[grain.rank()].get_or_init(make).clone()
-    }
-    #[cfg(not(test))]
-    make()
-}
-
-#[expect(clippy::too_many_lines)]
-fn surface(grain: Grain, pattern: &Pattern, origin: Vec3, size: Vec3, cuff: bool) -> Mesh {
-    let spacing = grain.cloth as f32 / 1000.0;
-    let counts = (size / spacing).ceil().as_uvec3() + UVec3::ONE;
-    let at = |x: u32, y: u32, z: u32| (x + counts.x * (y + counts.y * z)) as usize;
-    let mut points = Vec::new();
-    let mut values = Vec::new();
-    for z in 0..counts.z {
-        for y in 0..counts.y {
-            for x in 0..counts.x {
-                let p = origin + Vec3::new(x as f32, y as f32, z as f32) * spacing;
-                points.push(p);
-                values.push(pattern.field(p));
-            }
+impl Garment {
+    pub(super) fn shirt(grain: Grain, keeper: bool) -> Mesh {
+        // Tests build the same pattern many times; production makes each once.
+        #[cfg(test)]
+        {
+            use std::sync::OnceLock;
+            static MESHES: [OnceLock<Mesh>; 6] = [const { OnceLock::new() }; 6];
+            let index = grain.rank() * 2 + usize::from(keeper);
+            MESHES[index]
+                .get_or_init(|| Self::cut(grain, keeper))
+                .clone()
         }
+        #[cfg(not(test))]
+        Self::cut(grain, keeper)
     }
-    let mut positions = Vec::<[f32; 3]>::new();
-    let mut normals = Vec::<[f32; 3]>::new();
-    let mut indices = Vec::new();
-    let mut edges = HashMap::<(usize, usize), u32>::new();
-    // The shared cube diagonal keeps adjacent tetrahedra conforming.
-    const TETRA: [[usize; 4]; 6] = [
-        [0, 1, 3, 7],
-        [0, 3, 2, 7],
-        [0, 2, 6, 7],
-        [0, 6, 4, 7],
-        [0, 4, 5, 7],
-        [0, 5, 1, 7],
-    ];
-    for z in 0..counts.z - 1 {
-        for y in 0..counts.y - 1 {
-            for x in 0..counts.x - 1 {
-                let cube = [
-                    at(x, y, z),
-                    at(x + 1, y, z),
-                    at(x, y + 1, z),
-                    at(x + 1, y + 1, z),
-                    at(x, y, z + 1),
-                    at(x + 1, y, z + 1),
-                    at(x, y + 1, z + 1),
-                    at(x + 1, y + 1, z + 1),
-                ];
-                if cube.iter().all(|&i| values[i] >= 0.0) || cube.iter().all(|&i| values[i] < 0.0) {
-                    continue;
-                }
-                for tet in TETRA {
-                    let mut face = Vec::with_capacity(4);
-                    for [a, b] in [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]] {
-                        let (a, b) = (cube[tet[a]], cube[tet[b]]);
-                        if (values[a] < 0.0) == (values[b] < 0.0) {
-                            continue;
-                        }
-                        let key = (a.min(b), a.max(b));
-                        let index = *edges.entry(key).or_insert_with(|| {
-                            let p = points[a].lerp(points[b], values[a] / (values[a] - values[b]));
-                            let index = positions.len() as u32;
-                            positions.push(p.to_array());
-                            normals.push(pattern.normal(p).to_array());
-                            index
-                        });
-                        face.push(index);
-                    }
-                    if face.len() < 3 {
+
+    fn cut(grain: Grain, keeper: bool) -> Mesh {
+        let pattern = Pattern::new(grain, keeper);
+        let origin = Vec3::new(-0.39, -0.035, -0.155);
+        let size = Vec3::new(0.78, 0.65, 0.31);
+        Self::surface(grain, &pattern, origin, size, !keeper)
+    }
+
+    pub(super) fn shorts(grain: Grain) -> Mesh {
+        let make = || {
+            Self::surface(
+                grain,
+                &Pattern::shorts(grain),
+                Vec3::new(-0.24, -0.35, -0.14),
+                Vec3::new(0.48, 0.40, 0.28),
+                false,
+            )
+        };
+        #[cfg(test)]
+        {
+            use std::sync::OnceLock;
+            static MESHES: [OnceLock<Mesh>; 3] = [const { OnceLock::new() }; 3];
+            MESHES[grain.rank()].get_or_init(make).clone()
+        }
+        #[cfg(not(test))]
+        make()
+    }
+
+    fn march(
+        pattern: &Pattern,
+        points: &[Vec3],
+        values: &[f32],
+        counts: UVec3,
+    ) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<u32>) {
+        let at = |x: u32, y: u32, z: u32| (x + counts.x * (y + counts.y * z)) as usize;
+        let mut positions = Vec::<[f32; 3]>::new();
+        let mut normals = Vec::<[f32; 3]>::new();
+        let mut indices = Vec::new();
+        let mut edges = HashMap::<(usize, usize), u32>::new();
+        // The shared cube diagonal keeps adjacent tetrahedra conforming.
+        const TETRA: [[usize; 4]; 6] = [
+            [0, 1, 3, 7],
+            [0, 3, 2, 7],
+            [0, 2, 6, 7],
+            [0, 6, 4, 7],
+            [0, 4, 5, 7],
+            [0, 5, 1, 7],
+        ];
+        for z in 0..counts.z - 1 {
+            for y in 0..counts.y - 1 {
+                for x in 0..counts.x - 1 {
+                    let cube = [
+                        at(x, y, z),
+                        at(x + 1, y, z),
+                        at(x, y + 1, z),
+                        at(x + 1, y + 1, z),
+                        at(x, y, z + 1),
+                        at(x + 1, y, z + 1),
+                        at(x, y + 1, z + 1),
+                        at(x + 1, y + 1, z + 1),
+                    ];
+                    if cube.iter().all(|&i| values[i] >= 0.0)
+                        || cube.iter().all(|&i| values[i] < 0.0)
+                    {
                         continue;
                     }
-                    let center = face
-                        .iter()
-                        .map(|&i| Vec3::from(positions[i as usize]))
-                        .sum::<Vec3>()
-                        / face.len() as f32;
-                    let normal = pattern.normal(center);
-                    let axis =
-                        (Vec3::from(positions[face[0] as usize]) - center).normalize_or_zero();
-                    let cross = normal.cross(axis);
-                    face.sort_by(|&a, &b| {
-                        let a = Vec3::from(positions[a as usize]) - center;
-                        let b = Vec3::from(positions[b as usize]) - center;
-                        a.dot(cross)
-                            .atan2(a.dot(axis))
-                            .total_cmp(&b.dot(cross).atan2(b.dot(axis)))
-                    });
-                    for n in 1..face.len() - 1 {
-                        indices.extend([face[0], face[n], face[n + 1]]);
+                    for tet in TETRA {
+                        let mut face = Vec::with_capacity(4);
+                        for [a, b] in [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]] {
+                            let (a, b) = (cube[tet[a]], cube[tet[b]]);
+                            if (values[a] < 0.0) == (values[b] < 0.0) {
+                                continue;
+                            }
+                            let key = (a.min(b), a.max(b));
+                            let index = *edges.entry(key).or_insert_with(|| {
+                                let p =
+                                    points[a].lerp(points[b], values[a] / (values[a] - values[b]));
+                                let index = positions.len() as u32;
+                                positions.push(p.to_array());
+                                normals.push(pattern.normal(p).to_array());
+                                index
+                            });
+                            face.push(index);
+                        }
+                        if face.len() < 3 {
+                            continue;
+                        }
+                        let center = face
+                            .iter()
+                            .map(|&i| Vec3::from(positions[i as usize]))
+                            .sum::<Vec3>()
+                            / face.len() as f32;
+                        let normal = pattern.normal(center);
+                        let axis =
+                            (Vec3::from(positions[face[0] as usize]) - center).normalize_or_zero();
+                        let cross = normal.cross(axis);
+                        face.sort_by(|&a, &b| {
+                            let a = Vec3::from(positions[a as usize]) - center;
+                            let b = Vec3::from(positions[b as usize]) - center;
+                            a.dot(cross)
+                                .atan2(a.dot(axis))
+                                .total_cmp(&b.dot(cross).atan2(b.dot(axis)))
+                        });
+                        for n in 1..face.len() - 1 {
+                            indices.extend([face[0], face[n], face[n + 1]]);
+                        }
                     }
                 }
             }
         }
+        (positions, normals, indices)
     }
-    let (positions, normals, uvs, indices) = if !cuff {
-        let count = positions.len();
-        let swatch = if pattern.shorts {
-            Swatch::Shorts
+
+    fn surface(grain: Grain, pattern: &Pattern, origin: Vec3, size: Vec3, cuff: bool) -> Mesh {
+        let spacing = grain.cloth as f32 / 1000.0;
+        let counts = (size / spacing).ceil().as_uvec3() + UVec3::ONE;
+        let mut points = Vec::new();
+        let mut values = Vec::new();
+        for z in 0..counts.z {
+            for y in 0..counts.y {
+                for x in 0..counts.x {
+                    let p = origin + Vec3::new(x as f32, y as f32, z as f32) * spacing;
+                    points.push(p);
+                    values.push(pattern.field(p));
+                }
+            }
+        }
+        let (positions, normals, indices) = Self::march(pattern, &points, &values, counts);
+        let (positions, normals, uvs, indices) = if !cuff {
+            let count = positions.len();
+            let swatch = if pattern.shorts {
+                Swatch::Shorts
+            } else {
+                Swatch::Shirt
+            };
+            (positions, normals, vec![swatch.uv(); count], indices)
         } else {
-            Swatch::Shirt
+            Self::trim(pattern, positions, normals, indices)
         };
-        (positions, normals, vec![swatch.uv(); count], indices)
-    } else {
-        trim(pattern, positions, normals, indices)
-    };
-    Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::RENDER_WORLD,
-    )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
-    .with_inserted_indices(Indices::U32(indices))
-}
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::RENDER_WORLD,
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(Indices::U32(indices))
+    }
 
-type Surface = (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<u32>);
-
-/// Split triangles at the cuff boundary. Each face samples one swatch, while
-/// the two colours share exactly the same surface and deformation weights.
-fn trim(
-    pattern: &Pattern,
-    positions: Vec<[f32; 3]>,
-    normals: Vec<[f32; 3]>,
-    indices: Vec<u32>,
-) -> Surface {
-    let distances: Vec<f32> = positions
-        .iter()
-        .map(|&p| {
-            let p = Vec3::from(p);
-            let local = pattern.arm.transform_point3(Vec3::new(p.x.abs(), p.y, p.z));
-            let (chest, arm, _) = pattern.distances(p);
-            (local.y + 0.116).max(arm - chest)
-        })
-        .collect();
-    let mut out = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    let mut vertices = HashMap::new();
-    for tri in indices.as_chunks::<3>().0 {
-        for cuff in [false, true] {
-            let mut polygon = Vec::with_capacity(4);
-            for edge in 0..3 {
-                let a = tri[edge] as usize;
-                let b = tri[(edge + 1) % 3] as usize;
-                let inside_a = (distances[a] < 0.0) == cuff;
-                let inside_b = (distances[b] < 0.0) == cuff;
-                if inside_a {
-                    polygon.push((a, a));
+    /// Split triangles at the cuff boundary. Each face samples one swatch, while
+    /// the two colours share exactly the same surface and deformation weights.
+    fn trim(
+        pattern: &Pattern,
+        positions: Vec<[f32; 3]>,
+        normals: Vec<[f32; 3]>,
+        indices: Vec<u32>,
+    ) -> Surface {
+        let distances: Vec<f32> = positions
+            .iter()
+            .map(|&p| {
+                let p = Vec3::from(p);
+                let local = pattern.arm.transform_point3(Vec3::new(p.x.abs(), p.y, p.z));
+                let (chest, arm, _) = pattern.distances(p);
+                (local.y + 0.116).max(arm - chest)
+            })
+            .collect();
+        let mut out = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut vertices = HashMap::new();
+        for tri in indices.as_chunks::<3>().0 {
+            for cuff in [false, true] {
+                let mut polygon = Vec::with_capacity(4);
+                for edge in 0..3 {
+                    let a = tri[edge] as usize;
+                    let b = tri[(edge + 1) % 3] as usize;
+                    let inside_a = (distances[a] < 0.0) == cuff;
+                    let inside_b = (distances[b] < 0.0) == cuff;
+                    if inside_a {
+                        polygon.push((a, a));
+                    }
+                    if inside_a != inside_b {
+                        polygon.push((a.min(b), a.max(b)));
+                    }
                 }
-                if inside_a != inside_b {
-                    polygon.push((a.min(b), a.max(b)));
-                }
-            }
-            let polygon: Vec<u32> = polygon
-                .into_iter()
-                .map(|(a, b)| {
-                    *vertices.entry((a, b, cuff)).or_insert_with(|| {
-                        let t = if a == b {
-                            0.0
-                        } else {
-                            distances[a] / (distances[a] - distances[b])
-                        };
-                        let p = Vec3::from(positions[a]).lerp(Vec3::from(positions[b]), t);
-                        let n = Vec3::from(normals[a])
-                            .lerp(Vec3::from(normals[b]), t)
-                            .normalize_or_zero();
-                        let index = out.0.len() as u32;
-                        out.0.push(p.to_array());
-                        out.1.push(n.to_array());
-                        out.2
-                            .push(if cuff { Swatch::Trim } else { Swatch::Shirt }.uv());
-                        index
+                let polygon: Vec<u32> = polygon
+                    .into_iter()
+                    .map(|(a, b)| {
+                        *vertices.entry((a, b, cuff)).or_insert_with(|| {
+                            let t = if a == b {
+                                0.0
+                            } else {
+                                distances[a] / (distances[a] - distances[b])
+                            };
+                            let p = Vec3::from(positions[a]).lerp(Vec3::from(positions[b]), t);
+                            let n = Vec3::from(normals[a])
+                                .lerp(Vec3::from(normals[b]), t)
+                                .normalize_or_zero();
+                            let index = out.0.len() as u32;
+                            out.0.push(p.to_array());
+                            out.1.push(n.to_array());
+                            out.2
+                                .push(if cuff { Swatch::Trim } else { Swatch::Shirt }.uv());
+                            index
+                        })
                     })
-                })
-                .collect();
-            for n in 1..polygon.len().saturating_sub(1) {
-                out.3.extend([polygon[0], polygon[n], polygon[n + 1]]);
+                    .collect();
+                for n in 1..polygon.len().saturating_sub(1) {
+                    out.3.extend([polygon[0], polygon[n], polygon[n + 1]]);
+                }
             }
         }
+        out
     }
-    out
-}
 
-/// Added after merging the collar, so every attribute has the same length.
-pub(super) fn skin(mesh: &mut Mesh, grain: Grain, keeper: bool) {
-    let pattern = Pattern::new(grain, keeper);
-    let positions = mesh
-        .attribute(Mesh::ATTRIBUTE_POSITION)
-        .unwrap()
-        .as_float3()
-        .unwrap();
-    let mut joints = Vec::with_capacity(positions.len());
-    let mut weights = Vec::with_capacity(positions.len());
-    for &p in positions {
-        let p = Vec3::from(p);
-        let arm = pattern.weight(p);
-        joints.push([0, if p.x < 0.0 { 1 } else { 2 }, 0, 0]);
-        weights.push([1.0 - arm, arm, 0.0, 0.0]);
-    }
-    mesh.insert_attribute(
-        Mesh::ATTRIBUTE_JOINT_INDEX,
-        VertexAttributeValues::Uint16x4(joints),
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, weights);
-    mesh.generate_skinned_mesh_bounds()
-        .expect("shirt weights match its vertices");
-}
-
-pub(super) fn skin_shorts(mesh: &mut Mesh) {
-    let positions = mesh
-        .attribute(Mesh::ATTRIBUTE_POSITION)
-        .unwrap()
-        .as_float3()
-        .unwrap();
-    let mut weights = Vec::with_capacity(positions.len());
-    for &p in positions {
-        let leg = Relief::fade((-p[1] - 0.025) / 0.17);
-        // Share the crotch between both hips. Below it, each opening follows
-        // its own thigh so striding cannot pull the opposite hem across it.
-        let width = 0.06 * (1.0 - Relief::fade((-p[1] - 0.14) / 0.07)) + 0.001;
-        let right = Relief::fade(0.5 + p[0] / width);
-        weights.push([1.0 - leg, leg * (1.0 - right), leg * right, 0.0]);
-    }
-    let count = weights.len();
-    mesh.insert_attribute(
-        Mesh::ATTRIBUTE_JOINT_INDEX,
-        VertexAttributeValues::Uint16x4(vec![[0, 1, 2, 0]; count]),
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, weights);
-    mesh.generate_skinned_mesh_bounds()
-        .expect("shorts weights match their vertices");
-}
-
-#[cfg(test)]
-pub(super) fn posed(mesh: &Mesh, grain: Grain, gait: Gait, keeper: bool) -> Mesh {
-    let mut mesh = mesh.clone();
-    skin(&mut mesh, grain, keeper);
-    let mut transforms = vec![Mat4::IDENTITY];
-    for side in [-1.0, 1.0] {
-        let origin = Vec3::new(side * Physique::SHOULDER_SPREAD, Physique::SHOULDER, 0.0);
-        transforms.push(
-            skeleton::step(Limb::Shoulder, side, origin, gait).to_matrix()
-                * shoulder(side).inverse(),
-        );
-    }
-    deform(mesh, &transforms)
-}
-
-#[cfg(test)]
-pub(super) fn posed_shorts(mesh: &Mesh, gait: Gait) -> Mesh {
-    let mut mesh = mesh.clone();
-    skin_shorts(&mut mesh);
-    let hips = Vec3::Y * Physique::HIP;
-    let bind = shorts_binds();
-    let transforms = [
-        skeleton::step(Limb::Pelvis, 0.0, hips, gait).to_matrix(),
-        skeleton::step(Limb::Hip, -1.0, hips - Vec3::X * Physique::HIP_SPREAD, gait).to_matrix()
-            * bind[1],
-        skeleton::step(Limb::Hip, 1.0, hips + Vec3::X * Physique::HIP_SPREAD, gait).to_matrix()
-            * bind[2],
-    ];
-    deform(mesh, &transforms)
-}
-
-#[cfg(test)]
-fn deform(mut mesh: Mesh, transforms: &[Mat4]) -> Mesh {
-    let Some(VertexAttributeValues::Uint16x4(joints)) = mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX)
-    else {
-        unreachable!()
-    };
-    let Some(VertexAttributeValues::Float32x4(weights)) =
-        mesh.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT)
-    else {
-        unreachable!()
-    };
-    let positions = mesh
-        .attribute(Mesh::ATTRIBUTE_POSITION)
-        .unwrap()
-        .as_float3()
-        .unwrap();
-    let normals = mesh
-        .attribute(Mesh::ATTRIBUTE_NORMAL)
-        .unwrap()
-        .as_float3()
-        .unwrap();
-    let mut moved = Vec::new();
-    let mut turned = Vec::new();
-    for index in 0..positions.len() {
-        let mut matrix = Mat4::ZERO;
-        for slot in 0..4 {
-            matrix += transforms[joints[index][slot] as usize] * weights[index][slot];
+    /// Added after merging the collar, so every attribute has the same length.
+    pub(super) fn skin(mesh: &mut Mesh, grain: Grain, keeper: bool) {
+        let pattern = Pattern::new(grain, keeper);
+        let positions = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap()
+            .as_float3()
+            .unwrap();
+        let mut joints = Vec::with_capacity(positions.len());
+        let mut weights = Vec::with_capacity(positions.len());
+        for &p in positions {
+            let p = Vec3::from(p);
+            let arm = pattern.weight(p);
+            joints.push([0, if p.x < 0.0 { 1 } else { 2 }, 0, 0]);
+            weights.push([1.0 - arm, arm, 0.0, 0.0]);
         }
-        moved.push(
-            matrix
-                .transform_point3(Vec3::from(positions[index]))
-                .to_array(),
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_JOINT_INDEX,
+            VertexAttributeValues::Uint16x4(joints),
         );
-        turned.push(
-            matrix
-                .transform_vector3(Vec3::from(normals[index]))
-                .normalize_or_zero()
-                .to_array(),
-        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, weights);
+        mesh.generate_skinned_mesh_bounds()
+            .expect("shirt weights match its vertices");
     }
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, moved);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, turned);
-    mesh
+
+    pub(super) fn skin_shorts(mesh: &mut Mesh) {
+        let positions = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap()
+            .as_float3()
+            .unwrap();
+        let mut weights = Vec::with_capacity(positions.len());
+        for &p in positions {
+            let leg = Relief::fade((-p[1] - 0.025) / 0.17);
+            // Share the crotch between both hips. Below it, each opening follows
+            // its own thigh so striding cannot pull the opposite hem across it.
+            let width = 0.06 * (1.0 - Relief::fade((-p[1] - 0.14) / 0.07)) + 0.001;
+            let right = Relief::fade(0.5 + p[0] / width);
+            weights.push([1.0 - leg, leg * (1.0 - right), leg * right, 0.0]);
+        }
+        let count = weights.len();
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_JOINT_INDEX,
+            VertexAttributeValues::Uint16x4(vec![[0, 1, 2, 0]; count]),
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, weights);
+        mesh.generate_skinned_mesh_bounds()
+            .expect("shorts weights match their vertices");
+    }
+
+    #[cfg(test)]
+    pub(super) fn posed(mesh: &Mesh, grain: Grain, gait: Gait, keeper: bool) -> Mesh {
+        let mut mesh = mesh.clone();
+        Self::skin(&mut mesh, grain, keeper);
+        let mut transforms = vec![Mat4::IDENTITY];
+        for side in [-1.0, 1.0] {
+            let origin = Vec3::new(side * Physique::SHOULDER_SPREAD, Physique::SHOULDER, 0.0);
+            transforms.push(
+                skeleton::step(Limb::Shoulder, side, origin, gait).to_matrix()
+                    * Self::shoulder(side).inverse(),
+            );
+        }
+        Self::deform(mesh, &transforms)
+    }
+
+    #[cfg(test)]
+    pub(super) fn posed_shorts(mesh: &Mesh, gait: Gait) -> Mesh {
+        let mut mesh = mesh.clone();
+        Self::skin_shorts(&mut mesh);
+        let hips = Vec3::Y * Physique::HIP;
+        let bind = Self::shorts_binds();
+        let transforms = [
+            skeleton::step(Limb::Pelvis, 0.0, hips, gait).to_matrix(),
+            skeleton::step(Limb::Hip, -1.0, hips - Vec3::X * Physique::HIP_SPREAD, gait)
+                .to_matrix()
+                * bind[1],
+            skeleton::step(Limb::Hip, 1.0, hips + Vec3::X * Physique::HIP_SPREAD, gait).to_matrix()
+                * bind[2],
+        ];
+        Self::deform(mesh, &transforms)
+    }
+
+    #[cfg(test)]
+    fn deform(mut mesh: Mesh, transforms: &[Mat4]) -> Mesh {
+        let Some(VertexAttributeValues::Uint16x4(joints)) =
+            mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX)
+        else {
+            unreachable!()
+        };
+        let Some(VertexAttributeValues::Float32x4(weights)) =
+            mesh.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT)
+        else {
+            unreachable!()
+        };
+        let positions = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap()
+            .as_float3()
+            .unwrap();
+        let normals = mesh
+            .attribute(Mesh::ATTRIBUTE_NORMAL)
+            .unwrap()
+            .as_float3()
+            .unwrap();
+        let mut moved = Vec::new();
+        let mut turned = Vec::new();
+        for index in 0..positions.len() {
+            let mut matrix = Mat4::ZERO;
+            for slot in 0..4 {
+                matrix += transforms[joints[index][slot] as usize] * weights[index][slot];
+            }
+            moved.push(
+                matrix
+                    .transform_point3(Vec3::from(positions[index]))
+                    .to_array(),
+            );
+            turned.push(
+                matrix
+                    .transform_vector3(Vec3::from(normals[index]))
+                    .normalize_or_zero()
+                    .to_array(),
+            );
+        }
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, moved);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, turned);
+        mesh
+    }
 }
 
 #[cfg(test)]
@@ -595,7 +617,11 @@ mod tests {
     #[test]
     fn each_garment_is_one_connected_surface() {
         for grain in Grain::ALL {
-            for mesh in [shirt(grain, false), shirt(grain, true), shorts(grain)] {
+            for mesh in [
+                Garment::shirt(grain, false),
+                Garment::shirt(grain, true),
+                Garment::shorts(grain),
+            ] {
                 let positions = mesh
                     .attribute(Mesh::ATTRIBUTE_POSITION)
                     .unwrap()
@@ -655,8 +681,8 @@ mod tests {
     fn skin_weights_anchor_chest_and_cuffs_to_the_existing_rig() {
         for grain in Grain::ALL {
             for keeper in [false, true] {
-                let mut mesh = shirt(grain, keeper);
-                skin(&mut mesh, grain, keeper);
+                let mut mesh = Garment::shirt(grain, keeper);
+                Garment::skin(&mut mesh, grain, keeper);
                 let positions = mesh
                     .attribute(Mesh::ATTRIBUTE_POSITION)
                     .unwrap()
@@ -672,8 +698,12 @@ mod tests {
                 else {
                     panic!("shirt weights")
                 };
-                let rest = [Mat4::IDENTITY, shoulder(-1.0), shoulder(1.0)];
-                let binds = binds();
+                let rest = [
+                    Mat4::IDENTITY,
+                    Garment::shoulder(-1.0),
+                    Garment::shoulder(1.0),
+                ];
+                let binds = Garment::binds();
                 let mut cuffs = 0;
                 for (index, &p) in positions.iter().enumerate() {
                     let p = Vec3::from(p);
@@ -692,7 +722,9 @@ mod tests {
                     if p.x.abs() < 0.10 {
                         assert!(w[1] < 1e-6, "the arm moves the chest print");
                     }
-                    let local = shoulder(p.x.signum()).inverse().transform_point3(p);
+                    let local = Garment::shoulder(p.x.signum())
+                        .inverse()
+                        .transform_point3(p);
                     if local.y < -0.120 && local.x.abs() < 0.055 && local.z.abs() < 0.06 {
                         assert!(w[1] > 0.999, "the cuff slips against its arm");
                         cuffs += 1;

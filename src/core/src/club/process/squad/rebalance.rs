@@ -14,7 +14,9 @@ use log::debug;
 
 use crate::club::staff::perception::{AbilityEstimator, CoachProfile};
 use crate::transfers::pipeline::{LoanOutReason, TransferTrace};
-use crate::{Club, Person, PlayerFieldPositionGroup, PlayerPlan, PlayerStatusType, Team, TeamType};
+use crate::{
+    Club, Person, Player, PlayerFieldPositionGroup, PlayerPlan, PlayerStatusType, Team, TeamType,
+};
 
 use super::depth::{PromotionBar, SquadSize, YouthSquadDepth};
 use super::promotion::{ProfessionalContractPromotion, PromotionEvidence};
@@ -508,7 +510,6 @@ impl Club {
 
     /// Phase 2: apply the moves, respecting the squad-size guards. Returns how
     /// many players each team gave up, which the backfill needs.
-    #[expect(clippy::too_many_lines)]
     fn execute_moves(
         &mut self,
         date: NaiveDate,
@@ -523,130 +524,143 @@ impl Club {
             b_main.cmp(&a_main)
         });
 
-        // Track how many players we've taken from each source team
-        // so we don't drain any team below minimum.
+        // Track how many players we've taken from each source team so we
+        // don't drain any team below minimum.
         let mut taken: Vec<usize> = vec![0; self.teams.teams.len()];
 
         for m in &moves {
-            let source_size = self.teams.teams[m.from].players.players.len();
-            let already_taken = taken[m.from];
-
-            let min_for_source = if m.from == main_idx {
-                SquadSize::MIN_MAIN
-            } else {
-                SquadSize::MIN_YOUTH
-            };
-            if !m.reason.ignores_squad_minimum()
-                && !m.clears_by_margin
-                && source_size.saturating_sub(already_taken) <= min_for_source
-            {
-                if TransferTrace::is(m.player_id) {
-                    TransferTrace::line(
-                        m.player_id,
-                        "squad",
-                        format!(
-                            "move={} blocked_by=min_squad source_size={source_size} \
-                             taken={already_taken} min={min_for_source}",
-                            m.reason.label(),
-                        ),
-                    );
-                }
+            if Self::move_blocked(&self.teams.teams, m, &taken, main_idx) {
                 continue;
             }
-
-            let from_info = self.teams.teams[m.from].history_info();
-            let to_info = self.teams.teams[m.to].history_info();
-            let from_senior = self.teams.teams[m.from].team_type.is_own_team();
-            let to_senior = self.teams.teams[m.to].team_type.is_own_team();
-
-            if let Some(mut player) = self.teams.teams[m.from].players.take_player(&m.player_id) {
-                // A club does not loan out the boy who has just become
-                // first-team ready. The badge goes, the candidate row goes,
-                // and the country pass is told to pull his live loan
-                // listing — otherwise the row keeps advertising a player
-                // the club has just promoted.
-                if m.withdraws_loan {
-                    player.statuses.remove(PlayerStatusType::Loa);
-                    // The stage is the same decision as the badge and the
-                    // row: a boy the club has just promoted is not still
-                    // staged for a loan.
-                    let promoted = player.pathway_stage().promoted();
-                    player.on_pathway_advanced(
-                        club_id,
-                        promoted,
-                        PlayerPlan::SHORT_REVIEW_DAYS,
-                        date,
-                    );
-                    player.decision_history.add(
-                        date,
-                        "dec_loan_withdrawn".to_string(),
-                        "dec_reason_promoted_instead".to_string(),
-                        "dec_decided_board".to_string(),
-                    );
-                    self.transfer_plan
-                        .loan_out_candidates
-                        .retain(|c| c.player_id != m.player_id);
-                    if !self.transfer_plan.loan_withdrawals.contains(&m.player_id) {
-                        self.transfer_plan.loan_withdrawals.push(m.player_id);
-                    }
-                    if TransferTrace::is(m.player_id) {
-                        TransferTrace::line(
-                            m.player_id,
-                            "squad",
-                            "promotion=granted loan_intent=withdrawn \
-                             reason=promoted_instead",
-                        );
-                    }
-                }
-                if TransferTrace::is(m.player_id) {
-                    TransferTrace::line(
-                        m.player_id,
-                        "squad",
-                        format!(
-                            "move={} from={} to={} clears_by_margin={}",
-                            m.reason.label(),
-                            self.teams.teams[m.from].name,
-                            self.teams.teams[m.to].name,
-                            m.clears_by_margin,
-                        ),
-                    );
-                }
-                // Upgrade youth contract to full when promoting to main
-                if m.to == main_idx {
-                    ProfessionalContractPromotion::upgrade(
-                        &mut player,
-                        date,
-                        self.teams.teams[main_idx].reputation.world,
-                    );
-                    // Career-defining promotion to senior football. Long
-                    // cooldown (effectively one-shot per spell) keeps the
-                    // event scarce — a player who yo-yos between reserve
-                    // and main shouldn't get a fresh "breakthrough" each
-                    // bounce.
-                    player.on_youth_breakthrough(date);
-                }
-
-                // Close the previous spell and open one on the destination
-                // team so future official matches accumulate against the
-                // team the player actually plays for. Without this, B-team
-                // appearances kept being recorded under the Main row.
-                player.on_intra_club_move(&from_info, &to_info, from_senior, to_senior, date);
-
-                debug!(
-                    "squad rebalance: {} (CA={}, age={}) {} → {} ({})",
-                    player.full_name,
-                    player.player_attributes.current_ability,
-                    player.age(date),
-                    from_info.name,
-                    to_info.name,
-                    m.reason.label(),
-                );
-                self.teams.teams[m.to].players.add(player);
+            if self.apply_pending_move(m, main_idx, date, club_id) {
                 taken[m.from] += 1;
             }
         }
 
         taken
+    }
+
+    fn move_blocked(teams: &[Team], m: &PendingMove, taken: &[usize], main_idx: usize) -> bool {
+        let source_size = teams[m.from].players.players.len();
+        let already_taken = taken[m.from];
+        let min_for_source = if m.from == main_idx {
+            SquadSize::MIN_MAIN
+        } else {
+            SquadSize::MIN_YOUTH
+        };
+        if !m.reason.ignores_squad_minimum()
+            && !m.clears_by_margin
+            && source_size.saturating_sub(already_taken) <= min_for_source
+        {
+            if TransferTrace::is(m.player_id) {
+                TransferTrace::line(
+                    m.player_id,
+                    "squad",
+                    format!(
+                        "move={} blocked_by=min_squad source_size={source_size} \
+                         taken={already_taken} min={min_for_source}",
+                        m.reason.label(),
+                    ),
+                );
+            }
+            return true;
+        }
+        false
+    }
+
+    fn apply_pending_move(
+        &mut self,
+        m: &PendingMove,
+        main_idx: usize,
+        date: NaiveDate,
+        club_id: u32,
+    ) -> bool {
+        let from_info = self.teams.teams[m.from].history_info();
+        let to_info = self.teams.teams[m.to].history_info();
+        let from_senior = self.teams.teams[m.from].team_type.is_own_team();
+        let to_senior = self.teams.teams[m.to].team_type.is_own_team();
+
+        let Some(mut player) = self.teams.teams[m.from].players.take_player(&m.player_id) else {
+            return false;
+        };
+        if m.withdraws_loan {
+            self.withdraw_loan_for_promotion(&mut player, club_id, date);
+        }
+        if TransferTrace::is(m.player_id) {
+            TransferTrace::line(
+                m.player_id,
+                "squad",
+                format!(
+                    "move={} from={} to={} clears_by_margin={}",
+                    m.reason.label(),
+                    self.teams.teams[m.from].name,
+                    self.teams.teams[m.to].name,
+                    m.clears_by_margin,
+                ),
+            );
+        }
+        // Upgrade youth contract to full when promoting to main.
+        if m.to == main_idx {
+            ProfessionalContractPromotion::upgrade(
+                &mut player,
+                date,
+                self.teams.teams[main_idx].reputation.world,
+            );
+            // Career-defining promotion to senior football. Long cooldown
+            // (effectively one-shot per spell) keeps the event scarce — a
+            // player who yo-yos between reserve and main shouldn't get a
+            // fresh "breakthrough" each bounce.
+            player.on_youth_breakthrough(date);
+        }
+
+        // Close the previous spell and open one on the destination team so
+        // future official matches accumulate against the team the player
+        // actually plays for. Without this, B-team appearances kept being
+        // recorded under the Main row.
+        player.on_intra_club_move(&from_info, &to_info, from_senior, to_senior, date);
+
+        debug!(
+            "squad rebalance: {} (CA={}, age={}) {} → {} ({})",
+            player.full_name,
+            player.player_attributes.current_ability,
+            player.age(date),
+            from_info.name,
+            to_info.name,
+            m.reason.label(),
+        );
+        self.teams.teams[m.to].players.add(player);
+        true
+    }
+
+    fn withdraw_loan_for_promotion(&mut self, player: &mut Player, club_id: u32, date: NaiveDate) {
+        // A club does not loan out the boy who has just become first-team
+        // ready. The badge goes, the candidate row goes, and the country pass
+        // is told to pull his live loan listing — otherwise the row keeps
+        // advertising a player the club has just promoted.
+        player.statuses.remove(PlayerStatusType::Loa);
+        // The stage is the same decision as the badge and the row: a boy the
+        // club has just promoted is not still staged for a loan.
+        let promoted = player.pathway_stage().promoted();
+        player.on_pathway_advanced(club_id, promoted, PlayerPlan::SHORT_REVIEW_DAYS, date);
+        player.decision_history.add(
+            date,
+            "dec_loan_withdrawn".to_string(),
+            "dec_reason_promoted_instead".to_string(),
+            "dec_decided_board".to_string(),
+        );
+        self.transfer_plan
+            .loan_out_candidates
+            .retain(|c| c.player_id != player.id);
+        if !self.transfer_plan.loan_withdrawals.contains(&player.id) {
+            self.transfer_plan.loan_withdrawals.push(player.id);
+        }
+        if TransferTrace::is(player.id) {
+            TransferTrace::line(
+                player.id,
+                "squad",
+                "promotion=granted loan_intent=withdrawn reason=promoted_instead",
+            );
+        }
     }
 
     /// Phase 3: top the first team back up if it is still short of a working

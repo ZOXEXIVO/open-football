@@ -24,52 +24,56 @@ pub struct ProcessQuery {
     pub days: Option<u32>,
 }
 
-pub async fn game_process_action(
-    State(state): State<GameAppData>,
-    Query(query): Query<ProcessQuery>,
-) -> impl IntoResponse {
-    let days = query.days.unwrap_or(1);
+pub struct GameProcess;
 
-    // If already processing, return immediately
-    let process_guard = match Arc::clone(&state.process_lock).try_lock_owned() {
-        Ok(guard) => guard,
-        Err(_) => return StatusCode::OK,
-    };
+impl GameProcess {
+    pub async fn process(
+        State(state): State<GameAppData>,
+        Query(query): Query<ProcessQuery>,
+    ) -> impl IntoResponse {
+        let days = query.days.unwrap_or(1);
 
-    // Reset cancel flag at start
-    state.cancel_flag.store(false, Ordering::SeqCst);
+        // If already processing, return immediately
+        let process_guard = match Arc::clone(&state.process_lock).try_lock_owned() {
+            Ok(guard) => guard,
+            Err(_) => return StatusCode::OK,
+        };
 
-    // Clone data under read lock (cheap Arc clone), then release lock immediately
-    let data_arc = {
-        let guard = state.data.read().await;
-        Arc::clone(guard.as_ref().unwrap())
-    };
+        // Reset cancel flag at start
+        state.cancel_flag.store(false, Ordering::SeqCst);
 
-    let run = ProcessingRun {
-        handle: Handle::current(),
-        data: Arc::clone(&state.data),
-        i18n: Arc::clone(&state.i18n),
-        cancel_flag: Arc::clone(&state.cancel_flag),
-    };
+        // Clone data under read lock (cheap Arc clone), then release lock immediately
+        let data_arc = {
+            let guard = state.data.read().await;
+            Arc::clone(guard.as_ref().unwrap())
+        };
 
-    // Run CPU-bound simulation on the blocking thread pool so tokio worker
-    // threads stay free to serve HTTP requests while processing runs.
-    // Await completion so the client knows when processing is done.
-    let join_result = spawn_blocking(move || {
-        let _guard = process_guard;
+        let run = ProcessingRun {
+            handle: Handle::current(),
+            data: Arc::clone(&state.data),
+            i18n: Arc::clone(&state.i18n),
+            cancel_flag: Arc::clone(&state.cancel_flag),
+        };
 
-        // Deep clone outside any lock (the shared slot still holds a
-        // reference, so unwrap_or_clone always clones here).
-        run.execute(Arc::unwrap_or_clone(data_arc), days);
-    })
-    .await;
+        // Run CPU-bound simulation on the blocking thread pool so tokio worker
+        // threads stay free to serve HTTP requests while processing runs.
+        // Await completion so the client knows when processing is done.
+        let join_result = spawn_blocking(move || {
+            let _guard = process_guard;
 
-    if let Err(err) = join_result {
-        error!("game process task failed: {err}");
-        return StatusCode::INTERNAL_SERVER_ERROR;
+            // Deep clone outside any lock (the shared slot still holds a
+            // reference, so unwrap_or_clone always clones here).
+            run.execute(Arc::unwrap_or_clone(data_arc), days);
+        })
+        .await;
+
+        if let Err(err) = join_result {
+            error!("game process task failed: {err}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+
+        StatusCode::OK
     }
-
-    StatusCode::OK
 }
 
 /// A day's replays, baking while the next day simulates. At most one day is
@@ -218,16 +222,16 @@ pub struct ProcessingStatus {
     pub processing: bool,
 }
 
-pub async fn game_processing_status_action(
-    State(state): State<GameAppData>,
-) -> Json<ProcessingStatus> {
-    let processing = state.process_lock.try_lock().is_err();
-    Json(ProcessingStatus { processing })
-}
+impl GameProcess {
+    pub async fn status(State(state): State<GameAppData>) -> Json<ProcessingStatus> {
+        let processing = state.process_lock.try_lock().is_err();
+        Json(ProcessingStatus { processing })
+    }
 
-pub async fn game_cancel_action(State(state): State<GameAppData>) -> StatusCode {
-    state.cancel_flag.store(true, Ordering::SeqCst);
-    StatusCode::OK
+    pub async fn cancel(State(state): State<GameAppData>) -> StatusCode {
+        state.cancel_flag.store(true, Ordering::SeqCst);
+        StatusCode::OK
+    }
 }
 
 #[cfg(test)]
@@ -255,7 +259,11 @@ mod tests {
         baking.hand_over(runtime.handle(), day_of_baking(&written));
         baking.hand_over(runtime.handle(), day_of_baking(&written));
 
-        assert_eq!(written.load(Ordering::SeqCst), 1, "only one day may be in flight");
+        assert_eq!(
+            written.load(Ordering::SeqCst),
+            1,
+            "only one day may be in flight"
+        );
         baking.finish(runtime.handle());
         assert_eq!(written.load(Ordering::SeqCst), 2);
     }

@@ -272,10 +272,6 @@ impl TrainingDirection {
 }
 
 impl TeamBehaviour {
-    /// Monthly training-direction pass: progress existing personal
-    /// plans, then let the coach set at most one retraining plan and
-    /// one fitness block per squad per month.
-    #[expect(clippy::too_many_lines)]
     pub(super) fn process_training_direction(
         players: &mut PlayerCollection,
         staffs: &StaffCollection,
@@ -319,14 +315,9 @@ impl TeamBehaviour {
             .collect();
 
         let cfg = HappinessConfig::default();
-        let mut retrain_assigned = false;
-        let mut fitness_assigned = false;
-        let mut recovery_assigned = false;
-        let mut weak_foot_assigned = false;
-        let mut specific_skill_assigned = false;
-        let mut mental_assigned = false;
-        // Mentality programs are a man-manager's tool — a coach without
-        // the people skills doesn't run one.
+        let mut assigned = TrainingAssignments::default();
+        // Mentality programs are a man-manager's tool — a coach without the
+        // people skills doesn't run one.
         let coach_runs_mental_programs = head_coach.staff_attributes.mental.man_management >= 12;
 
         for player in players.players.iter_mut() {
@@ -334,144 +325,224 @@ impl TeamBehaviour {
                 continue;
             }
             let age = player.age(today);
-
-            // Reintegration program: a player in medical recovery gets a
-            // structured return — the eligibility evaluator softens the
-            // returning-from-injury selection caution while it runs.
-            if !recovery_assigned && player.player_attributes.is_in_recovery() {
-                player.individual_training = Some(IndividualTrainingPlan {
-                    player_id: player.id,
-                    focus_areas: vec![TrainingFocus::InjuryRecovery],
-                    intensity_modifier: 0.8,
-                    special_instructions: Vec::new(),
-                    started: Some(today),
-                });
-                player.happiness.add_event_with_cooldown(
-                    HappinessEventType::PersonalTrainingPlanSet,
-                    cfg.catalog.personal_training_plan_set,
-                    120,
-                );
-                recovery_assigned = true;
+            if player.try_assign_direction_plan(
+                today,
+                age,
+                &group_counts,
+                &thin_groups,
+                &cfg,
+                coach_runs_mental_programs,
+                &mut assigned,
+            ) {
                 continue;
-            }
-
-            // Retraining: young squad player from a crowded group with a
-            // half-formed foothold in a thin one.
-            if !retrain_assigned && age <= TrainingDirection::RETRAIN_MAX_AGE {
-                let own_group = player.position().position_group();
-                let overfull = group_counts.get(&own_group).copied().unwrap_or(0)
-                    > own_group.ideal_squad_depth();
-                if let Some(target) =
-                    TrainingDirection::retrain_target(player, overfull, &thin_groups)
-                {
-                    player.individual_training = Some(IndividualTrainingPlan {
-                        player_id: player.id,
-                        focus_areas: vec![TrainingFocus::PositionRetraining(target)],
-                        intensity_modifier: 1.0,
-                        special_instructions: Vec::new(),
-                        started: Some(today),
-                    });
-                    // A role change reads as investment to the willing
-                    // pro and as a slight to the unwilling.
-                    let magnitude = if player.attributes.professionalism < 10.0 {
-                        -cfg.catalog.personal_training_plan_set
-                    } else {
-                        cfg.catalog.personal_training_plan_set
-                    };
-                    player.happiness.add_event_with_cooldown(
-                        HappinessEventType::PersonalTrainingPlanSet,
-                        magnitude,
-                        120,
-                    );
-                    retrain_assigned = true;
-                    continue;
-                }
-            }
-
-            // Fitness block: an injury-plagued senior gets a program.
-            if !fitness_assigned
-                && age >= TrainingDirection::FITNESS_MIN_AGE
-                && player.player_attributes.injury_count >= 3
-                && player.player_attributes.injury_proneness > 10
-                && !player.player_attributes.is_injured
-            {
-                player.individual_training = Some(IndividualTrainingPlan {
-                    player_id: player.id,
-                    focus_areas: vec![TrainingFocus::FitnessBuilding],
-                    intensity_modifier: 1.1,
-                    special_instructions: Vec::new(),
-                    started: Some(today),
-                });
-                player.happiness.add_event_with_cooldown(
-                    HappinessEventType::PersonalTrainingPlanSet,
-                    cfg.catalog.personal_training_plan_set,
-                    120,
-                );
-                fitness_assigned = true;
-                continue;
-            }
-
-            // Weak-foot work: a lopsided youngster with the technique
-            // to learn gets a second foot built up to serviceable.
-            if !weak_foot_assigned && TrainingDirection::weak_foot_eligible(player, age) {
-                player.individual_training = Some(IndividualTrainingPlan {
-                    player_id: player.id,
-                    focus_areas: vec![TrainingFocus::WeakFootImprovement],
-                    intensity_modifier: 1.0,
-                    special_instructions: Vec::new(),
-                    started: Some(today),
-                });
-                player.happiness.add_event_with_cooldown(
-                    HappinessEventType::PersonalTrainingPlanSet,
-                    cfg.catalog.personal_training_plan_set,
-                    120,
-                );
-                weak_foot_assigned = true;
-                continue;
-            }
-
-            // Specialty polishing: a position-relevant skill that
-            // clearly lags the player's own technical level.
-            if !specific_skill_assigned
-                && let Some(skill) = TrainingDirection::specific_skill_target(player, age)
-            {
-                player.individual_training = Some(IndividualTrainingPlan {
-                    player_id: player.id,
-                    focus_areas: vec![TrainingFocus::SpecificSkill(skill)],
-                    intensity_modifier: 1.0,
-                    special_instructions: Vec::new(),
-                    started: Some(today),
-                });
-                player.happiness.add_event_with_cooldown(
-                    HappinessEventType::PersonalTrainingPlanSet,
-                    cfg.catalog.personal_training_plan_set,
-                    120,
-                );
-                specific_skill_assigned = true;
-                continue;
-            }
-
-            // Mentality program: a fragile young talent under a coach
-            // with the people skills to run one.
-            if !mental_assigned
-                && coach_runs_mental_programs
-                && TrainingDirection::mental_development_eligible(player, age)
-            {
-                player.individual_training = Some(IndividualTrainingPlan {
-                    player_id: player.id,
-                    focus_areas: vec![TrainingFocus::MentalDevelopment],
-                    intensity_modifier: 1.0,
-                    special_instructions: Vec::new(),
-                    started: Some(today),
-                });
-                player.happiness.add_event_with_cooldown(
-                    HappinessEventType::PersonalTrainingPlanSet,
-                    cfg.catalog.personal_training_plan_set,
-                    120,
-                );
-                mental_assigned = true;
             }
         }
+    }
+}
+
+#[derive(Default)]
+struct TrainingAssignments {
+    retrain: bool,
+    fitness: bool,
+    recovery: bool,
+    weak_foot: bool,
+    specific_skill: bool,
+    mental: bool,
+}
+
+impl Player {
+    /// Assign the highest-priority training direction this player qualifies
+    /// for, respecting one plan per category per squad per month.
+    fn try_assign_direction_plan(
+        &mut self,
+        today: NaiveDate,
+        age: u8,
+        group_counts: &FxHashMap<PlayerFieldPositionGroup, usize>,
+        thin_groups: &[PlayerFieldPositionGroup],
+        cfg: &HappinessConfig,
+        coach_runs_mental_programs: bool,
+        assigned: &mut TrainingAssignments,
+    ) -> bool {
+        if !assigned.recovery && self.try_assign_recovery_plan(today, cfg) {
+            assigned.recovery = true;
+            return true;
+        }
+        if !assigned.retrain
+            && self.try_assign_retrain_plan(today, age, group_counts, thin_groups, cfg)
+        {
+            assigned.retrain = true;
+            return true;
+        }
+        if !assigned.fitness && self.try_assign_fitness_plan(today, age, cfg) {
+            assigned.fitness = true;
+            return true;
+        }
+        if !assigned.weak_foot && self.try_assign_weak_foot_plan(today, age, cfg) {
+            assigned.weak_foot = true;
+            return true;
+        }
+        if !assigned.specific_skill && self.try_assign_specific_skill_plan(today, age, cfg) {
+            assigned.specific_skill = true;
+            return true;
+        }
+        if !assigned.mental
+            && coach_runs_mental_programs
+            && self.try_assign_mental_plan(today, age, cfg)
+        {
+            assigned.mental = true;
+            return true;
+        }
+        false
+    }
+
+    /// Reintegration program: a player in medical recovery gets a structured
+    /// return — the eligibility evaluator softens the returning-from-injury
+    /// selection caution while it runs.
+    fn try_assign_recovery_plan(&mut self, today: NaiveDate, cfg: &HappinessConfig) -> bool {
+        if !self.player_attributes.is_in_recovery() {
+            return false;
+        }
+        self.install_training_plan(
+            today,
+            TrainingFocus::InjuryRecovery,
+            0.8,
+            cfg.catalog.personal_training_plan_set,
+        );
+        true
+    }
+
+    /// Retraining: young squad player from a crowded group with a half-formed
+    /// foothold in a thin one.
+    fn try_assign_retrain_plan(
+        &mut self,
+        today: NaiveDate,
+        age: u8,
+        group_counts: &FxHashMap<PlayerFieldPositionGroup, usize>,
+        thin_groups: &[PlayerFieldPositionGroup],
+        cfg: &HappinessConfig,
+    ) -> bool {
+        if age > TrainingDirection::RETRAIN_MAX_AGE {
+            return false;
+        }
+        let own_group = self.position().position_group();
+        let overfull =
+            group_counts.get(&own_group).copied().unwrap_or(0) > own_group.ideal_squad_depth();
+        let Some(target) = TrainingDirection::retrain_target(self, overfull, thin_groups) else {
+            return false;
+        };
+        // A role change reads as investment to the willing pro and as a
+        // slight to the unwilling.
+        let magnitude = if self.attributes.professionalism < 10.0 {
+            -cfg.catalog.personal_training_plan_set
+        } else {
+            cfg.catalog.personal_training_plan_set
+        };
+        self.install_training_plan(
+            today,
+            TrainingFocus::PositionRetraining(target),
+            1.0,
+            magnitude,
+        );
+        true
+    }
+
+    /// Fitness block: an injury-plagued senior gets a program.
+    fn try_assign_fitness_plan(
+        &mut self,
+        today: NaiveDate,
+        age: u8,
+        cfg: &HappinessConfig,
+    ) -> bool {
+        if age < TrainingDirection::FITNESS_MIN_AGE
+            || self.player_attributes.injury_count < 3
+            || self.player_attributes.injury_proneness <= 10
+            || self.player_attributes.is_injured
+        {
+            return false;
+        }
+        self.install_training_plan(
+            today,
+            TrainingFocus::FitnessBuilding,
+            1.1,
+            cfg.catalog.personal_training_plan_set,
+        );
+        true
+    }
+
+    /// Weak-foot work: a lopsided youngster with the technique to learn gets
+    /// a second foot built up to serviceable.
+    fn try_assign_weak_foot_plan(
+        &mut self,
+        today: NaiveDate,
+        age: u8,
+        cfg: &HappinessConfig,
+    ) -> bool {
+        if !TrainingDirection::weak_foot_eligible(self, age) {
+            return false;
+        }
+        self.install_training_plan(
+            today,
+            TrainingFocus::WeakFootImprovement,
+            1.0,
+            cfg.catalog.personal_training_plan_set,
+        );
+        true
+    }
+
+    /// Specialty polishing: a position-relevant skill that clearly lags the
+    /// player's own technical level.
+    fn try_assign_specific_skill_plan(
+        &mut self,
+        today: NaiveDate,
+        age: u8,
+        cfg: &HappinessConfig,
+    ) -> bool {
+        let Some(skill) = TrainingDirection::specific_skill_target(self, age) else {
+            return false;
+        };
+        self.install_training_plan(
+            today,
+            TrainingFocus::SpecificSkill(skill),
+            1.0,
+            cfg.catalog.personal_training_plan_set,
+        );
+        true
+    }
+
+    /// Mentality program: a fragile young talent under a coach with the
+    /// people skills to run one.
+    fn try_assign_mental_plan(&mut self, today: NaiveDate, age: u8, cfg: &HappinessConfig) -> bool {
+        if !TrainingDirection::mental_development_eligible(self, age) {
+            return false;
+        }
+        self.install_training_plan(
+            today,
+            TrainingFocus::MentalDevelopment,
+            1.0,
+            cfg.catalog.personal_training_plan_set,
+        );
+        true
+    }
+
+    fn install_training_plan(
+        &mut self,
+        today: NaiveDate,
+        focus: TrainingFocus,
+        intensity_modifier: f32,
+        magnitude: f32,
+    ) {
+        self.individual_training = Some(IndividualTrainingPlan {
+            player_id: self.id,
+            focus_areas: vec![focus],
+            intensity_modifier,
+            special_instructions: Vec::new(),
+            started: Some(today),
+        });
+        self.happiness.add_event_with_cooldown(
+            HappinessEventType::PersonalTrainingPlanSet,
+            magnitude,
+            120,
+        );
     }
 }
 

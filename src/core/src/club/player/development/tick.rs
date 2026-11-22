@@ -6,7 +6,7 @@ use super::blueprint::SkillBlueprint;
 use super::ceilings::PositionalSkillCeilings;
 use super::layoff::Layoff;
 use super::ledger::GrowthSource;
-use super::skills_array::{SKILL_COUNT, skills_to_array};
+use super::skills_array::SKILL_COUNT;
 use crate::club::player::maturation::{MaturationGroup, SkillMaturation};
 use crate::club::player::player::Player;
 use crate::utils::DateUtils;
@@ -45,7 +45,7 @@ impl Player {
             self.position(),
             self.player_attributes.potential_ability,
         );
-        let before = skills_to_array(self);
+        let before = self.skills_to_array();
         let mut after = before;
         for i in 0..SKILL_COUNT {
             let family = PositionalSkillCeilings::maturation_group(i);
@@ -83,7 +83,7 @@ impl Player {
     fn age_a_week(&mut self, age: f32) {
         let maturity_age = self.development.age(age);
         let keep = self.ageing_keep();
-        let before = skills_to_array(self);
+        let before = self.skills_to_array();
         let mut after = before;
         for i in 0..SKILL_COUNT {
             if before[i] <= SkillBlueprint::ZERO || PositionalSkillCeilings::is_condition(i) {
@@ -105,7 +105,7 @@ impl Player {
     /// height each week once laid off; a week of work repays what was given
     /// back first, at several times the rate it was built.
     fn idle_or_repay(&mut self, worked: bool) {
-        let before = skills_to_array(self);
+        let before = self.skills_to_array();
         let mut after = before;
         for family in [MaturationGroup::Physical, MaturationGroup::Explosive] {
             let given = self.development.layoff.given_back(family);

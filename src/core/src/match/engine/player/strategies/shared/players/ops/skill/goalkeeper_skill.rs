@@ -98,41 +98,316 @@ pub struct GoalkeeperSkillProfile {
     pub effective_punch_distance: f32,
 }
 
-#[inline]
-fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    if (edge0 - edge1).abs() < f32::EPSILON {
-        return if x < edge0 { 0.0 } else { 1.0 };
+#[derive(Debug, Clone, Copy)]
+struct GoalkeeperSkillReads {
+    determination01: f32,
+    nat_fitness01: f32,
+    match_readiness01: f32,
+    reflexes01: f32,
+    handling01: f32,
+    one_on_ones01: f32,
+    aerial_reach01: f32,
+    punching01: f32,
+    kicking01: f32,
+    throwing01: f32,
+    gk_passing01: f32,
+    gk_first_touch01: f32,
+    rushing_out_raw01: f32,
+    command_of_area01: f32,
+    communication01: f32,
+    positioning01: f32,
+    anticipation01: f32,
+    concentration01: f32,
+    decisions01: f32,
+    composure01: f32,
+    bravery01: f32,
+    teamwork01: f32,
+    vision01: f32,
+    agility01: f32,
+    acceleration01: f32,
+    pace01: f32,
+    jumping01: f32,
+    strength01: f32,
+    balance01: f32,
+    stamina01: f32,
+    eccentricity01: f32,
+}
+
+impl GoalkeeperSkillReads {
+    fn of(player: &MatchPlayer, minute: u32) -> Self {
+        let bands = SkillBands::for_player(player, minute);
+        let s = &player.skills;
+
+        let reflexes_eff = bands.apply(s.goalkeeping.reflexes, SkillCategory::Technical);
+        let handling_eff = bands.apply(s.goalkeeping.handling, SkillCategory::Technical);
+        let one_on_ones_eff = bands.apply(s.goalkeeping.one_on_ones, SkillCategory::Technical);
+        let aerial_reach_eff = bands.apply(s.goalkeeping.aerial_reach, SkillCategory::Technical);
+        let punching_eff = bands.apply(s.goalkeeping.punching, SkillCategory::Technical);
+        let kicking_eff = bands.apply(s.goalkeeping.kicking, SkillCategory::Technical);
+        let throwing_eff = bands.apply(s.goalkeeping.throwing, SkillCategory::Technical);
+        let gk_passing_eff = bands.apply(s.goalkeeping.passing, SkillCategory::Technical);
+        let gk_first_touch_eff = bands.apply(s.goalkeeping.first_touch, SkillCategory::Technical);
+        let rushing_out_eff = bands.apply(s.goalkeeping.rushing_out, SkillCategory::Technical);
+        let command_of_area_eff = bands.apply(s.goalkeeping.command_of_area, SkillCategory::Mental);
+        let communication_eff = bands.apply(s.goalkeeping.communication, SkillCategory::Mental);
+
+        // ── Mental reads ─────────────────────────────────────────────
+        let positioning_eff = bands.apply(s.mental.positioning, SkillCategory::Mental);
+        let anticipation_eff = bands.apply(s.mental.anticipation, SkillCategory::Mental);
+        let concentration_eff = bands.apply(s.mental.concentration, SkillCategory::Mental);
+        let decisions_eff = bands.apply(s.mental.decisions, SkillCategory::Mental);
+        let composure_eff = bands.apply(s.mental.composure, SkillCategory::Mental);
+        let bravery_eff = bands.apply(s.mental.bravery, SkillCategory::Mental);
+        let teamwork_eff = bands.apply(s.mental.teamwork, SkillCategory::Mental);
+        let vision_eff = bands.apply(s.mental.vision, SkillCategory::Mental);
+
+        // ── Physical reads ───────────────────────────────────────────
+        let agility_eff = bands.apply(s.physical.agility, SkillCategory::Explosive);
+        let acceleration_eff = bands.apply(s.physical.acceleration, SkillCategory::Explosive);
+        let pace_eff = bands.apply(s.physical.pace, SkillCategory::Explosive);
+        let jumping_eff = bands.apply(s.physical.jumping, SkillCategory::Explosive);
+        let strength_eff = bands.apply(s.physical.strength, SkillCategory::Explosive);
+        let balance_eff = bands.apply(s.physical.balance, SkillCategory::Technical);
+        let stamina_eff = bands.apply(s.physical.stamina, SkillCategory::Explosive);
+
+        // ── Normalised reads (0..1 via skill01) ──────────────────────
+        //
+        // The composites below are CONVEX in skill, so read against the
+        // whole game the keeper improves faster than the shooters he
+        // faces as the pyramid rises: saves per shot on target ran 56.6%
+        // at level 4 to 70.7% at 18 against a real ~68% everywhere. The
+        // squads are measured against the standard of the match at
+        // kickoff (`MatchStandard::measure`), so the curves describe the
+        // spread within a division.
+
+        Self {
+            reflexes01: GoalkeeperSkillProfile::skill01(reflexes_eff),
+            handling01: GoalkeeperSkillProfile::skill01(handling_eff),
+            one_on_ones01: GoalkeeperSkillProfile::skill01(one_on_ones_eff),
+            aerial_reach01: GoalkeeperSkillProfile::skill01(aerial_reach_eff),
+            punching01: GoalkeeperSkillProfile::skill01(punching_eff),
+            kicking01: GoalkeeperSkillProfile::skill01(kicking_eff),
+            throwing01: GoalkeeperSkillProfile::skill01(throwing_eff),
+            gk_passing01: GoalkeeperSkillProfile::skill01(gk_passing_eff),
+            gk_first_touch01: GoalkeeperSkillProfile::skill01(gk_first_touch_eff),
+            rushing_out_raw01: GoalkeeperSkillProfile::skill01(rushing_out_eff),
+            command_of_area01: GoalkeeperSkillProfile::skill01(command_of_area_eff),
+            communication01: GoalkeeperSkillProfile::skill01(communication_eff),
+            positioning01: GoalkeeperSkillProfile::skill01(positioning_eff),
+            anticipation01: GoalkeeperSkillProfile::skill01(anticipation_eff),
+            concentration01: GoalkeeperSkillProfile::skill01(concentration_eff),
+            decisions01: GoalkeeperSkillProfile::skill01(decisions_eff),
+            composure01: GoalkeeperSkillProfile::skill01(composure_eff),
+            bravery01: GoalkeeperSkillProfile::skill01(bravery_eff),
+            teamwork01: GoalkeeperSkillProfile::skill01(teamwork_eff),
+            vision01: GoalkeeperSkillProfile::skill01(vision_eff),
+            agility01: GoalkeeperSkillProfile::skill01(agility_eff),
+            acceleration01: GoalkeeperSkillProfile::skill01(acceleration_eff),
+            pace01: GoalkeeperSkillProfile::skill01(pace_eff),
+            jumping01: GoalkeeperSkillProfile::skill01(jumping_eff),
+            strength01: GoalkeeperSkillProfile::skill01(strength_eff),
+            balance01: GoalkeeperSkillProfile::skill01(balance_eff),
+            stamina01: GoalkeeperSkillProfile::skill01(stamina_eff),
+            determination01: GoalkeeperSkillProfile::skill01(
+                bands.apply(s.mental.determination, SkillCategory::Mental),
+            ),
+            nat_fitness01: GoalkeeperSkillProfile::skill01(s.physical.natural_fitness),
+            match_readiness01: GoalkeeperSkillProfile::skill01(s.physical.match_readiness),
+            eccentricity01: GoalkeeperSkillProfile::skill01(s.goalkeeping.eccentricity),
+        }
     }
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
+
+    fn headline(&self) -> (f32, f32) {
+        let primary = (GoalkeeperSkillProfile::reaction_curve(self.reflexes01) * 0.30
+            + GoalkeeperSkillProfile::handling_curve(self.handling01) * 0.20
+            + GoalkeeperSkillProfile::reaction_curve(self.one_on_ones01) * 0.15
+            + GoalkeeperSkillProfile::keeper_curve(self.positioning01) * 0.12
+            + GoalkeeperSkillProfile::keeper_curve(self.anticipation01) * 0.10
+            + GoalkeeperSkillProfile::keeper_curve(self.concentration01) * 0.08
+            + GoalkeeperSkillProfile::keeper_curve(self.command_of_area01) * 0.05)
+            .clamp(0.0, 1.0);
+        let poor_skill_penalty = GoalkeeperSkillProfile::smoothstep(0.45, 0.18, primary);
+        let elite_lift = GoalkeeperSkillProfile::smoothstep(0.72, 0.95, primary) * 0.08;
+        (poor_skill_penalty, elite_lift)
+    }
 }
 
-/// Map a raw 1..20 skill to 0..1 with a small dead zone at 1 so weak
-/// keepers come out closer to 0.
-#[inline]
-fn skill01(value: f32) -> f32 {
-    ((value - 1.0) / 19.0).clamp(0.0, 1.0)
+#[derive(Debug, Clone, Copy)]
+struct GoalkeeperConditioning {
+    condition_mult: f32,
+    explosive_mult: f32,
+    handling_mult: f32,
+    decision_mult: f32,
 }
 
-/// Generic skill curve for goalkeeper attributes (slightly concave so
-/// the 5..15 band spreads out non-linearly).
-#[inline]
-fn keeper_curve(x: f32) -> f32 {
-    x.clamp(0.0, 1.0).powf(1.55)
+impl GoalkeeperConditioning {
+    fn of(
+        inputs: &GoalkeeperSkillInputs,
+        reads: &GoalkeeperSkillReads,
+        player: &MatchPlayer,
+    ) -> Self {
+        let condition = inputs.condition_pct.clamp(0.0, 1.0);
+        let fatigue = (1.0 - condition).max(0.0).powf(1.25);
+        let jaded = (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
+
+        let fitness_base = reads.stamina01 * 0.30
+            + reads.nat_fitness01 * 0.25
+            + reads.match_readiness01 * 0.20
+            + reads.concentration01 * 0.15
+            + reads.determination01 * 0.10;
+
+        let condition_mult = (1.03 - fatigue * (0.34 + (1.0 - fitness_base) * 0.24) - jaded * 0.18)
+            .clamp(0.52, 1.03);
+
+        let explosive_mult = (condition_mult - fatigue * 0.10).clamp(0.45, 1.02);
+        let handling_mult = (condition_mult - fatigue * 0.07 - jaded * 0.06).clamp(0.50, 1.02);
+        let decision_mult = (condition_mult - fatigue * 0.08 - jaded * 0.10).clamp(0.48, 1.02);
+
+        GoalkeeperConditioning {
+            condition_mult,
+            explosive_mult,
+            handling_mult,
+            decision_mult,
+        }
+    }
 }
 
-/// Reaction-style curve — reflexes / one-on-ones use this to make the
-/// difference between a quick and a slow keeper feel sharp.
-#[inline]
-fn reaction_curve(x: f32) -> f32 {
-    x.clamp(0.0, 1.0).powf(1.65)
-}
+impl GoalkeeperSkillReads {
+    fn stopping_and_reach(
+        &self,
+        poor_skill_penalty: f32,
+        elite_lift: f32,
+        condition_mult: f32,
+        explosive_mult: f32,
+    ) -> (f32, f32, f32) {
+        let shot_stopping_raw = GoalkeeperSkillProfile::reaction_curve(self.reflexes01) * 0.28
+            + GoalkeeperSkillProfile::reaction_curve(self.one_on_ones01) * 0.18
+            + GoalkeeperSkillProfile::keeper_curve(self.agility01) * 0.16
+            + GoalkeeperSkillProfile::keeper_curve(self.anticipation01) * 0.10
+            + GoalkeeperSkillProfile::keeper_curve(self.positioning01) * 0.10
+            + GoalkeeperSkillProfile::handling_curve(self.handling01) * 0.08
+            + GoalkeeperSkillProfile::keeper_curve(self.concentration01) * 0.06
+            + GoalkeeperSkillProfile::keeper_curve(self.composure01) * 0.04;
+        let shot_stopping = (shot_stopping_raw * condition_mult - poor_skill_penalty * 0.10
+            + elite_lift)
+            .clamp(0.0, 1.0);
 
-/// Handling curve — slightly steeper than `keeper_curve` so a 5/20
-/// handler spills more often than a 5/20 jumper.
-#[inline]
-fn handling_curve(x: f32) -> f32 {
-    x.clamp(0.0, 1.0).powf(1.60)
+        let positioning_profile = (GoalkeeperSkillProfile::keeper_curve(self.positioning01) * 0.22
+            + GoalkeeperSkillProfile::keeper_curve(self.anticipation01) * 0.18
+            + GoalkeeperSkillProfile::keeper_curve(self.decisions01) * 0.16
+            + GoalkeeperSkillProfile::keeper_curve(self.concentration01) * 0.14
+            + GoalkeeperSkillProfile::keeper_curve(self.command_of_area01) * 0.10
+            + GoalkeeperSkillProfile::keeper_curve(self.communication01) * 0.08
+            + GoalkeeperSkillProfile::keeper_curve(self.teamwork01) * 0.07
+            + GoalkeeperSkillProfile::keeper_curve(self.composure01) * 0.05)
+            .clamp(0.0, 1.0);
+
+        let dive_reach_raw = GoalkeeperSkillProfile::keeper_curve(self.agility01) * 0.24
+            + GoalkeeperSkillProfile::keeper_curve(self.acceleration01) * 0.20
+            + GoalkeeperSkillProfile::keeper_curve(self.jumping01) * 0.18
+            + GoalkeeperSkillProfile::reaction_curve(self.reflexes01) * 0.16
+            + GoalkeeperSkillProfile::keeper_curve(self.balance01) * 0.12
+            + GoalkeeperSkillProfile::keeper_curve(self.strength01) * 0.10;
+        let dive_reach = (dive_reach_raw * explosive_mult).clamp(0.0, 1.0);
+        (shot_stopping, positioning_profile, dive_reach)
+    }
+
+    fn handling_and_aerial(
+        &self,
+        explosive_mult: f32,
+        handling_mult: f32,
+    ) -> (f32, f32, f32, f32, f32) {
+        let handling_raw = GoalkeeperSkillProfile::handling_curve(self.handling01) * 0.34
+            + GoalkeeperSkillProfile::reaction_curve(self.reflexes01) * 0.18
+            + GoalkeeperSkillProfile::keeper_curve(self.concentration01) * 0.14
+            + GoalkeeperSkillProfile::keeper_curve(self.composure01) * 0.12
+            + GoalkeeperSkillProfile::keeper_curve(self.agility01) * 0.10
+            + GoalkeeperSkillProfile::keeper_curve(self.command_of_area01) * 0.07
+            + GoalkeeperSkillProfile::keeper_curve(self.balance01) * 0.05;
+        let handling_profile = (handling_raw * handling_mult).clamp(0.0, 1.0);
+
+        let parry_control = (GoalkeeperSkillProfile::handling_curve(self.handling01) * 0.24
+            + GoalkeeperSkillProfile::keeper_curve(self.punching01) * 0.18
+            + GoalkeeperSkillProfile::keeper_curve(self.strength01) * 0.16
+            + GoalkeeperSkillProfile::reaction_curve(self.reflexes01) * 0.14
+            + GoalkeeperSkillProfile::keeper_curve(self.decisions01) * 0.12
+            + GoalkeeperSkillProfile::keeper_curve(self.composure01) * 0.10
+            + GoalkeeperSkillProfile::keeper_curve(self.balance01) * 0.06)
+            .clamp(0.0, 1.0);
+
+        let aerial_command_raw = GoalkeeperSkillProfile::keeper_curve(self.aerial_reach01) * 0.22
+            + GoalkeeperSkillProfile::keeper_curve(self.jumping01) * 0.18
+            + GoalkeeperSkillProfile::handling_curve(self.handling01) * 0.15
+            + GoalkeeperSkillProfile::keeper_curve(self.command_of_area01) * 0.15
+            + GoalkeeperSkillProfile::keeper_curve(self.bravery01) * 0.10
+            + GoalkeeperSkillProfile::keeper_curve(self.strength01) * 0.08
+            + GoalkeeperSkillProfile::keeper_curve(self.anticipation01) * 0.07
+            + GoalkeeperSkillProfile::keeper_curve(self.communication01) * 0.05;
+        let aerial_command = (aerial_command_raw * explosive_mult).clamp(0.0, 1.0);
+
+        let rushing_out_raw = GoalkeeperSkillProfile::keeper_curve(self.rushing_out_raw01) * 0.24
+            + GoalkeeperSkillProfile::keeper_curve(self.acceleration01) * 0.18
+            + GoalkeeperSkillProfile::keeper_curve(self.pace01) * 0.12
+            + GoalkeeperSkillProfile::keeper_curve(self.decisions01) * 0.14
+            + GoalkeeperSkillProfile::keeper_curve(self.anticipation01) * 0.12
+            + GoalkeeperSkillProfile::keeper_curve(self.composure01) * 0.08
+            + GoalkeeperSkillProfile::keeper_curve(self.one_on_ones01) * 0.08
+            + GoalkeeperSkillProfile::keeper_curve(self.bravery01) * 0.04;
+        let rushing_out_profile = (rushing_out_raw * explosive_mult).clamp(0.0, 1.0);
+
+        let one_v_one = (GoalkeeperSkillProfile::reaction_curve(self.one_on_ones01) * 0.26
+            + GoalkeeperSkillProfile::reaction_curve(self.reflexes01) * 0.18
+            + GoalkeeperSkillProfile::keeper_curve(self.composure01) * 0.16
+            + GoalkeeperSkillProfile::keeper_curve(self.agility01) * 0.14
+            + GoalkeeperSkillProfile::keeper_curve(self.decisions01) * 0.12
+            + GoalkeeperSkillProfile::keeper_curve(self.bravery01) * 0.08
+            + GoalkeeperSkillProfile::keeper_curve(self.positioning01) * 0.06)
+            .clamp(0.0, 1.0);
+        (
+            handling_profile,
+            parry_control,
+            aerial_command,
+            rushing_out_profile,
+            one_v_one,
+        )
+    }
+
+    fn distribution_and_command(&self, decision_mult: f32) -> (f32, f32, f32, f32) {
+        let distribution_raw = GoalkeeperSkillProfile::keeper_curve(self.kicking01) * 0.22
+            + GoalkeeperSkillProfile::keeper_curve(self.throwing01) * 0.18
+            + GoalkeeperSkillProfile::keeper_curve(self.gk_passing01) * 0.16
+            + GoalkeeperSkillProfile::keeper_curve(self.gk_first_touch01) * 0.10
+            + GoalkeeperSkillProfile::keeper_curve(self.decisions01) * 0.14
+            + GoalkeeperSkillProfile::keeper_curve(self.vision01) * 0.08
+            + GoalkeeperSkillProfile::keeper_curve(self.composure01) * 0.08
+            + GoalkeeperSkillProfile::keeper_curve(self.teamwork01) * 0.04;
+        let distribution = (distribution_raw * decision_mult).clamp(0.0, 1.0);
+
+        let communication = (GoalkeeperSkillProfile::keeper_curve(self.communication01) * 0.45
+            + GoalkeeperSkillProfile::keeper_curve(self.command_of_area01) * 0.30
+            + GoalkeeperSkillProfile::keeper_curve(self.concentration01) * 0.15
+            + GoalkeeperSkillProfile::keeper_curve(self.positioning01) * 0.10)
+            .clamp(0.0, 1.0);
+
+        // How much of the space in front of his goal he claims as his.
+        // Linear in the attribute — see the field note. `communication`
+        // and `bravery` are here because owning a box is shouting a back
+        // four into place and going through a crowd to punch, and
+        // `decisions` / `anticipation` because the keeper who comes for
+        // everything and the one who comes for nothing are both wrong.
+        let command_of_area = ((self.command_of_area01 * 0.40
+            + self.communication01 * 0.15
+            + self.bravery01 * 0.15
+            + self.decisions01 * 0.15
+            + self.anticipation01 * 0.15)
+            * decision_mult)
+            .clamp(0.0, 1.0);
+
+        let concentration =
+            GoalkeeperSkillProfile::keeper_curve(self.concentration01).clamp(0.0, 1.0);
+
+        (distribution, communication, command_of_area, concentration)
+    }
 }
 
 impl GoalkeeperSkillProfile {
@@ -222,227 +497,27 @@ impl GoalkeeperSkillProfile {
         profile
     }
 
-    #[expect(clippy::too_many_lines)]
     pub fn from_player(player: &MatchPlayer, inputs: &GoalkeeperSkillInputs) -> Self {
-        let bands = SkillBands::for_player(player, inputs.minute);
-        let s = &player.skills;
+        let reads = GoalkeeperSkillReads::of(player, inputs.minute);
+        let (poor_skill_penalty, elite_lift) = reads.headline();
+        let conditioning = GoalkeeperConditioning::of(inputs, &reads, player);
 
-        // ── Goalkeeping (technical-feel) reads (factored fatigue bands;
-        //    bit-identical to per-read effective_skill — see SkillBands) ─
-        let reflexes_eff = bands.apply(s.goalkeeping.reflexes, SkillCategory::Technical);
-        let handling_eff = bands.apply(s.goalkeeping.handling, SkillCategory::Technical);
-        let one_on_ones_eff = bands.apply(s.goalkeeping.one_on_ones, SkillCategory::Technical);
-        let aerial_reach_eff = bands.apply(s.goalkeeping.aerial_reach, SkillCategory::Technical);
-        let punching_eff = bands.apply(s.goalkeeping.punching, SkillCategory::Technical);
-        let kicking_eff = bands.apply(s.goalkeeping.kicking, SkillCategory::Technical);
-        let throwing_eff = bands.apply(s.goalkeeping.throwing, SkillCategory::Technical);
-        let gk_passing_eff = bands.apply(s.goalkeeping.passing, SkillCategory::Technical);
-        let gk_first_touch_eff = bands.apply(s.goalkeeping.first_touch, SkillCategory::Technical);
-        let rushing_out_eff = bands.apply(s.goalkeeping.rushing_out, SkillCategory::Technical);
-        let command_of_area_eff = bands.apply(s.goalkeeping.command_of_area, SkillCategory::Mental);
-        let communication_eff = bands.apply(s.goalkeeping.communication, SkillCategory::Mental);
+        let (shot_stopping, positioning_profile, dive_reach) = reads.stopping_and_reach(
+            poor_skill_penalty,
+            elite_lift,
+            conditioning.condition_mult,
+            conditioning.explosive_mult,
+        );
+        let (handling_profile, parry_control, aerial_command, rushing_out_profile, one_v_one) =
+            reads.handling_and_aerial(conditioning.explosive_mult, conditioning.handling_mult);
+        let (distribution, communication, command_of_area, concentration) =
+            reads.distribution_and_command(conditioning.decision_mult);
 
-        // ── Mental reads ─────────────────────────────────────────────
-        let positioning_eff = bands.apply(s.mental.positioning, SkillCategory::Mental);
-        let anticipation_eff = bands.apply(s.mental.anticipation, SkillCategory::Mental);
-        let concentration_eff = bands.apply(s.mental.concentration, SkillCategory::Mental);
-        let decisions_eff = bands.apply(s.mental.decisions, SkillCategory::Mental);
-        let composure_eff = bands.apply(s.mental.composure, SkillCategory::Mental);
-        let bravery_eff = bands.apply(s.mental.bravery, SkillCategory::Mental);
-        let teamwork_eff = bands.apply(s.mental.teamwork, SkillCategory::Mental);
-        let vision_eff = bands.apply(s.mental.vision, SkillCategory::Mental);
-        let determination01 = skill01(bands.apply(s.mental.determination, SkillCategory::Mental));
-
-        // ── Physical reads ───────────────────────────────────────────
-        let agility_eff = bands.apply(s.physical.agility, SkillCategory::Explosive);
-        let acceleration_eff = bands.apply(s.physical.acceleration, SkillCategory::Explosive);
-        let pace_eff = bands.apply(s.physical.pace, SkillCategory::Explosive);
-        let jumping_eff = bands.apply(s.physical.jumping, SkillCategory::Explosive);
-        let strength_eff = bands.apply(s.physical.strength, SkillCategory::Explosive);
-        let balance_eff = bands.apply(s.physical.balance, SkillCategory::Technical);
-        let stamina_eff = bands.apply(s.physical.stamina, SkillCategory::Explosive);
-        let nat_fitness01 = skill01(s.physical.natural_fitness);
-        let match_readiness01 = skill01(s.physical.match_readiness);
-
-        // ── Normalised reads (0..1 via skill01) ──────────────────────
-        //
-        // The composites below are CONVEX in skill, so read against the
-        // whole game the keeper improves faster than the shooters he
-        // faces as the pyramid rises: saves per shot on target ran 56.6%
-        // at level 4 to 70.7% at 18 against a real ~68% everywhere. The
-        // squads are measured against the standard of the match at
-        // kickoff (`MatchStandard::measure`), so the curves describe the
-        // spread within a division.
-        let reflexes01 = skill01(reflexes_eff);
-        let handling01 = skill01(handling_eff);
-        let one_on_ones01 = skill01(one_on_ones_eff);
-        let aerial_reach01 = skill01(aerial_reach_eff);
-        let punching01 = skill01(punching_eff);
-        let kicking01 = skill01(kicking_eff);
-        let throwing01 = skill01(throwing_eff);
-        let gk_passing01 = skill01(gk_passing_eff);
-        let gk_first_touch01 = skill01(gk_first_touch_eff);
-        let rushing_out_raw01 = skill01(rushing_out_eff);
-        let command_of_area01 = skill01(command_of_area_eff);
-        let communication01 = skill01(communication_eff);
-
-        let positioning01 = skill01(positioning_eff);
-        let anticipation01 = skill01(anticipation_eff);
-        let concentration01 = skill01(concentration_eff);
-        let decisions01 = skill01(decisions_eff);
-        let composure01 = skill01(composure_eff);
-        let bravery01 = skill01(bravery_eff);
-        let teamwork01 = skill01(teamwork_eff);
-        let vision01 = skill01(vision_eff);
-
-        let agility01 = skill01(agility_eff);
-        let acceleration01 = skill01(acceleration_eff);
-        let pace01 = skill01(pace_eff);
-        let jumping01 = skill01(jumping_eff);
-        let strength01 = skill01(strength_eff);
-        let balance01 = skill01(balance_eff);
-        let stamina01 = skill01(stamina_eff);
-
-        // ── Headline penalty / lift (drives weak/elite differentiation) ─
-        let primary = (reaction_curve(reflexes01) * 0.30
-            + handling_curve(handling01) * 0.20
-            + reaction_curve(one_on_ones01) * 0.15
-            + keeper_curve(positioning01) * 0.12
-            + keeper_curve(anticipation01) * 0.10
-            + keeper_curve(concentration01) * 0.08
-            + keeper_curve(command_of_area01) * 0.05)
-            .clamp(0.0, 1.0);
-        let poor_skill_penalty = smoothstep(0.45, 0.18, primary);
-        let elite_lift = smoothstep(0.72, 0.95, primary) * 0.08;
-
-        // ── Conditioning ─────────────────────────────────────────────
-        let condition = inputs.condition_pct.clamp(0.0, 1.0);
-        let fatigue = (1.0 - condition).max(0.0).powf(1.25);
-        let jaded = (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
-
-        let fitness_base = stamina01 * 0.30
-            + nat_fitness01 * 0.25
-            + match_readiness01 * 0.20
-            + concentration01 * 0.15
-            + determination01 * 0.10;
-
-        let condition_mult = (1.03 - fatigue * (0.34 + (1.0 - fitness_base) * 0.24) - jaded * 0.18)
-            .clamp(0.52, 1.03);
-
-        let explosive_mult = (condition_mult - fatigue * 0.10).clamp(0.45, 1.02);
-        let handling_mult = (condition_mult - fatigue * 0.07 - jaded * 0.06).clamp(0.50, 1.02);
-        let decision_mult = (condition_mult - fatigue * 0.08 - jaded * 0.10).clamp(0.48, 1.02);
-
-        // ── Composite profiles ───────────────────────────────────────
-        let shot_stopping_raw = reaction_curve(reflexes01) * 0.28
-            + reaction_curve(one_on_ones01) * 0.18
-            + keeper_curve(agility01) * 0.16
-            + keeper_curve(anticipation01) * 0.10
-            + keeper_curve(positioning01) * 0.10
-            + handling_curve(handling01) * 0.08
-            + keeper_curve(concentration01) * 0.06
-            + keeper_curve(composure01) * 0.04;
-        let shot_stopping = (shot_stopping_raw * condition_mult - poor_skill_penalty * 0.10
-            + elite_lift)
-            .clamp(0.0, 1.0);
-
-        let positioning_profile = (keeper_curve(positioning01) * 0.22
-            + keeper_curve(anticipation01) * 0.18
-            + keeper_curve(decisions01) * 0.16
-            + keeper_curve(concentration01) * 0.14
-            + keeper_curve(command_of_area01) * 0.10
-            + keeper_curve(communication01) * 0.08
-            + keeper_curve(teamwork01) * 0.07
-            + keeper_curve(composure01) * 0.05)
-            .clamp(0.0, 1.0);
-
-        let dive_reach_raw = keeper_curve(agility01) * 0.24
-            + keeper_curve(acceleration01) * 0.20
-            + keeper_curve(jumping01) * 0.18
-            + reaction_curve(reflexes01) * 0.16
-            + keeper_curve(balance01) * 0.12
-            + keeper_curve(strength01) * 0.10;
-        let dive_reach = (dive_reach_raw * explosive_mult).clamp(0.0, 1.0);
-
-        let handling_raw = handling_curve(handling01) * 0.34
-            + reaction_curve(reflexes01) * 0.18
-            + keeper_curve(concentration01) * 0.14
-            + keeper_curve(composure01) * 0.12
-            + keeper_curve(agility01) * 0.10
-            + keeper_curve(command_of_area01) * 0.07
-            + keeper_curve(balance01) * 0.05;
-        let handling_profile = (handling_raw * handling_mult).clamp(0.0, 1.0);
-
-        let parry_control = (handling_curve(handling01) * 0.24
-            + keeper_curve(punching01) * 0.18
-            + keeper_curve(strength01) * 0.16
-            + reaction_curve(reflexes01) * 0.14
-            + keeper_curve(decisions01) * 0.12
-            + keeper_curve(composure01) * 0.10
-            + keeper_curve(balance01) * 0.06)
-            .clamp(0.0, 1.0);
-
-        let aerial_command_raw = keeper_curve(aerial_reach01) * 0.22
-            + keeper_curve(jumping01) * 0.18
-            + handling_curve(handling01) * 0.15
-            + keeper_curve(command_of_area01) * 0.15
-            + keeper_curve(bravery01) * 0.10
-            + keeper_curve(strength01) * 0.08
-            + keeper_curve(anticipation01) * 0.07
-            + keeper_curve(communication01) * 0.05;
-        let aerial_command = (aerial_command_raw * explosive_mult).clamp(0.0, 1.0);
-
-        let rushing_out_raw = keeper_curve(rushing_out_raw01) * 0.24
-            + keeper_curve(acceleration01) * 0.18
-            + keeper_curve(pace01) * 0.12
-            + keeper_curve(decisions01) * 0.14
-            + keeper_curve(anticipation01) * 0.12
-            + keeper_curve(composure01) * 0.08
-            + keeper_curve(one_on_ones01) * 0.08
-            + keeper_curve(bravery01) * 0.04;
-        let rushing_out_profile = (rushing_out_raw * explosive_mult).clamp(0.0, 1.0);
-        let eccentricity = skill01(s.goalkeeping.eccentricity);
-
-        let one_v_one = (reaction_curve(one_on_ones01) * 0.26
-            + reaction_curve(reflexes01) * 0.18
-            + keeper_curve(composure01) * 0.16
-            + keeper_curve(agility01) * 0.14
-            + keeper_curve(decisions01) * 0.12
-            + keeper_curve(bravery01) * 0.08
-            + keeper_curve(positioning01) * 0.06)
-            .clamp(0.0, 1.0);
-
-        let distribution_raw = keeper_curve(kicking01) * 0.22
-            + keeper_curve(throwing01) * 0.18
-            + keeper_curve(gk_passing01) * 0.16
-            + keeper_curve(gk_first_touch01) * 0.10
-            + keeper_curve(decisions01) * 0.14
-            + keeper_curve(vision01) * 0.08
-            + keeper_curve(composure01) * 0.08
-            + keeper_curve(teamwork01) * 0.04;
-        let distribution = (distribution_raw * decision_mult).clamp(0.0, 1.0);
-
-        let communication = (keeper_curve(communication01) * 0.45
-            + keeper_curve(command_of_area01) * 0.30
-            + keeper_curve(concentration01) * 0.15
-            + keeper_curve(positioning01) * 0.10)
-            .clamp(0.0, 1.0);
-
-        // How much of the space in front of his goal he claims as his.
-        // Linear in the attribute — see the field note. `communication`
-        // and `bravery` are here because owning a box is shouting a back
-        // four into place and going through a crowd to punch, and
-        // `decisions` / `anticipation` because the keeper who comes for
-        // everything and the one who comes for nothing are both wrong.
-        let command_of_area = ((command_of_area01 * 0.40
-            + communication01 * 0.15
-            + bravery01 * 0.15
-            + decisions01 * 0.15
-            + anticipation01 * 0.15)
-            * decision_mult)
-            .clamp(0.0, 1.0);
-
-        let concentration = keeper_curve(concentration01).clamp(0.0, 1.0);
+        let eccentricity = reads.eccentricity01;
+        let condition_mult = conditioning.condition_mult;
+        let explosive_mult = conditioning.explosive_mult;
+        let handling_mult = conditioning.handling_mult;
+        let decision_mult = conditioning.decision_mult;
 
         // Effective ranges in game units. The legacy code used fixed
         // 35..40u catch / dive distances regardless of skill; here, weak
@@ -503,6 +578,43 @@ impl GoalkeeperSkillProfile {
         }
     }
 
+    #[inline]
+    fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+        if (edge0 - edge1).abs() < f32::EPSILON {
+            return if x < edge0 { 0.0 } else { 1.0 };
+        }
+        let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    /// Map a raw 1..20 skill to 0..1 with a small dead zone at 1 so weak
+    /// keepers come out closer to 0.
+    #[inline]
+    fn skill01(value: f32) -> f32 {
+        ((value - 1.0) / 19.0).clamp(0.0, 1.0)
+    }
+
+    /// Generic skill curve for goalkeeper attributes (slightly concave so
+    /// the 5..15 band spreads out non-linearly).
+    #[inline]
+    fn keeper_curve(x: f32) -> f32 {
+        x.clamp(0.0, 1.0).powf(1.55)
+    }
+
+    /// Reaction-style curve — reflexes / one-on-ones use this to make the
+    /// difference between a quick and a slow keeper feel sharp.
+    #[inline]
+    fn reaction_curve(x: f32) -> f32 {
+        x.clamp(0.0, 1.0).powf(1.65)
+    }
+
+    /// Handling curve — slightly steeper than `keeper_curve` so a 5/20
+    /// handler spills more often than a 5/20 jumper.
+    #[inline]
+    fn handling_curve(x: f32) -> f32 {
+        x.clamp(0.0, 1.0).powf(1.60)
+    }
+
     /// Per-shot save probability against an estimated shot difficulty in
     /// 0..1 space (combines power, placement, lateral error, reaction
     /// time, screen, deflection, keeper offline). Saves clamp into a
@@ -526,7 +638,7 @@ impl GoalkeeperSkillProfile {
         // a Sunday-League keeper saves routine balls — the
         // differentiator is corner-of-the-net shots, which are handled
         // by the upper end of the curve.
-        let raw = sigmoid((keeper_save_power - shot_difficulty) * 1.40);
+        let raw = Self::sigmoid((keeper_save_power - shot_difficulty) * 1.40);
         let mut save_prob = raw.clamp(0.12, 0.86);
         // Poor-skill flat penalty trimmed 0.14 → 0.08 because it compounded
         // with the sigmoid-driven gap above to drag weak-GK save rate well
@@ -551,7 +663,7 @@ impl GoalkeeperSkillProfile {
         // Sigmoid 2.40 → 1.80 → 1.40 and floor 0.02 → 0.08 → 0.10,
         // matching the `save_probability` change above. Calibration-
         // neutral at equal skill, less crushing at extreme gaps.
-        sigmoid((self.handling_profile - catch_difficulty) * 1.40).clamp(0.10, 0.78)
+        Self::sigmoid((self.handling_profile - catch_difficulty) * 1.40).clamp(0.10, 0.78)
     }
 
     /// Whether the keeper should punch instead of catch.
@@ -576,11 +688,11 @@ impl GoalkeeperSkillProfile {
             - self.distribution * 0.36)
             .clamp(0.02, 0.85)
     }
-}
 
-#[inline]
-fn sigmoid(x: f32) -> f32 {
-    1.0 / (1.0 + (-x).exp())
+    #[inline]
+    fn sigmoid(x: f32) -> f32 {
+        1.0 / (1.0 + (-x).exp())
+    }
 }
 
 #[cfg(test)]

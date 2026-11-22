@@ -1,9 +1,9 @@
 pub mod routes;
 
-use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::shared::slug::player_history_slug;
 use crate::leagues::address::{LeagueAddress, LeaguePage};
 use crate::leagues::newspaper::LeagueNewspaperCounter;
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::slug::PlayerSlug;
 use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -12,11 +12,12 @@ use axum::response::IntoResponse;
 use chrono::Duration;
 use core::continent::{CompetitionTier, ContinentalQualification, QualificationBand};
 use core::league::{
-    LeagueLadder, LeagueTableRow as CoreTableRow, PlayoffStage, ScheduleItem, ScheduleTour,
+    League, LeagueLadder, LeagueTableRow as CoreTableRow, PlayoffStage, ScheduleItem, ScheduleTour,
     TieBreakPolicy,
 };
 use core::r#match::GoalDetail;
 use core::r#match::player::statistics::MatchStatisticType;
+use core::{Country, SimulatorData};
 use itertools::*;
 use serde::Deserialize;
 use std::cmp::Reverse;
@@ -204,92 +205,152 @@ pub struct LeagueTableRow {
     pub goal_concerned: i32,
     pub points: u8,
 }
+pub struct LeagueGetPage<'a> {
+    data: &'a SimulatorData,
+    i18n: I18n,
+    lang: String,
+    league: &'a League,
+    country: &'a Country,
+}
 
-#[expect(clippy::too_many_lines)]
-pub async fn league_get_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<LeagueGetRequest>,
-) -> ApiResult<axum::response::Response> {
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let guard = state.data.read().await;
+impl<'a> LeagueGetPage<'a> {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<LeagueGetRequest>,
+    ) -> ApiResult<axum::response::Response> {
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let guard = state.data.read().await;
 
-    let simulator_data = guard.as_ref().unwrap();
+        let simulator_data = guard.as_ref().unwrap();
 
-    let (league, country) = match LeagueAddress::resolve(
-        simulator_data,
-        &route_params.lang,
-        &route_params.country_slug,
-        &route_params.league_slug,
-        "",
-    )? {
-        LeaguePage::Found(league, country) => (league, country),
-        LeaguePage::Moved(response) => return Ok(response),
-    };
-    let league_id = league.id;
-
-    // Domestic cups and grouped-competition playoffs have their own
-    // bracket pages; bounce there so this handler only ever renders a
-    // standings table.
-    if league.is_cup {
-        let section = if country.playoffs.iter().any(|p| p.league.id == league_id) {
-            "playoffs"
-        } else {
-            "cups"
+        let (league, country) = match LeagueAddress::resolve(
+            simulator_data,
+            &route_params.lang,
+            &route_params.country_slug,
+            &route_params.league_slug,
+            "",
+        )? {
+            LeaguePage::Found(league, country) => (league, country),
+            LeaguePage::Moved(response) => return Ok(response),
         };
-        return Ok(axum::response::Redirect::to(&format!(
-            "/{}/{}/{}",
-            route_params.lang, section, league.slug
-        ))
-        .into_response());
+        let league_id = league.id;
+
+        // Domestic cups and grouped-competition playoffs have their own
+        // bracket pages; bounce there so this handler only ever renders a
+        // standings table.
+        if league.is_cup {
+            let section = if country.playoffs.iter().any(|p| p.league.id == league_id) {
+                "playoffs"
+            } else {
+                "cups"
+            };
+            return Ok(axum::response::Redirect::to(&format!(
+                "/{}/{}/{}",
+                route_params.lang, section, league.slug
+            ))
+            .into_response());
+        }
+
+        let page = LeagueGetPage {
+            data: simulator_data,
+            i18n,
+            lang: route_params.lang,
+            league,
+            country,
+        };
+        Ok(page.render().into_response())
     }
 
-    let league_table = league.table.get();
+    fn render(self) -> LeagueGetTemplate {
+        let ladder = LeagueLadder::new(&self.country.leagues.leagues);
+        let continental = self
+            .data
+            .continent(self.country.continent_id)
+            .map(|continent| ContinentalQualification::bands_for_league(continent, self.league))
+            .unwrap_or_default();
 
-    let ladder = LeagueLadder::new(&country.leagues.leagues);
-    let continental = simulator_data
-        .continent(country.continent_id)
-        .map(|continent| ContinentalQualification::bands_for_league(continent, league))
-        .unwrap_or_default();
+        let mut table_rows: Vec<LeagueTableRow> = self
+            .league
+            .table
+            .get()
+            .iter()
+            .map(|t| LeagueTableRow::from_core(self.data, t))
+            .collect();
 
-    let mut table_rows: Vec<LeagueTableRow> = league_table
-        .iter()
-        .map(|t| {
-            let team = simulator_data.team(t.team_id).unwrap();
-            LeagueTableRow {
-                zone: "",
-                team_name: team.name.clone(),
-                team_slug: team.slug.clone(),
-                played: t.played,
-                win: t.win,
-                draft: t.draft,
-                lost: t.lost,
-                goal_scored: t.goal_scored,
-                goal_concerned: t.goal_concerned,
-                points: t.points,
-            }
-        })
-        .collect();
+        // Split-season context: label the live standings with the current
+        // tournament (Apertura until the flip, Clausura after) and build the
+        // annual aggregate across every zone of the competition — the same
+        // aggregate the relegation pipeline reads.
+        let split_season = self.league.settings.split_season;
+        let legend = StandingsZones {
+            continental,
+            promoted: ladder.promoted_from_table(self.league),
+            relegated: ladder.relegated_from_table(self.league),
+        }
+        .apply(&mut table_rows, &self.i18n);
 
-    // Split-season context: label the live standings with the current
-    // tournament (Apertura until the flip, Clausura after) and build the
-    // annual aggregate across every zone of the competition — the same
-    // aggregate the relegation pipeline reads.
-    let split_season = league.settings.split_season;
-    let legend = StandingsZones {
-        continental,
-        promoted: ladder.promoted_from_table(league),
-        relegated: ladder.relegated_from_table(league),
+        let (tournament_label, mut annual_table_rows) = self.split_season_rows(split_season);
+
+        let annual_legend = StandingsZones {
+            continental: Vec::new(),
+            promoted: 0,
+            relegated: ladder.relegated_from_annual(self.league),
+        }
+        .apply(&mut annual_table_rows, &self.i18n);
+
+        let current_tour_schedule = self.schedule();
+        let competition_reputation = self.competition_reputation();
+        let stats = LeaguePlayerStats::collect(&self);
+
+        let league_title = views::Menus::league_display_name(self.league, &self.i18n, self.data);
+        let league_url = LeagueAddress::new(&self.country.slug, &self.league.slug).url(&self.lang);
+
+        LeagueGetTemplate {
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
+            cpu_brand: &CPU_BRAND,
+            cores_count: *CPU_CORES,
+            title: league_title,
+            sub_title_prefix: String::new(),
+            sub_title_suffix: String::new(),
+            sub_title: self.country.name.clone(),
+            sub_title_link: format!("/{}/countries/{}", self.lang, self.country.slug),
+            sub_title_flag: Some(SubTitleFlag::of(self.country, &self.lang)),
+            header_color: self.country.background_color.clone(),
+            foreground_color: self.country.foreground_color.clone(),
+            menu_sections: self.menu_sections(&league_url),
+            league_url,
+            newspaper_count: LeagueNewspaperCounter::count(self.league),
+            split_season,
+            tournament_label,
+            annual_table_rows,
+            annual_legend,
+            table_rows,
+            legend,
+            current_tour_schedule,
+            competition_reputation,
+            top_scorers: stats.top_scorers,
+            top_assisters: stats.top_assisters,
+            top_rated: stats.top_rated,
+            lang: self.lang,
+            i18n: self.i18n,
+        }
     }
-    .apply(&mut table_rows, &i18n);
 
-    let (tournament_label, mut annual_table_rows) = if split_season {
-        let second_stage = league.split_first_table.is_some();
+    fn split_season_rows(&self, split_season: bool) -> (String, Vec<LeagueTableRow>) {
+        if !split_season {
+            return (String::new(), Vec::new());
+        }
+
+        let league_id = self.league.id;
+        let second_stage = self.league.split_first_table.is_some();
         let stage = if second_stage {
             PlayoffStage::SecondStage
         } else {
             PlayoffStage::FirstStage
         };
-        let tournament_label = country
+        let tournament_label = self
+            .country
             .playoffs
             .iter()
             .find(|p| p.stage == stage && p.group_league_ids.contains(&league_id))
@@ -302,12 +363,14 @@ pub async fn league_get_action(
                 }
             });
 
-        let competition = league
+        let competition = self
+            .league
             .settings
             .league_group
             .as_ref()
             .map(|g| g.competition.clone());
-        let mut annual: Vec<CoreTableRow> = country
+        let mut annual: Vec<CoreTableRow> = self
+            .country
             .leagues
             .leagues
             .iter()
@@ -323,227 +386,108 @@ pub async fn league_get_action(
         let annual_rows: Vec<LeagueTableRow> = annual
             .iter()
             .filter_map(|t| {
-                simulator_data.team(t.team_id).map(|team| LeagueTableRow {
-                    zone: "",
-                    team_name: team.name.clone(),
-                    team_slug: team.slug.clone(),
-                    played: t.played,
-                    win: t.win,
-                    draft: t.draft,
-                    lost: t.lost,
-                    goal_scored: t.goal_scored,
-                    goal_concerned: t.goal_concerned,
-                    points: t.points,
-                })
+                self.data
+                    .team(t.team_id)
+                    .map(|_| LeagueTableRow::from_core(self.data, t))
             })
             .collect();
         (tournament_label, annual_rows)
-    } else {
-        (String::new(), Vec::new())
-    };
-
-    let annual_legend = StandingsZones {
-        continental: Vec::new(),
-        promoted: 0,
-        relegated: ladder.relegated_from_annual(league),
     }
-    .apply(&mut annual_table_rows, &i18n);
 
-    // Build a single fixture view-item for the current tour.
-    let map_item = |item: &ScheduleItem| -> LeagueScheduleItem {
-        let home_team = simulator_data.team(item.home_team_id).unwrap();
-        let away_team = simulator_data.team(item.away_team_id).unwrap();
+    fn schedule(&self) -> Vec<TourSchedule> {
+        let mut current_tour_schedule = Vec::new();
 
-        LeagueScheduleItem {
-            match_id: item.id.clone(),
-            result: item.result.as_ref().map(|res| {
-                let details: Vec<&GoalDetail> = res
-                    .details
+        let today = self.data.date.date();
+
+        // A round is unveiled on its eve. Reaching further ahead than that
+        // swapped the last matchday's scorelines for a column of dashes days
+        // before anyone had kicked a ball, so the division's board stood empty
+        // through the gap week.
+        let reveal_date = today + Duration::days(1);
+
+        let tours = &self.league.schedule.tours;
+
+        // The round in play, or the last one to have kicked off. Its results
+        // hold the panel for as long as nothing newer has started.
+        let latest_started = tours.iter().rfind(|t| t.start_date() <= today);
+
+        // The round to come, once it is within a day of its first kick-off.
+        // Disjoint from the one above, so a matchday never lists twice.
+        let next_up = tours
+            .iter()
+            .find(|t| t.start_date() > today && t.start_date() <= reveal_date);
+
+        let mut shown_tours: Vec<&ScheduleTour> = Vec::new();
+        shown_tours.extend(latest_started);
+        shown_tours.extend(next_up);
+
+        // Pre-season: nothing has kicked off yet, so the opening round stands
+        // in rather than leaving the board blank until the eve of matchday 1.
+        if shown_tours.is_empty() {
+            shown_tours.extend(tours.first());
+        }
+
+        for tour in shown_tours {
+            for (key, group) in &tour.items.iter().chunk_by(|t| t.date.date()) {
+                current_tour_schedule.push(TourSchedule {
+                    date: key.format("%d.%m.%Y").to_string(),
+                    matches: group
+                        .map(|item| LeagueScheduleItem::from_item(self.data, item))
+                        .collect(),
+                });
+            }
+        }
+        current_tour_schedule
+    }
+
+    fn competition_reputation(&self) -> Vec<CompetitionReputationItem> {
+        let mut reputation_data: Vec<(u16, String, String, String, String)> = self
+            .data
+            .continents
+            .iter()
+            .flat_map(|continent| &continent.countries)
+            .flat_map(|country| {
+                let lang = &self.lang;
+                country
+                    .leagues
+                    .leagues
                     .iter()
-                    .filter(|detail| detail.stat_type == MatchStatisticType::Goal)
-                    .collect();
+                    .filter(|l| !l.friendly)
+                    .map(move |league| {
+                        (
+                            league.reputation,
+                            league.name.clone(),
+                            LeagueAddress::new(&country.slug, &league.slug).url(lang),
+                            country.name.clone(),
+                            country.code.clone(),
+                        )
+                    })
+            })
+            .collect();
 
-                LeagueScheduleItemResult {
-                    home_goals: if item.home_team_id == res.home_team.team_id {
-                        res.home_team.get()
-                    } else {
-                        res.away_team.get()
-                    },
-                    home_goalscorers: details
-                        .iter()
-                        .filter_map(|detail| {
-                            let player = simulator_data.player(detail.player_id)?;
-                            if home_team.players.contains(player.id) {
-                                Some(LeagueTableGoalscorer {
-                                    id: detail.player_id,
-                                    name: player.full_name.to_string(),
-                                    time: format!(
-                                        "('{})",
-                                        Duration::new((detail.time / 1000) as i64, 0)
-                                            .unwrap()
-                                            .num_minutes()
-                                    ),
-                                    auto_goal: detail.is_auto_goal,
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                        .collect(),
-                    away_goals: if item.away_team_id == res.away_team.team_id {
-                        res.away_team.get()
-                    } else {
-                        res.home_team.get()
-                    },
-                    away_goalscorers: details
-                        .iter()
-                        .filter_map(|detail| {
-                            let player = simulator_data.player(detail.player_id)?;
-                            if away_team.players.contains(player.id) {
-                                Some(LeagueTableGoalscorer {
-                                    id: detail.player_id,
-                                    name: player.full_name.to_string(),
-                                    time: format!(
-                                        "('{})",
-                                        Duration::new((detail.time / 1000) as i64, 0)
-                                            .unwrap()
-                                            .num_minutes()
-                                    ),
-                                    auto_goal: detail.is_auto_goal,
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                        .collect(),
+        reputation_data.sort_by_key(|r| Reverse(r.0));
+
+        reputation_data
+            .into_iter()
+            .take(10)
+            .map(|(_, league_name, league_url, country_name, country_code)| {
+                CompetitionReputationItem {
+                    league_name,
+                    league_url,
+                    country_name,
+                    country_code,
                 }
-            }),
-            home_team_name: home_team.name.clone(),
-            home_team_slug: home_team.slug.clone(),
-            away_team_name: away_team.name.clone(),
-            away_team_slug: away_team.slug.clone(),
-        }
-    };
-
-    let mut current_tour_schedule = Vec::new();
-
-    let today = simulator_data.date.date();
-
-    // A round is unveiled on its eve. Reaching further ahead than that
-    // swapped the last matchday's scorelines for a column of dashes days
-    // before anyone had kicked a ball, so the division's board stood empty
-    // through the gap week.
-    let reveal_date = today + Duration::days(1);
-
-    let tours = &league.schedule.tours;
-
-    // The round in play, or the last one to have kicked off. Its results
-    // hold the panel for as long as nothing newer has started.
-    let latest_started = tours.iter().rfind(|t| t.start_date() <= today);
-
-    // The round to come, once it is within a day of its first kick-off.
-    // Disjoint from the one above, so a matchday never lists twice.
-    let next_up = tours
-        .iter()
-        .find(|t| t.start_date() > today && t.start_date() <= reveal_date);
-
-    let mut shown_tours: Vec<&ScheduleTour> = Vec::new();
-    shown_tours.extend(latest_started);
-    shown_tours.extend(next_up);
-
-    // Pre-season: nothing has kicked off yet, so the opening round stands
-    // in rather than leaving the board blank until the eve of matchday 1.
-    if shown_tours.is_empty() {
-        shown_tours.extend(tours.first());
+            })
+            .collect()
     }
 
-    for tour in shown_tours {
-        for (key, group) in &tour.items.iter().chunk_by(|t| t.date.date()) {
-            current_tour_schedule.push(TourSchedule {
-                date: key.format("%d.%m.%Y").to_string(),
-                matches: group.map(&map_item).collect(),
-            });
-        }
-    }
-
-    let mut reputation_data: Vec<(u16, String, String, String, String)> = simulator_data
-        .continents
-        .iter()
-        .flat_map(|continent| &continent.countries)
-        .flat_map(|country| {
-            let lang = &route_params.lang;
-            country
-                .leagues
-                .leagues
-                .iter()
-                .filter(|l| !l.friendly)
-                .map(move |league| {
-                    (
-                        league.reputation,
-                        league.name.clone(),
-                        LeagueAddress::new(&country.slug, &league.slug).url(lang),
-                        country.name.clone(),
-                        country.code.clone(),
-                    )
-                })
-        })
-        .collect();
-
-    reputation_data.sort_by_key(|r| Reverse(r.0));
-
-    let competition_reputation: Vec<CompetitionReputationItem> = reputation_data
-        .into_iter()
-        .take(10)
-        .map(
-            |(_, league_name, league_url, country_name, country_code)| CompetitionReputationItem {
-                league_name,
-                league_url,
-                country_name,
-                country_code,
-            },
-        )
-        .collect();
-
-    // League-scoped tallies — read goals / assists / apps from this
-    // league's own match records, not from `player.statistics`.
-    // `player.statistics` is the live per-spell bucket and gets wiped
-    // on mid-season transfer / loan and at every season-end snapshot,
-    // while the league's match records keep goal events and lineups.
-    // Reading apps from `player.statistics.played` produced the
-    // "0 Apps – 22 Goals" top-scorer row when the bucket got reset
-    // under a player whose goal events still sat in the league.
-    //
-    // `league.matches` is reset at season start (see `League::simulate`)
-    // and trimmed to a 3-season window globally, so every entry walked
-    // here belongs to the current season.
-    let mut goals_per_player: HashMap<u32, u16> = HashMap::new();
-    let mut assists_per_player: HashMap<u32, u16> = HashMap::new();
-    let mut apps_per_player: HashMap<u32, u16> = HashMap::new();
-
-    for mr in league.matches.iter() {
-        for d in &mr.score.details {
-            match d.stat_type {
-                MatchStatisticType::Goal if !d.is_auto_goal => {
-                    *goals_per_player.entry(d.player_id).or_insert(0) += 1;
-                }
-                MatchStatisticType::Assist => {
-                    *assists_per_player.entry(d.player_id).or_insert(0) += 1;
-                }
-                _ => {}
-            }
-        }
-        if let Some(details) = &mr.details {
-            for side in [&details.left_team_players, &details.right_team_players] {
-                for &pid in side.main.iter().chain(side.substitutes_used.iter()) {
-                    *apps_per_player.entry(pid).or_insert(0) += 1;
-                }
-            }
-        }
-    }
-
-    let resolve_team_for_player = |player_id: u32| -> Option<(String, String)> {
-        let (_player, roster_team) = simulator_data.player_with_team(player_id)?;
-        let club = simulator_data.club(roster_team.club_id)?;
+    fn resolve_team_for_player(
+        &self,
+        player_id: u32,
+        league_table: &[CoreTableRow],
+    ) -> Option<(String, String)> {
+        let (_player, roster_team) = self.data.player_with_team(player_id)?;
+        let club = self.data.club(roster_team.club_id)?;
         // Prefer the player's actual roster team if it's in this
         // league. Otherwise (force-pinned youth, or rare reserve
         // entries), fall back to the club's team that participates
@@ -557,225 +501,361 @@ pub async fn league_get_action(
             }
         }
         None
-    };
-
-    let mut scorer_data: Vec<(u32, String, String, String, u16, u16)> = Vec::new();
-    let mut assister_data: Vec<(u32, String, String, String, u16, u16)> = Vec::new();
-    let mut rating_data: Vec<(u32, String, String, String, u16, f32)> = Vec::new();
-
-    for (&pid, &goals) in &goals_per_player {
-        let Some(player) = simulator_data.player(pid) else {
-            continue;
-        };
-        let Some((team_name, team_slug)) = resolve_team_for_player(pid) else {
-            continue;
-        };
-        let played = apps_per_player.get(&pid).copied().unwrap_or(0);
-        scorer_data.push((
-            pid,
-            player.full_name.to_string(),
-            team_name,
-            team_slug,
-            played,
-            goals,
-        ));
     }
 
-    for (&pid, &assists) in &assists_per_player {
-        let Some(player) = simulator_data.player(pid) else {
-            continue;
+    fn menu_sections(&self, league_url: &str) -> Vec<MenuSection> {
+        let mut cl: Vec<(u32, &str, &str)> = self
+            .country
+            .leagues
+            .leagues
+            .iter()
+            .filter(|l| !l.friendly)
+            .map(|l| (l.id, l.name.as_str(), l.slug.as_str()))
+            .collect();
+        cl.sort_by_key(|(id, _, _)| *id);
+        let cl_refs: Vec<(&str, &str)> = cl.iter().map(|(_, n, s)| (*n, *s)).collect();
+        let mp = views::MenuParams {
+            i18n: &self.i18n,
+            lang: &self.lang,
+            current_path: league_url,
+            country_name: &self.country.name,
+            country_slug: &self.country.slug,
         };
-        let Some((team_name, team_slug)) = resolve_team_for_player(pid) else {
-            continue;
-        };
-        let played = apps_per_player.get(&pid).copied().unwrap_or(0);
-        assister_data.push((
-            pid,
-            player.full_name.to_string(),
-            team_name,
-            team_slug,
-            played,
-            assists,
-        ));
+        // The domestic cup links to its dedicated /cups/ bracket page,
+        // the playoffs to /playoffs/.
+        views::Menus::league_menu(
+            &mp,
+            &cl_refs,
+            self.country
+                .domestic_cup
+                .as_ref()
+                .map(|c| (c.league.name.as_str(), c.league.slug.as_str())),
+            &self
+                .country
+                .playoffs
+                .iter()
+                .map(|p| (p.league.name.as_str(), p.league.slug.as_str()))
+                .collect::<Vec<_>>(),
+        )
     }
+}
 
-    // Average rating still flows from the global league bucket — per-league
-    // rating tracking would need new storage on the player. Iterate over
-    // the same effective rosters we use for matchday selection so force-
-    // pinned youth players surface here too. The value we feed into the
-    // ranking is the sample-size-regressed one so the league's top-rated
-    // table is gated by both the minimum-apps filter below *and* the
-    // positional reliability regression — a debut-month 8.2 shouldn't
-    // outrank a 30-app 7.4 starter.
-    let mut seen_in_table: std::collections::HashSet<u32> = std::collections::HashSet::new();
-    for table_row in league_table {
-        if let Some(team) = simulator_data.team(table_row.team_id) {
-            let team_name = team.name.clone();
-            let team_slug = team.slug.clone();
+impl LeagueTableRow {
+    fn from_core(data: &SimulatorData, row: &CoreTableRow) -> LeagueTableRow {
+        let team = data.team(row.team_id).unwrap();
+        LeagueTableRow {
+            zone: "",
+            team_name: team.name.clone(),
+            team_slug: team.slug.clone(),
+            played: row.played,
+            win: row.win,
+            draft: row.draft,
+            lost: row.lost,
+            goal_scored: row.goal_scored,
+            goal_concerned: row.goal_concerned,
+            points: row.points,
+        }
+    }
+}
 
-            let mut effective: Vec<&core::Player> = team.players.players.iter().collect();
-            if team.team_type == core::TeamType::Main
-                && let Some(club) = simulator_data.club(team.club_id)
-            {
-                for sibling in &club.teams.teams {
-                    if sibling.id == team.id {
-                        continue;
-                    }
-                    for p in &sibling.players.players {
-                        if p.is_force_match_selection && !effective.iter().any(|q| q.id == p.id) {
-                            effective.push(p);
+impl LeagueScheduleItem {
+    fn from_item(data: &SimulatorData, item: &ScheduleItem) -> LeagueScheduleItem {
+        let home_team = data.team(item.home_team_id).unwrap();
+        let away_team = data.team(item.away_team_id).unwrap();
+
+        LeagueScheduleItem {
+            match_id: item.id.clone(),
+            result: item.result.as_ref().map(|res| {
+                LeagueScheduleItemResult::from_result(data, item, res, home_team, away_team)
+            }),
+            home_team_name: home_team.name.clone(),
+            home_team_slug: home_team.slug.clone(),
+            away_team_name: away_team.name.clone(),
+            away_team_slug: away_team.slug.clone(),
+        }
+    }
+}
+
+impl LeagueScheduleItemResult {
+    fn from_result(
+        data: &SimulatorData,
+        item: &ScheduleItem,
+        res: &core::r#match::engine::flow::result::Score,
+        home_team: &core::Team,
+        away_team: &core::Team,
+    ) -> LeagueScheduleItemResult {
+        let details: Vec<&GoalDetail> = res
+            .details
+            .iter()
+            .filter(|detail| detail.stat_type == MatchStatisticType::Goal)
+            .collect();
+
+        LeagueScheduleItemResult {
+            home_goals: if item.home_team_id == res.home_team.team_id {
+                res.home_team.get()
+            } else {
+                res.away_team.get()
+            },
+            home_goalscorers: details
+                .iter()
+                .filter_map(|detail| {
+                    let player = data.player(detail.player_id)?;
+                    home_team
+                        .players
+                        .contains(player.id)
+                        .then(|| LeagueTableGoalscorer::from_goal(detail, player))
+                })
+                .collect(),
+            away_goals: if item.away_team_id == res.away_team.team_id {
+                res.away_team.get()
+            } else {
+                res.home_team.get()
+            },
+            away_goalscorers: details
+                .iter()
+                .filter_map(|detail| {
+                    let player = data.player(detail.player_id)?;
+                    away_team
+                        .players
+                        .contains(player.id)
+                        .then(|| LeagueTableGoalscorer::from_goal(detail, player))
+                })
+                .collect(),
+        }
+    }
+}
+
+impl LeagueTableGoalscorer {
+    fn from_goal(detail: &GoalDetail, player: &core::Player) -> LeagueTableGoalscorer {
+        LeagueTableGoalscorer {
+            id: detail.player_id,
+            name: player.full_name.to_string(),
+            time: format!(
+                "('{})",
+                Duration::new((detail.time / 1000) as i64, 0)
+                    .unwrap()
+                    .num_minutes()
+            ),
+            auto_goal: detail.is_auto_goal,
+        }
+    }
+}
+
+struct LeaguePlayerStats {
+    top_scorers: Vec<LeaguePlayerStatItem>,
+    top_assisters: Vec<LeaguePlayerStatItem>,
+    top_rated: Vec<LeaguePlayerStatItem>,
+}
+
+impl LeaguePlayerStats {
+    fn collect(page: &LeagueGetPage<'_>) -> LeaguePlayerStats {
+        let tally = LeagueTally::collect(page.league);
+        let league_table = page.league.table.get();
+
+        let scorers = Self::tally_rows(page, league_table, &tally.apps, &tally.goals);
+        let assisters = Self::tally_rows(page, league_table, &tally.apps, &tally.assists);
+        let ratings = Self::rating_rows(page, league_table, &tally.apps);
+
+        LeaguePlayerStats {
+            top_scorers: Self::items(page, scorers, |(_, _, _, _, played, goals)| {
+                (*played, goals.to_string())
+            }),
+            top_assisters: Self::items(page, assisters, |(_, _, _, _, played, assists)| {
+                (*played, assists.to_string())
+            }),
+            top_rated: ratings
+                .into_iter()
+                .take(10)
+                .map(
+                    |(player_id, player_name, team_name, team_slug, played, rating)| {
+                        LeaguePlayerStatItem {
+                            player_slug: PlayerSlug::history(page.data, player_id, &player_name),
+                            player_name,
+                            team_name,
+                            team_slug,
+                            played,
+                            stat_value: format!("{:.2}", rating),
                         }
-                    }
-                }
-            }
-
-            for player in effective {
-                if !seen_in_table.insert(player.id) {
-                    continue;
-                }
-                // Use league-scoped apps from `apps_per_player` so the
-                // count matches the top-scorers/assisters columns.
-                // Roster members who haven't featured score 0 here and
-                // are excluded by the `played > 0` filter below.
-                let played = apps_per_player.get(&player.id).copied().unwrap_or(0);
-                if played > 0 && player.statistics.average_rating > 0.0 {
-                    let pos = player.position().position_group();
-                    rating_data.push((
-                        player.id,
-                        player.full_name.to_string(),
-                        team_name.clone(),
-                        team_slug.clone(),
-                        played,
-                        player.statistics.average_rating_realistic(pos),
-                    ));
-                }
-            }
+                    },
+                )
+                .collect(),
         }
     }
 
-    // Gate top_rated on a minimum appearance count so a single
-    // standout match doesn't outrank a season of consistent play.
-    // Threshold scales with the league's leader so the cut adapts
-    // to season progress (low early, strict late).
-    let max_played_in_league = apps_per_player.values().copied().max().unwrap_or(0);
-    let min_rated_apps = std::cmp::max(5, max_played_in_league / 2);
-    rating_data.retain(|(_, _, _, _, played, _)| *played >= min_rated_apps);
-
-    scorer_data.sort_by_key(|s| Reverse(s.5));
-    assister_data.sort_by_key(|a| Reverse(a.5));
-    rating_data.sort_by(|a, b| b.5.partial_cmp(&a.5).unwrap_or(std::cmp::Ordering::Equal));
-
-    let top_scorers: Vec<LeaguePlayerStatItem> = scorer_data
-        .into_iter()
-        .take(10)
-        .map(
-            |(player_id, player_name, team_name, team_slug, played, goals)| LeaguePlayerStatItem {
-                player_slug: player_history_slug(simulator_data, player_id, &player_name),
-                player_name,
-                team_name,
-                team_slug,
-                played,
-                stat_value: goals.to_string(),
-            },
-        )
-        .collect();
-
-    let top_assisters: Vec<LeaguePlayerStatItem> = assister_data
-        .into_iter()
-        .take(10)
-        .map(
-            |(player_id, player_name, team_name, team_slug, played, assists)| {
-                LeaguePlayerStatItem {
-                    player_slug: player_history_slug(simulator_data, player_id, &player_name),
-                    player_name,
-                    team_name,
-                    team_slug,
-                    played,
-                    stat_value: assists.to_string(),
-                }
-            },
-        )
-        .collect();
-
-    let top_rated: Vec<LeaguePlayerStatItem> = rating_data
-        .into_iter()
-        .take(10)
-        .map(
-            |(player_id, player_name, team_name, team_slug, played, rating)| LeaguePlayerStatItem {
-                player_slug: player_history_slug(simulator_data, player_id, &player_name),
-                player_name,
-                team_name,
-                team_slug,
-                played,
-                stat_value: format!("{:.2}", rating),
-            },
-        )
-        .collect();
-
-    let league_title = views::league_display_name(league, &i18n, simulator_data);
-    let league_url = LeagueAddress::new(&country.slug, &league.slug).url(&route_params.lang);
-
-    Ok(LeagueGetTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        title: league_title,
-        sub_title_prefix: String::new(),
-        sub_title_suffix: String::new(),
-        sub_title: country.name.clone(),
-        sub_title_link: format!("/{}/countries/{}", route_params.lang, country.slug),
-        sub_title_flag: Some(SubTitleFlag::of(country, &route_params.lang)),
-        header_color: country.background_color.clone(),
-        foreground_color: country.foreground_color.clone(),
-        menu_sections: {
-            let mut cl: Vec<(u32, &str, &str)> = country
-                .leagues
-                .leagues
-                .iter()
-                .filter(|l| !l.friendly)
-                .map(|l| (l.id, l.name.as_str(), l.slug.as_str()))
-                .collect();
-            cl.sort_by_key(|(id, _, _)| *id);
-            let cl_refs: Vec<(&str, &str)> = cl.iter().map(|(_, n, s)| (*n, *s)).collect();
-            let mp = views::MenuParams {
-                i18n: &i18n,
-                lang: &route_params.lang,
-                current_path: &league_url,
-                country_name: &country.name,
-                country_slug: &country.slug,
+    fn tally_rows(
+        page: &LeagueGetPage<'_>,
+        league_table: &[CoreTableRow],
+        apps: &HashMap<u32, u16>,
+        tally: &HashMap<u32, u16>,
+    ) -> Vec<(u32, String, String, String, u16, u16)> {
+        let mut rows: Vec<(u32, String, String, String, u16, u16)> = Vec::new();
+        for (&pid, &value) in tally {
+            let Some(player) = page.data.player(pid) else {
+                continue;
             };
-            // The domestic cup links to its dedicated /cups/ bracket page,
-            // the playoffs to /playoffs/.
-            views::league_menu(
-                &mp,
-                &cl_refs,
-                country
-                    .domestic_cup
-                    .as_ref()
-                    .map(|c| (c.league.name.as_str(), c.league.slug.as_str())),
-                &country
-                    .playoffs
-                    .iter()
-                    .map(|p| (p.league.name.as_str(), p.league.slug.as_str()))
-                    .collect::<Vec<_>>(),
-            )
-        },
-        league_url,
-        newspaper_count: LeagueNewspaperCounter::count(league),
-        split_season,
-        tournament_label,
-        annual_table_rows,
-        annual_legend,
-        table_rows,
-        legend,
-        current_tour_schedule,
-        competition_reputation,
-        top_scorers,
-        top_assisters,
-        top_rated,
-        lang: route_params.lang,
-        i18n,
+            let Some((team_name, team_slug)) = page.resolve_team_for_player(pid, league_table)
+            else {
+                continue;
+            };
+            let played = apps.get(&pid).copied().unwrap_or(0);
+            rows.push((
+                pid,
+                player.full_name.to_string(),
+                team_name,
+                team_slug,
+                played,
+                value,
+            ));
+        }
+        rows.sort_by_key(|r| Reverse(r.5));
+        rows
     }
-    .into_response())
+
+    fn items<F>(
+        page: &LeagueGetPage<'_>,
+        rows: Vec<(u32, String, String, String, u16, u16)>,
+        value: F,
+    ) -> Vec<LeaguePlayerStatItem>
+    where
+        F: Fn(&(u32, String, String, String, u16, u16)) -> (u16, String),
+    {
+        rows.into_iter()
+            .take(10)
+            .map(|row| {
+                let (played, stat_value) = value(&row);
+                LeaguePlayerStatItem {
+                    player_slug: PlayerSlug::history(page.data, row.0, &row.1),
+                    player_name: row.1,
+                    team_name: row.2,
+                    team_slug: row.3,
+                    played,
+                    stat_value,
+                }
+            })
+            .collect()
+    }
+
+    /// Average rating still flows from the global league bucket — per-league
+    /// rating tracking would need new storage on the player. Iterate over
+    /// the same effective rosters we use for matchday selection so force-
+    /// pinned youth players surface here too. The value we feed into the
+    /// ranking is the sample-size-regressed one so the league's top-rated
+    /// table is gated by both the minimum-apps filter below *and* the
+    /// positional reliability regression — a debut-month 8.2 shouldn't
+    /// outrank a 30-app 7.4 starter.
+    fn rating_rows(
+        page: &LeagueGetPage<'_>,
+        league_table: &[CoreTableRow],
+        apps: &HashMap<u32, u16>,
+    ) -> Vec<(u32, String, String, String, u16, f32)> {
+        let mut rating_data: Vec<(u32, String, String, String, u16, f32)> = Vec::new();
+        let mut seen_in_table: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for table_row in league_table {
+            if let Some(team) = page.data.team(table_row.team_id) {
+                let team_name = team.name.clone();
+                let team_slug = team.slug.clone();
+
+                let mut effective: Vec<&core::Player> = team.players.players.iter().collect();
+                if team.team_type == core::TeamType::Main
+                    && let Some(club) = page.data.club(team.club_id)
+                {
+                    for sibling in &club.teams.teams {
+                        if sibling.id == team.id {
+                            continue;
+                        }
+                        for p in &sibling.players.players {
+                            if p.is_force_match_selection && !effective.iter().any(|q| q.id == p.id)
+                            {
+                                effective.push(p);
+                            }
+                        }
+                    }
+                }
+
+                for player in effective {
+                    if !seen_in_table.insert(player.id) {
+                        continue;
+                    }
+                    // Use league-scoped apps from `apps` so the
+                    // count matches the top-scorers/assisters columns.
+                    // Roster members who haven't featured score 0 here and
+                    // are excluded by the `played > 0` filter below.
+                    let played = apps.get(&player.id).copied().unwrap_or(0);
+                    if played > 0 && player.statistics.average_rating > 0.0 {
+                        let pos = player.position().position_group();
+                        rating_data.push((
+                            player.id,
+                            player.full_name.to_string(),
+                            team_name.clone(),
+                            team_slug.clone(),
+                            played,
+                            player.statistics.average_rating_realistic(pos),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Gate top_rated on a minimum appearance count so a single
+        // standout match doesn't outrank a season of consistent play.
+        // Threshold scales with the league's leader so the cut adapts
+        // to season progress (low early, strict late).
+        let max_played_in_league = apps.values().copied().max().unwrap_or(0);
+        let min_rated_apps = std::cmp::max(5, max_played_in_league / 2);
+        rating_data.retain(|(_, _, _, _, played, _)| *played >= min_rated_apps);
+        rating_data.sort_by(|a, b| b.5.partial_cmp(&a.5).unwrap_or(std::cmp::Ordering::Equal));
+        rating_data
+    }
+}
+
+struct LeagueTally {
+    goals: HashMap<u32, u16>,
+    assists: HashMap<u32, u16>,
+    apps: HashMap<u32, u16>,
+}
+
+impl LeagueTally {
+    /// League-scoped tallies — read goals / assists / apps from this
+    /// league's own match records, not from `player.statistics`.
+    /// `player.statistics` is the live per-spell bucket and gets wiped
+    /// on mid-season transfer / loan and at every season-end snapshot,
+    /// while the league's match records keep goal events and lineups.
+    /// Reading apps from `player.statistics.played` produced the
+    /// "0 Apps – 22 Goals" top-scorer row when the bucket got reset
+    /// under a player whose goal events still sat in the league.
+    ///
+    /// `league.matches` is reset at season start (see `League::simulate`)
+    /// and trimmed to a 3-season window globally, so every entry walked
+    /// here belongs to the current season.
+    fn collect(league: &League) -> LeagueTally {
+        let mut goals: HashMap<u32, u16> = HashMap::new();
+        let mut assists: HashMap<u32, u16> = HashMap::new();
+        let mut apps: HashMap<u32, u16> = HashMap::new();
+
+        for mr in league.matches.iter() {
+            for d in &mr.score.details {
+                match d.stat_type {
+                    MatchStatisticType::Goal if !d.is_auto_goal => {
+                        *goals.entry(d.player_id).or_insert(0) += 1;
+                    }
+                    MatchStatisticType::Assist => {
+                        *assists.entry(d.player_id).or_insert(0) += 1;
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(details) = &mr.details {
+                for side in [&details.left_team_players, &details.right_team_players] {
+                    for &pid in side.main.iter().chain(side.substitutes_used.iter()) {
+                        *apps.entry(pid).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+        LeagueTally {
+            goals,
+            assists,
+            apps,
+        }
+    }
 }

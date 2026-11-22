@@ -1,10 +1,9 @@
 pub mod routes;
 
-use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::shared::slug::{PlayerPage, resolve_player_page};
-use crate::player::events::{CareerPlace, PlayerEventsCounter};
-use crate::player::newspaper::PlayerNewsCounter;
-use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
+use crate::player::events::CareerPlace;
+use crate::player::{PlayerPageChrome, PlayerPageColors};
+use crate::shared::slug::{PlayerPage, PlayerSlug};
+use crate::views::{MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -17,6 +16,7 @@ use core::Player;
 use core::PlayerStatusType;
 use core::SimulatorData;
 use core::StaffPosition;
+use core::Team;
 use core::TeamType;
 use core::club::player::mind;
 use core::utils::FormattingUtils;
@@ -195,199 +195,206 @@ pub struct PlayerLanguageDto {
     pub level: String,
 }
 
-#[expect(clippy::too_many_lines)]
-pub async fn player_personal_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<PlayerPersonalRequest>,
-) -> ApiResult<Response> {
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let guard = state.data.read().await;
+pub struct PlayerPersonalPage;
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+impl PlayerPersonalPage {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<PlayerPersonalRequest>,
+    ) -> ApiResult<Response> {
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let guard = state.data.read().await;
 
-    let (player, team_opt, canonical) = match resolve_player_page(
-        simulator_data,
-        &route_params.player_slug,
-        &route_params.lang,
-        "/personal",
-    )? {
-        PlayerPage::Found {
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+
+        let (player, team_opt, canonical) = match PlayerSlug::resolve_page(
+            simulator_data,
+            &route_params.player_slug,
+            &route_params.lang,
+            "/personal",
+        )? {
+            PlayerPage::Found {
+                player,
+                team,
+                canonical_slug,
+            } => (player, team, canonical_slug),
+            PlayerPage::Redirect(r) => return Ok(r),
+        };
+
+        let today = simulator_data.date.date();
+        let view = PersonalView::build(player, team_opt, simulator_data, &i18n, today);
+        let chrome = PlayerPageChrome::build(
+            simulator_data,
+            i18n,
             player,
-            team,
-            canonical_slug,
-        } => (player, team, canonical_slug),
-        PlayerPage::Redirect(r) => return Ok(r),
-    };
+            team_opt,
+            &route_params.lang,
+            &canonical,
+            "personal",
+            PlayerPageColors::Grey,
+        )?;
 
-    let (neighbor_teams, country_leagues) = if let Some(team) = team_opt {
-        get_neighbor_teams(team.club_id, simulator_data, &i18n)?
-    } else {
-        (Vec::new(), Vec::new())
-    };
-    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-
-    let title = format!(
-        "{} {}",
-        player.full_name.display_first_name(),
-        player.full_name.display_last_name()
-    );
-
-    let today = simulator_data.date.date();
-
-    let personality = get_personality(player);
-    let (weighing, lifting) = get_happiness_factors(player, &i18n);
-    let morale = MoraleScale::read(player.happiness.morale, &weighing, &lifting, &i18n);
-    let concerns = get_concerns(player, &i18n);
-    let behaviour = i18n
-        .t(&format!(
-            "behaviour_{}",
-            player.behaviour.as_str().to_lowercase()
-        ))
-        .to_string();
-
-    let manager_relationship = team_opt
-        .and_then(|team| {
-            team.staffs.manager().or_else(|| {
-                team.staffs
-                    .find_by_position(StaffPosition::AssistantManager)
-            })
-        })
-        .map(|staff| ManagerBond::of(player, staff, &i18n));
-
-    let favorite_clubs: Vec<FavoriteClubDto> = player
-        .favorite_clubs
-        .iter()
-        .filter_map(|&club_id| {
-            simulator_data.club(club_id).map(|club| {
-                let slug = club
-                    .teams
-                    .teams
-                    .iter()
-                    .find(|t| t.team_type == TeamType::Main)
-                    .map(|t| t.slug.clone())
-                    .unwrap_or_default();
-                FavoriteClubDto {
-                    name: club.name.clone(),
-                    slug,
-                }
-            })
-        })
-        .collect();
-
-    let (wants, mind) = PlayerMindView::of(
-        player,
-        team_opt.map(|t| t.club_id).unwrap_or(0),
-        today,
-        &i18n,
-    );
-    let career_plan = CareerPlanCard::of(player, today, &i18n);
-    let career_anchors = CareerAnchorsCard::of(player, simulator_data, &i18n);
-
-    let player_info = get_player_info(player, today, &i18n);
-    let reputation = ReputationLadder::rows(player, &i18n);
-
-    Ok(PlayerPersonalTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        title,
-        sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
-        sub_title_suffix: String::new(),
-        sub_title: team_opt.map(|t| t.name.clone()).unwrap_or_else(|| {
-            if player.is_retired() {
-                i18n.t("retired").to_string()
-            } else {
-                i18n.t("free_agent").to_string()
-            }
-        }),
-        sub_title_link: team_opt
-            .map(|t| format!("/{}/teams/{}", route_params.lang, t.slug))
-            .unwrap_or_default(),
-        sub_title_flag: None,
-        header_color: team_opt
-            .and_then(|t| {
-                simulator_data
-                    .club(t.club_id)
-                    .map(|c| c.colors.background.clone())
-            })
-            .unwrap_or_else(|| "#808080".to_string()),
-        foreground_color: team_opt
-            .and_then(|t| {
-                simulator_data
-                    .club(t.club_id)
-                    .map(|c| c.colors.foreground.clone())
-            })
-            .unwrap_or_else(|| "#ffffff".to_string()),
-        menu_sections: if let Some(team) = team_opt {
-            let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-            let current_path = format!("/{}/teams/{}", route_params.lang, team.slug);
-            let mp = views::MenuParams {
-                i18n: &i18n,
-                lang: &route_params.lang,
-                current_path: &current_path,
-                country_name: cn,
-                country_slug: cs,
-            };
-            views::team_menu(&mp, &neighbor_refs, &league_refs)
-        } else {
-            Vec::new()
-        },
-        i18n,
-        lang: route_params.lang.clone(),
-        active_tab: "personal",
-        player_id: player.id,
-        player_slug: canonical,
-        club_id: team_opt.map(|t| t.club_id).unwrap_or(0),
-        is_on_loan: player.is_on_loan(),
-        is_injured: player.player_attributes.is_injured,
-        is_unhappy: player.statuses.get().contains(&PlayerStatusType::Unh),
-        is_force_match_selection: player.is_force_match_selection,
-        is_on_watchlist: simulator_data.watchlist.contains(&player.id),
-        events_count: PlayerEventsCounter::count(player),
-        interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
-        awards_count: player.awards_count.total(),
-        news_count: PlayerNewsCounter::count(simulator_data, player),
-        personality,
-        morale,
-        weighing,
-        lifting,
-        concerns,
-        behaviour,
-        manager_relationship,
-        favorite_clubs,
-        player_info,
-        reputation,
-        career_anchors,
-        career_plan,
-        wants,
-        mind,
+        Ok(PlayerPersonalTemplate {
+            css_version: chrome.css_version,
+            computer_name: chrome.computer_name,
+            cpu_brand: chrome.cpu_brand,
+            cores_count: chrome.cores_count,
+            title: chrome.title,
+            sub_title_prefix: chrome.sub_title_prefix,
+            sub_title_suffix: chrome.sub_title_suffix,
+            sub_title: chrome.sub_title,
+            sub_title_link: chrome.sub_title_link,
+            sub_title_flag: chrome.sub_title_flag,
+            header_color: chrome.header_color,
+            foreground_color: chrome.foreground_color,
+            menu_sections: chrome.menu_sections,
+            i18n: chrome.i18n,
+            lang: chrome.lang,
+            active_tab: chrome.active_tab,
+            player_id: chrome.player_id,
+            player_slug: chrome.player_slug,
+            club_id: chrome.club_id,
+            is_on_loan: chrome.is_on_loan,
+            is_injured: chrome.is_injured,
+            is_unhappy: chrome.is_unhappy,
+            is_force_match_selection: chrome.is_force_match_selection,
+            is_on_watchlist: chrome.is_on_watchlist,
+            events_count: chrome.events_count,
+            interested_clubs_count: chrome.interested_clubs_count,
+            awards_count: chrome.awards_count,
+            news_count: chrome.news_count,
+            personality: view.personality,
+            morale: view.morale,
+            weighing: view.weighing,
+            lifting: view.lifting,
+            concerns: view.concerns,
+            behaviour: view.behaviour,
+            manager_relationship: view.manager_relationship,
+            favorite_clubs: view.favorite_clubs,
+            player_info: view.player_info,
+            reputation: view.reputation,
+            career_anchors: view.career_anchors,
+            career_plan: view.career_plan,
+            wants: view.wants,
+            mind: view.mind,
+        }
+        .into_response())
     }
-    .into_response())
 }
 
-fn get_personality(player: &Player) -> PersonalityDto {
-    let attrs = &player.attributes;
+struct PersonalView {
+    personality: PersonalityDto,
+    morale: MoraleDto,
+    weighing: Vec<HappinessFactorDto>,
+    lifting: Vec<HappinessFactorDto>,
+    concerns: Vec<String>,
+    behaviour: String,
+    manager_relationship: Option<ManagerRelationshipDto>,
+    favorite_clubs: Vec<FavoriteClubDto>,
+    player_info: PlayerInfoDto,
+    reputation: ReputationDto,
+    career_anchors: Option<CareerAnchorsDto>,
+    career_plan: Option<CareerPlanDto>,
+    wants: Vec<MindWantDto>,
+    mind: Option<MindDto>,
+}
 
-    PersonalityRadar::plot([
-        attrs.adaptability.round().clamp(1.0, 20.0) as u8,
-        attrs.ambition.round().clamp(1.0, 20.0) as u8,
-        attrs.controversy.round().clamp(1.0, 20.0) as u8,
-        attrs.loyalty.round().clamp(1.0, 20.0) as u8,
-        attrs.pressure.round().clamp(1.0, 20.0) as u8,
-        attrs.professionalism.round().clamp(1.0, 20.0) as u8,
-        attrs.sportsmanship.round().clamp(1.0, 20.0) as u8,
-        attrs.temperament.round().clamp(1.0, 20.0) as u8,
-    ])
+impl PersonalView {
+    fn build(
+        player: &Player,
+        team_opt: Option<&Team>,
+        data: &SimulatorData,
+        i18n: &I18n,
+        today: NaiveDate,
+    ) -> Self {
+        let personality = PersonalityDto::build(player);
+        let (weighing, lifting) = HappinessLedger::for_player(player, i18n);
+        let morale = MoraleScale::read(player.happiness.morale, &weighing, &lifting, i18n);
+        let concerns = PlayerConcerns::of(player, i18n);
+        let behaviour = i18n
+            .t(&format!(
+                "behaviour_{}",
+                player.behaviour.as_str().to_lowercase()
+            ))
+            .to_string();
+        let manager_relationship = team_opt
+            .and_then(|team| {
+                team.staffs.manager().or_else(|| {
+                    team.staffs
+                        .find_by_position(StaffPosition::AssistantManager)
+                })
+            })
+            .map(|staff| ManagerBond::of(player, staff, i18n));
+        let favorite_clubs = Self::favorite_clubs(player, data);
+        let (wants, mind) = PlayerMindView::of(
+            player,
+            team_opt.map(|t| t.club_id).unwrap_or(0),
+            today,
+            i18n,
+        );
+        let career_plan = CareerPlanCard::of(player, today, i18n);
+        let career_anchors = CareerAnchorsCard::of(player, data, i18n);
+        let player_info = PlayerInfoDto::build(player, today, i18n);
+        let reputation = ReputationLadder::rows(player, i18n);
+
+        Self {
+            personality,
+            morale,
+            weighing,
+            lifting,
+            concerns,
+            behaviour,
+            manager_relationship,
+            favorite_clubs,
+            player_info,
+            reputation,
+            career_anchors,
+            career_plan,
+            wants,
+            mind,
+        }
+    }
+
+    fn favorite_clubs(player: &Player, data: &SimulatorData) -> Vec<FavoriteClubDto> {
+        player
+            .favorite_clubs
+            .iter()
+            .filter_map(|&club_id| {
+                data.club(club_id).map(|club| {
+                    let slug = club
+                        .teams
+                        .teams
+                        .iter()
+                        .find(|t| t.team_type == TeamType::Main)
+                        .map(|t| t.slug.clone())
+                        .unwrap_or_default();
+                    FavoriteClubDto {
+                        name: club.name.clone(),
+                        slug,
+                    }
+                })
+            })
+            .collect()
+    }
+}
+
+impl PersonalityDto {
+    fn build(player: &Player) -> PersonalityDto {
+        let attrs = &player.attributes;
+
+        PersonalityRadar::plot([
+            attrs.adaptability.round().clamp(1.0, 20.0) as u8,
+            attrs.ambition.round().clamp(1.0, 20.0) as u8,
+            attrs.controversy.round().clamp(1.0, 20.0) as u8,
+            attrs.loyalty.round().clamp(1.0, 20.0) as u8,
+            attrs.pressure.round().clamp(1.0, 20.0) as u8,
+            attrs.professionalism.round().clamp(1.0, 20.0) as u8,
+            attrs.sportsmanship.round().clamp(1.0, 20.0) as u8,
+            attrs.temperament.round().clamp(1.0, 20.0) as u8,
+        ])
+    }
 }
 
 /// Lays the eight hidden attributes out on the radar the personality
@@ -483,56 +490,58 @@ impl PersonalityRadar {
     }
 }
 
-fn get_player_info(player: &Player, today: NaiveDate, i18n: &I18n) -> PlayerInfoDto {
-    let preferred_foot = i18n.t(player.preferred_foot.as_i18n_key());
+impl PlayerInfoDto {
+    fn build(player: &Player, today: NaiveDate, i18n: &I18n) -> PlayerInfoDto {
+        let preferred_foot = i18n.t(player.preferred_foot.as_i18n_key());
 
-    let mental = &player.skills.mental;
-    let leadership = mental.leadership.round().clamp(1.0, 20.0) as u8;
-    let determination = mental.determination.round().clamp(1.0, 20.0) as u8;
-    let work_rate = mental.work_rate.round().clamp(1.0, 20.0) as u8;
+        let mental = &player.skills.mental;
+        let leadership = mental.leadership.round().clamp(1.0, 20.0) as u8;
+        let determination = mental.determination.round().clamp(1.0, 20.0) as u8;
+        let work_rate = mental.work_rate.round().clamp(1.0, 20.0) as u8;
 
-    let pa = &player.player_attributes;
-    let condition = (pa.condition as f32 / 100.0).round().clamp(0.0, 100.0) as u8;
-    let fitness = (pa.fitness as f32 / 100.0).round().clamp(0.0, 100.0) as u8;
+        let pa = &player.player_attributes;
+        let condition = (pa.condition as f32 / 100.0).round().clamp(0.0, 100.0) as u8;
+        let fitness = (pa.fitness as f32 / 100.0).round().clamp(0.0, 100.0) as u8;
 
-    let (squad_status, salary, contract_expiry) = if let Some(contract) = &player.contract {
-        let status = i18n.t(contract.squad_status.i18n_key());
-        let wage = format!(
-            "{} {}",
-            FormattingUtils::format_money(contract.salary as f64),
-            i18n.t("per_year")
-        );
-        let expiry = i18n.format_date(contract.expiration);
-        (status.to_string(), wage, expiry)
-    } else {
-        (String::new(), String::new(), String::new())
-    };
+        let (squad_status, salary, contract_expiry) = if let Some(contract) = &player.contract {
+            let status = i18n.t(contract.squad_status.i18n_key());
+            let wage = format!(
+                "{} {}",
+                FormattingUtils::format_money(contract.salary as f64),
+                i18n.t("per_year")
+            );
+            let expiry = i18n.format_date(contract.expiration);
+            (status.to_string(), wage, expiry)
+        } else {
+            (String::new(), String::new(), String::new())
+        };
 
-    let languages: Vec<PlayerLanguageDto> = player
-        .languages
-        .iter()
-        .filter(|l| l.proficiency >= 5 || l.is_native)
-        .map(|l| PlayerLanguageDto {
-            name: i18n.t(l.language.i18n_key()).to_string(),
-            level: i18n.t(l.level_key()).to_string(),
-        })
-        .collect();
+        let languages: Vec<PlayerLanguageDto> = player
+            .languages
+            .iter()
+            .filter(|l| l.proficiency >= 5 || l.is_native)
+            .map(|l| PlayerLanguageDto {
+                name: i18n.t(l.language.i18n_key()).to_string(),
+                level: i18n.t(l.level_key()).to_string(),
+            })
+            .collect();
 
-    PlayerInfoDto {
-        age: player.age(today),
-        birth_date: i18n.format_date(player.birth_date),
-        preferred_foot: preferred_foot.to_string(),
-        leadership,
-        determination,
-        work_rate,
-        condition,
-        fitness,
-        squad_status,
-        salary,
-        contract_expiry,
-        international_apps: pa.international_apps,
-        international_goals: pa.international_goals,
-        languages,
+        PlayerInfoDto {
+            age: player.age(today),
+            birth_date: i18n.format_date(player.birth_date),
+            preferred_foot: preferred_foot.to_string(),
+            leadership,
+            determination,
+            work_rate,
+            condition,
+            fitness,
+            squad_status,
+            salary,
+            contract_expiry,
+            international_apps: pa.international_apps,
+            international_goals: pa.international_goals,
+            languages,
+        }
     }
 }
 
@@ -673,38 +682,40 @@ impl FactorSentiment {
     }
 }
 
-fn get_happiness_factors(
-    player: &Player,
-    i18n: &I18n,
-) -> (Vec<HappinessFactorDto>, Vec<HappinessFactorDto>) {
-    let f = &player.happiness.factors;
-    // Core seven factors (existing) plus the six derived "life in the
-    // team" factors. Surface them all so the user can answer "why is
-    // Messi unhappy at this club?" without guessing.
-    HappinessLedger::split(
-        &[
-            ("factor_playing_time", f.playing_time),
-            ("factor_salary", f.salary_satisfaction),
-            ("factor_manager", f.manager_relationship),
-            ("factor_ambition_fit", f.ambition_fit),
-            ("factor_injury", f.injury_frustration),
-            ("factor_role_clarity", f.role_clarity),
-            ("factor_coach_credibility", f.coach_credibility),
-            ("factor_dressing_room_status", f.dressing_room_status),
-            ("factor_club_fit", f.club_fit),
-            ("factor_pressure_load", f.pressure_load),
-            ("factor_promise_trust", f.promise_trust),
-        ],
-        i18n,
-    )
-}
-
 /// The happiness factors as the morale panel lists them: two columns,
 /// what is dragging him down and what is holding him up, each strongest
 /// first.
 struct HappinessLedger;
 
 impl HappinessLedger {
+    /// The player's ledger, split into what drags him down and what holds
+    /// him up.
+    fn for_player(
+        player: &Player,
+        i18n: &I18n,
+    ) -> (Vec<HappinessFactorDto>, Vec<HappinessFactorDto>) {
+        let f = &player.happiness.factors;
+        // Core seven factors (existing) plus the six derived "life in the
+        // team" factors. Surface them all so the user can answer "why is
+        // Messi unhappy at this club?" without guessing.
+        Self::split(
+            &[
+                ("factor_playing_time", f.playing_time),
+                ("factor_salary", f.salary_satisfaction),
+                ("factor_manager", f.manager_relationship),
+                ("factor_ambition_fit", f.ambition_fit),
+                ("factor_injury", f.injury_frustration),
+                ("factor_role_clarity", f.role_clarity),
+                ("factor_coach_credibility", f.coach_credibility),
+                ("factor_dressing_room_status", f.dressing_room_status),
+                ("factor_club_fit", f.club_fit),
+                ("factor_pressure_load", f.pressure_load),
+                ("factor_promise_trust", f.promise_trust),
+            ],
+            i18n,
+        )
+    }
+
     /// A factor this close to zero says nothing and is left off. It is
     /// `FactorSentiment`'s neutral band rather than a threshold of its
     /// own — a row reading "Neutral" under "Weighing on him" is the sign
@@ -752,36 +763,40 @@ impl HappinessLedger {
     }
 }
 
-fn get_concerns(player: &Player, i18n: &I18n) -> Vec<String> {
-    let statuses = player.statuses.get();
-    let mut concerns = Vec::new();
+struct PlayerConcerns;
 
-    for status in &statuses {
-        let key = match status {
-            PlayerStatusType::Unh => Some("concern_unhappy"),
-            PlayerStatusType::Req => Some("concern_transfer_request"),
-            PlayerStatusType::Rst => Some("concern_needs_rest"),
-            PlayerStatusType::Fut => Some("concern_future"),
-            PlayerStatusType::Abs => Some("concern_absent"),
-            PlayerStatusType::Slt => Some("concern_slight_concerns"),
-            PlayerStatusType::Frt => Some("concern_wants_free_transfer"),
-            _ => None,
-        };
-        if let Some(k) = key {
-            concerns.push(i18n.t(k).to_string());
+impl PlayerConcerns {
+    fn of(player: &Player, i18n: &I18n) -> Vec<String> {
+        let statuses = player.statuses.get();
+        let mut concerns = Vec::new();
+
+        for status in &statuses {
+            let key = match status {
+                PlayerStatusType::Unh => Some("concern_unhappy"),
+                PlayerStatusType::Req => Some("concern_transfer_request"),
+                PlayerStatusType::Rst => Some("concern_needs_rest"),
+                PlayerStatusType::Fut => Some("concern_future"),
+                PlayerStatusType::Abs => Some("concern_absent"),
+                PlayerStatusType::Slt => Some("concern_slight_concerns"),
+                PlayerStatusType::Frt => Some("concern_wants_free_transfer"),
+                _ => None,
+            };
+            if let Some(k) = key {
+                concerns.push(i18n.t(k).to_string());
+            }
         }
-    }
 
-    // A formal unhappiness already says it louder than the minutes do.
-    let unhappy = statuses.contains(&PlayerStatusType::Unh);
-    for key in FactorSentiment::concern_keys(&player.happiness.factors) {
-        if key == "concern_lacking_playing_time" && unhappy {
-            continue;
+        // A formal unhappiness already says it louder than the minutes do.
+        let unhappy = statuses.contains(&PlayerStatusType::Unh);
+        for key in FactorSentiment::concern_keys(&player.happiness.factors) {
+            if key == "concern_lacking_playing_time" && unhappy {
+                continue;
+            }
+            concerns.push(i18n.t(key).to_string());
         }
-        concerns.push(i18n.t(key).to_string());
-    }
 
-    concerns
+        concerns
+    }
 }
 
 /// Where the player stands with the man picking the side.
@@ -871,40 +886,6 @@ impl ReputationLadder {
     fn fill(reached: usize) -> u8 {
         (reached as f32 / Self::TIERS.len() as f32 * 100.0).round() as u8
     }
-}
-
-fn get_neighbor_teams(
-    club_id: u32,
-    data: &SimulatorData,
-    i18n: &I18n,
-) -> Result<NeighborMenus, ApiError> {
-    let club = data
-        .club(club_id)
-        .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
-
-    let teams = views::neighbor_teams(club, i18n);
-
-    let mut country_leagues: Vec<(u32, String, String)> = data
-        .country_by_club(club_id)
-        .map(|country| {
-            country
-                .leagues
-                .leagues
-                .iter()
-                .filter(|l| !l.friendly)
-                .map(|l| (l.id, l.name.clone(), l.slug.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
-    country_leagues.sort_by_key(|(id, _, _)| *id);
-
-    Ok((
-        teams,
-        country_leagues
-            .into_iter()
-            .map(|(_, name, slug)| (name, slug))
-            .collect(),
-    ))
 }
 
 #[cfg(test)]

@@ -365,26 +365,20 @@ impl ClubBoard {
         }
     }
 
-    #[expect(clippy::too_many_lines)]
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> BoardResult {
         let mut result = BoardResult::new();
         result.club_id = ctx.club.as_ref().map(|c| c.id).unwrap_or(0);
         let today = ctx.simulation.date.date();
 
-        // Derive the ownership archetype + opening vision once, the first
-        // time we have club context to read. Different clubs get different
-        // boards purely from durable signals — no hard-coded names.
         // What the board is looking at, banked for the census before
         // anything spends it (see [`BoardIncomeRead`]).
         if let Some(board_ctx) = &ctx.board {
-            self.last_income_read = BoardIncomeRead {
-                trailing_annual_income: board_ctx.trailing_annual_income,
-                projected_annual_income: board_ctx.projected_annual_income,
-                annual_wages: board_ctx.total_annual_wages as i64,
-                balance: board_ctx.balance,
-            };
+            self.record_income_read(board_ctx);
         }
 
+        // Derive the ownership archetype + opening vision once, the first
+        // time we have club context to read. Different clubs get different
+        // boards purely from durable signals — no hard-coded names.
         if !self.personality_initialized
             && let Some(board_ctx) = &ctx.board
         {
@@ -426,124 +420,170 @@ impl ClubBoard {
         let is_season_start = ctx.simulation.is_season_start(&season);
         let is_month_beginning = ctx.simulation.is_month_beginning();
 
-        // ── Season start: targets, vision reckoning, facility review ──
         if is_season_start && let Some(board_ctx) = &ctx.board {
-            let current_year = today.year();
-            self.evaluate_long_term_vision(current_year, &mut result);
-            // What the owner is funding, re-read once a season on a
-            // three-year half-life — BEFORE the budgets, so this
-            // year's wage mandate and transfer ceiling both spend it.
-            let flipped = self.ownership.refresh_benefactor(
-                board_ctx.balance,
-                board_ctx.total_annual_wages as i64,
-                board_ctx.projected_annual_income,
-            );
-            if flipped {
-                // A club whose owner has started funding it gets the
-                // new archetype's boardroom too, not just its label.
-                Self::map_chairman_knobs(&mut self.chairman, &self.ownership);
-            }
-            // What the owner puts BACK this year. Booked as funding
-            // rather than revenue (`push_owner_investment`), so the
-            // market's inflation read still sees spend without income.
-            let idle_now =
-                ClubBenefactor::idle_cash(board_ctx.balance, board_ctx.total_annual_wages as i64);
-            let top_up = self.ownership.annual_top_up(
-                idle_now,
-                matches!(board_ctx.debt_standing, DebtStanding::Emergency),
-            );
-            // …and the cheque is in the pot BEFORE the envelope is
-            // sized against it. `BoardDecision::OwnerTopUp` is applied
-            // later, in `BoardResult::process`, so the idle cash the
-            // envelope split reads was the PRE-top-up figure: a
-            // benefactor that had drained to zero sized its whole
-            // season off nothing and then banked the money the same
-            // tick. One local copy of the context, and the order the
-            // owner actually writes it in.
-            let funded_ctx;
-            let budget_ctx = if top_up >= 1.0 {
-                result.decisions.push(BoardDecision::OwnerTopUp {
-                    amount: top_up as i64,
-                    reason: DecisionReason::OwnerInjection,
-                });
-                let mut ctx = (*board_ctx).clone();
-                ctx.balance = ctx.balance.saturating_add(top_up as i64);
-                funded_ctx = ctx;
-                &funded_ctx
-            } else {
-                board_ctx
-            };
-            self.calculate_season_targets(budget_ctx);
-
-            // Promises whose deadline lapsed unfulfilled break now and
-            // cost the manager board trust. Counted before they are
-            // resolved — afterwards they are indistinguishable from
-            // promises broken in earlier seasons, and the club needs
-            // to date this one for the press.
-            let overdue = self
-                .promises
-                .active()
-                .filter(|p| p.is_overdue(today))
-                .count();
-            let penalty = self.promises.break_overdue(today);
-            if penalty != 0 {
-                self.relationship.adjust_communication(penalty);
-            }
-            result.promises_broken = overdue.min(u8::MAX as usize) as u8;
-            self.promises.prune(today, 800);
-
-            // Yearly infrastructure review → facility decisions applied
-            // in `BoardResult::process`. Gated by a per-board cooldown
-            // so wealthy owners can't upgrade every season.
-            let facility_decisions = self.run_facility_review(board_ctx, current_year);
-
-            // Open this season's board promises (season goal, youth
-            // pathway, deferred capex). Done after the review so a
-            // declined-on-affordability upgrade becomes a "we'll revisit"
-            // facility promise.
-            self.open_season_promises(board_ctx, today, &facility_decisions);
-            result.decisions.extend(facility_decisions);
-
-            // Renewal: a happy board moves to tie the manager down, but
-            // only when the deal is genuinely running down (or its
-            // length is unknown). Driven by legacy confidence/loyalty OR
-            // sustained multi-facet trust.
-            let contract_at_risk = board_ctx.manager_contract_months_left == 0
-                || board_ctx.manager_contract_months_left <= 18;
-            if !result.manager_sacked
-                && contract_at_risk
-                && ((self.confidence.level >= 70 && self.chairman.manager_loyalty >= 55)
-                    || self.relationship.merits_renewal())
-            {
-                result.offer_manager_renewal = true;
-            }
-            self.confidence.level = 65; // Reset confidence at season start
-            self.poor_mood_months = 0;
-            self.season_month_index = 0;
+            self.run_season_start(board_ctx, today, &mut result);
         }
 
         // ── Monthly review + takeover watch ──
         if is_month_beginning {
             if let Some(board_ctx) = &ctx.board {
-                self.evaluate_performance(board_ctx, &mut result);
-                self.tick_takeover(board_ctx, today, &mut result);
-                // Resolve outstanding promises against this tick's decisions
-                // and league standing (kept promises build manager trust).
-                self.resolve_promises(board_ctx, today, &mut result);
+                self.run_monthly_review(board_ctx, today, &mut result);
             }
             if !is_season_start {
                 self.season_month_index = self.season_month_index.saturating_add(1);
             }
         }
 
-        // Manager search: once the per-club search window elapses, signal
-        // the result stage to confirm a permanent appointment. The result
-        // stage tries the top free-agent shortlist first (slice B) and
-        // falls back to promoting the caretaker if no candidate sticks.
-        // Window length scales with reputation — top clubs hunt longer
-        // because they're chasing big names; smaller clubs move faster.
+        self.signal_manager_search_due(today, &mut result);
+
+        result
+    }
+
+    fn record_income_read(&mut self, board_ctx: &BoardContext) {
+        self.last_income_read = BoardIncomeRead {
+            trailing_annual_income: board_ctx.trailing_annual_income,
+            projected_annual_income: board_ctx.projected_annual_income,
+            annual_wages: board_ctx.total_annual_wages as i64,
+            balance: board_ctx.balance,
+        };
+    }
+
+    /// ── Season start: targets, vision reckoning, facility review ──
+    fn run_season_start(
+        &mut self,
+        board_ctx: &BoardContext,
+        today: NaiveDate,
+        result: &mut BoardResult,
+    ) {
+        let current_year = today.year();
+        self.evaluate_long_term_vision(current_year, result);
+        // What the owner is funding, re-read once a season on a
+        // three-year half-life — BEFORE the budgets, so this
+        // year's wage mandate and transfer ceiling both spend it.
+        let flipped = self.ownership.refresh_benefactor(
+            board_ctx.balance,
+            board_ctx.total_annual_wages as i64,
+            board_ctx.projected_annual_income,
+        );
+        if flipped {
+            // A club whose owner has started funding it gets the
+            // new archetype's boardroom too, not just its label.
+            Self::map_chairman_knobs(&mut self.chairman, &self.ownership);
+        }
+        // What the owner puts BACK this year. Booked as funding
+        // rather than revenue (`push_owner_investment`), so the
+        // market's inflation read still sees spend without income.
+        let idle_now =
+            ClubBenefactor::idle_cash(board_ctx.balance, board_ctx.total_annual_wages as i64);
+        let top_up = self.ownership.annual_top_up(
+            idle_now,
+            matches!(board_ctx.debt_standing, DebtStanding::Emergency),
+        );
+        // …and the cheque is in the pot BEFORE the envelope is
+        // sized against it. `BoardDecision::OwnerTopUp` is applied
+        // later, in `BoardResult::process`, so the idle cash the
+        // envelope split reads was the PRE-top-up figure: a
+        // benefactor that had drained to zero sized its whole
+        // season off nothing and then banked the money the same
+        // tick. One local copy of the context, and the order the
+        // owner actually writes it in.
+        let funded_ctx;
+        let budget_ctx = if top_up >= 1.0 {
+            result.decisions.push(BoardDecision::OwnerTopUp {
+                amount: top_up as i64,
+                reason: DecisionReason::OwnerInjection,
+            });
+            let mut ctx = (*board_ctx).clone();
+            ctx.balance = ctx.balance.saturating_add(top_up as i64);
+            funded_ctx = ctx;
+            &funded_ctx
+        } else {
+            board_ctx
+        };
+        self.calculate_season_targets(budget_ctx);
+
+        self.break_overdue_season_promises(today, result);
+        self.plan_season_facilities(board_ctx, today, current_year, result);
+
+        // Renewal: a happy board moves to tie the manager down, but
+        // only when the deal is genuinely running down (or its
+        // length is unknown). Driven by legacy confidence/loyalty OR
+        // sustained multi-facet trust.
+        let contract_at_risk = board_ctx.manager_contract_months_left == 0
+            || board_ctx.manager_contract_months_left <= 18;
+        if !result.manager_sacked
+            && contract_at_risk
+            && ((self.confidence.level >= 70 && self.chairman.manager_loyalty >= 55)
+                || self.relationship.merits_renewal())
+        {
+            result.offer_manager_renewal = true;
+        }
+        self.confidence.level = 65; // Reset confidence at season start
+        self.poor_mood_months = 0;
+        self.season_month_index = 0;
+    }
+
+    /// Promises whose deadline lapsed unfulfilled break now and cost the
+    /// manager board trust. Counted before they are resolved — afterwards
+    /// they are indistinguishable from promises broken in earlier seasons,
+    /// and the club needs to date this one for the press.
+    fn break_overdue_season_promises(&mut self, today: NaiveDate, result: &mut BoardResult) {
+        let overdue = self
+            .promises
+            .active()
+            .filter(|p| p.is_overdue(today))
+            .count();
+        let penalty = self.promises.break_overdue(today);
+        if penalty != 0 {
+            self.relationship.adjust_communication(penalty);
+        }
+        result.promises_broken = overdue.min(u8::MAX as usize) as u8;
+        self.promises.prune(today, 800);
+    }
+
+    /// Yearly infrastructure review → facility decisions applied in
+    /// `BoardResult::process`. Gated by a per-board cooldown so wealthy
+    /// owners can't upgrade every season.
+    fn plan_season_facilities(
+        &mut self,
+        board_ctx: &BoardContext,
+        today: NaiveDate,
+        current_year: i32,
+        result: &mut BoardResult,
+    ) {
+        let facility_decisions = self.run_facility_review(board_ctx, current_year);
+
+        // Open this season's board promises (season goal, youth
+        // pathway, deferred capex). Done after the review so a
+        // declined-on-affordability upgrade becomes a "we'll revisit"
+        // facility promise.
+        self.open_season_promises(board_ctx, today, &facility_decisions);
+        result.decisions.extend(facility_decisions);
+    }
+
+    /// Monthly review, takeover watch and the promise reckoning that
+    /// reads this tick's decisions.
+    fn run_monthly_review(
+        &mut self,
+        board_ctx: &BoardContext,
+        today: NaiveDate,
+        result: &mut BoardResult,
+    ) {
+        self.evaluate_performance(board_ctx, result);
+        self.tick_takeover(board_ctx, today, result);
+        // Resolve outstanding promises against this tick's decisions
+        // and league standing (kept promises build manager trust).
+        self.resolve_promises(board_ctx, today, result);
+    }
+
+    /// Manager search: once the per-club search window elapses, signal
+    /// the result stage to confirm a permanent appointment. The result
+    /// stage tries the top free-agent shortlist first (slice B) and
+    /// falls back to promoting the caretaker if no candidate sticks.
+    /// Window length scales with reputation — top clubs hunt longer
+    /// because they're chasing big names; smaller clubs move faster.
+    fn signal_manager_search_due(&mut self, today: NaiveDate, result: &mut BoardResult) {
         if let Some(since) = self.manager_search_since {
-            let today = ctx.simulation.date.date();
             let days = (today - since).num_days();
             // Defensive: a board with `manager_search_since` set but a
             // zero search window (legacy state, or first tick after a
@@ -558,8 +598,6 @@ impl ClubBoard {
                 result.confirm_new_manager = true;
             }
         }
-
-        result
     }
 
     /// Re-derive this season's mandate from the club's standing.

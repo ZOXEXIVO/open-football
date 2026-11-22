@@ -28,7 +28,7 @@ use crate::{
     TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
 };
 
-use super::lookups::{country_lookup, country_lookup_mut};
+use super::lookups::WorldCountryLookup;
 use crate::CallUpReason;
 use crate::ClubFacilities;
 use crate::CountryGeneratorData;
@@ -278,7 +278,7 @@ fn synth_match_result(home_score: u8, away_score: u8, scorer_id: Option<u32>) ->
             },
         );
     }
-    // The scorer starts for the home side — `collect_international_appearances`
+    // The scorer starts for the home side — `InternationalAppearances::collect`
     // reads the side and the starter flag off these squads, so a fixture
     // that names nobody would book every appearance as an away substitute.
     let mut left_team_players = FieldSquad::new();
@@ -333,7 +333,7 @@ fn build_world_squad_includes_foreign_based_player() {
         make_continent(2, vec![country_b]),
     ];
 
-    if let Some(brazil) = country_lookup_mut(&mut continents, 1) {
+    if let Some(brazil) = WorldCountryLookup::find_mut(&mut continents, 1) {
         brazil.national_team.country_name = "Brazil".to_string();
         brazil.national_team.reputation = 8000;
         brazil.national_team.squad.push(NationalSquadPlayer {
@@ -371,7 +371,7 @@ fn world_stats_update_reaches_foreign_based_player() {
         make_continent(2, vec![country_b]),
     ];
 
-    if let Some(brazil) = country_lookup_mut(&mut continents, 1) {
+    if let Some(brazil) = WorldCountryLookup::find_mut(&mut continents, 1) {
         brazil.national_team.squad.push(NationalSquadPlayer {
             player_id: 101,
             club_id: 200,
@@ -386,8 +386,8 @@ fn world_stats_update_reaches_foreign_based_player() {
         .get_mut(&101)
         .expect("scorer stat line")
         .goals = 2;
-    let appearances = collect_international_appearances(&raw, 1, 99, 2, 0);
-    apply_world_international_stats(
+    let appearances = InternationalAppearances::collect(&raw, 1, 99, 2, 0);
+    WorldInternationalStats::apply(
         &mut continents,
         1,
         99,
@@ -451,7 +451,7 @@ fn global_tournament_result_updates_caps_schedule_and_match_result() {
 
     let mut continents = vec![make_continent(1, vec![country_a, country_b])];
 
-    if let Some(brazil) = country_lookup_mut(&mut continents, 1) {
+    if let Some(brazil) = WorldCountryLookup::find_mut(&mut continents, 1) {
         brazil.national_team.squad.push(NationalSquadPlayer {
             player_id: 101,
             club_id: 1,
@@ -460,7 +460,7 @@ fn global_tournament_result_updates_caps_schedule_and_match_result() {
             secondary_reasons: Vec::new(),
         });
     }
-    if let Some(spain) = country_lookup_mut(&mut continents, 2) {
+    if let Some(spain) = WorldCountryLookup::find_mut(&mut continents, 2) {
         spain.national_team.squad.push(NationalSquadPlayer {
             player_id: 202,
             club_id: 2,
@@ -533,7 +533,7 @@ fn global_tournament_result_updates_caps_schedule_and_match_result() {
     let date = d(2026, 6, 20);
 
     let match_result =
-        apply_global_tournament_result(&mut continents, &fixture, &raw, date, "WC", "World Cup");
+        GlobalTournamentMatch::apply(&mut continents, &fixture, &raw, date, "WC", "World Cup");
 
     assert_eq!(match_result.league_slug, "international");
     assert_eq!(match_result.home_team_id, 1);
@@ -608,7 +608,7 @@ fn emergency_callup_uses_world_candidates_and_bumps_metric() {
         "EmergencyCallupMetrics::total must increment for visibility"
     );
 
-    let brazil = country_lookup(&continents, 1).unwrap();
+    let brazil = WorldCountryLookup::find(&continents, 1).unwrap();
     let squad_has_foreigner = brazil
         .national_team
         .squad
@@ -683,9 +683,9 @@ fn world_country_reputation_lookup_works_across_continents() {
         make_continent(1, vec![country_a]),
         make_continent(2, vec![country_b]),
     ];
-    assert_eq!(world_country_reputation(&continents, 1), 8000);
-    assert_eq!(world_country_reputation(&continents, 2), 500);
-    assert_eq!(world_country_reputation(&continents, 999), 0);
+    assert_eq!(WorldCountryLookup::reputation(&continents, 1), 8000);
+    assert_eq!(WorldCountryLookup::reputation(&continents, 2), 500);
+    assert_eq!(WorldCountryLookup::reputation(&continents, 999), 0);
 }
 
 // ============================================================
@@ -743,7 +743,7 @@ fn u21_squad_excludes_senior_selected_player() {
     let country = make_country(1, 1, "Brazil", vec![club], 8000);
     let mut continents = vec![make_continent(1, vec![country])];
 
-    if let Some(brazil) = country_lookup_mut(&mut continents, 1) {
+    if let Some(brazil) = WorldCountryLookup::find_mut(&mut continents, 1) {
         brazil.national_team.squad.push(NationalSquadPlayer {
             player_id: 301,
             club_id: 1,
@@ -760,7 +760,7 @@ fn u21_squad_excludes_senior_selected_player() {
         NationalTeamLevel::Under21,
     );
 
-    let brazil = country_lookup(&continents, 1).unwrap();
+    let brazil = WorldCountryLookup::find(&continents, 1).unwrap();
     assert!(
         !brazil
             .u21_national_team
@@ -786,11 +786,11 @@ fn u21_match_stats_increment_only_u21_caps() {
         .expect("scorer stat line")
         .goals = 2;
 
-    apply_world_international_stats_for_level(
+    WorldInternationalStats::apply_for_level(
         &mut continents,
         1,
         99,
-        &collect_international_appearances(&raw, 1, 99, 2, 0),
+        &InternationalAppearances::collect(&raw, 1, 99, 2, 0),
         &InternationalMatchContext::new(
             d(2026, 11, 18),
             NationalTeamLevel::Under21,
@@ -841,7 +841,7 @@ fn appearance_map_reads_side_and_starter_from_the_match_squads() {
     raw.right_team_players.substitutes.push(202);
     raw.player_of_the_match_id = Some(202);
 
-    let appearances = collect_international_appearances(&raw, 791, 799, 1, 2);
+    let appearances = InternationalAppearances::collect(&raw, 791, 799, 1, 2);
 
     let home = appearances.get(&101).expect("home scorer must appear");
     assert!(home.is_starter, "he is named in the home starting eleven");
@@ -916,7 +916,7 @@ fn u21_release_clears_only_u21_status() {
     let country = make_country(1, 1, "Brazil", vec![club], 8000);
     let mut continents = vec![make_continent(1, vec![country])];
 
-    if let Some(brazil) = country_lookup_mut(&mut continents, 1) {
+    if let Some(brazil) = WorldCountryLookup::find_mut(&mut continents, 1) {
         brazil.u21_national_team.squad.push(NationalSquadPlayer {
             player_id: 301,
             club_id: 1,

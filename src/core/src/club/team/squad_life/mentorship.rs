@@ -190,7 +190,6 @@ impl MentorshipProcessor {
     /// at most one mentee per pass, and each mentee has exactly one mentor.
     /// Returns the pairings that were applied this tick so callers can surface
     /// them to the UI / result stream.
-    #[expect(clippy::too_many_lines)]
     pub fn process(
         players: &mut [Player],
         date: NaiveDate,
@@ -199,12 +198,109 @@ impl MentorshipProcessor {
         if players.len() < 2 {
             return Vec::new();
         }
+        let (mut mentors, mut mentees) = Self::score_candidates(players, date);
+        if mentors.is_empty() || mentees.is_empty() {
+            return Vec::new();
+        }
 
-        // Score candidates (immutable pass).
+        // Sort by score — best mentors/mentees first.
+        mentors.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+        mentees.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+        let pairings = Self::match_pairs(players, date, &mentors, &mentees);
+
+        // Head of Youth Development amplifies transfer rate: elite HoY → +25%.
+        let hoy_factor = 1.0 + (head_of_youth_wwy as f32 / 20.0 - 0.5).max(0.0) * 0.5;
+        let mut applied: Vec<MentorshipPairing> = Vec::with_capacity(pairings.len());
+
+        for (mentor_idx, mentee_idx, compat) in &pairings {
+            let mentor_id = players[*mentor_idx].id;
+            let mentee_id = players[*mentee_idx].id;
+            let (mentor_prof, mentor_amb, mentor_det, mentor_controversy) = {
+                let mentor = &players[*mentor_idx];
+                (
+                    mentor.attributes.professionalism,
+                    mentor.attributes.ambition,
+                    mentor.skills.mental.determination,
+                    mentor.attributes.controversy,
+                )
+            };
+
+            // Bad-mentor rule: low professionalism / high controversy mentors
+            // can sour the mentee instead of guiding them. 20% deterministic
+            // weekly chance of negative influence.
+            let bad_mentor = mentor_prof < 8.0 || mentor_controversy > 16.0;
+            let bad_roll = Self::bad_mentor_roll(mentor_id, mentee_id, date) < 0.20;
+
+            // Step size scales with compatibility tier.
+            let (step_factor, bond_mag) = if *compat >= 75.0 {
+                (1.0, 0.20)
+            } else {
+                // 55..74 tier
+                (0.6, 0.10)
+            };
+            let step = 0.020 * step_factor * hoy_factor;
+
+            let mentee = &mut players[*mentee_idx];
+            if bad_mentor && bad_roll {
+                mentee.apply_bad_mentorship(mentor_id, date);
+            } else {
+                mentee.apply_healthy_mentorship(
+                    mentor_id,
+                    mentor_prof,
+                    mentor_amb,
+                    mentor_det,
+                    step,
+                    bond_mag,
+                    *compat,
+                    date,
+                );
+            }
+            mentee.statuses.add(date, PlayerStatusType::Tut);
+
+            applied.push(MentorshipPairing {
+                mentor_id,
+                mentee_id,
+            });
+        }
+
+        // Mark mentors with Lrn status. Mentor-side relation bookkeeping is
+        // handled below via `set_mentorship`, which already mirrors the bond
+        // and influence on the mentor's side.
+        for (mentor_idx, _, _) in &pairings {
+            players[*mentor_idx]
+                .statuses
+                .add(date, PlayerStatusType::Lrn);
+        }
+
+        // Record mentorship on both sides — the mentor flags the mentee's slot
+        // with Mentee and the mentee flags the mentor with Mentor. Chemistry /
+        // influence passes can now see the pairing and surface it in the UI.
+        for (mentor_idx, mentee_idx, _) in pairings.iter() {
+            let mentor_id = players[*mentor_idx].id;
+            let mentee_id = players[*mentee_idx].id;
+            players[*mentor_idx]
+                .relations
+                .set_mentorship(mentee_id, MentorshipType::Mentee);
+            players[*mentee_idx]
+                .relations
+                .set_mentorship(mentor_id, MentorshipType::Mentor);
+        }
+
+        applied
+    }
+
+    fn score_candidates(
+        players: &[Player],
+        date: NaiveDate,
+    ) -> (
+        Vec<(usize, f32, PlayerFieldPositionGroup)>,
+        Vec<(usize, f32, PlayerFieldPositionGroup)>,
+    ) {
         let mut mentors: Vec<(usize, f32, PlayerFieldPositionGroup)> = Vec::new();
         let mut mentees: Vec<(usize, f32, PlayerFieldPositionGroup)> = Vec::new();
         for (idx, p) in players.iter().enumerate() {
-            // Already paired? Let the existing pairing finish before re-pairing.
+            // Already paired? Let the existing pairing finish before
+            // re-pairing.
             if p.statuses.has(PlayerStatusType::Inj) {
                 continue;
             }
@@ -218,19 +314,19 @@ impl MentorshipProcessor {
                 mentees.push((idx, n_score, group));
             }
         }
+        (mentors, mentees)
+    }
 
-        if mentors.is_empty() || mentees.is_empty() {
-            return Vec::new();
-        }
-
-        // Sort by score — best mentors/mentees first.
-        mentors.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
-        mentees.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
-
+    fn match_pairs(
+        players: &[Player],
+        date: NaiveDate,
+        mentors: &[(usize, f32, PlayerFieldPositionGroup)],
+        mentees: &[(usize, f32, PlayerFieldPositionGroup)],
+    ) -> Vec<(usize, usize, f32)> {
         // Greedy same-position-group matching, gated on compatibility.
         let mut used_mentors: Vec<bool> = vec![false; mentors.len()];
         let mut pairings: Vec<(usize, usize, f32)> = Vec::new();
-        for (mentee_idx, _, mentee_group) in &mentees {
+        for (mentee_idx, _, mentee_group) in mentees {
             // Find best compatibility-scoring mentor in same group.
             let mut best: Option<(usize, f32)> = None;
             for (mi, (mentor_idx, _, mentor_group)) in mentors.iter().enumerate() {
@@ -259,195 +355,130 @@ impl MentorshipProcessor {
                 used_mentors[mi] = true;
             }
         }
+        pairings
+    }
+}
 
-        // Head of Youth Development amplifies transfer rate: elite HoY → +25%.
-        let hoy_factor = 1.0 + (head_of_youth_wwy as f32 / 20.0 - 0.5).max(0.0) * 0.5;
+impl Player {
+    fn apply_bad_mentorship(&mut self, mentor_id: u32, date: NaiveDate) {
+        // Negative influence — pull mentee's professionalism down a notch and
+        // record training friction with the mentor.
+        self.attributes.professionalism =
+            (self.attributes.professionalism - 0.010).clamp(0.0, 20.0);
+        self.relations
+            .update_with_type(mentor_id, -0.15, ChangeType::TrainingFriction, date);
 
-        let mut applied: Vec<MentorshipPairing> = Vec::with_capacity(pairings.len());
-        let mentor_ids: Vec<u32> = pairings
+        // Repeated incidents (last 30 days had a similar event) escalate to a
+        // visible ConflictWithTeammate event.
+        let recent_friction = self
+            .happiness
+            .recent_events
             .iter()
-            .map(|(m_idx, _, _)| players[*m_idx].id)
-            .collect();
-        let mentee_ids: Vec<u32> = pairings
-            .iter()
-            .map(|(_, t_idx, _)| players[*t_idx].id)
-            .collect();
-        let pair_compatibilities: Vec<f32> = pairings.iter().map(|(_, _, c)| *c).collect();
-
-        for (i, (mentor_idx, mentee_idx, compat)) in pairings.iter().enumerate() {
-            // Read mentor attributes (immutable).
-            let (mentor_prof, mentor_amb, mentor_det, mentor_controversy) = {
-                let mentor = &players[*mentor_idx];
-                (
-                    mentor.attributes.professionalism,
-                    mentor.attributes.ambition,
-                    mentor.skills.mental.determination,
-                    mentor.attributes.controversy,
-                )
-            };
-
-            // Bad-mentor rule: low professionalism / high controversy mentors
-            // can sour the mentee instead of guiding them. 20% deterministic
-            // weekly chance of negative influence.
-            let bad_mentor = mentor_prof < 8.0 || mentor_controversy > 16.0;
-            let bad_roll = Self::bad_mentor_roll(mentor_ids[i], mentee_ids[i], date) < 0.20;
-
-            // Step size scales with compatibility tier.
-            let (step_factor, bond_mag) = if *compat >= 75.0 {
-                (1.0, 0.20)
-            } else {
-                // 55..74 tier
-                (0.6, 0.10)
-            };
-            let step = 0.020 * step_factor * hoy_factor;
-
-            let mentee = &mut players[*mentee_idx];
-            if bad_mentor && bad_roll {
-                // Negative influence — pull mentee's professionalism down a
-                // notch and record training friction with the mentor.
-                mentee.attributes.professionalism =
-                    (mentee.attributes.professionalism - 0.010).clamp(0.0, 20.0);
-                mentee.relations.update_with_type(
-                    mentor_ids[i],
-                    -0.15,
-                    ChangeType::TrainingFriction,
-                    date,
-                );
-                // Repeated incidents (last 30 days had a similar event) escalate
-                // to a visible ConflictWithTeammate event.
-                let recent_friction = mentee
-                    .happiness
-                    .recent_events
-                    .iter()
-                    .filter(|e| {
-                        e.event_type == HappinessEventType::ConflictWithTeammate
-                            && e.partner_player_id == Some(mentor_ids[i])
-                            && e.days_ago <= 30
-                    })
-                    .count();
-                if recent_friction >= 1 {
-                    let mag = -1.5;
-                    let snapshot = mentee
-                        .relations
-                        .get_player(mentor_ids[i])
-                        .map(|r| (r.level, r.trust, r.friendship, r.professional_respect));
-                    let mut ctx = HappinessEventContext::new(
-                        HappinessEventCause::LeadershipDispute,
-                        HappinessEventSeverity::from_magnitude(mag),
-                        HappinessEventScope::TrainingGround,
-                    )
-                    .with_evidence(HappinessEventEvidence::MentorInfluence)
-                    .with_evidence(HappinessEventEvidence::RepeatedIncident)
-                    .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk)
-                    .with_teammate_conflict_context(
-                        TeammateConflictContext::new(
-                            TeammateConflictReason::LeadershipChallenge,
-                            ConflictLocation::TrainingGround,
-                        ),
-                    );
-                    if let Some((level, trust, friendship, prof)) = snapshot {
-                        ctx = ctx
-                            .with_relationship_levels(level, level)
-                            .with_relationship_axes(trust, friendship, prof);
-                    }
-                    // 30-day partner cooldown + shared same-tick
-                    // conflict budget via the central helper.
-                    mentee
-                        .happiness
-                        .try_add_partner_context_with_same_tick_budget(
-                            HappinessEventType::ConflictWithTeammate,
-                            mag,
-                            mentor_ids[i],
-                            || ctx,
-                            30,
-                            PlayerHappiness::MAX_CONFLICT_WITH_TEAMMATE_PER_TICK,
-                        );
-                }
-            } else {
-                // Healthy mentoring — drift personality and bond.
-                mentee.on_mentored(&Mentoring {
-                    professionalism: mentor_prof,
-                    ambition: mentor_amb,
-                    determination: mentor_det,
-                    step,
-                });
-                mentee.relations.update_with_type(
-                    mentor_ids[i],
-                    bond_mag,
-                    ChangeType::MentorshipBond,
-                    date,
-                );
-                // Partner-tagged event — tier 75+ is meaningful enough
-                // to log. Routes through the central budget+cooldown
-                // helper so repeated healthy mentorship can't spam the
-                // bonding feed, and so the row shares the same-tick
-                // bonding ceiling with the behaviour-pass and
-                // training-friction emitters.
-                if *compat >= 75.0 {
-                    let mag = 0.6;
-                    let snapshot = mentee
-                        .relations
-                        .get_player(mentor_ids[i])
-                        .map(|r| (r.level, r.trust, r.friendship, r.professional_respect));
-                    let mut ctx = HappinessEventContext::new(
-                        HappinessEventCause::TrainingPartnership,
-                        HappinessEventSeverity::from_magnitude(mag),
-                        HappinessEventScope::TrainingGround,
-                    )
-                    .with_evidence(HappinessEventEvidence::MentorInfluence)
-                    .with_follow_up(HappinessEventFollowUp::TrendImproving);
-                    if let Some((level, trust, friendship, prof)) = snapshot {
-                        ctx = ctx
-                            .with_relationship_levels(level, level)
-                            .with_relationship_axes(trust, friendship, prof);
-                    }
-                    mentee
-                        .happiness
-                        .try_add_partner_context_with_same_tick_budget(
-                            HappinessEventType::TeammateBonding,
-                            mag,
-                            mentor_ids[i],
-                            || ctx,
-                            30,
-                            PlayerHappiness::MAX_TEAMMATE_BONDING_PER_TICK,
-                        );
-                }
-            }
-            mentee.statuses.add(date, PlayerStatusType::Tut);
-
-            applied.push(MentorshipPairing {
-                mentor_id: mentor_ids[i],
-                mentee_id: mentee_ids[i],
-            });
+            .filter(|e| {
+                e.event_type == HappinessEventType::ConflictWithTeammate
+                    && e.partner_player_id == Some(mentor_id)
+                    && e.days_ago <= 30
+            })
+            .count();
+        if recent_friction < 1 {
+            return;
         }
 
-        // Mark mentors with Lrn status. Mentor-side relation bookkeeping is
-        // handled below via `set_mentorship`, which already mirrors the bond
-        // and influence on the mentor's side.
-        for (mentor_idx, _, _) in &pairings {
-            players[*mentor_idx]
-                .statuses
-                .add(date, PlayerStatusType::Lrn);
+        let mag = -1.5;
+        let snapshot = self
+            .relations
+            .get_player(mentor_id)
+            .map(|r| (r.level, r.trust, r.friendship, r.professional_respect));
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::LeadershipDispute,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::TrainingGround,
+        )
+        .with_evidence(HappinessEventEvidence::MentorInfluence)
+        .with_evidence(HappinessEventEvidence::RepeatedIncident)
+        .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk)
+        .with_teammate_conflict_context(TeammateConflictContext::new(
+            TeammateConflictReason::LeadershipChallenge,
+            ConflictLocation::TrainingGround,
+        ));
+        if let Some((level, trust, friendship, prof)) = snapshot {
+            ctx = ctx
+                .with_relationship_levels(level, level)
+                .with_relationship_axes(trust, friendship, prof);
         }
-        let _ = pair_compatibilities; // kept for diagnostics; enforced as cap above.
-
-        // Record mentorship on both sides — the mentor flags the mentee's slot
-        // with Mentee and the mentee flags the mentor with Mentor. Chemistry /
-        // influence passes can now see the pairing and surface it in the UI.
-        for (i, (mentor_idx, mentee_idx, _)) in pairings.iter().enumerate() {
-            let mentor_id = mentor_ids[i];
-            let mentee_id = mentee_ids[i];
-            players[*mentor_idx]
-                .relations
-                .set_mentorship(mentee_id, MentorshipType::Mentee);
-            players[*mentee_idx]
-                .relations
-                .set_mentorship(mentor_id, MentorshipType::Mentor);
-        }
-
-        applied
+        // 30-day partner cooldown + shared same-tick conflict budget via the
+        // central helper.
+        self.happiness
+            .try_add_partner_context_with_same_tick_budget(
+                HappinessEventType::ConflictWithTeammate,
+                mag,
+                mentor_id,
+                || ctx,
+                30,
+                PlayerHappiness::MAX_CONFLICT_WITH_TEAMMATE_PER_TICK,
+            );
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn apply_healthy_mentorship(
+        &mut self,
+        mentor_id: u32,
+        mentor_professionalism: f32,
+        mentor_ambition: f32,
+        mentor_determination: f32,
+        step: f32,
+        bond_mag: f32,
+        compatibility: f32,
+        date: NaiveDate,
+    ) {
+        // Healthy mentoring — drift personality and bond.
+        self.on_mentored(&Mentoring {
+            professionalism: mentor_professionalism,
+            ambition: mentor_ambition,
+            determination: mentor_determination,
+            step,
+        });
+        self.relations
+            .update_with_type(mentor_id, bond_mag, ChangeType::MentorshipBond, date);
+
+        // Partner-tagged event — tier 75+ is meaningful enough to log. Routes
+        // through the central budget+cooldown helper so repeated healthy
+        // mentorship can't spam the bonding feed, and so the row shares the
+        // same-tick bonding ceiling with the behaviour-pass and
+        // training-friction emitters.
+        if compatibility < 75.0 {
+            return;
+        }
+        let mag = 0.6;
+        let snapshot = self
+            .relations
+            .get_player(mentor_id)
+            .map(|r| (r.level, r.trust, r.friendship, r.professional_respect));
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::TrainingPartnership,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::TrainingGround,
+        )
+        .with_evidence(HappinessEventEvidence::MentorInfluence)
+        .with_follow_up(HappinessEventFollowUp::TrendImproving);
+        if let Some((level, trust, friendship, prof)) = snapshot {
+            ctx = ctx
+                .with_relationship_levels(level, level)
+                .with_relationship_axes(trust, friendship, prof);
+        }
+        self.happiness
+            .try_add_partner_context_with_same_tick_budget(
+                HappinessEventType::TeammateBonding,
+                mag,
+                mentor_id,
+                || ctx,
+                30,
+                PlayerHappiness::MAX_TEAMMATE_BONDING_PER_TICK,
+            );
+    }
+}
+
+impl MentorshipProcessor {
     /// Deterministic 0..1 roll for the bad-mentor test. Same mentor + mentee +
     /// date returns the same number — keeps tests reproducible.
     fn bad_mentor_roll(mentor_id: u32, mentee_id: u32, date: NaiveDate) -> f32 {

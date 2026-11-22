@@ -1,17 +1,16 @@
 use crate::GameAppData;
-use crate::about::about_routes;
-use crate::ai::routes::ai_routes;
+use crate::about::routes::AboutRoutes;
+use crate::ai::routes::AiRoutes;
 use crate::champions_league::champions_league_routes;
-use crate::shared::default_handler::default_handler;
 use crate::conference_league::conference_league_routes;
 use crate::copa_libertadores::copa_libertadores_routes;
 use crate::countries::country_routes;
 use crate::cups::cup_routes;
-use crate::date::current_date_routes;
+use crate::date::CurrentDateRoutes;
 use crate::europa_league::europa_league_routes;
 use crate::face::face_routes;
-use crate::game::game_routes;
-use crate::i18n::{SUPPORTED_LANG_CODES, detect_language};
+use crate::game::GameRoutes;
+use crate::i18n::{I18nManager, SUPPORTED_LANG_CODES};
 use crate::leagues::address::LeagueAddress;
 use crate::leagues::league_routes;
 use crate::r#match::routes::match_routes;
@@ -19,10 +18,11 @@ use crate::national_competitions::national_competitions_routes;
 use crate::player::player_routes;
 use crate::playoffs::playoff_routes;
 use crate::search::search_routes;
+use crate::shared::default_handler::DefaultHandler;
 use crate::staff::staff_routes;
 use crate::teams::team_routes;
-use crate::watchlist::watchlist_routes;
-use crate::workers::routes::workers_routes;
+use crate::watchlist::routes::WatchlistRoutes;
+use crate::workers::routes::WorkersRoutes;
 use axum::Router;
 use axum::extract::{Request, State};
 use axum::http::HeaderMap;
@@ -32,21 +32,25 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use core::SimulatorData;
 
-async fn root_redirect(headers: HeaderMap) -> impl IntoResponse {
-    let accept_language = headers
-        .get(ACCEPT_LANGUAGE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("en");
-    let lang = detect_language(accept_language);
-    Redirect::temporary(&format!("/{}", lang))
+impl ServerRoutes {
+    async fn root_redirect(headers: HeaderMap) -> impl IntoResponse {
+        let accept_language = headers
+            .get(ACCEPT_LANGUAGE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("en");
+        let lang = I18nManager::detect_language(accept_language);
+        Redirect::temporary(&format!("/{}", lang))
+    }
 }
 
-async fn sitemap_xml(State(state): State<GameAppData>) -> impl IntoResponse {
-    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let guard = state.data.read().await;
-    let xml = Sitemap::render(guard.as_deref(), &date);
+impl ServerRoutes {
+    async fn sitemap_xml(State(state): State<GameAppData>) -> impl IntoResponse {
+        let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let guard = state.data.read().await;
+        let xml = Sitemap::render(guard.as_deref(), &date);
 
-    ([(axum::http::header::CONTENT_TYPE, "application/xml")], xml)
+        ([(axum::http::header::CONTENT_TYPE, "application/xml")], xml)
+    }
 }
 
 struct Sitemap;
@@ -120,31 +124,33 @@ impl Sitemap {
 ///
 /// Pre-handler: rejects unsupported language prefixes (e.g. `/saas/countries/...`).
 /// Post-handler: catches any 4xx response (not-found entity, invalid path param).
-async fn redirect_on_error(request: Request, next: Next) -> Response {
-    let path = request.uri().path();
+impl ServerRoutes {
+    async fn redirect_on_error(request: Request, next: Next) -> Response {
+        let path = request.uri().path();
 
-    // Never redirect API endpoints or static assets
-    if path.starts_with("/api/") || path.starts_with("/static/") {
-        return next.run(request).await;
-    }
+        // Never redirect API endpoints or static assets
+        if path.starts_with("/api/") || path.starts_with("/static/") {
+            return next.run(request).await;
+        }
 
-    // Check language prefix before running the handler
-    let first_segment = path.trim_start_matches('/').split('/').next().unwrap_or("");
+        // Check language prefix before running the handler
+        let first_segment = path.trim_start_matches('/').split('/').next().unwrap_or("");
 
-    // Only validate paths that look like /{lang}/... (skip `/`, `/sitemap.xml`, assets)
-    if !first_segment.is_empty()
-        && path.matches('/').count() > 1
-        && !SUPPORTED_LANG_CODES.contains(&first_segment)
-    {
-        return Redirect::temporary("/").into_response();
-    }
+        // Only validate paths that look like /{lang}/... (skip `/`, `/sitemap.xml`, assets)
+        if !first_segment.is_empty()
+            && path.matches('/').count() > 1
+            && !SUPPORTED_LANG_CODES.contains(&first_segment)
+        {
+            return Redirect::temporary("/").into_response();
+        }
 
-    let response = next.run(request).await;
+        let response = next.run(request).await;
 
-    if response.status().is_client_error() {
-        Redirect::temporary("/").into_response()
-    } else {
-        response
+        if response.status().is_client_error() {
+            Redirect::temporary("/").into_response()
+        } else {
+            response
+        }
     }
 }
 
@@ -153,8 +159,8 @@ pub struct ServerRoutes;
 impl ServerRoutes {
     pub fn create() -> Router<GameAppData> {
         Router::<GameAppData>::new()
-            .route("/", get(root_redirect))
-            .route("/sitemap.xml", get(sitemap_xml))
+            .route("/", get(Self::root_redirect))
+            .route("/sitemap.xml", get(Self::sitemap_xml))
             .merge(champions_league_routes())
             .merge(europa_league_routes())
             .merge(conference_league_routes())
@@ -163,21 +169,21 @@ impl ServerRoutes {
             .merge(country_routes())
             .merge(cup_routes())
             .merge(playoff_routes())
-            .merge(game_routes())
+            .merge(GameRoutes::routes())
             .merge(league_routes())
             .merge(team_routes())
             .merge(player_routes())
             .merge(staff_routes())
             .merge(match_routes())
-            .merge(current_date_routes())
+            .merge(CurrentDateRoutes::routes())
             .merge(face_routes())
-            .merge(watchlist_routes())
+            .merge(WatchlistRoutes::routes())
             .merge(search_routes())
-            .merge(about_routes())
-            .merge(workers_routes())
-            .merge(ai_routes())
-            .fallback(default_handler)
-            .layer(axum::middleware::from_fn(redirect_on_error))
+            .merge(AboutRoutes::routes())
+            .merge(WorkersRoutes::routes())
+            .merge(AiRoutes::routes())
+            .fallback(DefaultHandler::serve)
+            .layer(axum::middleware::from_fn(Self::redirect_on_error))
     }
 }
 

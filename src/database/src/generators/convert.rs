@@ -1,135 +1,137 @@
 use std::collections::HashMap;
 
 use crate::loaders::{
-    CountryCorridorEntity, CountryTransferProfileEntity, NationalCompetitionEntity,
+    CountryCorridorEntity, CountryDiasporaEntity, CountryTransferProfileEntity,
+    NationalCompetitionEntity, QualifyingZoneEntity, ScheduleDateEntity,
 };
 use core::transfers::{CorridorWeight, CountryTransferProfile, DiasporaShare};
 use core::{
     CompetitionScope, InternationalCalendar, InternationalWindow, NationalCompetitionConfig,
-    NationalTeamLevel, QualifyingConfig, QualifyingPosition, QualifyingZoneConfig,
-    ScheduleConfig, ScheduleDate, TournamentConfig,
+    NationalTeamLevel, QualifyingConfig, QualifyingPosition, QualifyingZoneConfig, ScheduleConfig,
+    ScheduleDate, TournamentConfig,
 };
 
-/// Convert a database NationalCompetitionEntity to a runtime NationalCompetitionConfig
-#[expect(clippy::too_many_lines)]
-pub fn convert_national_competition(
-    entity: &NationalCompetitionEntity,
-) -> NationalCompetitionConfig {
-    let scope = match entity.scope.as_str() {
-        "global" => CompetitionScope::Global,
-        "continental" => CompetitionScope::Continental,
-        _ => CompetitionScope::Continental,
-    };
+/// Maps a database [`NationalCompetitionEntity`] onto the runtime
+/// [`NationalCompetitionConfig`] the simulator consumes.
+pub struct NationalCompetitionConverter;
 
-    // Missing / null / "senior" => Senior (backward-compatible default).
-    let team_level = match entity.team_level.as_deref() {
-        Some("u21") => NationalTeamLevel::Under21,
-        _ => NationalTeamLevel::Senior,
-    };
-
-    let qualifying = QualifyingConfig {
-        zones: entity
-            .qualifying
-            .zones
-            .iter()
-            .map(|z| {
-                let qualifiers_per_group = z
-                    .qualifiers_per_group
-                    .iter()
-                    .map(|pos| match pos.as_str() {
-                        "winner" => QualifyingPosition::Winner,
-                        "runner_up" => QualifyingPosition::RunnerUp,
-                        _ => QualifyingPosition::Winner,
-                    })
-                    .collect();
-
-                QualifyingZoneConfig {
-                    continent_id: z.continent_id,
-                    spots: z.spots,
-                    max_groups: z.max_groups,
-                    teams_per_group_target: z.teams_per_group_target,
-                    qualifiers_per_group,
-                    best_runners_up: z.best_runners_up,
-                    best_third_placed: z.best_third_placed,
-                }
-            })
-            .collect(),
-    };
-
-    let tournament = TournamentConfig {
-        total_teams: entity.tournament.total_teams,
-        group_count: entity.tournament.group_count,
-        teams_per_group: entity.tournament.teams_per_group,
-        advance_per_group: entity.tournament.advance_per_group,
-        best_third_placed: entity.tournament.best_third_placed,
-    };
-
-    // A qualifying date names its international window by month; the
-    // simulator trusts that the window exists and has a matchday for it.
-    let mut per_window: HashMap<(i32, u32), usize> = HashMap::new();
-    for sd in &entity.schedule.qualifying_dates {
-        assert!(
-            InternationalCalendar::names_window(sd.month),
-            "national competition {}: qualifying month {} has no international window",
-            entity.name,
-            sd.month
-        );
-        let dates = per_window.entry((sd.year_offset, sd.month)).or_default();
-        *dates += 1;
-        assert!(
-            *dates <= InternationalWindow::MATCHDAYS,
-            "national competition {}: more than {} qualifying dates in the month {} window",
-            entity.name,
-            InternationalWindow::MATCHDAYS,
-            sd.month
-        );
+impl NationalCompetitionConverter {
+    pub fn convert(entity: &NationalCompetitionEntity) -> NationalCompetitionConfig {
+        NationalCompetitionConfig {
+            id: entity.id,
+            name: entity.name.clone(),
+            short_name: entity.short_name.clone(),
+            scope: Self::scope(&entity.scope),
+            continent_id: entity.continent_id,
+            team_level: Self::team_level(entity.team_level.as_deref()),
+            cycle_years: entity.cycle_years,
+            cycle_offset: entity.cycle_offset,
+            qualifying: Self::qualifying(entity),
+            tournament: Self::tournament(entity),
+            schedule: Self::schedule(entity),
+        }
     }
 
-    let schedule = ScheduleConfig {
-        qualifying_dates: entity
-            .schedule
-            .qualifying_dates
-            .iter()
-            .map(|sd| ScheduleDate {
-                month: sd.month,
-                day: sd.day,
-                year_offset: sd.year_offset,
-            })
-            .collect(),
-        tournament_group_dates: entity
-            .schedule
-            .tournament_group_dates
-            .iter()
-            .map(|sd| ScheduleDate {
-                month: sd.month,
-                day: sd.day,
-                year_offset: sd.year_offset,
-            })
-            .collect(),
-        tournament_knockout_dates: entity
-            .schedule
-            .tournament_knockout_dates
-            .iter()
-            .map(|sd| ScheduleDate {
-                month: sd.month,
-                day: sd.day,
-                year_offset: sd.year_offset,
-            })
-            .collect(),
-    };
+    fn scope(scope: &str) -> CompetitionScope {
+        match scope {
+            "global" => CompetitionScope::Global,
+            "continental" => CompetitionScope::Continental,
+            _ => CompetitionScope::Continental,
+        }
+    }
 
-    NationalCompetitionConfig {
-        id: entity.id,
-        name: entity.name.clone(),
-        short_name: entity.short_name.clone(),
-        scope,
-        continent_id: entity.continent_id,
-        team_level,
-        cycle_years: entity.cycle_years,
-        cycle_offset: entity.cycle_offset,
-        qualifying,
-        tournament,
-        schedule,
+    fn team_level(team_level: Option<&str>) -> NationalTeamLevel {
+        // Missing / null / "senior" => Senior (backward-compatible default).
+        match team_level {
+            Some("u21") => NationalTeamLevel::Under21,
+            _ => NationalTeamLevel::Senior,
+        }
+    }
+
+    fn qualifying(entity: &NationalCompetitionEntity) -> QualifyingConfig {
+        QualifyingConfig {
+            zones: entity
+                .qualifying
+                .zones
+                .iter()
+                .map(Self::qualifying_zone)
+                .collect(),
+        }
+    }
+
+    fn qualifying_zone(zone: &QualifyingZoneEntity) -> QualifyingZoneConfig {
+        QualifyingZoneConfig {
+            continent_id: zone.continent_id,
+            spots: zone.spots,
+            max_groups: zone.max_groups,
+            teams_per_group_target: zone.teams_per_group_target,
+            qualifiers_per_group: zone
+                .qualifiers_per_group
+                .iter()
+                .map(|pos| match pos.as_str() {
+                    "winner" => QualifyingPosition::Winner,
+                    "runner_up" => QualifyingPosition::RunnerUp,
+                    _ => QualifyingPosition::Winner,
+                })
+                .collect(),
+            best_runners_up: zone.best_runners_up,
+            best_third_placed: zone.best_third_placed,
+        }
+    }
+
+    fn tournament(entity: &NationalCompetitionEntity) -> TournamentConfig {
+        TournamentConfig {
+            total_teams: entity.tournament.total_teams,
+            group_count: entity.tournament.group_count,
+            teams_per_group: entity.tournament.teams_per_group,
+            advance_per_group: entity.tournament.advance_per_group,
+            best_third_placed: entity.tournament.best_third_placed,
+        }
+    }
+
+    fn schedule(entity: &NationalCompetitionEntity) -> ScheduleConfig {
+        Self::validate_qualifying_dates(entity);
+        ScheduleConfig {
+            qualifying_dates: Self::schedule_dates(&entity.schedule.qualifying_dates),
+            tournament_group_dates: Self::schedule_dates(&entity.schedule.tournament_group_dates),
+            tournament_knockout_dates: Self::schedule_dates(
+                &entity.schedule.tournament_knockout_dates,
+            ),
+        }
+    }
+
+    fn schedule_dates(dates: &[ScheduleDateEntity]) -> Vec<ScheduleDate> {
+        dates
+            .iter()
+            .map(|sd| ScheduleDate {
+                month: sd.month,
+                day: sd.day,
+                year_offset: sd.year_offset,
+            })
+            .collect()
+    }
+
+    /// A qualifying date names its international window by month; the
+    /// simulator trusts that the window exists and has a matchday for it.
+    fn validate_qualifying_dates(entity: &NationalCompetitionEntity) {
+        let mut per_window: HashMap<(i32, u32), usize> = HashMap::new();
+        for sd in &entity.schedule.qualifying_dates {
+            assert!(
+                InternationalCalendar::names_window(sd.month),
+                "national competition {}: qualifying month {} has no international window",
+                entity.name,
+                sd.month
+            );
+            let dates = per_window.entry((sd.year_offset, sd.month)).or_default();
+            *dates += 1;
+            assert!(
+                *dates <= InternationalWindow::MATCHDAYS,
+                "national competition {}: more than {} qualifying dates in the month {} window",
+                entity.name,
+                InternationalWindow::MATCHDAYS,
+                sd.month
+            );
+        }
     }
 }
 
@@ -144,73 +146,80 @@ const UEFA_CONTINENT_ID: u32 = 1;
 /// exercise in-sim. Two-year cycle starting on the next even year;
 /// qualifying matchdays land inside the September/October/November/March
 /// international windows, finals in the June window.
-pub fn uefa_u21_championship_config() -> NationalCompetitionConfig {
-    let qualifying = QualifyingConfig {
-        zones: vec![QualifyingZoneConfig {
-            continent_id: UEFA_CONTINENT_ID,
-            spots: 16,
-            max_groups: 8,
-            teams_per_group_target: 5,
-            qualifiers_per_group: vec![QualifyingPosition::Winner, QualifyingPosition::RunnerUp],
-            best_runners_up: 0,
+pub struct UefaU21Championship;
+
+impl UefaU21Championship {
+    pub fn config() -> NationalCompetitionConfig {
+        let qualifying = QualifyingConfig {
+            zones: vec![QualifyingZoneConfig {
+                continent_id: UEFA_CONTINENT_ID,
+                spots: 16,
+                max_groups: 8,
+                teams_per_group_target: 5,
+                qualifiers_per_group: vec![
+                    QualifyingPosition::Winner,
+                    QualifyingPosition::RunnerUp,
+                ],
+                best_runners_up: 0,
+                best_third_placed: 0,
+            }],
+        };
+
+        let tournament = TournamentConfig {
+            total_teams: 16,
+            group_count: 4,
+            teams_per_group: 4,
+            advance_per_group: 2,
             best_third_placed: 0,
-        }],
-    };
+        };
 
-    let tournament = TournamentConfig {
-        total_teams: 16,
-        group_count: 4,
-        teams_per_group: 4,
-        advance_per_group: 2,
-        best_third_placed: 0,
-    };
+        let qd = |month: u32, day: u32, year_offset: i32| ScheduleDate {
+            month,
+            day,
+            year_offset,
+        };
 
-    let qd = |month: u32, day: u32, year_offset: i32| ScheduleDate {
-        month,
-        day,
-        year_offset,
-    };
+        let schedule = ScheduleConfig {
+            // Each pair names its month's window and takes its Thursday and
+            // Sunday.
+            qualifying_dates: vec![
+                qd(9, 6, 0),
+                qd(9, 9, 0),
+                qd(10, 11, 0),
+                qd(10, 14, 0),
+                qd(11, 15, 0),
+                qd(11, 18, 0),
+                qd(3, 22, 1),
+                qd(3, 25, 1),
+            ],
+            // Finals in June of the tournament year (qualifying_start + 2).
+            tournament_group_dates: vec![qd(6, 11, 2), qd(6, 14, 2), qd(6, 17, 2)],
+            tournament_knockout_dates: vec![
+                qd(6, 24, 2),
+                qd(6, 28, 2),
+                qd(7, 2, 2),
+                qd(7, 5, 2),
+                qd(7, 8, 2),
+            ],
+        };
 
-    let schedule = ScheduleConfig {
-        // Each pair names its month's window and takes its Thursday and
-        // Sunday.
-        qualifying_dates: vec![
-            qd(9, 6, 0),
-            qd(9, 9, 0),
-            qd(10, 11, 0),
-            qd(10, 14, 0),
-            qd(11, 15, 0),
-            qd(11, 18, 0),
-            qd(3, 22, 1),
-            qd(3, 25, 1),
-        ],
-        // Finals in June of the tournament year (qualifying_start + 2).
-        tournament_group_dates: vec![qd(6, 11, 2), qd(6, 14, 2), qd(6, 17, 2)],
-        tournament_knockout_dates: vec![
-            qd(6, 24, 2),
-            qd(6, 28, 2),
-            qd(7, 2, 2),
-            qd(7, 5, 2),
-            qd(7, 8, 2),
-        ],
-    };
-
-    NationalCompetitionConfig {
-        id: 9_001,
-        name: "UEFA U21 Championship".to_string(),
-        short_name: "U21 EURO".to_string(),
-        scope: CompetitionScope::Continental,
-        continent_id: Some(UEFA_CONTINENT_ID),
-        team_level: NationalTeamLevel::Under21,
-        cycle_years: 2,
-        cycle_offset: 0,
-        qualifying,
-        tournament,
-        schedule,
+        NationalCompetitionConfig {
+            id: 9_001,
+            name: "UEFA U21 Championship".to_string(),
+            short_name: "U21 EURO".to_string(),
+            scope: CompetitionScope::Continental,
+            continent_id: Some(UEFA_CONTINENT_ID),
+            team_level: NationalTeamLevel::Under21,
+            cycle_years: 2,
+            cycle_offset: 0,
+            qualifying,
+            tournament,
+            schedule,
+        }
     }
 }
 
-/// Turn one country's shipped transfer card into the runtime profile.
+/// Turns one country's shipped transfer card into the runtime profile.
 ///
 /// Two things happen here and nowhere else: country CODES become country
 /// IDS (the data files name each other by code; the simulator works in ids),
@@ -219,22 +228,39 @@ pub fn uefa_u21_championship_config() -> NationalCompetitionConfig {
 /// a country this database does not carry is dropped — silently, because the
 /// compiler already fails the build on an unknown code and a drop here can
 /// only mean a database older than its cards.
-pub fn convert_country_transfers(
-    entity: Option<&CountryTransferProfileEntity>,
-    country_id_by_code: &HashMap<String, u32>,
-) -> CountryTransferProfile {
-    let Some(entity) = entity else {
-        return CountryTransferProfile::default();
-    };
+pub struct CountryTransferProfileConverter<'a> {
+    country_id_by_code: &'a HashMap<String, u32>,
+}
 
-    let corridors = |rows: &[CountryCorridorEntity]| -> Vec<CorridorWeight> {
+impl<'a> CountryTransferProfileConverter<'a> {
+    pub fn new(country_id_by_code: &'a HashMap<String, u32>) -> Self {
+        Self { country_id_by_code }
+    }
+
+    pub fn convert(&self, entity: Option<&CountryTransferProfileEntity>) -> CountryTransferProfile {
+        let Some(entity) = entity else {
+            return CountryTransferProfile::default();
+        };
+
+        CountryTransferProfile {
+            import: self.corridors(&entity.import),
+            export: self.corridors(&entity.export),
+            diaspora: self.diaspora(&entity.diaspora),
+            foreign_share: entity.foreign_share.clamp(0.0, 1.0),
+            authored: entity.source == "authored",
+        }
+    }
+
+    fn corridors(&self, rows: &[CountryCorridorEntity]) -> Vec<CorridorWeight> {
         let max = rows.iter().map(|r| r.weight).fold(0.0_f32, f32::max);
         if max <= 0.0 {
             return Vec::new();
         }
         rows.iter()
             .filter_map(|row| {
-                let country_id = *country_id_by_code.get(&row.country.to_ascii_lowercase())?;
+                let country_id = *self
+                    .country_id_by_code
+                    .get(&row.country.to_ascii_lowercase())?;
                 Some(CorridorWeight {
                     country_id,
                     weight: (row.weight / max).clamp(0.0, 1.0),
@@ -242,24 +268,20 @@ pub fn convert_country_transfers(
                 })
             })
             .collect()
-    };
+    }
 
-    CountryTransferProfile {
-        import: corridors(&entity.import),
-        export: corridors(&entity.export),
-        diaspora: entity
-            .diaspora
-            .iter()
+    fn diaspora(&self, rows: &[CountryDiasporaEntity]) -> Vec<DiasporaShare> {
+        rows.iter()
             .filter_map(|row| {
-                let country_id = *country_id_by_code.get(&row.country.to_ascii_lowercase())?;
+                let country_id = *self
+                    .country_id_by_code
+                    .get(&row.country.to_ascii_lowercase())?;
                 Some(DiasporaShare {
                     country_id,
                     share: row.share.clamp(0.0, 1.0),
                 })
             })
-            .collect(),
-        foreign_share: entity.foreign_share.clamp(0.0, 1.0),
-        authored: entity.source == "authored",
+            .collect()
     }
 }
 
@@ -295,7 +317,7 @@ mod transfer_profile_tests {
             diaspora: Vec::new(),
             foreign_share: 0.58,
         };
-        let profile = convert_country_transfers(Some(&entity), &codes());
+        let profile = CountryTransferProfileConverter::new(&codes()).convert(Some(&entity));
         assert_eq!(profile.import_weight(1), Some(1.0));
         assert_eq!(profile.import_weight(3), Some(0.2));
         assert!(profile.is_money_corridor(3));
@@ -305,7 +327,7 @@ mod transfer_profile_tests {
 
     #[test]
     fn an_absent_card_yields_the_neutral_profile() {
-        let profile = convert_country_transfers(None, &codes());
+        let profile = CountryTransferProfileConverter::new(&codes()).convert(None);
         assert!(profile.import.is_empty());
         assert_eq!(profile.foreign_share, 0.0);
     }
@@ -331,7 +353,7 @@ mod transfer_profile_tests {
             diaspora: Vec::new(),
             foreign_share: 0.3,
         };
-        let profile = convert_country_transfers(Some(&entity), &codes());
+        let profile = CountryTransferProfileConverter::new(&codes()).convert(Some(&entity));
         assert_eq!(profile.import.len(), 1);
     }
 }
@@ -360,28 +382,28 @@ mod shipped_national_calendar_tests {
     #[test]
     fn every_shipped_qualifying_calendar_names_real_windows() {
         for entity in NationalCompetitionLoader::load() {
-            convert_national_competition(&entity);
+            NationalCompetitionConverter::convert(&entity);
         }
     }
 
     #[test]
     #[should_panic(expected = "qualifying month 6 has no international window")]
     fn a_june_qualifying_date_is_rejected() {
-        convert_national_competition(&world_cup_with(vec![(9, 6), (6, 10)]));
+        NationalCompetitionConverter::convert(&world_cup_with(vec![(9, 6), (6, 10)]));
     }
 
     #[test]
     #[should_panic(expected = "more than 3 qualifying dates in the month 10 window")]
     fn a_window_holds_at_most_three_qualifying_dates() {
         let four_in_october = vec![(10, 5), (10, 8), (10, 11), (10, 14)];
-        convert_national_competition(&world_cup_with(four_in_october));
+        NationalCompetitionConverter::convert(&world_cup_with(four_in_october));
     }
 
     #[test]
     fn the_euro_and_the_world_cup_never_open_qualifying_in_the_same_year() {
         let configs: Vec<_> = NationalCompetitionLoader::load()
             .iter()
-            .map(convert_national_competition)
+            .map(NationalCompetitionConverter::convert)
             .collect();
         let world_cup = configs
             .iter()

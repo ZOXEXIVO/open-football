@@ -1,4 +1,3 @@
-use crate::club::player::contract::contract::{is_inert_bonus, is_inert_clause};
 use crate::{
     ContractBonus, ContractBonusType, ContractClause, ContractClauseType, ContractType, Player,
     PlayerClubContract, PlayerContractProposal, PlayerSquadStatus,
@@ -50,14 +49,14 @@ impl AcceptContractHandler {
             .clone()
             .unwrap_or(current_status);
 
-        let mut bonuses = build_bonuses(&proposal);
-        let mut clauses = build_clauses(&proposal);
+        let mut bonuses = Self::build_bonuses(&proposal);
+        let mut clauses = Self::build_clauses(&proposal);
         // Strip inert types so a future code path can't sneak a
         // decorative bonus or clause onto a contract — those would
         // inflate the perceived package value (happiness / acceptance
         // scoring) without ever costing the club anything.
-        bonuses.retain(|b| !is_inert_bonus(&b.bonus_type));
-        clauses.retain(|c| !is_inert_clause(&c.bonus_type));
+        bonuses.retain(|b| !b.bonus_type.is_inert());
+        clauses.retain(|c| !c.bonus_type.is_inert());
 
         // Anchor the cap-bonus baseline at the player's CURRENT caps so
         // pre-existing international caps do NOT trigger a retroactive
@@ -111,154 +110,156 @@ impl AcceptContractHandler {
     }
 }
 
-fn build_bonuses(p: &PlayerContractProposal) -> Vec<ContractBonus> {
-    let mut bonuses = Vec::new();
+impl AcceptContractHandler {
+    fn build_bonuses(p: &PlayerContractProposal) -> Vec<ContractBonus> {
+        let mut bonuses = Vec::new();
 
-    if p.signing_bonus > 0 {
-        bonuses.push(ContractBonus::new(
-            p.signing_bonus as i32,
-            ContractBonusType::SigningBonus,
-        ));
-    }
-    if p.loyalty_bonus > 0 {
-        bonuses.push(ContractBonus::new(
-            p.loyalty_bonus as i32,
-            ContractBonusType::LoyaltyBonus,
-        ));
-    }
-    push_optional(
-        &mut bonuses,
-        p.appearance_fee,
-        ContractBonusType::AppearanceFee,
-    );
-    push_optional(
-        &mut bonuses,
-        p.unused_sub_fee,
-        ContractBonusType::UnusedSubstitutionFee,
-    );
-    push_optional(&mut bonuses, p.goal_bonus, ContractBonusType::GoalFee);
-    push_optional(
-        &mut bonuses,
-        p.clean_sheet_bonus,
-        ContractBonusType::CleanSheetFee,
-    );
-    push_optional(
-        &mut bonuses,
-        p.promotion_bonus,
-        ContractBonusType::PromotionFee,
-    );
-    push_optional(
-        &mut bonuses,
-        p.avoid_relegation_bonus,
-        ContractBonusType::AvoidRelegationFee,
-    );
-    push_optional(
-        &mut bonuses,
-        p.international_cap_bonus,
-        ContractBonusType::InternationalCapFee,
-    );
+        if p.signing_bonus > 0 {
+            bonuses.push(ContractBonus::new(
+                p.signing_bonus as i32,
+                ContractBonusType::SigningBonus,
+            ));
+        }
+        if p.loyalty_bonus > 0 {
+            bonuses.push(ContractBonus::new(
+                p.loyalty_bonus as i32,
+                ContractBonusType::LoyaltyBonus,
+            ));
+        }
+        Self::push_optional(
+            &mut bonuses,
+            p.appearance_fee,
+            ContractBonusType::AppearanceFee,
+        );
+        Self::push_optional(
+            &mut bonuses,
+            p.unused_sub_fee,
+            ContractBonusType::UnusedSubstitutionFee,
+        );
+        Self::push_optional(&mut bonuses, p.goal_bonus, ContractBonusType::GoalFee);
+        Self::push_optional(
+            &mut bonuses,
+            p.clean_sheet_bonus,
+            ContractBonusType::CleanSheetFee,
+        );
+        Self::push_optional(
+            &mut bonuses,
+            p.promotion_bonus,
+            ContractBonusType::PromotionFee,
+        );
+        Self::push_optional(
+            &mut bonuses,
+            p.avoid_relegation_bonus,
+            ContractBonusType::AvoidRelegationFee,
+        );
+        Self::push_optional(
+            &mut bonuses,
+            p.international_cap_bonus,
+            ContractBonusType::InternationalCapFee,
+        );
 
-    bonuses
-}
+        bonuses
+    }
 
-fn build_clauses(p: &PlayerContractProposal) -> Vec<ContractClause> {
-    let mut clauses = Vec::new();
+    fn build_clauses(p: &PlayerContractProposal) -> Vec<ContractClause> {
+        let mut clauses = Vec::new();
 
-    if let Some(release) = p.release_clause {
-        clauses.push(ContractClause::new(
-            release as i32,
-            ContractClauseType::MinimumFeeRelease,
-        ));
-    }
-    if let Some(release) = p.relegation_release {
-        clauses.push(ContractClause::new(
-            release as i32,
-            ContractClauseType::RelegationFeeRelease,
-        ));
-    }
-    if let Some(release) = p.non_promotion_release {
-        clauses.push(ContractClause::new(
-            release as i32,
-            ContractClauseType::NonPromotionRelease,
-        ));
-    }
-    if let Some(pct) = p.yearly_wage_rise_pct
-        && pct > 0
-    {
-        clauses.push(ContractClause::new(
-            pct as i32,
-            ContractClauseType::YearlyWageRise,
-        ));
-    }
-    if let Some(pct) = p.promotion_wage_increase_pct
-        && pct > 0
-    {
-        clauses.push(ContractClause::new(
-            pct as i32,
-            ContractClauseType::PromotionWageIncrease,
-        ));
-    }
-    if let Some(pct) = p.relegation_wage_decrease_pct
-        && pct > 0
-    {
-        clauses.push(ContractClause::new(
-            pct as i32,
-            ContractClauseType::RelegationWageDecrease,
-        ));
-    }
-    if let Some(years) = p.optional_extension_years
-        && years > 0
-    {
-        clauses.push(ContractClause::new(
-            years as i32,
-            ContractClauseType::OptionalContractExtensionByClub,
-        ));
-    }
-    if let Some(threshold) = p.appearance_extension_threshold
-        && threshold > 0
-    {
-        clauses.push(ContractClause::new(
-            threshold as i32,
-            ContractClauseType::OneYearExtensionAfterLeagueGamesFinalSeason,
-        ));
-    }
-    if let Some((threshold, pct)) = p.wage_after_apps {
-        // Use explicit threshold + percentage fields so the negotiated
-        // rise size survives intact — the previous packed encoding
-        // (`threshold * 100 + pct`) silently broke for raw-threshold
-        // values like 100 and could not survive a round-trip.
-        if threshold > 0 {
+        if let Some(release) = p.release_clause {
+            clauses.push(ContractClause::new(
+                release as i32,
+                ContractClauseType::MinimumFeeRelease,
+            ));
+        }
+        if let Some(release) = p.relegation_release {
+            clauses.push(ContractClause::new(
+                release as i32,
+                ContractClauseType::RelegationFeeRelease,
+            ));
+        }
+        if let Some(release) = p.non_promotion_release {
+            clauses.push(ContractClause::new(
+                release as i32,
+                ContractClauseType::NonPromotionRelease,
+            ));
+        }
+        if let Some(pct) = p.yearly_wage_rise_pct
+            && pct > 0
+        {
+            clauses.push(ContractClause::new(
+                pct as i32,
+                ContractClauseType::YearlyWageRise,
+            ));
+        }
+        if let Some(pct) = p.promotion_wage_increase_pct
+            && pct > 0
+        {
+            clauses.push(ContractClause::new(
+                pct as i32,
+                ContractClauseType::PromotionWageIncrease,
+            ));
+        }
+        if let Some(pct) = p.relegation_wage_decrease_pct
+            && pct > 0
+        {
+            clauses.push(ContractClause::new(
+                pct as i32,
+                ContractClauseType::RelegationWageDecrease,
+            ));
+        }
+        if let Some(years) = p.optional_extension_years
+            && years > 0
+        {
+            clauses.push(ContractClause::new(
+                years as i32,
+                ContractClauseType::OptionalContractExtensionByClub,
+            ));
+        }
+        if let Some(threshold) = p.appearance_extension_threshold
+            && threshold > 0
+        {
+            clauses.push(ContractClause::new(
+                threshold as i32,
+                ContractClauseType::OneYearExtensionAfterLeagueGamesFinalSeason,
+            ));
+        }
+        if let Some((threshold, pct)) = p.wage_after_apps {
+            // Use explicit threshold + percentage fields so the negotiated
+            // rise size survives intact — the previous packed encoding
+            // (`threshold * 100 + pct`) silently broke for raw-threshold
+            // values like 100 and could not survive a round-trip.
+            if threshold > 0 {
+                clauses.push(ContractClause::new_threshold_pct(
+                    threshold,
+                    pct,
+                    ContractClauseType::WageAfterReachingClubCareerLeagueGames,
+                ));
+            }
+        }
+        if let Some((threshold, pct)) = p.wage_after_caps
+            && threshold > 0
+        {
             clauses.push(ContractClause::new_threshold_pct(
                 threshold,
                 pct,
-                ContractClauseType::WageAfterReachingClubCareerLeagueGames,
+                ContractClauseType::WageAfterReachingInternationalCaps,
             ));
         }
-    }
-    if let Some((threshold, pct)) = p.wage_after_caps
-        && threshold > 0
-    {
-        clauses.push(ContractClause::new_threshold_pct(
-            threshold,
-            pct,
-            ContractClauseType::WageAfterReachingInternationalCaps,
-        ));
-    }
-    if p.match_highest_earner {
-        clauses.push(ContractClause::new(
-            1,
-            ContractClauseType::MatchHighestEarner,
-        ));
+        if p.match_highest_earner {
+            clauses.push(ContractClause::new(
+                1,
+                ContractClauseType::MatchHighestEarner,
+            ));
+        }
+
+        clauses
     }
 
-    clauses
-}
-
-fn push_optional(out: &mut Vec<ContractBonus>, value: Option<u32>, kind: ContractBonusType) {
-    if let Some(v) = value
-        && v > 0
-    {
-        out.push(ContractBonus::new(v as i32, kind));
+    fn push_optional(out: &mut Vec<ContractBonus>, value: Option<u32>, kind: ContractBonusType) {
+        if let Some(v) = value
+            && v > 0
+        {
+            out.push(ContractBonus::new(v as i32, kind));
+        }
     }
 }
 
@@ -297,7 +298,7 @@ mod tests {
     #[test]
     fn proposal_installs_all_negotiated_bonuses() {
         let proposal = rich_proposal();
-        let bonuses = build_bonuses(&proposal);
+        let bonuses = AcceptContractHandler::build_bonuses(&proposal);
         let kinds: Vec<_> = bonuses
             .iter()
             .map(|b| std::mem::discriminant(&b.bonus_type))
@@ -333,7 +334,7 @@ mod tests {
     #[test]
     fn proposal_installs_all_negotiated_clauses() {
         let proposal = rich_proposal();
-        let clauses = build_clauses(&proposal);
+        let clauses = AcceptContractHandler::build_clauses(&proposal);
         // release + relegation_release + non_promotion_release +
         // yearly_wage_rise + promotion_wage_increase + relegation_wage_decrease +
         // optional_extension + appearance_extension + wage_after_apps +
@@ -458,8 +459,8 @@ mod tests {
     #[test]
     fn zero_or_none_optionals_do_not_install() {
         let proposal = PlayerContractProposal::basic(100_000, 3, 10, 0, 0, None);
-        let bonuses = build_bonuses(&proposal);
-        let clauses = build_clauses(&proposal);
+        let bonuses = AcceptContractHandler::build_bonuses(&proposal);
+        let clauses = AcceptContractHandler::build_clauses(&proposal);
         assert_eq!(bonuses.len(), 0);
         assert_eq!(clauses.len(), 0);
     }

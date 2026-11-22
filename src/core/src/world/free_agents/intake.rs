@@ -10,243 +10,258 @@ use crate::transfers::{CompletedTransfer, TransferType};
 use crate::world::SimulatorData;
 use crate::world::bootstrap::ClubIdentity;
 use crate::{Person, Player, PlayerSquadStatus, PlayerStatusType};
+use chrono::NaiveDate;
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 
+struct FreeAgentSweepContext<'a> {
+    club_id: u32,
+    country_id: u32,
+    country_reputation: u16,
+    league_reputations: &'a FxHashMap<u32, u16>,
+    date: NaiveDate,
+}
+
 impl SimulatorData {
-    /// Move every team-attached player whose main-club contract is `None`
-    /// onto the global `free_agents` pool. Several pipelines (positional
-    /// surplus, unresolved-salary "free transfer", contract expiry) clear
-    /// the contract in place; without this sweep the player lingers on the
-    /// roster as a "free agent on a team," which the player page renders
-    /// inconsistently — the header reads the team name while the contract
-    /// panel reads "Free Agent."
-    ///
-    /// Each move is logged as a `CompletedTransfer` (zero fee, `Free`
-    /// type) on the losing club's country, so the transfer history page
-    /// reflects the departure. Reason is derived from the player's
-    /// status: `Frt` set means the club explicitly released early
-    /// (mutual / surplus / unresolved-salary path); otherwise the
-    /// contract simply expired.
-    ///
-    /// Once the reason is read, the player's club-transient state is
-    /// reset (`reset_on_club_change`): the upstream release pipelines
-    /// only clear the contract, so without this the player would sit in
-    /// the pool still flagged "Listed / Loan Listed / Wants Free
-    /// Transfer / Unhappy" about a club he no longer belongs to.
-    ///
-    /// Loanees are skipped (their `contract` is the parent-club contract
-    /// and stays `Some` during the loan), as are retired players (already
-    /// removed from team rosters by the retirement pipeline).
-    #[expect(clippy::too_many_lines)]
     pub fn sweep_released_to_free_agents(&mut self) {
         let date = self.date.date();
         let released: Vec<Player> = self
             .continents
             .par_iter_mut()
             .flat_map(|continent| continent.countries.par_iter_mut())
-            .flat_map_iter(|country| {
-                // Most days nobody leaves: decide that before building
-                // anything for the country.
-                let leaves = |p: &Player| p.contract.is_none() && !p.is_on_loan() && !p.retired;
-                if !country
-                    .clubs
-                    .iter()
-                    .flat_map(|club| club.teams.teams.iter())
-                    .flat_map(|team| team.players.players.iter())
-                    .any(leaves)
-                {
-                    return Vec::new();
-                }
-                // League reputation is needed by `on_release` so the
-                // player carries an accurate market-state snapshot into
-                // the free-agent pool. Pre-collect once per country —
-                // immutable read before the mutable club iteration
-                // takes the borrow.
-                let league_reputations: FxHashMap<u32, u16> = country
-                    .leagues
-                    .leagues
-                    .iter()
-                    .map(|l| (l.id, l.reputation))
-                    .collect();
-                let country_id = country.id;
-                let country_reputation = country.reputation;
-                // Per-club main-team identity resolver — the same one the
-                // history seeder uses, so a released player's spell is
-                // marked departed under the exact slug it was seeded with
-                // (youth / Reserve squads alias to the parent Main team).
-                let league_lookup = ClubIdentity::league_lookup(country);
-                let mut released_in_country: Vec<Player> = Vec::new();
-                let mut new_history: Vec<CompletedTransfer> = Vec::new();
-                for club in &mut country.clubs {
-                    let club_id = club.id;
-                    // The dugout hears first, and while the players are all
-                    // still in their squads: once the sweep below has lifted
-                    // them out there is nobody left to close a spell with.
-                    let leaving: Vec<u32> = club
-                        .teams
-                        .teams
-                        .iter()
-                        .flat_map(|team| team.players.players.iter())
-                        .filter(|p| leaves(p))
-                        .map(|p| p.id)
-                        .collect();
-                    if leaving.is_empty() {
-                        continue;
-                    }
-                    let mut departures: Vec<DepartedPlayer> = Vec::with_capacity(leaving.len());
-                    for player_id in leaving {
-                        departures.extend(DepartedPlayer::read(
-                            club,
-                            player_id,
-                            DepartureKind::Released,
-                            date,
-                        ));
-                        let cause = SquadDepartures::release_cause(club, player_id);
-                        SquadDepartures::notify(club, player_id, cause, date);
-                    }
-                    let identity = ClubIdentity::resolve(club, &league_lookup);
-                    for team in &mut club.teams.teams {
-                        let release_team_info = identity.team_info_for(team);
-                        let team_id = team.id;
-                        let team_name = team.name.clone();
-                        let team_reputation_world = team.reputation.world;
-                        let team_league_reputation = team
-                            .league_id
-                            .and_then(|lid| league_reputations.get(&lid).copied())
-                            .unwrap_or(country_reputation);
-                        let candidates: Vec<(u32, String, bool)> = team
-                            .players
-                            .players
-                            .iter()
-                            .filter(|p| leaves(p))
-                            .map(|p| {
-                                let was_released_early = p.statuses.has(PlayerStatusType::Frt);
-                                (p.id, p.full_name.to_string(), was_released_early)
-                            })
-                            .collect();
-                        for (id, player_name, released_early) in candidates {
-                            if let Some(mut p) = team.players.take_player(&id) {
-                                // Prefer the explicit reason the release path
-                                // recorded; fall back to the legacy Frt-vs-no-Frt
-                                // inference so an older save (or a path that
-                                // didn't stamp a reason) still reads sensibly:
-                                // an Frt marker without a reason is a generic
-                                // mutual release, no marker is a plain expiry.
-                                let reason = TransferReason::key(
-                                    p.release_reason()
-                                        .unwrap_or(if released_early {
-                                            FreeAgentReleaseReason::MutualTermination
-                                        } else {
-                                            FreeAgentReleaseReason::ContractExpired
-                                        })
-                                        .history_reason(),
-                                );
-                                new_history.push(
-                                    CompletedTransfer::new(
-                                        id,
-                                        player_name,
-                                        club_id,
-                                        team_id,
-                                        team_name.clone(),
-                                        0,
-                                        "Free Agent".to_string(),
-                                        date,
-                                        CurrencyValue::new(0.0, Currency::Usd),
-                                        TransferType::Free,
-                                    )
-                                    .with_reason(reason),
-                                );
-                                // Stamp the player's market-state
-                                // snapshot at the moment they enter the
-                                // pool. `last_salary` is unrecoverable
-                                // here (the contract was already cleared
-                                // upstream), so seed from the wage
-                                // calculator using the team / league
-                                // tiers as a faithful replacement.
-                                let last_squad_status = PlayerSquadStatus::FirstTeamSquadRotation;
-                                let club_score =
-                                    (team_reputation_world as f32 / 10_000.0).clamp(0.0, 1.0);
-                                let last_salary = WageCalculator::expected_annual_wage(
-                                    &p,
-                                    p.age(date),
-                                    club_score,
-                                    team_league_reputation,
-                                );
-                                // A complete release fires BOTH halves: the
-                                // stats-history side (snapshot in-flight match
-                                // stats onto the source-club spell and mark it
-                                // departed) and the market-state side below.
-                                // Skipping `on_release` leaves the current-club
-                                // entry `departed_date: None`, so a later
-                                // same-season signing becomes a second "active"
-                                // spell the History projection hides as a
-                                // phantom — and the un-drained cup / friendly
-                                // buckets trip `on_free_agent_signing`.
-                                p.on_release(&release_team_info, date);
-                                if p.free_agent_state().is_none() {
-                                    p.enter_free_agent_market(ReleaseContext {
-                                        date,
-                                        last_club_id: Some(club_id),
-                                        last_country_id: Some(country_id),
-                                        last_country_reputation: country_reputation,
-                                        last_league_reputation: team_league_reputation,
-                                        last_club_reputation_score: club_score,
-                                        last_salary,
-                                        last_squad_status,
-                                    });
-                                }
-                                // The register's side of the exit: the day a
-                                // career spell ends and the player becomes a
-                                // free agent used to leave no row at all —
-                                // his page jumped from old club to new club
-                                // with the months in between unexplained.
-                                p.decision_history.add(
-                                    date,
-                                    format!("{team_name} →"),
-                                    "dec_contract_expired_free_agent".to_string(),
-                                    String::new(),
-                                );
-                                // The spell at the old club is over —
-                                // strip transfer statuses and the
-                                // unhappiness they were attached to,
-                                // exactly like a completed transfer
-                                // would. `released_early` consumed the
-                                // `Frt` marker above, so nothing here
-                                // still needs it.
-                                p.reset_on_club_change();
-                                p.on_spell_change(SpellChange::release(club_id), 0, date);
-                                released_in_country.push(p);
-                            }
-                        }
-                    }
-                    for departed in &departures {
-                        club.on_player_departed(departed);
-                    }
-                }
-                country.transfer_market.transfer_history.extend(new_history);
-                released_in_country
+            .flat_map_iter(|country| Self::sweep_released_country(country, date))
+            .collect();
+        if released.is_empty() {
+            return;
+        }
+        // Scrub the world of stale market state for the departed players: open
+        // listings end Cancelled, team transfer lists drop their rows,
+        // scouting/shortlist/monitoring interest is cleared and live
+        // negotiations rejected — the same chokepoint a completed transfer
+        // runs through, in its release flavour. Without this a released player
+        // kept an Available country-market listing pointing at a club he no
+        // longer plays for.
+        let released_ids: Vec<u32> = released.iter().map(|p| p.id).collect();
+        ApproachPass::cleanup_player_release_interest_batch(self, &released_ids);
+        // Monthly diagnostics flow counter — every swept player is one that
+        // leaked out of a roster into the pool this period.
+        self.free_agent_flow.released_to_pool = self
+            .free_agent_flow
+            .released_to_pool
+            .saturating_add(released.len() as u32);
+        self.free_agents.extend(released);
+    }
+
+    fn leaves_for_free_agency(p: &Player) -> bool {
+        p.contract.is_none() && !p.is_on_loan() && !p.retired
+    }
+
+    fn sweep_released_country(country: &mut crate::Country, date: NaiveDate) -> Vec<Player> {
+        // Most days nobody leaves: decide that before building anything for
+        // the country.
+        if !country
+            .clubs
+            .iter()
+            .flat_map(|club| club.teams.teams.iter())
+            .flat_map(|team| team.players.players.iter())
+            .any(Self::leaves_for_free_agency)
+        {
+            return Vec::new();
+        }
+        // League reputation is needed by `on_release` so the player carries an
+        // accurate market-state snapshot into the free-agent pool. Pre-collect
+        // once per country — immutable read before the mutable club iteration
+        // takes the borrow.
+        let league_reputations: FxHashMap<u32, u16> = country
+            .leagues
+            .leagues
+            .iter()
+            .map(|l| (l.id, l.reputation))
+            .collect();
+        let country_id = country.id;
+        let country_reputation = country.reputation;
+        // Per-club main-team identity resolver — the same one the history
+        // seeder uses, so a released player's spell is marked departed under
+        // the exact slug it was seeded with (youth / Reserve squads alias to
+        // the parent Main team).
+        let league_lookup = ClubIdentity::league_lookup(country);
+        let mut released_in_country: Vec<Player> = Vec::new();
+        let mut new_history: Vec<CompletedTransfer> = Vec::new();
+        for club in &mut country.clubs {
+            let context = FreeAgentSweepContext {
+                club_id: club.id,
+                country_id,
+                country_reputation,
+                league_reputations: &league_reputations,
+                date,
+            };
+            let (released, mut history) = Self::sweep_released_club(club, &context, &league_lookup);
+            released_in_country.extend(released);
+            new_history.append(&mut history);
+        }
+        country.transfer_market.transfer_history.extend(new_history);
+        released_in_country
+    }
+
+    fn sweep_released_club(
+        club: &mut crate::Club,
+        ctx: &FreeAgentSweepContext<'_>,
+        league_lookup: &FxHashMap<u32, (String, String)>,
+    ) -> (Vec<Player>, Vec<CompletedTransfer>) {
+        // The dugout hears first, and while the players are all still in their
+        // squads: once the sweep below has lifted them out there is nobody
+        // left to close a spell with.
+        let leaving: Vec<u32> = club
+            .teams
+            .teams
+            .iter()
+            .flat_map(|team| team.players.players.iter())
+            .filter(|p| Self::leaves_for_free_agency(p))
+            .map(|p| p.id)
+            .collect();
+        if leaving.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+        let mut departures: Vec<DepartedPlayer> = Vec::with_capacity(leaving.len());
+        for player_id in leaving {
+            departures.extend(DepartedPlayer::read(
+                club,
+                player_id,
+                DepartureKind::Released,
+                ctx.date,
+            ));
+            let cause = SquadDepartures::release_cause(club, player_id);
+            SquadDepartures::notify(club, player_id, cause, ctx.date);
+        }
+        let identity = ClubIdentity::resolve(club, league_lookup);
+        let mut released = Vec::new();
+        let mut history = Vec::new();
+        for team in &mut club.teams.teams {
+            let mut team_history = Vec::new();
+            released.extend(Self::sweep_released_team(
+                team,
+                ctx,
+                &identity,
+                &mut team_history,
+            ));
+            history.append(&mut team_history);
+        }
+        for departed in &departures {
+            club.on_player_departed(departed);
+        }
+        (released, history)
+    }
+
+    fn sweep_released_team(
+        team: &mut crate::Team,
+        ctx: &FreeAgentSweepContext<'_>,
+        identity: &ClubIdentity,
+        new_history: &mut Vec<CompletedTransfer>,
+    ) -> Vec<Player> {
+        let release_team_info = identity.team_info_for(team);
+        let team_id = team.id;
+        let team_name = team.name.clone();
+        let team_reputation_world = team.reputation.world;
+        let team_league_reputation = team
+            .league_id
+            .and_then(|lid| ctx.league_reputations.get(&lid).copied())
+            .unwrap_or(ctx.country_reputation);
+        let candidates: Vec<(u32, String, bool)> = team
+            .players
+            .players
+            .iter()
+            .filter(|p| Self::leaves_for_free_agency(p))
+            .map(|p| {
+                let was_released_early = p.statuses.has(PlayerStatusType::Frt);
+                (p.id, p.full_name.to_string(), was_released_early)
             })
             .collect();
-        if !released.is_empty() {
-            // Scrub the world of stale market state for the departed
-            // players: open listings end Cancelled, team transfer lists
-            // drop their rows, scouting/shortlist/monitoring interest is
-            // cleared and live negotiations rejected — the same
-            // chokepoint a completed transfer runs through, in its
-            // release flavour. Without this a released player kept an
-            // Available country-market listing pointing at a club he no
-            // longer plays for.
-            let released_ids: Vec<u32> = released.iter().map(|p| p.id).collect();
-            ApproachPass::cleanup_player_release_interest_batch(self, &released_ids);
-            // Monthly diagnostics flow counter — every swept player is one
-            // that leaked out of a roster into the pool this period.
-            self.free_agent_flow.released_to_pool = self
-                .free_agent_flow
-                .released_to_pool
-                .saturating_add(released.len() as u32);
-            self.free_agents.extend(released);
+        let mut released = Vec::new();
+        for (id, player_name, released_early) in candidates {
+            let Some(mut p) = team.players.take_player(&id) else {
+                continue;
+            };
+            // Prefer the explicit reason the release path recorded; fall back
+            // to the legacy Frt-vs-no-Frt inference so an older save (or a
+            // path that didn't stamp a reason) still reads sensibly: an Frt
+            // marker without a reason is a generic mutual release, no marker
+            // is a plain expiry.
+            let reason = TransferReason::key(
+                p.release_reason()
+                    .unwrap_or(if released_early {
+                        FreeAgentReleaseReason::MutualTermination
+                    } else {
+                        FreeAgentReleaseReason::ContractExpired
+                    })
+                    .history_reason(),
+            );
+            new_history.push(
+                CompletedTransfer::new(
+                    id,
+                    player_name,
+                    ctx.club_id,
+                    team_id,
+                    team_name.clone(),
+                    0,
+                    "Free Agent".to_string(),
+                    ctx.date,
+                    CurrencyValue::new(0.0, Currency::Usd),
+                    TransferType::Free,
+                )
+                .with_reason(reason),
+            );
+            // Stamp the player's market-state snapshot at the moment they
+            // enter the pool. `last_salary` is unrecoverable here (the
+            // contract was already cleared upstream), so seed from the wage
+            // calculator using the team / league tiers as a faithful
+            // replacement.
+            let last_squad_status = PlayerSquadStatus::FirstTeamSquadRotation;
+            let club_score = (team_reputation_world as f32 / 10_000.0).clamp(0.0, 1.0);
+            let last_salary = WageCalculator::expected_annual_wage(
+                &p,
+                p.age(ctx.date),
+                club_score,
+                team_league_reputation,
+            );
+            // A complete release fires BOTH halves: the stats-history side
+            // (snapshot in-flight match stats onto the source-club spell and
+            // mark it departed) and the market-state side below. Skipping
+            // `on_release` leaves the current-club entry `departed_date: None`,
+            // so a later same-season signing becomes a second "active" spell
+            // the History projection hides as a phantom — and the un-drained
+            // cup / friendly buckets trip `on_free_agent_signing`.
+            p.on_release(&release_team_info, ctx.date);
+            if p.free_agent_state().is_none() {
+                p.enter_free_agent_market(ReleaseContext {
+                    date: ctx.date,
+                    last_club_id: Some(ctx.club_id),
+                    last_country_id: Some(ctx.country_id),
+                    last_country_reputation: ctx.country_reputation,
+                    last_league_reputation: team_league_reputation,
+                    last_club_reputation_score: club_score,
+                    last_salary,
+                    last_squad_status,
+                });
+            }
+            // The register's side of the exit: the day a career spell ends and
+            // the player becomes a free agent used to leave no row at all — his
+            // page jumped from old club to new club with the months in between
+            // unexplained.
+            p.decision_history.add(
+                ctx.date,
+                format!("{team_name} →"),
+                "dec_contract_expired_free_agent".to_string(),
+                String::new(),
+            );
+            // The spell at the old club is over — strip transfer statuses and
+            // the unhappiness they were attached to, exactly like a completed
+            // transfer would. `released_early` consumed the `Frt` marker above,
+            // so nothing here still needs it.
+            p.reset_on_club_change();
+            p.on_spell_change(SpellChange::release(ctx.club_id), 0, ctx.date);
+            released.push(p);
         }
+        released
     }
 }
 

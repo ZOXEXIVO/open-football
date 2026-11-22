@@ -431,7 +431,6 @@ impl Ball {
     /// One roll per pass at getting a body in its way. Runs on unowned
     /// balls in flight that are NOT shots — see the module note for why
     /// the two are kept apart.
-    #[expect(clippy::too_many_lines)]
     pub fn try_block_pass(
         &mut self,
         context: &MatchContext,
@@ -449,55 +448,13 @@ impl Ball {
         // deflected off a man's head five metres later. See
         // [`Ball::block_contact_with`].
         if let Some(commit) = self.pass_blocked_by {
-            // A pass that has been claimed, has died, or has turned into
-            // a shot in the meantime is no longer the ball he committed
-            // to. Drop the commitment rather than deflecting something
-            // else.
-            if self.current_owner.is_some()
-                || self.flags.in_flight_state == 0
-                || self.cached_shot_target.is_some()
-            {
-                self.pass_blocked_by = None;
-                return;
-            }
-            match self.block_contact_with(
-                commit.blocker_id,
-                players,
-                Self::PASS_BLOCK_REACH,
-                PassBlock::contact_ceiling(commit.reaction),
-            ) {
-                BlockContact::Coming => {}
-                // Over him or past him — one pass, one roll, and he has
-                // had it.
-                BlockContact::Missed => self.pass_blocked_by = None,
-                BlockContact::AtTheBody => {
-                    self.pass_blocked_by = None;
-                    self.resolve_pass_block(commit, context, players, events, true);
-                }
-            }
+            self.await_pass_block(commit, context, players, events);
             return;
         }
 
-        if MatchContext::box_defence_off() {
+        let Some(speed) = self.pass_block_speed() else {
             return;
-        }
-        if self.current_owner.is_some()
-            || self.held_in_hands
-            || self.flags.in_flight_state == 0
-            || self.cached_shot_target.is_some()
-        {
-            return;
-        }
-        // A delivery whose aerial contest is already decided has priced
-        // every defender in the box once. Same double-jeopardy carve-out
-        // `try_intercept` makes.
-        if self.aerial_delivery.is_some() {
-            return;
-        }
-        let speed = (self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y).sqrt();
-        if speed < Self::MIN_PASS_SPEED {
-            return;
-        }
+        };
         let Some(passer) = self
             .previous_owner
             .and_then(|id| players.iter().find(|p| p.id == id))
@@ -514,9 +471,74 @@ impl Ball {
         let field_width = context.field_size.width as f32;
         let danger = PassBlock::danger(self.position.x, defending_side, field_width);
 
+        let Some((blocker_id, bit, reaction, chance)) =
+            self.best_pass_blocker(passer, players, speed, danger)
+        else {
+            return;
+        };
+        // Latched per MAN, so the rate stays a property of the defending
+        // rather than of how long the flight happened to be, while the
+        // defender downstream still gets the encounter that is his.
+        self.pass_block_rolled |= bit;
+        let fired = context.rng.unit_f32() < chance;
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::BoxPassDiag::note_block_roll(chance, fired);
+        if !fired {
+            return;
+        }
+        let commit = PassBlockCommit {
+            blocker_id,
+            outcome_roll: context.rng.unit_f32(),
+            reaction,
+        };
+        match self.block_contact_with(
+            blocker_id,
+            players,
+            Self::PASS_BLOCK_REACH,
+            PassBlock::contact_ceiling(reaction),
+        ) {
+            BlockContact::AtTheBody => {
+                self.resolve_pass_block(commit, context, players, events, false)
+            }
+            _ => self.pass_blocked_by = Some(commit),
+        }
+    }
+
+    /// Whether this ball is one the pass-block contest may price at all,
+    /// and how fast it is travelling across the grass if so.
+    fn pass_block_speed(&self) -> Option<f32> {
+        if MatchContext::box_defence_off() {
+            return None;
+        }
+        if self.current_owner.is_some()
+            || self.held_in_hands
+            || self.flags.in_flight_state == 0
+            || self.cached_shot_target.is_some()
+        {
+            return None;
+        }
+        // A delivery whose aerial contest is already decided has priced
+        // every defender in the box once. Same double-jeopardy carve-out
+        // `try_intercept` makes.
+        if self.aerial_delivery.is_some() {
+            return None;
+        }
+        let speed = (self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y).sqrt();
+        (speed >= Self::MIN_PASS_SPEED).then_some(speed)
+    }
+
+    /// The best-placed defender who has not spent his one roll on this
+    /// flight, with his slot bit, his reaction and the chance he was
+    /// priced at.
+    fn best_pass_blocker(
+        &self,
+        passer: &MatchPlayer,
+        players: &[MatchPlayer],
+        speed: f32,
+        danger: f32,
+    ) -> Option<(u32, u64, f32, f32)> {
         let minute = sc::minute_from_ticks(self.current_tick_cached);
         let delivery = PassBlock::technique(passer, minute, self.pending_pass_was_cross);
-
         let mut best_blocker: Option<(u32, u64, f32)> = None;
         let mut best_chance = 0.0f32;
 
@@ -552,40 +574,44 @@ impl Ball {
             }
         }
 
-        let Some((blocker_id, bit, reaction)) = best_blocker else {
-            return;
-        };
-        // Latched per MAN, so the rate stays a property of the defending
-        // rather than of how long the flight happened to be, while the
-        // defender downstream still gets the encounter that is his.
-        self.pass_block_rolled |= bit;
-        let chance = best_chance;
-        let fired = context.rng.unit_f32() < chance;
-        #[cfg(feature = "match-logs")]
-        crate::mid_run_diag::BoxPassDiag::note_block_roll(chance, fired);
-        if !fired {
+        best_blocker.map(|(id, bit, reaction)| (id, bit, reaction, best_chance))
+    }
+
+    /// A block already won, waiting for the ball to reach the man who won
+    /// it. The commitment is dropped if the ball stopped being the pass
+    /// he read.
+    fn await_pass_block(
+        &mut self,
+        commit: PassBlockCommit,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        if self.current_owner.is_some()
+            || self.flags.in_flight_state == 0
+            || self.cached_shot_target.is_some()
+        {
+            self.pass_blocked_by = None;
             return;
         }
-        let commit = PassBlockCommit {
-            blocker_id,
-            outcome_roll: context.rng.unit_f32(),
-            reaction,
-        };
         match self.block_contact_with(
-            blocker_id,
+            commit.blocker_id,
             players,
             Self::PASS_BLOCK_REACH,
-            PassBlock::contact_ceiling(reaction),
+            PassBlock::contact_ceiling(commit.reaction),
         ) {
+            BlockContact::Coming => {}
+            // Over him or past him — one pass, one roll, and he has
+            // had it.
+            BlockContact::Missed => self.pass_blocked_by = None,
             BlockContact::AtTheBody => {
-                self.resolve_pass_block(commit, context, players, events, false)
+                self.pass_blocked_by = None;
+                self.resolve_pass_block(commit, context, players, events, true);
             }
-            _ => self.pass_blocked_by = Some(commit),
         }
     }
 
     /// Turn a won pass-block into a deflection, at the blocker.
-    #[expect(clippy::too_many_lines)]
     fn resolve_pass_block(
         &mut self,
         commit: PassBlockCommit,
@@ -628,10 +654,7 @@ impl Ball {
         // to a man 2 m away would be the same error `try_intercept`
         // makes, and `move_to` would drop the ball again on the next tick
         // as an unreachable owner.
-        let composure = (blocker.skills.mental.composure / 20.0).clamp(0.0, 1.0);
-        let first_touch = (blocker.skills.technical.first_touch / 20.0).clamp(0.0, 1.0);
-        let controlled = blocker_gap <= CONTROL_DISTANCE
-            && outcome_roll < (0.08 + composure * 0.06 + first_touch * 0.06).clamp(0.08, 0.24);
+        let controlled = Self::blocked_pass_controlled(outcome_roll, blocker, blocker_gap);
         #[cfg(feature = "match-logs")]
         if controlled {
             crate::mid_run_diag::BoxPassDiag::note_block_controlled();
@@ -674,49 +697,81 @@ impl Ball {
         events.add_ball_event(BallEvent::Blocked(blocker_id, self.position));
 
         if controlled {
-            #[cfg(feature = "match-logs")]
-            {
-                self.open_arrival(GrantPath::CONTEST, blocker.position);
-                context.defender_census.borrow_mut().tag_take(
-                    TakeRule::PassBlock,
-                    blocker_id,
-                    tick,
-                );
-            }
-            self.current_owner = Some(blocker_id);
-            self.touch(blocker_id, Carrier::of(blocker));
-            self.flags.in_flight_state = 0;
-            self.claim_cooldown = 15;
-            events.add_player_event(PlayerEvent::ClaimBall(blocker_id));
+            self.keep_blocked_pass(blocker_id, blocker, context, tick, events);
             return;
         }
 
-        // ── At point blank it glances ────────────────────────────────
-        //
-        // A man the ball reached before he could react aimed nothing: it
-        // came off whatever it hit and kept much of its own line and pace.
-        // That is what takes a cross charged down near the byline behind —
-        // through the last-touch rule, with no branch of its own.
-        if context.rng.unit_f32() < reaction {
-            let own = Vector3::new(self.velocity.x / speed, self.velocity.y / speed, 0.0);
-            let dir = Self::turned(own, (context.rng.unit_f32() - 0.5) * Self::GLANCE_SPREAD);
-            let keep = 0.40 + context.rng.unit_f32() * 0.35;
-            self.velocity = dir * speed * keep;
-            self.claim_cooldown = self.claim_cooldown.max(4);
+        if self.glance_blocked_pass(speed, reaction, context) {
             return;
         }
 
-        // ── Otherwise it squirts ─────────────────────────────────────
-        //
-        // A blocked pass loses most of its pace and comes off at an
-        // angle. WHICH angle is not arbitrary: a defender getting a leg
-        // to a ball in his own box is trying to send it away from his
-        // goal, and the ones that go the other way are the deflections
-        // that produce chaos. So the direction is the reversed flight
-        // blended toward "away from my own goal", with a wide spread on
-        // top — the same shape as the shot block's deflection, aimed by
-        // the one thing a defender in that position is actually trying to
-        // do.
+        self.squirt_blocked_pass(speed, blocker, context);
+    }
+
+    /// Rarely, and only if the ball was genuinely at his feet.
+    fn blocked_pass_controlled(outcome_roll: f32, blocker: &MatchPlayer, blocker_gap: f32) -> bool {
+        let composure = (blocker.skills.mental.composure / 20.0).clamp(0.0, 1.0);
+        let first_touch = (blocker.skills.technical.first_touch / 20.0).clamp(0.0, 1.0);
+        blocker_gap <= CONTROL_DISTANCE
+            && outcome_roll < (0.08 + composure * 0.06 + first_touch * 0.06).clamp(0.08, 0.24)
+    }
+
+    /// The defender has it under his touch.
+    fn keep_blocked_pass(
+        &mut self,
+        blocker_id: u32,
+        blocker: &MatchPlayer,
+        context: &MatchContext,
+        tick: u64,
+        events: &mut EventCollection,
+    ) {
+        #[cfg(not(feature = "match-logs"))]
+        let _ = (context, tick);
+        #[cfg(feature = "match-logs")]
+        {
+            self.open_arrival(GrantPath::CONTEST, blocker.position);
+            context
+                .defender_census
+                .borrow_mut()
+                .tag_take(TakeRule::PassBlock, blocker_id, tick);
+        }
+        self.current_owner = Some(blocker_id);
+        self.touch(blocker_id, Carrier::of(blocker));
+        self.flags.in_flight_state = 0;
+        self.claim_cooldown = 15;
+        events.add_player_event(PlayerEvent::ClaimBall(blocker_id));
+    }
+
+    /// ── At point blank it glances ────────────────────────────────
+    ///
+    /// A man the ball reached before he could react aimed nothing: it
+    /// came off whatever it hit and kept much of its own line and pace.
+    /// That is what takes a cross charged down near the byline behind —
+    /// through the last-touch rule, with no branch of its own.
+    fn glance_blocked_pass(&mut self, speed: f32, reaction: f32, context: &MatchContext) -> bool {
+        if context.rng.unit_f32() >= reaction {
+            return false;
+        }
+        let own = Vector3::new(self.velocity.x / speed, self.velocity.y / speed, 0.0);
+        let dir = Self::turned(own, (context.rng.unit_f32() - 0.5) * Self::GLANCE_SPREAD);
+        let keep = 0.40 + context.rng.unit_f32() * 0.35;
+        self.velocity = dir * speed * keep;
+        self.claim_cooldown = self.claim_cooldown.max(4);
+        true
+    }
+
+    /// ── Otherwise it squirts ─────────────────────────────────────
+    ///
+    /// A blocked pass loses most of its pace and comes off at an
+    /// angle. WHICH angle is not arbitrary: a defender getting a leg
+    /// to a ball in his own box is trying to send it away from his
+    /// goal, and the ones that go the other way are the deflections
+    /// that produce chaos. So the direction is the reversed flight
+    /// blended toward "away from my own goal", with a wide spread on
+    /// top — the same shape as the shot block's deflection, aimed by
+    /// the one thing a defender in that position is actually trying to
+    /// do.
+    fn squirt_blocked_pass(&mut self, speed: f32, blocker: &MatchPlayer, context: &MatchContext) {
         let field_width = context.field_size.width as f32;
         let own_goal = Vector3::new(
             if blocker.side == Some(PlayerSide::Left) {
@@ -727,46 +782,8 @@ impl Ball {
             context.field_size.height as f32 / 2.0,
             0.0,
         );
-        // ── …AND SOMETIMES IT GOES BEHIND ────────────────────────────
-        //
-        // The commonest corner in football is a defender getting
-        // something on a ball played across his own six-yard box and
-        // putting it out, and the engine had no path for it at all. The
-        // corner-source census reads **ordinary play 0.15 a match (4%)**
-        // against a real ~25% of a 10.4-corner match, while the whole
-        // "defender puts it behind" family is fed only by SHOTS and by
-        // AIRBORNE deliveries — `try_block_shot`'s corner branch and
-        // `DeliveryResolver::heads_it_behind`. The low ball across the
-        // face of goal had no way of ending up behind, which is exactly
-        // the note `try_block_shot` carries about an earlier attempt at
-        // this: correct football, dead because the situation never
-        // arose. It arises now — this contest fires 5.7 times a match
-        // INSIDE the penalty area.
-        //
-        // Same curve as `heads_it_behind`, deliberately: the closer to
-        // his own line the defender is, the less choice he has about
-        // where it goes, and on the line there is no "away" left. A
-        // block at the edge of the area still comes off him up the
-        // pitch, which is what the branch below does.
-        let depth = (self.position.x - own_goal.x).abs();
-        if depth <= Self::BEHIND_DEPTH {
-            let urgency = 1.0 - depth / Self::BEHIND_DEPTH;
-            if context.rng.unit_f32() < Self::BEHIND_AT_LINE * urgency.powf(1.2) {
-                // The same geometry the headed clearance uses, so a
-                // blocked ball and a headed one leave the pitch the same
-                // way. `record_touch` above already made this HIS touch,
-                // which is what makes it a corner rather than a goal
-                // kick.
-                self.velocity = Ball::hook_behind_velocity(
-                    self.position,
-                    own_goal,
-                    context.field_size.height as f32,
-                );
-                self.flags.in_flight_state =
-                    FlightProtection::for_launch(self.velocity, self.position.z);
-                self.claim_cooldown = self.claim_cooldown.max(4);
-                return;
-            }
+        if self.hook_blocked_pass_behind(own_goal, context) {
+            return;
         }
 
         let away = (self.position - own_goal)
@@ -785,6 +802,48 @@ impl Ball {
         // It stays a live loose ball at whatever height it was — nothing
         // here writes the vertical axis, which is `ballistics`' business.
         self.claim_cooldown = self.claim_cooldown.max(4);
+    }
+
+    /// ── …AND SOMETIMES IT GOES BEHIND ────────────────────────────
+    ///
+    /// The commonest corner in football is a defender getting
+    /// something on a ball played across his own six-yard box and
+    /// putting it out, and the engine had no path for it at all. The
+    /// corner-source census reads **ordinary play 0.15 a match (4%)**
+    /// against a real ~25% of a 10.4-corner match, while the whole
+    /// "defender puts it behind" family is fed only by SHOTS and by
+    /// AIRBORNE deliveries — `try_block_shot`'s corner branch and
+    /// `DeliveryResolver::heads_it_behind`. The low ball across the
+    /// face of goal had no way of ending up behind, which is exactly
+    /// the note `try_block_shot` carries about an earlier attempt at
+    /// this: correct football, dead because the situation never
+    /// arose. It arises now — this contest fires 5.7 times a match
+    /// INSIDE the penalty area.
+    ///
+    /// Same curve as `heads_it_behind`, deliberately: the closer to
+    /// his own line the defender is, the less choice he has about
+    /// where it goes, and on the line there is no "away" left. A
+    /// block at the edge of the area still comes off him up the
+    /// pitch, which is what the branch below does.
+    fn hook_blocked_pass_behind(&mut self, own_goal: Vector3<f32>, context: &MatchContext) -> bool {
+        let depth = (self.position.x - own_goal.x).abs();
+        if depth > Self::BEHIND_DEPTH {
+            return false;
+        }
+        let urgency = 1.0 - depth / Self::BEHIND_DEPTH;
+        if context.rng.unit_f32() >= Self::BEHIND_AT_LINE * urgency.powf(1.2) {
+            return false;
+        }
+        // The same geometry the headed clearance uses, so a
+        // blocked ball and a headed one leave the pitch the same
+        // way. `record_touch` above already made this HIS touch,
+        // which is what makes it a corner rather than a goal
+        // kick.
+        self.velocity =
+            Ball::hook_behind_velocity(self.position, own_goal, context.field_size.height as f32);
+        self.flags.in_flight_state = FlightProtection::for_launch(self.velocity, self.position.z);
+        self.claim_cooldown = self.claim_cooldown.max(4);
+        true
     }
 
     /// How far a glance turns the ball off its own line: ±40°, a ball

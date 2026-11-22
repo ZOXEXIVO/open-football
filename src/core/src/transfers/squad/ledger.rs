@@ -506,7 +506,6 @@ impl AssetLedger {
     /// one of those reasons alone, which is exactly how real sales cluster.
     /// Asset protection is NOT overridden here: an entry is acceptance
     /// readiness, and the auto-listing sweeps keep their own vetoes.
-    #[expect(clippy::too_many_lines)]
     pub fn build(
         rows: &[AssetRow],
         ctx: &LedgerContext,
@@ -514,8 +513,6 @@ impl AssetLedger {
         date: NaiveDate,
     ) -> Vec<SellListEntry> {
         let pressure = LedgerPressure::of(ctx);
-        let wage_pressure = pressure.wage_pressure;
-        let cash_need = pressure.cash_need;
         let roster_pressure = if ctx.max_squad_size > 0 && ctx.squad_size > ctx.max_squad_size {
             ((ctx.squad_size - ctx.max_squad_size) as f64 / 5.0).clamp(0.0, 1.0)
         } else {
@@ -525,8 +522,7 @@ impl AssetLedger {
         // asset motives — peak value and a running-down contract — harder
         // than a club whose plan is to keep its best players.
         let trader = matches!(ctx.philosophy, ClubPhilosophy::DevelopAndSell);
-        let appetite = TradeAppetite::of(&ctx.philosophy, cash_need);
-        let asset_weight = appetite.asset_weight();
+        let appetite = TradeAppetite::of(&ctx.philosophy, pressure.cash_need);
 
         let mut entries: Vec<SellListEntry> = Vec::new();
         for row in rows {
@@ -537,115 +533,8 @@ impl AssetLedger {
                 continue;
             }
 
-            let mut score = SellScore::new();
-
-            // ── Peak value ──
-            // He is at the top of his curve and the club has watched the
-            // decline coming. Continuous from the peak age, so nothing
-            // happens on a birthday.
-            let peak = Self::peak_sale_age(row.group);
-            let peak_term = if row.age >= peak {
-                (((row.age - peak) as f32 + 1.0) / 4.0).clamp(0.0, 1.0) * 0.45 * asset_weight
-            } else {
-                0.0
-            };
-            score.add(peak_term, SellMotive::PeakValue);
-
-            // ── Contract running down with no renewal ──
-            // A contract the club will not renew is the loudest ordinary
-            // sell signal there is: every month that passes takes value off
-            // the asset and moves it closer to walking away for nothing.
-            let runway_term = match row.contract_months_remaining {
-                Some(months) if months <= Self::RUNWAY_SELL_MONTHS => {
-                    let closeness = 1.0 - (months.max(0) as f32 / Self::RUNWAY_SELL_MONTHS as f32);
-                    let blocked = if row.renewal_blocked { 1.0 } else { 0.45 };
-                    closeness * blocked * 0.75 * asset_weight
-                }
-                _ => 0.0,
-            };
-            score.add(runway_term, SellMotive::ExpiringRunway);
-
-            // ── Wage relief at a SOLVENT club ──
-            // The distressed case already exists (`WageReliefSale`); this is
-            // the ordinary one: the bill is at the mandate, so the highest
-            // earner the plan can spare becomes gettable.
-            let wage_share = if ctx.annual_wages > 0.0 {
-                (row.annual_wage / ctx.annual_wages).clamp(0.0, 1.0) as f32
-            } else {
-                0.0
-            };
-            let wage_term = wage_pressure as f32 * wage_share * 3.0;
-            score.add(wage_term.min(0.40), SellMotive::WageRelief);
-
-            // ── The brief needs money ──
-            // Everyone on the books is a little more sellable when the club
-            // is short of what its own plan asks for; the surplus end of the
-            // squad much more so.
-            let disposability = match row.asset_class {
-                SquadAssetClass::TrueSurplus => 1.0,
-                SquadAssetClass::RotationUseful => 0.7,
-                SquadAssetClass::UnknownNeedsEvaluation => 0.5,
-                SquadAssetClass::ProspectDevelopment => 0.35,
-                SquadAssetClass::FirstTeamUseful => 0.3,
-                SquadAssetClass::CorePlayer => 0.15,
-            };
-            score.add(
-                (cash_need as f32) * disposability * 0.35,
-                SellMotive::CashNeed,
-            );
-
-            // ── No shirt for him in the plan ──
-            let surplus_term = match row.asset_class {
-                SquadAssetClass::TrueSurplus => 0.50,
-                SquadAssetClass::RotationUseful if row.group_rank >= 3 => 0.25,
-                _ => 0.0,
-            } + (roster_pressure as f32) * disposability * 0.30;
-            score.add(surplus_term, SellMotive::SurplusByPlan);
-
-            // ── The club's own plan for him ──
-            // A trading club does not wait for a decline or a running
-            // contract to sell its best player; it decides, and the
-            // decision lives on his pathway. Held apart from the peak
-            // term above because that one is a circumstance and this
-            // one is a policy — a club with no policy scores nothing
-            // here whatever anybody's age is.
-            let pathway_term = match row.stage {
-                PathwayStage::SellAtPeak => 0.35 * asset_weight,
-                PathwayStage::Starter | PathwayStage::Core
-                    if trader && row.age + 1 >= Self::peak_sale_age(row.group) =>
-                {
-                    0.20 * asset_weight
-                }
-                _ => 0.0,
-            };
-            score.add(pathway_term, SellMotive::PathwayMature);
-
-            // ── What the market will not pay ──
-            // A man the market values below what the club still has on its
-            // books for him is not a sale the club wants to make. This is
-            // the term that makes the loan market the natural home of an
-            // unrealised mandate: he is lent out before he is marketed.
-            let market_ask = Self::asking_for(row, appetite);
-            if row.book_value > 0.0 {
-                let shortfall = (1.0 - market_ask / row.book_value).clamp(0.0, 1.0) as f32;
-                score.total -= Self::BOOK_LOSS_WEIGHT * shortfall;
-            }
-
-            // ── He is pushing ──
-            let push_term = if row.is_transfer_requested {
-                0.60
-            } else {
-                (row.stage_pull.clamp(0.0, 1.0) - 0.22).max(0.0) * 0.55
-            };
-            score.add(push_term, SellMotive::PlayerPushing);
-
-            // ── His own department says it is time ──
-            // A motive, not a verdict: it needs another reason beside it
-            // before the club answers a call.
-            if row.advised_to_move_on {
-                score.add(Self::STAFF_ADVICE, SellMotive::StaffAdvice);
-            }
-
+            let (score, market_ask) =
+                Self::score_row(row, ctx, &pressure, roster_pressure, trader, appetite);
             if score.total <= 0.0 {
                 continue;
             }
@@ -670,6 +559,133 @@ impl AssetLedger {
         entries.retain(|e| e.is_marketed());
         entries.truncate(Self::MAX_ENTRIES);
         entries
+    }
+
+    /// One player's sell-list terms, accumulated in the order the motives
+    /// were always weighed. Returns the score and the market's asking price,
+    /// which the board's reservation reads before the score decides whether
+    /// the club would answer.
+    fn score_row(
+        row: &AssetRow,
+        ctx: &LedgerContext,
+        pressure: &LedgerPressure,
+        roster_pressure: f64,
+        trader: bool,
+        appetite: TradeAppetite,
+    ) -> (SellScore, f64) {
+        let wage_pressure = pressure.wage_pressure;
+        let cash_need = pressure.cash_need;
+        let asset_weight = appetite.asset_weight();
+        let mut score = SellScore::new();
+
+        // ── Peak value ──
+        // He is at the top of his curve and the club has watched the
+        // decline coming. Continuous from the peak age, so nothing
+        // happens on a birthday.
+        let peak = Self::peak_sale_age(row.group);
+        let peak_term = if row.age >= peak {
+            (((row.age - peak) as f32 + 1.0) / 4.0).clamp(0.0, 1.0) * 0.45 * asset_weight
+        } else {
+            0.0
+        };
+        score.add(peak_term, SellMotive::PeakValue);
+
+        // ── Contract running down with no renewal ──
+        // A contract the club will not renew is the loudest ordinary
+        // sell signal there is: every month that passes takes value off
+        // the asset and moves it closer to walking away for nothing.
+        let runway_term = match row.contract_months_remaining {
+            Some(months) if months <= Self::RUNWAY_SELL_MONTHS => {
+                let closeness = 1.0 - (months.max(0) as f32 / Self::RUNWAY_SELL_MONTHS as f32);
+                let blocked = if row.renewal_blocked { 1.0 } else { 0.45 };
+                closeness * blocked * 0.75 * asset_weight
+            }
+            _ => 0.0,
+        };
+        score.add(runway_term, SellMotive::ExpiringRunway);
+
+        // ── Wage relief at a SOLVENT club ──
+        // The distressed case already exists (`WageReliefSale`); this is
+        // the ordinary one: the bill is at the mandate, so the highest
+        // earner the plan can spare becomes gettable.
+        let wage_share = if ctx.annual_wages > 0.0 {
+            (row.annual_wage / ctx.annual_wages).clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        };
+        let wage_term = wage_pressure as f32 * wage_share * 3.0;
+        score.add(wage_term.min(0.40), SellMotive::WageRelief);
+
+        // ── The brief needs money ──
+        // Everyone on the books is a little more sellable when the club
+        // is short of what its own plan asks for; the surplus end of the
+        // squad much more so.
+        let disposability = match row.asset_class {
+            SquadAssetClass::TrueSurplus => 1.0,
+            SquadAssetClass::RotationUseful => 0.7,
+            SquadAssetClass::UnknownNeedsEvaluation => 0.5,
+            SquadAssetClass::ProspectDevelopment => 0.35,
+            SquadAssetClass::FirstTeamUseful => 0.3,
+            SquadAssetClass::CorePlayer => 0.15,
+        };
+        score.add(
+            (cash_need as f32) * disposability * 0.35,
+            SellMotive::CashNeed,
+        );
+
+        // ── No shirt for him in the plan ──
+        let surplus_term = match row.asset_class {
+            SquadAssetClass::TrueSurplus => 0.50,
+            SquadAssetClass::RotationUseful if row.group_rank >= 3 => 0.25,
+            _ => 0.0,
+        } + (roster_pressure as f32) * disposability * 0.30;
+        score.add(surplus_term, SellMotive::SurplusByPlan);
+
+        // ── The club's own plan for him ──
+        // A trading club does not wait for a decline or a running
+        // contract to sell its best player; it decides, and the
+        // decision lives on his pathway. Held apart from the peak
+        // term above because that one is a circumstance and this
+        // one is a policy — a club with no policy scores nothing
+        // here whatever anybody's age is.
+        let pathway_term = match row.stage {
+            PathwayStage::SellAtPeak => 0.35 * asset_weight,
+            PathwayStage::Starter | PathwayStage::Core
+                if trader && row.age + 1 >= Self::peak_sale_age(row.group) =>
+            {
+                0.20 * asset_weight
+            }
+            _ => 0.0,
+        };
+        score.add(pathway_term, SellMotive::PathwayMature);
+
+        // ── What the market will not pay ──
+        // A man the market values below what the club still has on its
+        // books for him is not a sale the club wants to make. This is
+        // the term that makes the loan market the natural home of an
+        // unrealised mandate: he is lent out before he is marketed.
+        let market_ask = Self::asking_for(row, appetite);
+        if row.book_value > 0.0 {
+            let shortfall = (1.0 - market_ask / row.book_value).clamp(0.0, 1.0) as f32;
+            score.total -= Self::BOOK_LOSS_WEIGHT * shortfall;
+        }
+
+        // ── He is pushing ──
+        let push_term = if row.is_transfer_requested {
+            0.60
+        } else {
+            (row.stage_pull.clamp(0.0, 1.0) - 0.22).max(0.0) * 0.55
+        };
+        score.add(push_term, SellMotive::PlayerPushing);
+
+        // ── His own department says it is time ──
+        // A motive, not a verdict: it needs another reason beside it
+        // before the club answers a call.
+        if row.advised_to_move_on {
+            score.add(Self::STAFF_ADVICE, SellMotive::StaffAdvice);
+        }
+
+        (score, market_ask)
     }
 }
 
