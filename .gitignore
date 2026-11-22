@@ -8,7 +8,6 @@ src/web/assets/static/viewer/
 
 .idea/
 .qwen/
-.agents/
 .claude/
 
 match_results

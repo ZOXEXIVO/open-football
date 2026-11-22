@@ -1,13 +1,13 @@
 schema: spec-driven
 
 # Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
+# Add only constraints that should guide OpenSpec artifacts and workflows.
+# Include constraints an agent cannot infer by reading the code.
+# Keep general project documentation and discoverable codebase facts out.
 # Example:
 #   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+#     Designs and tasks must cover Windows, macOS, and Linux
+#     Write all artifacts in Spanish
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
@@ -15,7 +15,7 @@ schema: spec-driven
 #   rules:
 #     proposal:
 #       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
+#       - Always state what is out of scope
 #     tasks:
 #       - Break tasks into chunks of max 2 hours
 
