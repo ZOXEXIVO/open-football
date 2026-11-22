@@ -257,9 +257,11 @@ pub struct RoleLevels([u8; PlayerPositionType::ALL.len()]);
 
 impl RoleLevels {
     pub fn of(positions: &PlayerPositions) -> Self {
-        RoleLevels(PlayerPositionType::ALL.map(|role| {
-            (RoleFamiliarity::level_for_slot(positions, role) * 10.0).round() as u8
-        }))
+        RoleLevels(
+            PlayerPositionType::ALL.map(|role| {
+                (RoleFamiliarity::level_for_slot(positions, role) * 10.0).round() as u8
+            }),
+        )
     }
 
     /// A player listed at `role` alone, as a natural there.

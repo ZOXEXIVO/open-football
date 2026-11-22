@@ -68,6 +68,8 @@ use crate::ui::timeline::{DebugOverlay, Press, Timeline};
 use crate::ui::touch::{FlightPad, TouchControls, TouchDevice, TouchDrive, TouchGesture};
 use crate::ui::watermark::Watermark;
 use bevy::asset::AssetMetaCheck;
+use bevy::ecs::schedule::{IntoScheduleConfigs, ScheduleConfigs};
+use bevy::ecs::system::ScheduleSystem;
 use bevy::input::InputSystems;
 use bevy::light::{DirectionalLightShadowMap, PointLightShadowMap};
 use bevy::log::{Level, LogPlugin};
@@ -86,20 +88,28 @@ impl MatchViewer {
     pub fn start(config: String) {
         console_error_panic_hook::set_once();
 
-        let config: ViewerConfig = match serde_json::from_str(&config) {
-            Ok(config) => config,
+        let Some(config) = Self::read_config(&config) else {
+            return;
+        };
+        let (quality, pace) = Self::prepare(&config);
+        Self::build(config, quality, pace).run();
+    }
+}
+
+impl MatchViewer {
+    fn read_config(raw: &str) -> Option<ViewerConfig> {
+        match serde_json::from_str(raw) {
+            Ok(config) => Some(config),
             Err(error) => {
                 web_sys::console::error_1(&JsValue::from_str(&format!(
                     "match viewer: unusable config — {error}"
                 )));
-                return;
+                None
             }
-        };
+        }
+    }
 
-        let duration_ms = config.match_time_ms;
-        let debug = config.debug;
-        let instrumented = config.instrumented();
-
+    fn prepare(config: &ViewerConfig) -> (Quality, bevy::winit::WinitSettings) {
         // The orbit drag needs the right and wheel buttons, and the browser
         // answers those with a context menu and autoscroll. Winit would
         // suppress them, but only via the same switch that swallows the
@@ -149,11 +159,31 @@ impl MatchViewer {
         } else {
             bevy::winit::WinitSettings::default()
         };
+        (quality, pace)
+    }
 
-        App::new()
-            .insert_resource(pace)
-            .add_plugins(
-                DefaultPlugins
+    fn build(config: ViewerConfig, quality: Quality, pace: bevy::winit::WinitSettings) -> App {
+        let duration_ms = config.match_time_ms;
+        let debug = config.debug;
+        let instrumented = config.instrumented();
+        let mut app = App::new();
+        Self::install_window(&mut app, config, quality, pace);
+        Self::install_playback(&mut app, duration_ms);
+        Self::install_camera(&mut app);
+        Self::install_controls(&mut app);
+        Self::register_schedules(&mut app, debug, instrumented);
+        app
+    }
+
+    fn install_window(
+        app: &mut App,
+        config: ViewerConfig,
+        quality: Quality,
+        pace: bevy::winit::WinitSettings,
+    ) {
+        app.insert_resource(pace);
+        app.add_plugins(
+            DefaultPlugins
                     .set(WindowPlugin {
                         primary_window: Some(Window {
                             resolution: Stage::initial_resolution(&config.canvas),
@@ -177,173 +207,199 @@ impl MatchViewer {
                         level: Level::WARN,
                         ..default()
                     }),
-            )
-            // After `DefaultPlugins`, which is what creates `Assets<Font>`, and
-            // before any of the spawns below put text on the screen.
-            .add_plugins(Typeface)
-            // Bevy allocates shadow textures even with every shadow map disabled:
-            // a 1024-square cubemap and a 2048-square layer cost 40 MiB. The
-            // viewer uses contact discs, so only the shader bindings need backing.
-            .insert_resource(PointLightShadowMap { size: 1 })
-            .insert_resource(DirectionalLightShadowMap { size: 1 })
-            // Only ever seen if the dome somehow is not: `Sky` is carried by
-            // the lens and covers the frame. Held at the gradient's zenith so
-            // that if it ever does show, it shows as more sky.
-            .insert_resource(ClearColor(Color::srgb(0.030, 0.048, 0.098)))
-            // Asked BEFORE the app is built and inserted here rather than
-            // initialised as a system, because `TvCamera::spawn` reads it: a
-            // tier settled on the first frame costs nothing to adopt, where
-            // one settled on the tenth costs a pipeline recompile. See
-            // `quality`.
-            .insert_resource(quality)
-            .insert_resource(config)
-            // After the config, which says whether this session is
-            // instrumented: the census lives in the render world and only
-            // installs itself for a page that asked for the readout.
-            .add_plugins(ProgramCensus)
-            .insert_resource(Playback::new(duration_ms))
-            .init_resource::<ReplayTracks>()
-            .init_resource::<ChunkLoader>()
-            .init_resource::<RecordedSpans>()
-            .init_resource::<BallState>()
-            .init_resource::<Aftermath>()
-            .init_resource::<DebugOverlay>()
-            // Always collected, never in the way: two clock reads a frame and
-            // a mesh census every fifteenth. It is only *shown* when the page
-            // asked for the debug overlay — see `perf`, which is the thing
-            // that turns "laggy" into a number worth acting on.
-            .init_resource::<FrameCost>()
-            // Before `Startup`, because `TvCamera::spawn` is pointed at the
-            // image this owns and startup systems have no order between them
-            // worth relying on. See `stage`.
-            .init_resource::<Stage>()
-            .init_resource::<CameraZoom>()
-            // `TvCamera::follow_play` takes `Res<CameraOrbit>` and
-            // `CameraOrbit::handle_drag` takes `ResMut<CameraOrbit>`, but
-            // nothing ever inserted it — so the first `Update` tick
-            // failed parameter validation with "Resource does not exist"
-            // and the WASM viewer aborted before rendering a frame. The
-            // orbit landed next to the zoom in `camera.rs` and its
-            // registration was missed here.
-            .init_resource::<CameraOrbit>()
-            .init_resource::<CameraFlight>()
-            // Which of the twenty-two the camera has been asked to follow.
-            // Read by `TvCamera::follow_play`, by the ring on the grass and by
-            // the reset chip, so it exists from the first frame whether or not
-            // anybody ever clicks a player. See `focus`.
-            .init_resource::<CameraSubject>()
-            // Filled at startup from the config's substitutions; read by
-            // `TvCamera::follow_play` on every frame, so it exists from the
-            // first one whether or not the match had a change in it.
-            .init_resource::<ChangeoverShot>()
-            // The shot a goal gets. Nothing to fill at startup — it measures
-            // its subject off the bodies every frame — but `TvCamera::
-            // follow_play` reads it on every one of them, including the
-            // eighty-odd minutes with no goal behind them. See `broadcast::goal`.
-            .init_resource::<GoalShot>()
-            // …and how far the card the replay ends on has come up. Read every
-            // frame by the corner bug, which stands down for it, so it exists
-            // from the first one. See `ui::scoreboard::FullTime`.
-            .init_resource::<FullTime>()
-            // The two teams walked out before the first whistle. Registered
-            // here as well as filled by `Lineup::arm` at startup, because
-            // `TvCamera::follow_play` and `Actors::take_the_field` both take
-            // it as a `Res` and `Startup` systems have no order between them
-            // worth relying on — the same reason `Stage` is above.
-            .init_resource::<Lineup>()
-            // The touch half of the same controls. `TouchDrive` is read by
-            // `CameraFlight::steer` on every frame whether or not anything has
-            // ever been touched, so it is registered unconditionally — the
-            // orbit's own missing registration is the cautionary tale a few
-            // lines up.
-            .init_resource::<TouchDevice>()
-            .init_resource::<TouchDrive>()
-            .init_resource::<TouchGesture>()
-            .init_resource::<FlightPad>()
-            .init_resource::<Bringup>()
-            // How far through the dip between two clips the picture is. Read
-            // every frame whether or not the recording has any holes in it at
-            // all, so it exists from the first one. See `cut`.
-            .init_resource::<CutFade>()
-            // What the ball has already been heard doing, and whether anybody
-            // wants to hear it at all. Registered here rather than opened at
-            // startup on purpose: the audio engine behind it is not created
-            // until the replay is actually running, so a viewer who never
-            // presses play never makes the browser open one. See `sound`.
-            .init_resource::<Soundtrack>()
-            // …and its other half, which holds JavaScript handles and so
-            // cannot be a `Resource` at all — `Speakers` is the one non-send
-            // thing in the app.
-            .init_non_send::<Speakers>()
-            // Before everything: the tier the probe guessed, checked against
-            // the adapter wgpu actually opened. It has to land ahead of the
-            // camera and the squad, both of which are built from it — see
-            // `Quality::confirm`, and why a tier corrected here is free where
-            // one corrected later costs a scene-wide shader recompile.
-            .add_systems(PreStartup, Quality::confirm)
-            .add_systems(
-                Startup,
-                (
-                    Sky::spawn,
-                    TvCamera::spawn,
-                    // The window camera and the sheet the replay is shown on,
-                    // which is not the same camera that draws it — see
-                    // `stage`.
-                    Stage::spawn,
-                    Actors::spawn,
-                    PreRoll::install,
-                    // Hidden until a player is picked. Built here rather than
-                    // then for the reason `FlightPad::spawn` is: a marker
-                    // assembled on the frame it is first wanted is a mesh and
-                    // a material queued in the middle of a click.
-                    FocusRing::spawn,
-                    // Cuts the config's substitutions into one shot per
-                    // stoppage. Startup rather than per-frame because the
-                    // answer cannot change: the recording is fixed by the
-                    // time the page hands it over.
-                    ChangeoverShot::arm,
-                    // …and stands the two elevens up, off the team sheets.
-                    // Startup for the same reason: who started is fixed by the
-                    // time the page hands the document over.
-                    Lineup::arm,
-                    Timeline::spawn,
-                    Scoreboard::spawn,
-                    // The two team sheets, built once from the squads the page
-                    // handed over and shown for the walk-out only.
-                    TeamSheet::spawn,
-                    // The one label on the screen that is about the project
-                    // rather than the match. Nothing drives it afterwards.
-                    Watermark::spawn,
-                    // The card the replay ends on, built here rather than at
-                    // the final whistle for the reason the dip's veil is: a
-                    // panel assembled on the frame it is first wanted is a
-                    // dozen lines of text shaped in the middle of the moment
-                    // it exists to cover. See `ui::scoreboard::FullTime`.
-                    FullTime::spawn,
-                    // Hidden until the replay first cuts, and built here for
-                    // the reason the flight stick is: a sheet assembled on the
-                    // frame it is first wanted is a texture uploaded in the
-                    // middle of the moment it exists to cover.
-                    CutFade::spawn,
-                    ChunkLoader::bootstrap,
-                    // Hidden until a finger arrives — see `FlightPad::refresh`.
-                    // Spawned here rather than then, because a control built on
-                    // the frame it is first grabbed misses that grab.
-                    FlightPad::spawn,
-                    // After winit has adopted the canvas, or the focus it
-                    // takes is the focus this just set.
-                    CameraFlight::focus_canvas,
-                ),
-            )
-            // The stadium, a course per frame rather than all of it on the
-            // first one. Each of these queues a render pipeline the browser
-            // then blocks for seconds compiling, and running them on separate
-            // frames is what gives the page the main thread back in between —
-            // to repaint, to answer a click, and to move its own loading
-            // readout on. See `bringup`, which has the measurements.
-            .add_systems(
-                Update,
-                (
+        );
+        // After `DefaultPlugins`, which is what creates `Assets<Font>`, and
+        // before any of the spawns below put text on the screen.
+        app.add_plugins(Typeface);
+        // Bevy allocates shadow textures even with every shadow map disabled:
+        // a 1024-square cubemap and a 2048-square layer cost 40 MiB. The
+        // viewer uses contact discs, so only the shader bindings need backing.
+        app.insert_resource(PointLightShadowMap { size: 1 });
+        app.insert_resource(DirectionalLightShadowMap { size: 1 });
+        // Only ever seen if the dome somehow is not: `Sky` is carried by
+        // the lens and covers the frame. Held at the gradient's zenith so
+        // that if it ever does show, it shows as more sky.
+        app.insert_resource(ClearColor(Color::srgb(0.030, 0.048, 0.098)));
+        // Asked BEFORE the app is built and inserted here rather than
+        // initialised as a system, because `TvCamera::spawn` reads it: a
+        // tier settled on the first frame costs nothing to adopt, where
+        // one settled on the tenth costs a pipeline recompile. See
+        // `quality`.
+        app.insert_resource(quality);
+        app.insert_resource(config);
+        // After the config, which says whether this session is
+        // instrumented: the census lives in the render world and only
+        // installs itself for a page that asked for the readout.
+        app.add_plugins(ProgramCensus);
+    }
+
+    fn install_playback(app: &mut App, duration_ms: f64) {
+        app.insert_resource(Playback::new(duration_ms));
+        app.init_resource::<ReplayTracks>();
+        app.init_resource::<ChunkLoader>();
+        app.init_resource::<RecordedSpans>();
+        app.init_resource::<BallState>();
+        app.init_resource::<Aftermath>();
+        app.init_resource::<DebugOverlay>();
+        // Always collected, never in the way: two clock reads a frame and
+        // a mesh census every fifteenth. It is only *shown* when the page
+        // asked for the debug overlay — see `perf`, which is the thing
+        // that turns "laggy" into a number worth acting on.
+        app.init_resource::<FrameCost>();
+        // Before `Startup`, because `TvCamera::spawn` is pointed at the
+        // image this owns and startup systems have no order between them
+        // worth relying on. See `stage`.
+        app.init_resource::<Stage>();
+    }
+
+    fn install_camera(app: &mut App) {
+        app.init_resource::<CameraZoom>();
+        // `TvCamera::follow_play` takes `Res<CameraOrbit>` and
+        // `CameraOrbit::handle_drag` takes `ResMut<CameraOrbit>`, but
+        // nothing ever inserted it — so the first `Update` tick
+        // failed parameter validation with "Resource does not exist"
+        // and the WASM viewer aborted before rendering a frame. The
+        // orbit landed next to the zoom in `camera.rs` and its
+        // registration was missed here.
+        app.init_resource::<CameraOrbit>();
+        app.init_resource::<CameraFlight>();
+        // Which of the twenty-two the camera has been asked to follow.
+        // Read by `TvCamera::follow_play`, by the ring on the grass and by
+        // the reset chip, so it exists from the first frame whether or not
+        // anybody ever clicks a player. See `focus`.
+        app.init_resource::<CameraSubject>();
+        // Filled at startup from the config's substitutions; read by
+        // `TvCamera::follow_play` on every frame, so it exists from the
+        // first one whether or not the match had a change in it.
+        app.init_resource::<ChangeoverShot>();
+        // The shot a goal gets. Nothing to fill at startup — it measures
+        // its subject off the bodies every frame — but `TvCamera::
+        // follow_play` reads it on every one of them, including the
+        // eighty-odd minutes with no goal behind them. See `broadcast::goal`.
+        app.init_resource::<GoalShot>();
+        // …and how far the card the replay ends on has come up. Read every
+        // frame by the corner bug, which stands down for it, so it exists
+        // from the first one. See `ui::scoreboard::FullTime`.
+        app.init_resource::<FullTime>();
+        // The two teams walked out before the first whistle. Registered
+        // here as well as filled by `Lineup::arm` at startup, because
+        // `TvCamera::follow_play` and `Actors::take_the_field` both take
+        // it as a `Res` and `Startup` systems have no order between them
+        // worth relying on — the same reason `Stage` is above.
+        app.init_resource::<Lineup>();
+    }
+
+    fn install_controls(app: &mut App) {
+        // The touch half of the same controls. `TouchDrive` is read by
+        // `CameraFlight::steer` on every frame whether or not anything has
+        // ever been touched, so it is registered unconditionally — the
+        // orbit's own missing registration is the cautionary tale a few
+        // lines up.
+        app.init_resource::<TouchDevice>();
+        app.init_resource::<TouchDrive>();
+        app.init_resource::<TouchGesture>();
+        app.init_resource::<FlightPad>();
+        app.init_resource::<Bringup>();
+        // How far through the dip between two clips the picture is. Read
+        // every frame whether or not the recording has any holes in it at
+        // all, so it exists from the first one. See `cut`.
+        app.init_resource::<CutFade>();
+        // What the ball has already been heard doing, and whether anybody
+        // wants to hear it at all. Registered here rather than opened at
+        // startup on purpose: the audio engine behind it is not created
+        // until the replay is actually running, so a viewer who never
+        // presses play never makes the browser open one. See `sound`.
+        app.init_resource::<Soundtrack>();
+        // …and its other half, which holds JavaScript handles and so
+        // cannot be a `Resource` at all — `Speakers` is the one non-send
+        // thing in the app.
+        app.init_non_send::<Speakers>();
+    }
+
+    fn register_schedules(app: &mut App, debug: bool, instrumented: bool) {
+        // Before everything: the tier the probe guessed, checked against
+        // the adapter wgpu actually opened. It has to land ahead of the
+        // camera and the squad, both of which are built from it — see
+        // `Quality::confirm`, and why a tier corrected here is free where
+        // one corrected later costs a scene-wide shader recompile.
+        app.add_systems(PreStartup, Quality::confirm);
+        Self::register_startup(app);
+        Self::register_bringup(app);
+        Self::register_ceremonies(app);
+        Self::register_joints(app);
+        Self::register_tailoring(app);
+        Self::register_sound(app);
+        Self::register_update(app);
+        Self::register_tail(app, debug, instrumented);
+    }
+
+    fn register_startup(app: &mut App) {
+        app.add_systems(
+            Startup,
+            (
+                Sky::spawn,
+                TvCamera::spawn,
+                // The window camera and the sheet the replay is shown on,
+                // which is not the same camera that draws it — see
+                // `stage`.
+                Stage::spawn,
+                Actors::spawn,
+                PreRoll::install,
+                // Hidden until a player is picked. Built here rather than
+                // then for the reason `FlightPad::spawn` is: a marker
+                // assembled on the frame it is first wanted is a mesh and
+                // a material queued in the middle of a click.
+                FocusRing::spawn,
+                // Cuts the config's substitutions into one shot per
+                // stoppage. Startup rather than per-frame because the
+                // answer cannot change: the recording is fixed by the
+                // time the page hands it over.
+                ChangeoverShot::arm,
+                // …and stands the two elevens up, off the team sheets.
+                // Startup for the same reason: who started is fixed by the
+                // time the page hands the document over.
+                Lineup::arm,
+                Timeline::spawn,
+                Scoreboard::spawn,
+                // The two team sheets, built once from the squads the page
+                // handed over and shown for the walk-out only.
+                TeamSheet::spawn,
+                // The one label on the screen that is about the project
+                // rather than the match. Nothing drives it afterwards.
+                Watermark::spawn,
+                // The card the replay ends on, built here rather than at
+                // the final whistle for the reason the dip's veil is: a
+                // panel assembled on the frame it is first wanted is a
+                // dozen lines of text shaped in the middle of the moment
+                // it exists to cover. See `ui::scoreboard::FullTime`.
+                FullTime::spawn,
+                // Hidden until the replay first cuts, and built here for
+                // the reason the flight stick is: a sheet assembled on the
+                // frame it is first wanted is a texture uploaded in the
+                // middle of the moment it exists to cover.
+                CutFade::spawn,
+                ChunkLoader::bootstrap,
+                // Hidden until a finger arrives — see `FlightPad::refresh`.
+                // Spawned here rather than then, because a control built on
+                // the frame it is first grabbed misses that grab.
+                FlightPad::spawn,
+                // After winit has adopted the canvas, or the focus it
+                // takes is the focus this just set.
+                CameraFlight::focus_canvas,
+            ),
+        );
+    }
+
+    fn register_bringup(app: &mut App) {
+        // The stadium, a course per frame rather than all of it on the
+        // first one. Each of these queues a render pipeline the browser
+        // then blocks for seconds compiling, and running them on separate
+        // frames is what gives the page the main thread back in between —
+        // to repaint, to answer a click, and to move its own loading
+        // readout on. See `bringup`, which has the measurements.
+        app.add_systems(
+            Update,
+            (
                     Pitch::lay_turf.run_if(Bringup::on(1)),
                     Pitch::lay_surround.run_if(Bringup::on(2)),
                     Pitch::paint_markings.run_if(Bringup::on(3)),
@@ -373,306 +429,331 @@ impl MatchViewer {
                     // Ahead of the replay's own systems, so the course laid
                     // this frame is drawn this frame.
                     .before(FrameCost::enter_update),
-            )
-            // Behind everything, so the phase the page is told about is the
-            // one that has just finished rather than the one about to start.
-            .add_systems(Update, Bringup::pump.after(FrameCost::leave_update))
-            // **The two teams walked out**, and the one pair of systems in
-            // this file whose place in the frame is pinned by name rather than
-            // by position in the chain below.
-            //
-            // ⚠ **`.chain()` does not reach inside a nested tuple.** The chain
-            // orders the ELEMENTS of the tuple it is called on; an element
-            // that is itself a tuple becomes an unordered group, and the
-            // systems in it end up ordered against nothing. Both of these were
-            // written that way to stay inside Bevy's maximum arity and both
-            // landed in the wrong half of the frame: `pose` ran BEFORE
-            // `Actors::follow_playhead`, so the line it stood the men in was
-            // overwritten by the recording on the same frame. It looked
-            // correct for a fortunate reason — the playhead is parked at zero
-            // for the whole ceremony and a recording has no sample there to
-            // overwrite it with — and gave itself away the moment the parked
-            // time was moved off zero.
-            //
-            // So they are named here instead, which says what each one
-            // actually needs and cannot be broken by an arity limit:
-            //
-            // - **`hold`** behind every handler that can be a viewer asking
-            //   for the football (the keyboard is the last of them, and the
-            //   transport bar and the pick are chained ahead of it) and in
-            //   front of the playhead it holds still.
-            // - **`pose`** behind the recording, which is what it overrides,
-            //   and in front of `animate`, which poses whatever it leaves.
-            // - **`wear_the_name`** behind `hold`, which is what decides
-            //   whether the ceremony has the picture this frame, and behind
-            //   `take_the_field`, which is what spawns the print in the first
-            //   place — a man dressed this frame wears his name this frame.
-            .add_systems(
-                Update,
-                (
-                    Lineup::hold
-                        .after(Playback::handle_keyboard)
-                        .before(Playback::advance),
-                    // Behind the act it reads, so the sheet leaves on the frame
-                    // the camera turns rather than the one after it.
-                    TeamSheet::follow_ceremony.after(Lineup::hold),
-                    // …and reads the size the card was last laid out at, which
-                    // is a frame behind whatever a resize did to the window.
-                    // Every frame rather than on a resize event: the canvas on
-                    // a phone follows the URL bar, and a size arrived at
-                    // between two events is still a size the card has to fit.
-                    TeamSheet::fit_frame,
-                    Lineup::pose
-                        .after(Actors::take_the_field)
-                        .before(Actors::animate),
-                    Lineup::wear_the_name
-                        .after(Lineup::hold)
-                        .after(Actors::take_the_field),
-                    // **Ahead of the fold**, so a request that comes due this
-                    // frame is on the wire before the answer to the last one
-                    // is painted onto a face — the two are the halves of one
-                    // budget and belong in one frame's order, not two.
-                    //
-                    // Named here for the same reason the line-up's systems
-                    // are: the group below is at Bevy's twenty-tuple limit,
-                    // and nesting a pair inside it would leave both ordered
-                    // against nothing at all.
-                    Portraits::ask.before(Portraits::attach),
-                ),
-            )
-            // **The cut and the joints**: the pre-roll behind `animate`, so a
-            // seek lands on the state playing through would have reached, and
-            // the joints behind that and in front of the carriage hung from
-            // the same bodies. Named for the reason the pair below are.
-            .add_systems(
-                Update,
-                (
-                    PreRoll::run.after(Actors::animate),
-                    Actors::pose_joints
-                        .after(PreRoll::run)
-                        .before(Actors::carry_body),
-                ),
-            )
-            // **Each man cut as finely as the screen has room for**, off where
-            // the camera and he have both just been put this frame. Named for
-            // the reason the pair above are.
-            .add_systems(
-                Update,
-                Tailoring::fit
-                    .after(CameraFlight::steer)
-                    .after(Actors::animate)
-                    .before(FrameCost::leave_update),
-            )
-            // **The soundtrack**, named here for the same reason the pair
-            // above are: both of the twenty-system groups below are full, and
-            // what these two need is a place in the frame rather than a place
-            // in a list.
-            //
-            // - **the mute chip** ahead of the paint, so a click on it is
-            //   answered on the frame it happened rather than the next one.
-            // - **the ball** behind `Actors::follow_playhead`, which is what
-            //   settles `BallState` — where the ball is, how fast it is going
-            //   and the strike that is coming — and in front of
-            //   `Playback::end_frame`, which clears the `seeked` flag it reads
-            //   to know its idea of the ball's velocity is worthless.
-            .add_systems(
-                Update,
-                (
-                    Timeline::handle_sound.before(Timeline::paint_chips),
-                    Soundtrack::follow_playhead
-                        .after(Actors::follow_playhead)
-                        .after(Timeline::handle_sound)
-                        .before(Playback::end_frame),
-                ),
-            )
-            .add_systems(
-                Update,
-                // Split into two nested groups purely to stay inside
-                // Bevy's maximum tuple arity — `.chain()` still orders the
-                // whole thing end to end, so the ordering notes below mean
-                // exactly what they say across the boundary.
-                (
-                    // The clock either side of the whole chain, so what the
-                    // readout calls `update` is exactly this crate's own
-                    // systems and nothing of Bevy's.
-                    FrameCost::enter_update,
-                    (
-                        // First of everything, so a window resize or a step
-                        // down the resolution ladder lands on the frame it was
-                        // decided rather than being drawn once at the old size.
-                        Stage::fit,
-                        ChunkLoader::pump,
-                        // Beside the chunk loader because it is the same kind
-                        // of thing: a fetch that started when the page did,
-                        // landing whenever it lands. A face arriving in the
-                        // third minute changes nothing about the frame it
-                        // arrives on — see `portrait`.
-                        Portraits::attach,
-                        Timeline::handle_toggle,
-                        Timeline::handle_seek,
-                        // Ahead of `Playback::advance`, so a change of speed
-                        // applies to the frame it was asked for. Registered
-                        // here rather than with the debug systems below: the
-                        // speed chip is part of the transport bar in the
-                        // game too, and a button whose handler never runs is
-                        // worse than no button.
-                        Timeline::handle_speed,
-                        // Ahead of every camera system below, so a click on
-                        // the reset chip lands on the frame it happened.
-                        Timeline::handle_camera_reset,
-                        // The click on the pitch itself, and deliberately
-                        // BEFORE the playhead moves: what the pointer was
-                        // aimed at is the frame that was on the screen, and
-                        // that frame was drawn from last update's positions.
-                        // Testing against this update's would ask the viewer
-                        // to lead a running player. See `focus`.
-                        CameraSubject::handle_pick,
-                        Playback::handle_keyboard,
-                        Playback::advance,
-                        Actors::follow_playhead,
-                        // Straight after it, because it is what decides who is
-                        // on: a man is built when the playhead comes within a
-                        // few seconds of his first recorded sample, so the
-                        // thirty-six on the two team sheets are not all
-                        // assembled before the first frame. See
-                        // `Actors::take_the_field`.
-                        Actors::take_the_field,
-                        // Between the playhead moving and the bodies being
-                        // posed off it: `animate` reads the mood, and reading
-                        // last frame's would leave every reaction a frame
-                        // behind a scrub.
-                        Aftermath::follow_playhead,
-                        Actors::animate,
-                        // Straight after, so the dive `animate` has just read
-                        // out of the recording is on the body the same frame.
-                        Actors::carry_body,
-                        // And after that, because a shadow is placed off where
-                        // the body it belongs to has just been put — including
-                        // how far off the ground.
-                        Actors::cast_shadows,
-                        // After the bodies have moved and before anything
-                        // reads the subject: this is what copies the followed
-                        // player's position out for the camera and walks the
-                        // shot in and out of the close-up.
-                        CameraSubject::settle,
-                        // Beside it, off the same facts and for the same
-                        // reason: the substitution shot aims at where the men
-                        // coming on have just been put, and `follow_play`
-                        // below reads what it writes.
-                        ChangeoverShot::settle,
-                        // Straight after it, off the same two facts — where he
-                        // is standing and how far the shot has closed.
-                        FocusRing::follow,
-                        // After `follow_playhead`, which is what moves the
-                        // ball: the netting is deformed by wherever the ball
-                        // has just been put, so a frame's lag here would show
-                        // the mesh trailing the ball through it.
-                        Netting::ripple,
-                    ),
-                    (
-                        // Ahead of the gestures that read it, so the frame a
-                        // touch device announces itself is the frame its
-                        // controls exist.
-                        TouchControls::watch,
-                        // Beside the mouse handlers below because they are the
-                        // same controls, and ahead of `follow_play` for the same
-                        // reason: a gesture has to land on the frame it happened.
-                        TouchControls::handle_gestures,
-                        FlightPad::handle_touch,
-                        // Ahead of `follow_play`, which reads the orbit — so a
-                        // drag lands on the same frame it happened rather than
-                        // the next one. Never registered at all before, so the
-                        // camera could not be turned.
-                        CameraOrbit::handle_drag,
-                        CameraZoom::handle_wheel,
-                        TvCamera::follow_play,
-                        // After `follow_play` rather than before it: on the
-                        // frame the rig takes off, flight seeds itself from the
-                        // broadcast position that system has just written, so
-                        // the first key press continues the shot instead of
-                        // cutting.
-                        CameraFlight::steer,
-                        // Straight after the camera moves, so the stand the
-                        // rig has just walked into is gone on the same frame
-                        // it entered rather than flashing for one.
-                        Bank::cull,
-                        // Same frame, same reason: the dome is carried by the
-                        // lens, and a frame of lag would show as the horizon
-                        // sliding back into place after every pan.
-                        Sky::follow_lens,
-                        Actors::place_labels,
-                        EventLog::follow_playhead,
-                        Timeline::refresh,
-                        // After `ChunkLoader::pump`, which is where the spans
-                        // arrive — the bar is drawn on the frame the recording
-                        // tells us where its holes are.
-                        Timeline::refresh_gaps,
-                        Timeline::refresh_camera_reset,
-                        (Timeline::refresh_speed, Timeline::refresh_hints),
-                        // After `handle_touch`, so the knob is drawn where the
-                        // thumb has just put it rather than where it was.
-                        FlightPad::refresh,
-                        // Last of the bar's systems: the two above decide
-                        // which buttons are lit, and these turn that plus the
-                        // pointer into the colours actually drawn.
-                        Timeline::paint_chips,
-                        Timeline::paint_play,
-                        // After the bar, because it is the last thing that
-                        // reads a settled frame and the first that would
-                        // interrupt one: a tier that steps down here does it
-                        // between two frames rather than in the middle of
-                        // drawing one. See `quality`, which explains why this
-                        // may fire exactly once.
-                        Quality::relent,
-                        // Behind the whole frame, because the dip is drawn over
-                        // all of it: whatever the cut this frame did to the
-                        // camera, the bodies and the plates, this is what the
-                        // viewer sees it through. See `cut`.
-                        CutFade::follow_playhead,
-                    ),
-                    // Outside the two groups above rather than at the end of
-                    // one, because both are full — Bevy's system tuples stop at
-                    // twenty. It has to stay LAST all the same: it clears the
-                    // flags every one of them reads.
-                    Playback::end_frame,
-                    FrameCost::leave_update,
-                )
-                    .chain(),
-            )
-            // Either end of the frame itself. `First` is ahead of everything
-            // Bevy runs on this thread and `Last` is behind it, so what falls
-            // outside the pair is the render sub-app and the browser — which
-            // is the split that says whether a slow frame is ours or the GPU's.
-            // Where `bevy_ui` reads the pointer too, so a click lands on the
-            // frame it happened. See `Press`.
-            .add_systems(PreUpdate, Press::follow_pointer.after(InputSystems))
-            .add_systems(First, FrameCost::open)
-            .add_systems(Last, FrameCost::close)
-            // The corner frame counter. Registered apart from the full chain
-            // above — which is at Bevy's twenty-system tuple limit — and
-            // deliberately unordered against it: the badge paces itself and
-            // reads a median that is always a frame stale anyway.
-            .add_systems(Update, Timeline::refresh_fps)
-            // The score's own three: the shot a goal gets, the bug that counts
-            // them and the card they add up to. Registered apart from the
-            // chain for the same reason as the badge and ordered by hand,
-            // because unlike the badge none of them may be a frame late. The
-            // shot is measured off bodies that have just been placed and is
-            // read by the camera in the same frame; the bug is drawn off the
-            // window `Aftermath` has just resolved and off whether the card
-            // has the screen; and a frame's lag on any of them shows as the
-            // picture disagreeing with itself at the one moment anybody is
-            // watching closely.
-            .add_systems(
-                Update,
-                (
-                    GoalShot::settle
-                        .after(ChangeoverShot::settle)
-                        .before(TvCamera::follow_play),
-                    FullTime::follow_playhead
-                        .after(Playback::advance)
-                        .before(Playback::end_frame),
-                    Scoreboard::refresh
+        );
+        // Behind everything, so the phase the page is told about is the
+        // one that has just finished rather than the one about to start.
+        app.add_systems(Update, Bringup::pump.after(FrameCost::leave_update));
+    }
+
+    fn register_ceremonies(app: &mut App) {
+        // **The two teams walked out**, and the one pair of systems in
+        // this file whose place in the frame is pinned by name rather than
+        // by position in the chain below.
+        //
+        // ⚠ **`.chain()` does not reach inside a nested tuple.** The chain
+        // orders the ELEMENTS of the tuple it is called on; an element
+        // that is itself a tuple becomes an unordered group, and the
+        // systems in it end up ordered against nothing. Both of these were
+        // written that way to stay inside Bevy's maximum arity and both
+        // landed in the wrong half of the frame: `pose` ran BEFORE
+        // `Actors::follow_playhead`, so the line it stood the men in was
+        // overwritten by the recording on the same frame. It looked
+        // correct for a fortunate reason — the playhead is parked at zero
+        // for the whole ceremony and a recording has no sample there to
+        // overwrite it with — and gave itself away the moment the parked
+        // time was moved off zero.
+        //
+        // So they are named here instead, which says what each one
+        // actually needs and cannot be broken by an arity limit:
+        //
+        // - **`hold`** behind every handler that can be a viewer asking
+        //   for the football (the keyboard is the last of them, and the
+        //   transport bar and the pick are chained ahead of it) and in
+        //   front of the playhead it holds still.
+        // - **`pose`** behind the recording, which is what it overrides,
+        //   and in front of `animate`, which poses whatever it leaves.
+        // - **`wear_the_name`** behind `hold`, which is what decides
+        //   whether the ceremony has the picture this frame, and behind
+        //   `take_the_field`, which is what spawns the print in the first
+        //   place — a man dressed this frame wears his name this frame.
+        app.add_systems(
+            Update,
+            (
+                Lineup::hold
+                    .after(Playback::handle_keyboard)
+                    .before(Playback::advance),
+                // Behind the act it reads, so the sheet leaves on the frame
+                // the camera turns rather than the one after it.
+                TeamSheet::follow_ceremony.after(Lineup::hold),
+                // …and reads the size the card was last laid out at, which
+                // is a frame behind whatever a resize did to the window.
+                // Every frame rather than on a resize event: the canvas on
+                // a phone follows the URL bar, and a size arrived at
+                // between two events is still a size the card has to fit.
+                TeamSheet::fit_frame,
+                Lineup::pose
+                    .after(Actors::take_the_field)
+                    .before(Actors::animate),
+                Lineup::wear_the_name
+                    .after(Lineup::hold)
+                    .after(Actors::take_the_field),
+                // **Ahead of the fold**, so a request that comes due this
+                // frame is on the wire before the answer to the last one
+                // is painted onto a face — the two are the halves of one
+                // budget and belong in one frame's order, not two.
+                //
+                // Named here for the same reason the line-up's systems
+                // are: the group below is at Bevy's twenty-tuple limit,
+                // and nesting a pair inside it would leave both ordered
+                // against nothing at all.
+                Portraits::ask.before(Portraits::attach),
+            ),
+        );
+    }
+
+    fn register_joints(app: &mut App) {
+        // **The cut and the joints**: the pre-roll behind `animate`, so a
+        // seek lands on the state playing through would have reached, and
+        // the joints behind that and in front of the carriage hung from
+        // the same bodies. Named for the reason the pair below are.
+        app.add_systems(
+            Update,
+            (
+                PreRoll::run.after(Actors::animate),
+                Actors::pose_joints
+                    .after(PreRoll::run)
+                    .before(Actors::carry_body),
+            ),
+        );
+    }
+
+    fn register_tailoring(app: &mut App) {
+        // **Each man cut as finely as the screen has room for**, off where
+        // the camera and he have both just been put this frame. Named for
+        // the reason the pair above are.
+        app.add_systems(
+            Update,
+            Tailoring::fit
+                .after(CameraFlight::steer)
+                .after(Actors::animate)
+                .before(FrameCost::leave_update),
+        );
+    }
+
+    fn register_sound(app: &mut App) {
+        // **The soundtrack**, named here for the same reason the pair
+        // above are: both of the twenty-system groups below are full, and
+        // what these two need is a place in the frame rather than a place
+        // in a list.
+        //
+        // - **the mute chip** ahead of the paint, so a click on it is
+        //   answered on the frame it happened rather than the next one.
+        // - **the ball** behind `Actors::follow_playhead`, which is what
+        //   settles `BallState` — where the ball is, how fast it is going
+        //   and the strike that is coming — and in front of
+        //   `Playback::end_frame`, which clears the `seeked` flag it reads
+        //   to know its idea of the ball's velocity is worthless.
+        app.add_systems(
+            Update,
+            (
+                Timeline::handle_sound.before(Timeline::paint_chips),
+                Soundtrack::follow_playhead
+                    .after(Actors::follow_playhead)
+                    .after(Timeline::handle_sound)
+                    .before(Playback::end_frame),
+            ),
+        );
+    }
+
+    fn register_update(app: &mut App) {
+        app.add_systems(Update, Self::update_core());
+    }
+
+    fn update_core() -> ScheduleConfigs<ScheduleSystem> {
+        // Split into two nested groups purely to stay inside
+        // Bevy's maximum tuple arity — `.chain()` still orders the
+        // whole thing end to end, so the ordering notes below mean
+        // exactly what they say across the boundary.
+        (
+            // The clock either side of the whole chain, so what the
+            // readout calls `update` is exactly this crate's own
+            // systems and nothing of Bevy's.
+            FrameCost::enter_update,
+            Self::update_recording(),
+            Self::update_interface(),
+            Playback::end_frame,
+            FrameCost::leave_update,
+        )
+            .chain()
+    }
+
+    fn update_recording() -> ScheduleConfigs<ScheduleSystem> {
+        (
+            // First of everything, so a window resize or a step
+            // down the resolution ladder lands on the frame it was
+            // decided rather than being drawn once at the old size.
+            Stage::fit,
+            ChunkLoader::pump,
+            // Beside the chunk loader because it is the same kind
+            // of thing: a fetch that started when the page did,
+            // landing whenever it lands. A face arriving in the
+            // third minute changes nothing about the frame it
+            // arrives on — see `portrait`.
+            Portraits::attach,
+            Timeline::handle_toggle,
+            Timeline::handle_seek,
+            // Ahead of `Playback::advance`, so a change of speed
+            // applies to the frame it was asked for. Registered
+            // here rather than with the debug systems below: the
+            // speed chip is part of the transport bar in the
+            // game too, and a button whose handler never runs is
+            // worse than no button.
+            Timeline::handle_speed,
+            // Ahead of every camera system below, so a click on
+            // the reset chip lands on the frame it happened.
+            Timeline::handle_camera_reset,
+            // The click on the pitch itself, and deliberately
+            // BEFORE the playhead moves: what the pointer was
+            // aimed at is the frame that was on the screen, and
+            // that frame was drawn from last update's positions.
+            // Testing against this update's would ask the viewer
+            // to lead a running player. See `focus`.
+            CameraSubject::handle_pick,
+            Playback::handle_keyboard,
+            Playback::advance,
+            Actors::follow_playhead,
+            // Straight after it, because it is what decides who is
+            // on: a man is built when the playhead comes within a
+            // few seconds of his first recorded sample, so the
+            // thirty-six on the two team sheets are not all
+            // assembled before the first frame. See
+            // `Actors::take_the_field`.
+            Actors::take_the_field,
+            // Between the playhead moving and the bodies being
+            // posed off it: `animate` reads the mood, and reading
+            // last frame's would leave every reaction a frame
+            // behind a scrub.
+            Aftermath::follow_playhead,
+            Actors::animate,
+            // Straight after, so the dive `animate` has just read
+            // out of the recording is on the body the same frame.
+            Actors::carry_body,
+            // And after that, because a shadow is placed off where
+            // the body it belongs to has just been put — including
+            // how far off the ground.
+            Actors::cast_shadows,
+            // After the bodies have moved and before anything
+            // reads the subject: this is what copies the followed
+            // player's position out for the camera and walks the
+            // shot in and out of the close-up.
+            CameraSubject::settle,
+            // Beside it, off the same facts and for the same
+            // reason: the substitution shot aims at where the men
+            // coming on have just been put, and `follow_play`
+            // below reads what it writes.
+            ChangeoverShot::settle,
+            // Straight after it, off the same two facts — where he
+            // is standing and how far the shot has closed.
+            FocusRing::follow,
+            // After `follow_playhead`, which is what moves the
+            // ball: the netting is deformed by wherever the ball
+            // has just been put, so a frame's lag here would show
+            // the mesh trailing the ball through it.
+            Netting::ripple,
+        )
+            .into_configs()
+    }
+
+    fn update_interface() -> ScheduleConfigs<ScheduleSystem> {
+        (
+            // Ahead of the gestures that read it, so the frame a
+            // touch device announces itself is the frame its
+            // controls exist.
+            TouchControls::watch,
+            // Beside the mouse handlers below because they are the
+            // same controls, and ahead of `follow_play` for the same
+            // reason: a gesture has to land on the frame it happened.
+            TouchControls::handle_gestures,
+            FlightPad::handle_touch,
+            // Ahead of `follow_play`, which reads the orbit — so a
+            // drag lands on the same frame it happened rather than
+            // the next one. Never registered at all before, so the
+            // camera could not be turned.
+            CameraOrbit::handle_drag,
+            CameraZoom::handle_wheel,
+            TvCamera::follow_play,
+            // After `follow_play` rather than before it: on the
+            // frame the rig takes off, flight seeds itself from the
+            // broadcast position that system has just written, so
+            // the first key press continues the shot instead of
+            // cutting.
+            CameraFlight::steer,
+            // Straight after the camera moves, so the stand the
+            // rig has just walked into is gone on the same frame
+            // it entered rather than flashing for one.
+            Bank::cull,
+            // Same frame, same reason: the dome is carried by the
+            // lens, and a frame of lag would show as the horizon
+            // sliding back into place after every pan.
+            Sky::follow_lens,
+            Actors::place_labels,
+            EventLog::follow_playhead,
+            Timeline::refresh,
+            // After `ChunkLoader::pump`, which is where the spans
+            // arrive — the bar is drawn on the frame the recording
+            // tells us where its holes are.
+            Timeline::refresh_gaps,
+            Timeline::refresh_camera_reset,
+            (Timeline::refresh_speed, Timeline::refresh_hints),
+            // After `handle_touch`, so the knob is drawn where the
+            // thumb has just put it rather than where it was.
+            FlightPad::refresh,
+            // Last of the bar's systems: the two above decide
+            // which buttons are lit, and these turn that plus the
+            // pointer into the colours actually drawn.
+            Timeline::paint_chips,
+            Timeline::paint_play,
+            // After the bar, because it is the last thing that
+            // reads a settled frame and the first that would
+            // interrupt one: a tier that steps down here does it
+            // between two frames rather than in the middle of
+            // drawing one. See `quality`, which explains why this
+            // may fire exactly once.
+            Quality::relent,
+            // Behind the whole frame, because the dip is drawn over
+            // all of it: whatever the cut this frame did to the
+            // camera, the bodies and the plates, this is what the
+            // viewer sees it through. See `cut`.
+            CutFade::follow_playhead,
+        )
+            .into_configs()
+    }
+
+    fn register_tail(app: &mut App, debug: bool, instrumented: bool) {
+        // Either end of the frame itself. `First` is ahead of everything
+        // Bevy runs on this thread and `Last` is behind it, so what falls
+        // outside the pair is the render sub-app and the browser — which
+        // is the split that says whether a slow frame is ours or the GPU's.
+        // Where `bevy_ui` reads the pointer too, so a click lands on the
+        // frame it happened. See `Press`.
+        app.add_systems(PreUpdate, Press::follow_pointer.after(InputSystems));
+        app.add_systems(First, FrameCost::open);
+        app.add_systems(Last, FrameCost::close);
+        // The corner frame counter. Registered apart from the full chain
+        // above — which is at Bevy's twenty-system tuple limit — and
+        // deliberately unordered against it: the badge paces itself and
+        // reads a median that is always a frame stale anyway.
+        app.add_systems(Update, Timeline::refresh_fps);
+        // The score's own three: the shot a goal gets, the bug that counts
+        // them and the card they add up to. Registered apart from the
+        // chain for the same reason as the badge and ordered by hand,
+        // because unlike the badge none of them may be a frame late. The
+        // shot is measured off bodies that have just been placed and is
+        // read by the camera in the same frame; the bug is drawn off the
+        // window `Aftermath` has just resolved and off whether the card
+        // has the screen; and a frame's lag on any of them shows as the
+        // picture disagreeing with itself at the one moment anybody is
+        // watching closely.
+        app.add_systems(
+            Update,
+            (
+                GoalShot::settle
+                    .after(ChangeoverShot::settle)
+                    .before(TvCamera::follow_play),
+                FullTime::follow_playhead
+                    .after(Playback::advance)
+                    .before(Playback::end_frame),
+                Scoreboard::refresh
                         .after(Aftermath::follow_playhead)
                         .after(FullTime::follow_playhead)
                         // The sheets' own cue, so the corner lights on the
@@ -680,25 +761,21 @@ impl MatchViewer {
                         // the same reason `TeamSheet::follow_ceremony` sits
                         // behind it.
                         .after(Lineup::hold),
-                ),
-            )
-            // The engine-facing overlays only exist when the page asked for
-            // them, so their systems are only registered then.
-            .add_systems(
-                Update,
-                (Timeline::handle_debug_controls, Actors::follow_states)
-                    .chain()
-                    .run_if(move || debug),
-            )
-            // The frame-cost strip answers to the wider gate: `?perf=1` turns
-            // it on for a user on his own machine without also naming every
-            // player's engine state over his head. See `ViewerConfig::perf`.
-            // It tolerates the STATES chip being absent — it asks for it with
-            // `single_mut` and carries on when there is none.
-            .add_systems(
-                Update,
-                Timeline::refresh_debug.run_if(move || instrumented),
-            )
-            .run();
+            ),
+        );
+        // The engine-facing overlays only exist when the page asked for
+        // them, so their systems are only registered then.
+        app.add_systems(
+            Update,
+            (Timeline::handle_debug_controls, Actors::follow_states)
+                .chain()
+                .run_if(move || debug),
+        );
+        // The frame-cost strip answers to the wider gate: `?perf=1` turns
+        // it on for a user on his own machine without also naming every
+        // player's engine state over his head. See `ViewerConfig::perf`.
+        // It tolerates the STATES chip being absent — it asks for it with
+        // `single_mut` and carries on when there is none.
+        app.add_systems(Update, Timeline::refresh_debug.run_if(move || instrumented));
     }
 }

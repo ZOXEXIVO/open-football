@@ -106,6 +106,51 @@ impl KeeperCoachAuthority {
     }
 }
 
+/// The declared pecking order, read for the review.
+struct RoomOrder<'k> {
+    men: Vec<&'k RoomKeeper>,
+    number_one: Option<&'k RoomKeeper>,
+    deputy: Option<&'k RoomKeeper>,
+    third: Option<&'k RoomKeeper>,
+}
+
+impl<'k> RoomOrder<'k> {
+    /// The number one, then the senior order behind him.
+    fn select(
+        seniors: &[&'k RoomKeeper],
+        pathway: &[&'k RoomKeeper],
+        previous: &KeeperRoomPlan,
+    ) -> Self {
+        // ── The number one ──
+        let number_one = GoalkeepingDepartment::declare_number_one(seniors, pathway, previous);
+
+        // ── The senior order behind him ──
+        // Drawn from the senior squads first; a club carrying only two
+        // keepers finds its third in the academy, which is what actually
+        // happens.
+        let mut men: Vec<&'k RoomKeeper> = Vec::with_capacity(3);
+        if let Some(one) = number_one {
+            men.push(one);
+        }
+        for k in seniors.iter().chain(pathway.iter()) {
+            if men.len() >= 3 {
+                break;
+            }
+            if men.iter().any(|o| o.player_id == k.player_id) {
+                continue;
+            }
+            men.push(k);
+        }
+
+        RoomOrder {
+            number_one,
+            deputy: men.get(1).copied(),
+            third: men.get(2).copied(),
+            men,
+        }
+    }
+}
+
 /// The review that turns a keeper room into a plan.
 pub struct GoalkeepingDepartment;
 
@@ -233,34 +278,12 @@ impl GoalkeepingDepartment {
 
         let seniors: Vec<&RoomKeeper> = room.seniors().collect();
         let pathway: Vec<&RoomKeeper> = room.pathway().collect();
-
-        // ── The number one ──
-        let number_one = Self::declare_number_one(&seniors, &pathway, previous);
-
-        // ── The senior order behind him ──
-        // Drawn from the senior squads first; a club carrying only two
-        // keepers finds its third in the academy, which is what actually
-        // happens.
-        let mut order: Vec<&RoomKeeper> = Vec::with_capacity(3);
-        if let Some(one) = number_one {
-            order.push(one);
-        }
-        for k in seniors.iter().chain(pathway.iter()) {
-            if order.len() >= 3 {
-                break;
-            }
-            if order.iter().any(|o| o.player_id == k.player_id) {
-                continue;
-            }
-            order.push(k);
-        }
-        let deputy = order.get(1).copied();
-        let third = order.get(2).copied();
+        let order = RoomOrder::select(&seniors, &pathway, previous);
 
         // ── The heir, and the clock behind him ──
         // The succession is about the keepers the club owns: a borrowed
         // number one goes back, and the man it has to replace is its own.
-        let incumbent = order.iter().copied().find(|k| !k.borrowed);
+        let incumbent = order.men.iter().copied().find(|k| !k.borrowed);
         let heir = incumbent.and_then(|one| Self::find_heir(room, one));
         let succession = Self::succession_clock(
             incumbent,
@@ -269,29 +292,75 @@ impl GoalkeepingDepartment {
         );
 
         // ── The deputy's competition ──
-        let deputy_cup_reach = number_one
-            .zip(deputy)
+        let deputy_cup_reach = order
+            .number_one
+            .zip(order.deputy)
             .filter(|(one, second)| Self::deputy_is_ready(room, one, second))
             .map(|_| authority.cup_reach);
 
-        // ── The pathway ──
+        let pathway_picks = Self::pathway_picks(room, &pathway, &order, authority, heir);
+        let tiers = Self::tiers_for(room, &order, &pathway_picks);
+
+        // ── The nomination ──
+        let nominated = Self::nominate(&pathway_picks, &order.men, today);
+        let nominee_assurance = nominated
+            .and_then(|id| room.get(id))
+            .map(|k| k.mindset.perceived_assurance);
+
+        // ── What he tells the manager ──
+        let recommendations = Self::advise(
+            room,
+            &order.men,
+            incumbent,
+            &pathway_picks,
+            heir,
+            succession,
+            nominated,
+            deputy_cup_reach.is_some(),
+        );
+
+        Some(KeeperReviewOutcome {
+            tiers,
+            number_one: order.number_one.map(|k| k.player_id),
+            deputy: order.deputy.map(|k| k.player_id),
+            third: order.third.map(|k| k.player_id),
+            heir,
+            succession,
+            nominated,
+            nominee_assurance,
+            recommendations,
+            authority: authority.weight,
+            deputy_cup_reach,
+        })
+    }
+
+    /// The academy keepers close enough to the senior room to travel with
+    /// it, heir first.
+    fn pathway_picks<'k>(
+        room: &KeeperRoom,
+        pathway: &[&'k RoomKeeper],
+        order: &RoomOrder<'k>,
+        authority: KeeperCoachAuthority,
+        heir: Option<u32>,
+    ) -> Vec<&'k RoomKeeper> {
         let ready_band =
             Self::READY_BAND_BASE + Self::READY_BAND_SPECIALIST * authority.specialist_focus;
         let bar = order
+            .men
             .last()
             .map(|k| k.level)
             .or_else(|| room.best().map(|k| k.level))
             .unwrap_or(1);
-        let mut pathway_picks: Vec<&RoomKeeper> = pathway
+        let mut picks: Vec<&RoomKeeper> = pathway
             .iter()
             .copied()
-            .filter(|k| !order.iter().any(|o| o.player_id == k.player_id))
+            .filter(|k| !order.men.iter().any(|o| o.player_id == k.player_id))
             .filter(|k| k.age >= Self::BENCH_AGE)
             .filter(|k| Self::is_senior_ready(k, bar, ready_band))
             .collect();
         // The heir leads the pathway even when a bigger academy keeper is
         // rated slightly higher today — he is the one the club is building.
-        pathway_picks.sort_by(|a, b| {
+        picks.sort_by(|a, b| {
             let key = |k: &RoomKeeper| {
                 (
                     heir == Some(k.player_id),
@@ -300,11 +369,18 @@ impl GoalkeepingDepartment {
             };
             key(b).cmp(&key(a))
         });
-        pathway_picks.truncate(Self::MAX_PATHWAY);
+        picks.truncate(Self::MAX_PATHWAY);
+        picks
+    }
 
-        // ── Tiers ──
+    /// Every keeper in the room's tier for the plan.
+    fn tiers_for(
+        room: &KeeperRoom,
+        order: &RoomOrder<'_>,
+        pathway_picks: &[&RoomKeeper],
+    ) -> Vec<(u32, KeeperTier, Option<u32>)> {
         let mut tiers: Vec<(u32, KeeperTier, Option<u32>)> = Vec::with_capacity(room.len());
-        for (index, k) in order.iter().enumerate() {
+        for (index, k) in order.men.iter().enumerate() {
             let tier = match index {
                 0 => KeeperTier::NumberOne,
                 1 => KeeperTier::Deputy,
@@ -312,11 +388,11 @@ impl GoalkeepingDepartment {
             };
             tiers.push((k.player_id, tier, None));
         }
-        for k in &pathway_picks {
+        for k in pathway_picks {
             tiers.push((
                 k.player_id,
                 KeeperTier::Pathway,
-                number_one.map(|o| o.player_id),
+                order.number_one.map(|o| o.player_id),
             ));
         }
         for k in room.iter() {
@@ -332,38 +408,7 @@ impl GoalkeepingDepartment {
             };
             tiers.push((k.player_id, tier, None));
         }
-
-        // ── The nomination ──
-        let nominated = Self::nominate(&pathway_picks, &order, today);
-        let nominee_assurance = nominated
-            .and_then(|id| room.get(id))
-            .map(|k| k.mindset.perceived_assurance);
-
-        // ── What he tells the manager ──
-        let recommendations = Self::advise(
-            room,
-            &order,
-            incumbent,
-            &pathway_picks,
-            heir,
-            succession,
-            nominated,
-            deputy_cup_reach.is_some(),
-        );
-
-        Some(KeeperReviewOutcome {
-            tiers,
-            number_one: number_one.map(|k| k.player_id),
-            deputy: deputy.map(|k| k.player_id),
-            third: third.map(|k| k.player_id),
-            heir,
-            succession,
-            nominated,
-            nominee_assurance,
-            recommendations,
-            authority: authority.weight,
-            deputy_cup_reach,
-        })
+        tiers
     }
 
     /// Whether the second keeper can be given a competition of his own:
@@ -566,11 +611,26 @@ impl GoalkeepingDepartment {
         cup_declared: bool,
     ) -> Vec<KeeperRecommendation> {
         let mut out: Vec<KeeperRecommendation> = Vec::new();
-
         let number_one = order.first().copied();
         let deputy = order.get(1).copied();
         let third = order.get(2).copied();
 
+        Self::advise_senior_order(&mut out, room, number_one, deputy, third, cup_declared);
+        Self::advise_succession(&mut out, room, incumbent, heir, succession, number_one);
+        Self::advise_academy(&mut out, room, order, pathway, nominated);
+
+        out
+    }
+
+    /// What the first three keepers mean for the week's team.
+    fn advise_senior_order(
+        out: &mut Vec<KeeperRecommendation>,
+        room: &KeeperRoom,
+        number_one: Option<&RoomKeeper>,
+        deputy: Option<&RoomKeeper>,
+        third: Option<&RoomKeeper>,
+        cup_declared: bool,
+    ) {
         // The deputy owns the cup, where the club has declared it his.
         if let Some(d) = deputy.filter(|_| cup_declared) {
             out.push(KeeperRecommendation::about(
@@ -647,7 +707,17 @@ impl GoalkeepingDepartment {
             }
             _ => {}
         }
+    }
 
+    /// The succession, and what to do when nobody is coming.
+    fn advise_succession(
+        out: &mut Vec<KeeperRecommendation>,
+        room: &KeeperRoom,
+        incumbent: Option<&RoomKeeper>,
+        heir: Option<u32>,
+        succession: KeeperSuccession,
+        number_one: Option<&RoomKeeper>,
+    ) {
         // The succession.
         if succession >= KeeperSuccession::Watch
             && let Some(one) = incumbent
@@ -702,7 +772,16 @@ impl GoalkeepingDepartment {
                 .measured_against(number_one.map(|k| k.level)),
             );
         }
+    }
 
+    /// The academy: who travels, who starts, who needs a loan.
+    fn advise_academy(
+        out: &mut Vec<KeeperRecommendation>,
+        room: &KeeperRoom,
+        order: &[&RoomKeeper],
+        pathway: &[&RoomKeeper],
+        nominated: Option<u32>,
+    ) {
         // The academy.
         for k in pathway {
             out.push(KeeperRecommendation::about(
@@ -776,8 +855,6 @@ impl GoalkeepingDepartment {
                 KeeperUrgency::Noted,
             ));
         }
-
-        out
     }
 }
 

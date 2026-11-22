@@ -1,10 +1,10 @@
 use crate::club::player::StuckCareerScan;
 use crate::club::player::adaptation::{AdaptationFailureSignals, AdaptationSquadContext};
 use crate::club::player::behaviour_config::HappinessConfig;
-use crate::club::player::core::player::TransferRequestReason;
 use crate::club::player::mind::{
     CareerArc, GoalBridge, GoalEvidence, GoalKind, GoalOrigin, GoalStatus, MindClock,
 };
+use crate::club::player::model::player::TransferRequestReason;
 use crate::club::player::player::Player;
 use crate::club::player::transfer::stage::{BigStagePull, BigStagePullContext};
 use crate::club::{Person, PlayerMailbox, PlayerResult, PlayerStatusType};
@@ -1420,14 +1420,47 @@ impl Player {
         recently_transferred: bool,
         football_ask: Option<FirstTeamFootballAsk>,
     ) -> Vec<TransferRequestReason> {
-        // Re-evaluate every reason every tick. A reason in the set
-        // *now* is unresolved; a reason that's silent has gone away.
-        // Req only clears when no reasons remain.
-        let mut active_reasons: Vec<TransferRequestReason> = Vec::new();
         let arrived = self.mind.career.has_arrived();
+        let mut active_reasons = self.status_transfer_reasons(now, age, recently_transferred);
+        active_reasons.extend(self.ambition_transfer_reasons(
+            now,
+            ctx,
+            age,
+            recently_transferred,
+            arrived,
+        ));
+        active_reasons.extend(self.life_transfer_reasons(
+            now,
+            ctx,
+            recently_transferred,
+            football_ask,
+        ));
+
+        // Honeymoon overrides everything except poor behaviour. A
+        // newly-signed player won't formally request a transfer in the first
+        // 21 days unless their character has actually broken.
+        if recently_transferred {
+            active_reasons.retain(|r| matches!(r, TransferRequestReason::PoorBehaviour));
+        }
+
+        // A man living what he dreamed of has no bigger stage to want.
+        if arrived {
+            active_reasons.retain(|r| !r.asks_for_a_bigger_stage());
+        }
+
+        active_reasons
+    }
+
+    fn status_transfer_reasons(
+        &self,
+        now: NaiveDate,
+        age: u8,
+        recently_transferred: bool,
+    ) -> Vec<TransferRequestReason> {
+        let mut reasons = Vec::new();
 
         if self.behaviour.is_poor() {
-            active_reasons.push(TransferRequestReason::PoorBehaviour);
+            reasons.push(TransferRequestReason::PoorBehaviour);
         }
 
         // Generic unhappiness only escalates to a formal request once the
@@ -1439,19 +1472,19 @@ impl Player {
             .held_for_days(PlayerStatusType::Unh, now)
             .is_some_and(|d| d >= UNHAPPY_LISTING_MIN_DAYS);
         if has_unh_long {
-            active_reasons.push(TransferRequestReason::LongUnhappiness);
+            reasons.push(TransferRequestReason::LongUnhappiness);
         }
 
-        // A genuine ambition mismatch (wrong-size club / relegation slide)
-        // is a distinct, faster grievance — a fortnight of unhappiness on
-        // top of a clearly-too-small club is enough to want a move.
+        // A genuine ambition mismatch (wrong-size club / relegation slide) is
+        // a distinct, faster grievance — a fortnight of unhappiness on top of
+        // a clearly-too-small club is enough to want a move.
         if !recently_transferred && self.happiness.factors.ambition_fit <= -7.0 {
             let has_unh_short = self
                 .statuses
                 .held_for_days(PlayerStatusType::Unh, now)
                 .is_some_and(|d| d > 14);
             if has_unh_short {
-                active_reasons.push(TransferRequestReason::AmbitionMismatch);
+                reasons.push(TransferRequestReason::AmbitionMismatch);
             }
         }
 
@@ -1461,11 +1494,11 @@ impl Player {
         // needs no spell of `Unh`; the structural prestige deficit alone
         // drives it. Gated hard so only players who have genuinely outgrown
         // their club agitate — a deep ambition-fit deficit, real personal
-        // ambition, still young enough to climb, and settled at the club
-        // for a full year (a recent signing gets his look first). This is
-        // the missing "good player at a small club finally moves up"
-        // signal; without it the market only ever recirculated unhappy or
-        // surplus players, so established players never moved.
+        // ambition, still young enough to climb, and settled at the club for
+        // a full year (a recent signing gets his look first). This is the
+        // missing "good player at a small club finally moves up" signal;
+        // without it the market only ever recirculated unhappy or surplus
+        // players, so established players never moved.
         //
         // A plan to step up reaches the same reason, but only once the want
         // behind it has become a demand. Plans last for years and are said
@@ -1487,16 +1520,29 @@ impl Player {
                         .map(|d| d >= 365)
                         .unwrap_or(true)))
         {
-            active_reasons.push(TransferRequestReason::OutgrownClub);
+            reasons.push(TransferRequestReason::OutgrownClub);
         }
+
+        reasons
+    }
+
+    fn ambition_transfer_reasons(
+        &mut self,
+        now: NaiveDate,
+        ctx: &TransferDesireContext,
+        age: u8,
+        recently_transferred: bool,
+        arrived: bool,
+    ) -> Vec<TransferRequestReason> {
+        let mut reasons = Vec::new();
 
         // Wants a bigger stage. One score — see [`BigStagePull`] — drives
         // three tiers of consequence: a silent inclination the market reads
         // when a bid arrives, a visible mood, and finally a formal request.
         //
         // Escalation to a request deliberately does NOT require a spell of
-        // `Unh`. It requires that the itch has PERSISTED across a season,
-        // or that a concrete move was DENIED (a bid the club turned down, a
+        // `Unh`. It requires that the itch has PERSISTED across a season, or
+        // that a concrete move was DENIED (a bid the club turned down, a
         // window that came and went). Requiring unhappiness inverted the
         // truth: the players who most want a bigger league are usually the
         // ones doing best where they are, and a star at a locally-big club
@@ -1523,7 +1569,7 @@ impl Player {
             && pull.would_request()
             && self.stage_ambition_has_been_denied_or_endured(now)
         {
-            active_reasons.push(TransferRequestReason::WantsStrongerLeague);
+            reasons.push(TransferRequestReason::WantsStrongerLeague);
         }
         self.big_stage_inclination = stage_pull.map(|p| p.score).unwrap_or(0.0);
 
@@ -1544,68 +1590,67 @@ impl Player {
                 && self.attributes.loyalty < 12.0
                 && (25..=30).contains(&age);
             if restless_for_a_new_challenge {
-                active_reasons.push(TransferRequestReason::NewChallenge);
+                reasons.push(TransferRequestReason::NewChallenge);
             }
         }
+
+        reasons
+    }
+
+    fn life_transfer_reasons(
+        &mut self,
+        now: NaiveDate,
+        ctx: &TransferDesireContext,
+        recently_transferred: bool,
+        football_ask: Option<FirstTeamFootballAsk>,
+    ) -> Vec<TransferRequestReason> {
+        let mut reasons = Vec::new();
 
         if let Some(first_request) = self.happiness.last_salary_negotiation {
             let days = (now - first_request).num_days();
             if days > 540 && days <= 730 && self.happiness.factors.salary_satisfaction <= -5.0 {
-                active_reasons.push(TransferRequestReason::SalaryUnresolved);
+                reasons.push(TransferRequestReason::SalaryUnresolved);
             }
         }
 
         if !recently_transferred && self.return_home_request_pressure(now, ctx) {
-            // The 21-year-old asks to go home FOR A SEASON; the
-            // 29-year-old asks to leave. Same homesickness, two different
-            // asks, and the simulator only ever knew how to make the
-            // second — which is why a stuck foreign prospect's route out
-            // was a transfer request that then *suppressed* his loan
-            // request (`process_playing_time_complaints` skips a `Req`
-            // holder), and the most common loan in world football could
-            // not happen.
+            // The 21-year-old asks to go home FOR A SEASON; the 29-year-old
+            // asks to leave. Same homesickness, two different asks, and the
+            // simulator only ever knew how to make the second — which is why
+            // a stuck foreign prospect's route out was a transfer request
+            // that then *suppressed* his loan request
+            // (`process_playing_time_complaints` skips a `Req` holder), and
+            // the most common loan in world football could not happen.
             //
-            // Continuous in runway, so there is no birthday at which the
-            // ask changes shape.
+            // Continuous in runway, so there is no birthday at which the ask
+            // changes shape.
             if self.career_runway(now) > Self::HOME_LOAN_RUNWAY_BAR {
                 self.pursue_loan_home(now);
             } else {
-                active_reasons.push(TransferRequestReason::ReturnHome);
+                reasons.push(TransferRequestReason::ReturnHome);
             }
         }
 
         if !recently_transferred && self.european_request_pressure(now) {
-            active_reasons.push(TransferRequestReason::EuropeanAmbition);
+            reasons.push(TransferRequestReason::EuropeanAmbition);
         }
         if !recently_transferred && self.libertadores_request_pressure(now) {
-            active_reasons.push(TransferRequestReason::CopaLibertadoresAmbition);
+            reasons.push(TransferRequestReason::CopaLibertadoresAmbition);
         }
         if !recently_transferred && self.relegation_escape_pressure(now) {
-            active_reasons.push(TransferRequestReason::RelegationEscape);
+            reasons.push(TransferRequestReason::RelegationEscape);
         }
 
-        // Wants first-team football: seasons have gone by without a
-        // shirt and the player would now rather drop a level than keep
-        // watching. Every other reason above points him upward — this is
-        // the only one that points down, and it is the only route by
-        // which a perennial backup at a giant can ever become available.
+        // Wants first-team football: seasons have gone by without a shirt and
+        // the player would now rather drop a level than keep watching. Every
+        // other reason above points him upward — this is the only one that
+        // points down, and it is the only route by which a perennial backup
+        // at a giant can ever become available.
         if football_ask == Some(FirstTeamFootballAsk::Transfer) {
-            active_reasons.push(TransferRequestReason::WantsFirstTeamFootball);
+            reasons.push(TransferRequestReason::WantsFirstTeamFootball);
         }
 
-        // Honeymoon overrides everything except poor behaviour. A
-        // newly-signed player won't formally request a transfer in the
-        // first 21 days unless their character has actually broken.
-        if recently_transferred {
-            active_reasons.retain(|r| matches!(r, TransferRequestReason::PoorBehaviour));
-        }
-
-        // A man living what he dreamed of has no bigger stage to want.
-        if arrived {
-            active_reasons.retain(|r| !r.asks_for_a_bigger_stage());
-        }
-
-        active_reasons
+        reasons
     }
 }
 
@@ -1893,9 +1938,9 @@ mod career_desire_tests {
     use super::*;
     use crate::club::player::adaptation::AdaptationFailureSignals;
     use crate::club::player::builder::PlayerBuilder;
-    use crate::club::player::core::player::SquadStandingView;
     use crate::club::player::language::{Language, PlayerLanguage};
     use crate::club::player::mind::{CareerDreamReview, CareerPlan, MindSituation, PlanStage};
+    use crate::club::player::model::player::SquadStandingView;
     use crate::club::player::transfer::request::TransferRequestStanding;
     use crate::shared::fullname::FullName;
     use crate::{
@@ -3666,7 +3711,7 @@ mod career_desire_tests {
 
     #[test]
     fn language_tutor_request_for_struggling_foreign_player() {
-        use crate::club::player::core::player::SquadSocialView;
+        use crate::club::player::model::player::SquadSocialView;
         let today = d(2026, 5, 1);
         let mut p = build(25, 12.0, 10.0, 10.0, 11.0, 30, 130, 5000, 90, today);
         // No local language proficiency. Adapt mid-band — pushes

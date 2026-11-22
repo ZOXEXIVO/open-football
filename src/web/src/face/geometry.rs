@@ -260,7 +260,59 @@ impl Landmarks {
         let st = &id.structure;
         let maturity = ((age as f32 - 17.0) / 19.0).clamp(0.0, 1.0);
         let skull = Skull::morphed(id.face_var, m, st, id.fw, heft, maturity);
+        let head_path = Self::head_path(id, cx, &skull);
 
+        let eye = 118.0 + id.asym.1 * 0.6 + st.eye_y * 0.3;
+        let brow = 107.5 - m.brow_gap * 1.3 + aggr * 1.8 + id.asym.1 * 0.3 + st.brow_h * 1.7;
+        let nose =
+            (156.5 + m.nose_len * 2.8 + m.length * 0.5 + st.nose_y * 1.5).clamp(150.0, 163.0);
+        let mouth = nose + (skull.chin - nose) * (0.36 + st.philtrum * 0.035 + m.lip * 0.01);
+        let sulcus = mouth + (skull.chin - mouth) * 0.42;
+        let hairline = Self::hairline(id, age, &skull);
+
+        // Eyes: an eye is a fifth of the face wide and the pair sit one eye
+        // apart, which puts the centres about 20 units either side
+        let turn = id.turn * 0.35;
+        let eye_off = 20.0 + m.eye_spacing * 1.1;
+        let eye_l = cx - eye_off + id.asym.0 * 0.8 + turn * 1.5;
+        let eye_r = cx + eye_off - id.asym.0 * 0.4 + turn * 1.5;
+        let eye_shape = Self::eye_shape(id, m, aggr);
+        let nose_shape = Self::nose_shape(id, m, &skull, maturity);
+        let mouth_shape = Self::mouth_shape(id, m, maturity);
+        let brow_shape = Self::brow_shape(id, m);
+        let ear = Self::ear(m, maturity, brow, nose);
+
+        // Neck: nearly as wide as the jaw on an athlete, and thickest of
+        // all on a heavy build — the strongest weight cue in a head shot
+        let neck_half = (skull.jaw * 0.92 + heft * 1.6 + 2.0).clamp(28.0, skull.jaw + 2.0);
+        let neck_top = skull.chin - 24.0;
+        let neck_path = Self::neck_path(cx, neck_half, neck_top);
+
+        Landmarks {
+            cx,
+            skull,
+            hairline,
+            brow,
+            eye,
+            nose,
+            mouth,
+            sulcus,
+            head_path,
+            neck_path,
+            neck_half,
+            neck_top,
+            eye_l,
+            eye_r,
+            eye_shape,
+            nose_shape,
+            mouth_shape,
+            brow_shape,
+            ear,
+            maturity,
+        }
+    }
+
+    fn head_path(id: &Identity, cx: f32, skull: &Skull) -> String {
         // Outline: right side as drawn, left side mirrored and nudged by the
         // asymmetry and the turn so no head is a perfect reflection
         let turn = id.turn * 0.35;
@@ -275,28 +327,21 @@ impl Landmarks {
         // point at its end; both are dropped so the outline stays one loop
         let mut pts = right;
         pts.extend(left.into_iter().skip(1).take(left_n - 2));
-        let head_path = PathBuilder::smooth_closed(&pts, 0.05);
+        PathBuilder::smooth_closed(&pts, 0.05)
+    }
 
-        let eye = 118.0 + id.asym.1 * 0.6 + st.eye_y * 0.3;
-        let brow = 107.5 - m.brow_gap * 1.3 + aggr * 1.8 + id.asym.1 * 0.3 + st.brow_h * 1.7;
-        let nose =
-            (156.5 + m.nose_len * 2.8 + m.length * 0.5 + st.nose_y * 1.5).clamp(150.0, 163.0);
-        let mouth = nose + (skull.chin - nose) * (0.36 + st.philtrum * 0.035 + m.lip * 0.01);
-        let sulcus = mouth + (skull.chin - mouth) * 0.42;
+    fn hairline(id: &Identity, age: u8, skull: &Skull) -> f32 {
         let recession = match age {
             0..=25 => 0.0,
             26..=30 => 1.5,
             31..=34 => 3.0,
             _ => 4.5,
         };
-        let hairline = (64.0 - m.forehead * 3.5 + recession * 0.7 + (skull.crown - 36.0) * 0.6)
-            .max(skull.crown + 18.0);
+        (64.0 - id.morph.forehead * 3.5 + recession * 0.7 + (skull.crown - 36.0) * 0.6)
+            .max(skull.crown + 18.0)
+    }
 
-        // Eyes: an eye is a fifth of the face wide and the pair sit one eye
-        // apart, which puts the centres about 20 units either side
-        let eye_off = 20.0 + m.eye_spacing * 1.1;
-        let eye_l = cx - eye_off + id.asym.0 * 0.8 + turn * 1.5;
-        let eye_r = cx + eye_off - id.asym.0 * 0.4 + turn * 1.5;
+    fn eye_shape(id: &Identity, m: &Morph, aggr: f32) -> EyeShape {
         let (rx, ry, iris, pupil, bottom, crease, lid_extra, tilt_bias, peak): (
             f32,
             f32,
@@ -326,7 +371,7 @@ impl Landmarks {
             _ => (10.2, 4.6, 4.3, 1.7, 0.84, 0.28, -0.4, 0.5, 0.44),
         };
         let es = m.eye_scale * 1.13;
-        let eye_shape = EyeShape {
+        EyeShape {
             rx: rx * es,
             ry: ry * es * 0.92 * (1.0 - aggr * 0.08),
             iris_r: iris * (0.5 + 0.5 * es),
@@ -336,8 +381,10 @@ impl Landmarks {
             lid_extra,
             tilt: m.eye_tilt + tilt_bias,
             peak,
-        };
+        }
+    }
 
+    fn nose_shape(id: &Identity, m: &Morph, _skull: &Skull, maturity: f32) -> NoseShape {
         let (bridge, tip, nostril, ball, hump): (f32, f32, f32, f32, f32) = match id.nose_st {
             // Narrow, straight
             0 => (3.2, 8.0, 2.4, 4.4, 0.0),
@@ -353,14 +400,16 @@ impl Landmarks {
             _ => (3.9, 9.4, 3.0, 5.0, 0.5),
         };
         let nw = 1.0 + m.nose_w * 0.12 + id.fw * 0.03 + maturity * 0.05;
-        let nose_shape = NoseShape {
+        NoseShape {
             bridge: bridge * (1.0 + m.nose_w * 0.08),
             tip: tip * nw,
             nostril: nostril * nw,
             ball: ball * (1.0 + m.nose_w * 0.06 + maturity * 0.05),
             hump,
-        };
+        }
+    }
 
+    fn mouth_shape(id: &Identity, m: &Morph, maturity: f32) -> MouthShape {
         let (mh, upper, lower, bow): (f32, f32, f32, f32) = match id.mouth_st {
             0 => (19.0, 3.6, 5.4, 1.0),
             // Wide
@@ -373,13 +422,15 @@ impl Landmarks {
             _ => (18.0, 2.6, 4.2, 0.9),
         };
         let lip_k = 1.0 + m.lip * 0.22 - maturity * 0.12;
-        let mouth_shape = MouthShape {
+        MouthShape {
             half: (mh + 1.5 + m.mouth_w * 1.4 + id.fw * 0.25).clamp(14.5, 26.5),
             upper: upper * lip_k,
             lower: lower * lip_k,
             bow,
-        };
+        }
+    }
 
+    fn brow_shape(id: &Identity, m: &Morph) -> BrowShape {
         let (blen, btilt, barch, strands): (f32, f32, f32, usize) = match id.brow_st {
             0 => (14.0, 0.0, 1.6, 34),
             // High arch
@@ -392,26 +443,26 @@ impl Landmarks {
             // Short and sparse
             _ => (12.2, -0.3, 3.0, 26),
         };
-        let brow_shape = BrowShape {
+        BrowShape {
             len: blen,
             tilt: btilt,
             arch: barch,
             strands,
             thickness: (1.0 + m.brow_thick * 0.25).clamp(0.7, 1.4),
-        };
+        }
+    }
 
-        let ear = Ear {
+    fn ear(m: &Morph, maturity: f32, brow: f32, nose: f32) -> Ear {
+        Ear {
             top: brow + 3.0 - m.ear * 1.2,
             bottom: nose - 8.0 + m.ear * 1.2 + maturity * 1.2,
             width: 9.6 + m.ear * 1.4 + maturity * 0.8,
             out: 2.4 + m.ear * 0.8,
-        };
+        }
+    }
 
-        // Neck: nearly as wide as the jaw on an athlete, and thickest of
-        // all on a heavy build — the strongest weight cue in a head shot
-        let neck_half = (skull.jaw * 0.92 + heft * 1.6 + 2.0).clamp(28.0, skull.jaw + 2.0);
-        let neck_top = skull.chin - 24.0;
-        let neck_path = format!(
+    fn neck_path(cx: f32, neck_half: f32, neck_top: f32) -> String {
+        format!(
             "M{:.1} {neck_top:.1} C{:.1} {:.1} {:.1} 232 {:.1} 250 L{:.1} 250 C{:.1} 232 {:.1} {:.1} {:.1} {neck_top:.1}Z",
             cx - neck_half,
             cx - neck_half,
@@ -423,30 +474,7 @@ impl Landmarks {
             cx + neck_half,
             neck_top + 26.0,
             cx + neck_half,
-        );
-
-        Landmarks {
-            cx,
-            skull,
-            hairline,
-            brow,
-            eye,
-            nose,
-            mouth,
-            sulcus,
-            head_path,
-            neck_path,
-            neck_half,
-            neck_top,
-            eye_l,
-            eye_r,
-            eye_shape,
-            nose_shape,
-            mouth_shape,
-            brow_shape,
-            ear,
-            maturity,
-        }
+        )
     }
 
     /// The head's half-width at height `y`, interpolated along the outline.

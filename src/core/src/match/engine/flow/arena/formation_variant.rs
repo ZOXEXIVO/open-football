@@ -141,8 +141,11 @@ impl FormationVariant {
     ) -> (Vec<(usize, PlayerPositionType)>, Vec<PlayerPositionType>) {
         const NEVER: f32 = 1.0e9;
         let side = field.side_of(team_id);
-        let roles: Vec<PlayerPositionType> =
-            roles.iter().copied().filter(|r| !r.is_goalkeeper()).collect();
+        let roles: Vec<PlayerPositionType> = roles
+            .iter()
+            .copied()
+            .filter(|r| !r.is_goalkeeper())
+            .collect();
         let men: Vec<usize> = field
             .players
             .iter()

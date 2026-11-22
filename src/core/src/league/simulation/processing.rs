@@ -13,6 +13,126 @@ use log::debug;
 use rustc_hash::FxHashMap;
 use std::cmp::Ordering;
 
+/// Final-table outcomes used by the season awards: winner, top four and
+/// the relegated finishers.
+struct SeasonFinishOutcome {
+    champion_team_id: Option<u32>,
+    top_four: Vec<u32>,
+    relegated: Vec<u32>,
+}
+
+impl SeasonFinishOutcome {
+    fn from_table(rows: &[crate::league::LeagueTableRow], relegation_spots: usize) -> Self {
+        let mut champion_team_id: Option<u32> = None;
+        let mut top_four: Vec<u32> = Vec::new();
+        let mut relegated: Vec<u32> = Vec::new();
+        let row_count = rows.len();
+        for (idx, row) in rows.iter().enumerate() {
+            if idx == 0 {
+                champion_team_id = Some(row.team_id);
+            }
+            if idx < 4 {
+                top_four.push(row.team_id);
+            }
+            if idx >= row_count.saturating_sub(relegation_spots) {
+                relegated.push(row.team_id);
+            }
+        }
+        SeasonFinishOutcome {
+            champion_team_id,
+            top_four,
+            relegated,
+        }
+    }
+
+    fn team_finish_mul(&self, team_id: Option<u32>) -> f32 {
+        match team_id {
+            Some(t) if Some(t) == self.champion_team_id => 1.10,
+            Some(t) if self.top_four.contains(&t) => 1.05,
+            Some(t) if self.relegated.contains(&t) => 0.90,
+            _ => 1.0,
+        }
+    }
+}
+
+/// Scores a season-award candidate list, applying the appearance gate and
+/// the team-finish / weekly-award multipliers.
+struct SeasonAwardPicker;
+
+impl SeasonAwardPicker {
+    #[allow(clippy::too_many_arguments)]
+    fn pick(
+        scores: &FxHashMap<u32, crate::league::awards::CandidateAggregate>,
+        player_meta: &FxHashMap<u32, (u8, Option<u32>)>,
+        league_reputation: u16,
+        finish: &SeasonFinishOutcome,
+        weekly_awards_for: &dyn Fn(u32) -> u8,
+        min_apps: u8,
+        eligibility: &dyn Fn(u32) -> bool,
+    ) -> Option<u32> {
+        scores
+            .iter()
+            .filter(|(id, agg)| agg.matches_played >= min_apps && eligibility(**id))
+            .map(|(id, agg)| {
+                let team_finish = finish.team_finish_mul(player_meta.get(id).and_then(|(_, t)| *t));
+                let weekly = weekly_awards_for(*id);
+                let s = SeasonAwardSelector::score(agg, league_reputation, team_finish, weekly);
+                (*id, s, *agg)
+            })
+            .filter(|(_, s, _)| *s > 0.0)
+            .max_by(|(la, sa, aa), (lb, sb, ab)| {
+                sa.partial_cmp(sb)
+                    .unwrap_or(Ordering::Equal)
+                    .then(
+                        aa.best_rating
+                            .partial_cmp(&ab.best_rating)
+                            .unwrap_or(Ordering::Equal),
+                    )
+                    .then(aa.matches_played.cmp(&ab.matches_played))
+                    .then(lb.cmp(la))
+            })
+            .map(|(id, _, _)| id)
+    }
+
+    /// Pick the player and young player of the season from the same scored
+    /// candidate set.
+    #[allow(clippy::too_many_arguments)]
+    fn players_of_season(
+        scores: &FxHashMap<u32, crate::league::awards::CandidateAggregate>,
+        player_meta: &FxHashMap<u32, (u8, Option<u32>)>,
+        league_reputation: u16,
+        finish: &SeasonFinishOutcome,
+        weekly_awards_for: &dyn Fn(u32) -> u8,
+        min_apps_player: u8,
+        min_apps_young: u8,
+    ) -> (Option<u32>, Option<u32>) {
+        let player_of_season = Self::pick(
+            scores,
+            player_meta,
+            league_reputation,
+            finish,
+            weekly_awards_for,
+            min_apps_player,
+            &|_| true,
+        );
+        let young_player_of_season = Self::pick(
+            scores,
+            player_meta,
+            league_reputation,
+            finish,
+            weekly_awards_for,
+            min_apps_young,
+            &|id| {
+                player_meta
+                    .get(&id)
+                    .map(|(age, _)| *age <= 21)
+                    .unwrap_or(false)
+            },
+        );
+        (player_of_season, young_player_of_season)
+    }
+}
+
 impl League {
     pub(in crate::league) fn process_match_day_results(
         &mut self,
@@ -259,47 +379,15 @@ impl League {
 
         // Final-table outcomes — used for team finish multipliers and to
         // mark the relegated finishers cleanly.
-        let mut champion_team_id: Option<u32> = None;
-        let mut top_four: Vec<u32> = Vec::new();
-        let mut relegated: Vec<u32> = Vec::new();
-        let row_count = self.table.rows.len();
-        let relegation_spots = self.settings.relegation_spots as usize;
-        for (idx, row) in self.table.rows.iter().enumerate() {
-            if idx == 0 {
-                champion_team_id = Some(row.team_id);
-            }
-            if idx < 4 {
-                top_four.push(row.team_id);
-            }
-            if idx >= row_count.saturating_sub(relegation_spots) {
-                relegated.push(row.team_id);
-            }
-        }
-
-        let team_finish_mul = |team_id: Option<u32>| -> f32 {
-            match team_id {
-                Some(t) if Some(t) == champion_team_id => 1.10,
-                Some(t) if top_four.contains(&t) => 1.05,
-                Some(t) if relegated.contains(&t) => 0.90,
-                _ => 1.0,
-            }
-        };
+        let finish = SeasonFinishOutcome::from_table(
+            &self.table.rows,
+            self.settings.relegation_spots as usize,
+        );
 
         // Build a player-id → (age, position-group, club-team-id) lookup
         // from the league's clubs once so per-candidate filtering doesn't
         // walk the world.
-        let mut player_meta: FxHashMap<u32, (u8, Option<u32>)> = FxHashMap::default();
-        for club in clubs {
-            for team in &club.teams.teams {
-                if team.league_id != Some(self.id) {
-                    continue;
-                }
-                for player in &team.players.players {
-                    let age = DateUtils::age(player.birth_date, current_date);
-                    player_meta.insert(player.id, (age, Some(team.id)));
-                }
-            }
-        }
+        let player_meta = self.season_player_meta(clubs, current_date);
 
         let weekly_awards_for = |pid: u32| -> u8 {
             self.player_of_week
@@ -310,38 +398,15 @@ impl League {
                 .min(u8::MAX as usize) as u8
         };
 
-        let pick_best = |min_apps: u8, eligibility: &dyn Fn(u32) -> bool| -> Option<u32> {
-            scores
-                .iter()
-                .filter(|(id, agg)| agg.matches_played >= min_apps && eligibility(**id))
-                .map(|(id, agg)| {
-                    let team_finish = team_finish_mul(player_meta.get(id).and_then(|(_, t)| *t));
-                    let weekly = weekly_awards_for(*id);
-                    let s = SeasonAwardSelector::score(agg, self.reputation, team_finish, weekly);
-                    (*id, s, *agg)
-                })
-                .filter(|(_, s, _)| *s > 0.0)
-                .max_by(|(la, sa, aa), (lb, sb, ab)| {
-                    sa.partial_cmp(sb)
-                        .unwrap_or(Ordering::Equal)
-                        .then(
-                            aa.best_rating
-                                .partial_cmp(&ab.best_rating)
-                                .unwrap_or(Ordering::Equal),
-                        )
-                        .then(aa.matches_played.cmp(&ab.matches_played))
-                        .then(lb.cmp(la))
-                })
-                .map(|(id, _, _)| id)
-        };
-
-        let player_of_season = pick_best(min_apps_player, &|_| true);
-        let young_player_of_season = pick_best(min_apps_young, &|id| {
-            player_meta
-                .get(&id)
-                .map(|(age, _)| *age <= 21)
-                .unwrap_or(false)
-        });
+        let (player_of_season, young_player_of_season) = SeasonAwardPicker::players_of_season(
+            &scores,
+            &player_meta,
+            self.reputation,
+            &finish,
+            &weekly_awards_for,
+            min_apps_player,
+            min_apps_young,
+        );
 
         // Team of the season — positional quotas reused, but candidates
         // must clear a season-long appearance floor so a one-match elite
@@ -362,13 +427,52 @@ impl League {
         // the case where stats has decayed.
         let top_scorer = self.statistics.top_scorer.map(|(id, _)| id);
         let top_assists = self.statistics.top_assists.map(|(id, _)| id);
+        let golden_glove = Self::golden_glove(self.id, clubs);
 
-        // Golden glove — most clean sheets among GKs with ≥10 starts.
+        let _ = MonthlyAwardSelector::score; // silence unused-in-some-builds
+        SeasonAwardsSnapshot {
+            season_end_date: current_date,
+            player_of_season,
+            young_player_of_season,
+            team_of_season,
+            top_scorer,
+            top_assists,
+            golden_glove,
+            champion_team_id: finish.champion_team_id,
+            top_four_team_ids: finish.top_four,
+            relegated_team_ids: finish.relegated,
+        }
+    }
+
+    /// Player-id → (age, club-team-id) for this league's clubs, read once
+    /// per awards snapshot.
+    fn season_player_meta(
+        &self,
+        clubs: &[Club],
+        current_date: NaiveDate,
+    ) -> FxHashMap<u32, (u8, Option<u32>)> {
+        let mut player_meta: FxHashMap<u32, (u8, Option<u32>)> = FxHashMap::default();
+        for club in clubs {
+            for team in &club.teams.teams {
+                if team.league_id != Some(self.id) {
+                    continue;
+                }
+                for player in &team.players.players {
+                    let age = DateUtils::age(player.birth_date, current_date);
+                    player_meta.insert(player.id, (age, Some(team.id)));
+                }
+            }
+        }
+        player_meta
+    }
+
+    /// Golden glove — most clean sheets among GKs with ≥10 starts.
+    fn golden_glove(league_id: u32, clubs: &[Club]) -> Option<u32> {
         let mut golden_glove: Option<u32> = None;
         let mut best_cs: u16 = 0;
         for club in clubs {
             for team in &club.teams.teams {
-                if team.league_id != Some(self.id) {
+                if team.league_id != Some(league_id) {
                     continue;
                 }
                 for player in &team.players.players {
@@ -388,20 +492,7 @@ impl League {
                 }
             }
         }
-
-        let _ = MonthlyAwardSelector::score; // silence unused-in-some-builds
-        SeasonAwardsSnapshot {
-            season_end_date: current_date,
-            player_of_season,
-            young_player_of_season,
-            team_of_season,
-            top_scorer,
-            top_assists,
-            golden_glove,
-            champion_team_id,
-            top_four_team_ids: top_four,
-            relegated_team_ids: relegated,
-        }
+        golden_glove
     }
 
     fn process_winter_break(&mut self, _clubs: &[Club]) {

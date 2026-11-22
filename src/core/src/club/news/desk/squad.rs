@@ -1,5 +1,7 @@
 use super::dugout::DugoutDesk;
-use super::facts::{CareerRecord, PlayerStanding, RecentEvents, SquadPulse, WeeklyMatchFacts};
+use super::facts::{
+    CareerRecord, OutfieldMatchFacts, PlayerStanding, RecentEvents, SquadPulse, WeeklyMatchFacts,
+};
 use super::fans::FansDesk;
 use super::market::MarketDesk;
 use super::rumour::RumourDesk;
@@ -891,60 +893,83 @@ impl SquadDesk {
             PlayerFieldPositionGroup::Defender
         );
 
-        let verdict = |kind: NewsStoryKind, a: i32, b: i32, weight: i32| {
-            NewsStory::new(kind, date)
-                .about(player_id)
-                .with_numbers(a, b)
-                .weighted(weight)
-        };
+        if Self::file_headline_deeds(out, player_id, date, week, derby_hero, debut) {
+            return;
+        }
+        if Self::file_scoring_deeds(out, player_id, date, week, age, is_defender) {
+            return;
+        }
+        if Self::file_effort_deeds(out, player_id, date, week) {
+            return;
+        }
+        Self::file_workman_deeds(out, player_id, date, week, is_defender);
+    }
 
+    /// A player's own net and his own mistakes, and the one afternoon a
+    /// career gets only once.
+    fn file_headline_deeds(
+        out: &mut Vec<NewsStory>,
+        player_id: u32,
+        date: NaiveDate,
+        week: OutfieldMatchFacts,
+        derby_hero: bool,
+        debut: bool,
+    ) -> bool {
         // Winning a derby is the loudest thing a player can do in a
         // shirt, and it outranks anything else the same week did to him.
         if derby_hero {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::DerbyHero,
                 week.goals.max(1) as i32,
                 week.best_rating,
                 week.goals as i32 * 40,
             ));
-            return;
+            return true;
         }
 
         // Into his own net. Nobody's fault and entirely his, which is
         // exactly why it leads over everything he did well.
         if week.own_goals > 0 {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::OwnGoalShame,
                 week.own_goals as i32,
                 week.worst_rating,
                 (week.own_goals as i32 - 1) * 50,
             ));
-            return;
+            return true;
         }
 
         // Twelve yards, his to settle, and he missed. The one thing a
         // shoot-out is remembered by from the other end — the keeper's
         // save was already reported and the taker never was.
         if week.penalties_missed > 0 {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::PenaltyMissed,
                 week.penalties_missed as i32,
                 week.worst_rating,
                 (week.penalties_missed as i32 - 1) * 40,
             ));
-            return;
+            return true;
         }
 
         // His mistake, their goal. Unlike a goalkeeper's error this one
         // had a goalkeeper behind it and still ended up in the net.
         if week.errors_leading_to_goal > 0 {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::CostlyError,
                 week.errors_leading_to_goal as i32,
                 week.worst_rating,
                 (week.errors_leading_to_goal as i32 - 1) * 45,
             ));
-            return;
+            return true;
         }
 
         // A debut goes both ways and a player only ever gets one, so
@@ -953,125 +978,168 @@ impl SquadDesk {
         if debut {
             if week.goals > 0 || week.man_of_the_match || week.best_rating >= Self::DEBUT_JOY_RATING
             {
-                out.push(verdict(
+                out.push(Self::verdict(
+                    player_id,
+                    date,
                     NewsStoryKind::DreamDebut,
                     week.goals as i32,
                     week.best_rating,
                     week.goals as i32 * 40,
                 ));
-                return;
+                return true;
             }
             if week.worst_rating > 0 && week.worst_rating <= Self::STINKER_RATING {
-                out.push(verdict(
+                out.push(Self::verdict(
+                    player_id,
+                    date,
                     NewsStoryKind::DebutNightmare,
                     0,
                     week.worst_rating,
                     (Self::STINKER_RATING - week.worst_rating) / 4,
                 ));
-                return;
+                return true;
             }
         }
+        false
+    }
 
+    /// What he did that won the afternoon: goals, marks and the
+    /// afternoon a defender remembers.
+    fn file_scoring_deeds(
+        out: &mut Vec<NewsStory>,
+        player_id: u32,
+        date: NaiveDate,
+        week: OutfieldMatchFacts,
+        age: u8,
+        is_defender: bool,
+    ) -> bool {
         // Two goals. Below a hat-trick, which the squad desk already
         // files, and above every mark the column can otherwise reach
         // for — because it is usually the reason the match was won.
         if week.goals == Self::BRACE_GOALS {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::BraceHero,
                 week.goals as i32,
                 week.best_rating,
                 (week.best_rating - 700).max(0) / 5,
             ));
-            return;
+            return true;
         }
 
         // The same mark means a different thing at nineteen and at
         // thirty-four, and the column had one sentence for both.
         if age <= Self::PROSPECT_AGE && week.best_rating >= Self::TEENAGE_STAR_RATING {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::TeenageStarTurn,
                 age as i32,
                 week.best_rating,
                 (week.best_rating - Self::TEENAGE_STAR_RATING) / 4,
             ));
-            return;
+            return true;
         }
         if age >= Self::VETERAN_AGE && week.best_rating >= Self::VETERAN_TURN_RATING {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::RolledBackYears,
                 age as i32,
                 week.best_rating,
                 (week.best_rating - Self::VETERAN_TURN_RATING) / 4,
             ));
-            return;
+            return true;
         }
 
         if week.best_rating >= Self::MASTERCLASS_RATING {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::MatchMasterclass,
                 (week.goals.saturating_add(week.assists)) as i32,
                 week.best_rating,
                 (week.best_rating - Self::MASTERCLASS_RATING) / 4,
             ));
-            return;
+            return true;
         }
 
         // A centre-half up for a corner. Rare enough that the whole
         // ground remembers who took it.
         if is_defender && week.goals > 0 {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::GoalFromDefence,
                 week.goals as i32,
                 week.best_rating,
                 week.goals as i32 * 30,
             ));
-            return;
+            return true;
         }
 
         // A hand in two goals without scoring twice in either sense.
         if week.goals > 0 && week.assists > 0 {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::GoalAndAssistShow,
                 (week.goals.saturating_add(week.assists)) as i32,
                 week.best_rating,
                 (week.goals.saturating_add(week.assists) as i32 - 2) * 30,
             ));
-            return;
+            return true;
         }
 
         // The engine's own verdict on the afternoon, which the newsroom
         // has been recording and throwing away since the match page
         // started showing it.
         if week.man_of_the_match {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::ManOfTheMatch,
                 (week.goals.saturating_add(week.assists)) as i32,
                 week.best_rating,
                 (week.best_rating - 700).max(0) / 5,
             ));
-            return;
+            return true;
         }
 
         if week.assists >= Self::ASSIST_SHOW {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::AssistShow,
                 week.assists as i32,
                 week.best_rating,
                 (week.assists as i32 - Self::ASSIST_SHOW as i32) * 40,
             ));
-            return;
+            return true;
         }
+        false
+    }
 
+    /// The quieter verdicts: the bench, the misses and the hook.
+    fn file_effort_deeds(
+        out: &mut Vec<NewsStory>,
+        player_id: u32,
+        date: NaiveDate,
+        week: OutfieldMatchFacts,
+    ) -> bool {
         // Off the bench and decisive. Half an hour that changed the
         // afternoon, and a story only a substitute can be the subject of.
         if week.impact_off_the_bench > 0 {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::SuperSub,
                 week.impact_off_the_bench as i32,
                 week.best_rating,
                 (week.impact_off_the_bench as i32 - 1) * 35,
             ));
-            return;
+            return true;
         }
 
         // The chances were there and he put them everywhere but in. Both
@@ -1083,13 +1151,15 @@ impl SquadDesk {
             && week.shots >= Self::WASTEFUL_SHOTS
             && week.xg_x100 >= Self::WASTEFUL_XG
         {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::WastefulFinishing,
                 week.shots as i32,
                 week.worst_rating,
                 (week.xg_x100 - Self::WASTEFUL_XG) / 3,
             ));
-            return;
+            return true;
         }
 
         // Taken off before the hour, having been marked down while he
@@ -1100,25 +1170,39 @@ impl SquadDesk {
             && week.worst_rating_minutes <= Self::HOOKED_MINUTES
             && week.worst_rating <= Self::HOOKED_RATING
         {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::HookedEarly,
                 week.worst_rating_minutes as i32,
                 week.worst_rating,
                 (Self::HOOKED_RATING - week.worst_rating) / 5,
             ));
-            return;
+            return true;
         }
 
         if week.worst_rating > 0 && week.worst_rating <= Self::STINKER_RATING {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::MatchStinker,
                 week.worst_rating_minutes as i32,
                 week.worst_rating,
                 (Self::STINKER_RATING - week.worst_rating) / 4,
             ));
-            return;
+            return true;
         }
+        false
+    }
 
+    /// The working afternoon: the tackle, the pass and the foul.
+    fn file_workman_deeds(
+        out: &mut Vec<NewsStory>,
+        player_id: u32,
+        date: NaiveDate,
+        week: OutfieldMatchFacts,
+        is_defender: bool,
+    ) {
         // A defender's whole afternoon, and the one that never reaches a
         // scoreline. Three gates, and each throws out a different false
         // positive: the clean sheet (the same shift in a 4-0 defeat is a
@@ -1129,12 +1213,11 @@ impl SquadDesk {
         if week.shut_out
             && week.defensive_actions >= Self::DEFENSIVE_SHIFT
             && week.best_rating >= Self::DEFENSIVE_ROCK_RATING
-            && matches!(
-                player.position().position_group(),
-                PlayerFieldPositionGroup::Defender
-            )
+            && is_defender
         {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::DefensiveRock,
                 week.defensive_actions as i32,
                 week.best_rating,
@@ -1144,7 +1227,9 @@ impl SquadDesk {
         }
 
         if week.key_passes >= Self::CREATOR_KEY_PASSES {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::CreatorInChief,
                 week.key_passes as i32,
                 week.best_rating,
@@ -1154,7 +1239,9 @@ impl SquadDesk {
         }
 
         if week.successful_dribbles >= Self::DRIBBLING_DISPLAY {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::DribblingDisplay,
                 week.successful_dribbles as i32,
                 week.best_rating,
@@ -1170,7 +1257,9 @@ impl SquadDesk {
         if week.key_passes >= Self::ENGINE_KEY_PASSES
             && week.defensive_actions >= Self::ENGINE_DEFENSIVE_ACTIONS
         {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::MidfieldEngine,
                 (week.key_passes.saturating_add(week.defensive_actions)) as i32,
                 week.best_rating,
@@ -1181,13 +1270,29 @@ impl SquadDesk {
 
         // He spent the afternoon fouling people.
         if week.fouls >= Self::FOUL_TROUBLE {
-            out.push(verdict(
+            out.push(Self::verdict(
+                player_id,
+                date,
                 NewsStoryKind::FoulTrouble,
                 week.fouls as i32,
                 week.worst_rating,
                 (week.fouls as i32 - Self::FOUL_TROUBLE as i32).max(0) * 10,
             ));
         }
+    }
+
+    fn verdict(
+        player_id: u32,
+        date: NaiveDate,
+        kind: NewsStoryKind,
+        a: i32,
+        b: i32,
+        weight: i32,
+    ) -> NewsStory {
+        NewsStory::new(kind, date)
+            .about(player_id)
+            .with_numbers(a, b)
+            .weighted(weight)
     }
 
     /// The goalkeeper's week.
@@ -1445,6 +1550,19 @@ impl SquadDesk {
         feed: &RecentEvents<'_>,
         date: NaiveDate,
     ) {
+        Self::file_milestone_events(out, player, feed, date);
+        Self::file_captaincy_events(out, player, feed, date);
+        Self::file_twilight_and_homecoming(out, player, feed, date);
+    }
+
+    /// Debuts, recoveries, career milestones and the summer's international
+    /// honours.
+    fn file_milestone_events(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        feed: &RecentEvents<'_>,
+        date: NaiveDate,
+    ) {
         if feed.happened(HappinessEventType::SeniorDebut) {
             out.push(
                 NewsStory::new(NewsStoryKind::YouthDebut, date)
@@ -1549,7 +1667,16 @@ impl SquadDesk {
         if feed.happened(HappinessEventType::CaptaincyAwarded) {
             out.push(NewsStory::new(NewsStoryKind::CaptainNamed, date).about(player.id));
         }
+    }
 
+    /// The armband, the end of a career and the goals that mean something
+    /// beyond a scoreline.
+    fn file_captaincy_events(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        feed: &RecentEvents<'_>,
+        date: NaiveDate,
+    ) {
         // The armband going the other way. A paper that only ever
         // reports the naming of a captain is reporting half of the one
         // job in a dressing room everybody has an opinion about.
@@ -1593,7 +1720,15 @@ impl SquadDesk {
                     .weighted(PlayerStanding::importance(player) / 3),
             );
         }
+    }
 
+    /// The international farewell, and the return from a spell away.
+    fn file_twilight_and_homecoming(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        feed: &RecentEvents<'_>,
+        date: NaiveDate,
+    ) {
         // Finished with his country, carrying on at his club. A career
         // decision with a date on it, and the one retirement a player
         // gets to make twice.
@@ -1981,6 +2116,21 @@ impl SquadDesk {
         let feed = RecentEvents::fortnight(player);
         let importance = PlayerStanding::importance(player);
 
+        if Self::file_building_grievances(out, player, &feed, importance, date) {
+            return;
+        }
+        Self::file_training_ground(out, player, &feed, importance, date);
+    }
+
+    /// Where he stands in the building: eligible, wanted, and being used.
+    /// Returns true when one of the grievances has taken his line.
+    fn file_building_grievances(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        feed: &RecentEvents<'_>,
+        importance: i32,
+        date: NaiveDate,
+    ) -> bool {
         // Not injured, not dropped — ineligible. Worse than either,
         // because it takes a window to undo.
         if feed.happened(HappinessEventType::SquadRegistrationOmitted) {
@@ -2001,7 +2151,7 @@ impl SquadDesk {
                     .about(player.id)
                     .weighted(importance),
             );
-            return;
+            return true;
         }
 
         // He has outgrown the division and everybody can see it. A story
@@ -2013,7 +2163,7 @@ impl SquadDesk {
                     .with_numbers(player.age(date) as i32, 0)
                     .weighted(importance),
             );
-            return;
+            return true;
         }
 
         // Sick of the bench, and no longer hiding it.
@@ -2026,7 +2176,7 @@ impl SquadDesk {
                     .about(player.id)
                     .weighted(importance / 2),
             );
-            return;
+            return true;
         }
 
         // The signing who arrived to find a queue for the shirt.
@@ -2036,7 +2186,7 @@ impl SquadDesk {
                     .about(player.id)
                     .weighted(importance / 2),
             );
-            return;
+            return true;
         }
 
         if feed
@@ -2051,7 +2201,7 @@ impl SquadDesk {
                     .about(player.id)
                     .weighted(importance),
             );
-            return;
+            return true;
         }
 
         // He has seen what the man next to him earns. Read through the
@@ -2065,7 +2215,7 @@ impl SquadDesk {
                     .about(player.id)
                     .weighted(importance / 2),
             );
-            return;
+            return true;
         }
 
         if feed.happened(HappinessEventType::RelegationFear) {
@@ -2074,9 +2224,19 @@ impl SquadDesk {
                     .about(player.id)
                     .weighted(importance / 2),
             );
-            return;
+            return true;
         }
+        false
+    }
 
+    /// The training ground, from a star's aura to a quiet complaint.
+    fn file_training_ground(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        feed: &RecentEvents<'_>,
+        importance: i32,
+        date: NaiveDate,
+    ) {
         // The training ground. The quietest column in the paper and the
         // one that most often runs the week before somebody's run in the
         // side starts or ends.

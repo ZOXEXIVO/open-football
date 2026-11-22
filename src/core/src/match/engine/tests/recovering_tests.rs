@@ -3,11 +3,11 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
-use crate::r#match::common_states::{ChallengeKind, CommonRecoveringState};
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::ball::ball::PlayerReach;
 use crate::r#match::engine::result::Score;
 use crate::r#match::player::state::PlayerState;
+use crate::r#match::shared_states::{ChallengeKind, CommonRecoveringState};
 use crate::r#match::{
     GameTickContext, MatchContext, MatchField, MatchPlayer, MatchPlayerCollection,
     StateProcessingContext, StateProcessingHandler,

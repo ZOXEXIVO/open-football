@@ -1,3 +1,4 @@
+use crate::generators::rng::HydrationRng;
 use chrono::{Datelike, NaiveDate, Utc};
 use core::shared::FullName;
 use core::utils::FloatUtils;
@@ -8,7 +9,6 @@ use core::{
     StaffGoalkeeperCoaching, StaffKnowledge, StaffLicenseType, StaffMedical, StaffMental,
     StaffPosition, StaffStatus, TechnicalFocusType,
 };
-use crate::generators::rng::HydrationRng;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -100,10 +100,30 @@ impl StaffGenerator {
 
     fn generate_staff_focus() -> CoachFocus {
         CoachFocus {
-            technical_focus: get_random_technical(3),
-            mental_focus: get_random_mental(5),
-            physical_focus: get_random_physical(4),
+            technical_focus: Self::random_unique(TECHNICAL_FOCUSES, 3),
+            mental_focus: Self::random_unique(MENTAL_FOCUSES, 5),
+            physical_focus: Self::random_unique(PHYSICAL_FOCUSES, 4),
         }
+    }
+
+    /// Draw `count` distinct entries from one focus catalogue. Each call
+    /// owns its entropy stream, matching the per-catalogue draws the
+    /// generator has always made.
+    fn random_unique<T: Copy + PartialEq>(values: &[T], count: usize) -> Vec<T> {
+        let mut rng = HydrationRng::from_entropy();
+
+        let mut random_values = Vec::with_capacity(count);
+
+        while random_values.len() < count {
+            let random_index = rng.int_range(0, (values.len() - 1) as i32) as usize;
+            let random_value = values[random_index];
+
+            if !random_values.contains(&random_value) {
+                random_values.push(random_value);
+            }
+        }
+
+        random_values
     }
 
     /// Lift the attributes a role is actually hired for into the upper half
@@ -253,54 +273,3 @@ const PHYSICAL_FOCUSES: &[PhysicalFocusType] = &[
     PhysicalFocusType::Strength,
     PhysicalFocusType::MatchReadiness,
 ];
-
-fn get_random_technical(count: usize) -> Vec<TechnicalFocusType> {
-    let mut rng = HydrationRng::from_entropy();
-
-    let mut random_values = Vec::with_capacity(count);
-
-    while random_values.len() < count {
-        let random_index = rng.int_range(0, (TECHNICAL_FOCUSES.len() - 1) as i32) as usize;
-        let random_value = TECHNICAL_FOCUSES[random_index];
-
-        if !random_values.contains(&random_value) {
-            random_values.push(random_value);
-        }
-    }
-
-    random_values
-}
-
-fn get_random_mental(count: usize) -> Vec<MentalFocusType> {
-    let mut rng = HydrationRng::from_entropy();
-
-    let mut random_values = Vec::with_capacity(count);
-
-    while random_values.len() < count {
-        let random_index = rng.int_range(0, (MENTAL_FOCUSES.len() - 1) as i32) as usize;
-        let random_value = MENTAL_FOCUSES[random_index];
-
-        if !random_values.contains(&random_value) {
-            random_values.push(random_value);
-        }
-    }
-
-    random_values
-}
-
-fn get_random_physical(count: usize) -> Vec<PhysicalFocusType> {
-    let mut rng = HydrationRng::from_entropy();
-
-    let mut random_values = Vec::with_capacity(count);
-
-    while random_values.len() < count {
-        let random_index = rng.int_range(0, (PHYSICAL_FOCUSES.len() - 1) as i32) as usize;
-        let random_value = PHYSICAL_FOCUSES[random_index];
-
-        if !random_values.contains(&random_value) {
-            random_values.push(random_value);
-        }
-    }
-
-    random_values
-}

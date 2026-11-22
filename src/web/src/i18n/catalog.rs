@@ -1,4 +1,4 @@
-use crate::common::default_handler::Assets;
+use crate::shared::default_handler::Assets;
 use std::collections::HashMap;
 use std::sync::Arc;
 

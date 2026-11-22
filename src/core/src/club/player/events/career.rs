@@ -534,9 +534,6 @@ impl Player {
         self.awards_count.bump(kind, now, input.league_id);
 
         let (base_cur, base_home, base_world) = kind.centre_delta();
-        let cur_now = self.player_attributes.current_reputation;
-        let home_now = self.player_attributes.home_reputation;
-        let world_now = self.player_attributes.world_reputation;
 
         if kind.is_global() {
             // Top-of-the-pyramid awards: scale is fixed by design,
@@ -549,27 +546,30 @@ impl Player {
             return;
         }
 
+        let (delta_cur, delta_home, delta_world) = self.award_reputation_deltas(kind, &input, now);
+        self.player_attributes
+            .update_reputation(delta_cur, delta_home, delta_world);
+    }
+
+    /// Reputation movement for a non-global award, before the ceiling
+    /// clamp in `update_reputation`.
+    fn award_reputation_deltas(
+        &self,
+        kind: AwardReputationKind,
+        input: &AwardReputationInput,
+        now: NaiveDate,
+    ) -> (i16, i16, i16) {
+        let (base_cur, base_home, base_world) = kind.centre_delta();
+        let cur_now = self.player_attributes.current_reputation;
+        let home_now = self.player_attributes.home_reputation;
+        let world_now = self.player_attributes.world_reputation;
+
         let lr_norm = (input.league_reputation.unwrap_or(5_000) as f32 / 10_000.0).clamp(0.0, 1.0);
         let league_mul = 0.60 + 0.80 * lr_norm;
         let world_exposure = lr_norm.powf(1.25);
 
-        let quality_mul = match input.avg_rating {
-            Some(rating) if kind.is_season_aggregate() => {
-                let matches = input.matches_played.unwrap_or(0) as f32;
-                (0.85 + (rating - 7.0) * 0.12 + ((matches + 1.0).log10()) * 0.05).clamp(0.85, 1.30)
-            }
-            Some(rating) => (0.85 + (rating - 7.0) * 0.18).clamp(0.75, 1.25),
-            None => 1.0,
-        };
-
-        let age = self.age(now);
-        let breakthrough_mul = if age <= 20 && cur_now < 1_500 {
-            1.25
-        } else if age <= 23 && cur_now < 2_500 {
-            1.15
-        } else {
-            1.0
-        };
+        let quality_mul = Self::award_quality_multiplier(kind, input);
+        let breakthrough_mul = self.award_breakthrough_multiplier(now, cur_now);
 
         let weekly_saturation = if kind.is_weekly() && cur_now > 7_500 {
             0.5
@@ -595,8 +595,31 @@ impl Player {
         let delta_world =
             (base_world as f32 * common * world_exposure * head_world * world_lock).round() as i16;
 
-        self.player_attributes
-            .update_reputation(delta_cur, delta_home, delta_world);
+        (delta_cur, delta_home, delta_world)
+    }
+
+    /// How good the season/week behind the award was.
+    fn award_quality_multiplier(kind: AwardReputationKind, input: &AwardReputationInput) -> f32 {
+        match input.avg_rating {
+            Some(rating) if kind.is_season_aggregate() => {
+                let matches = input.matches_played.unwrap_or(0) as f32;
+                (0.85 + (rating - 7.0) * 0.12 + ((matches + 1.0).log10()) * 0.05).clamp(0.85, 1.30)
+            }
+            Some(rating) => (0.85 + (rating - 7.0) * 0.18).clamp(0.75, 1.25),
+            None => 1.0,
+        }
+    }
+
+    /// Wonderkid hype for the very young and still-unfamous.
+    fn award_breakthrough_multiplier(&self, now: NaiveDate, current_reputation: i16) -> f32 {
+        let age = self.age(now);
+        if age <= 20 && current_reputation < 1_500 {
+            1.25
+        } else if age <= 23 && current_reputation < 2_500 {
+            1.15
+        } else {
+            1.0
+        }
     }
 
     /// Stacking dampener for the centralised award reputation pipeline.
@@ -781,6 +804,19 @@ impl Player {
             return;
         };
 
+        let filed = self.mood_events_to_file(club);
+        if filed.is_empty() {
+            return;
+        }
+        let ctx = self.mind_context(now, Some(club));
+        for (kind, who) in filed {
+            self.mind.remember(kind, who, &ctx);
+        }
+    }
+
+    /// The week's mood events that a career remembers, with the actor
+    /// each is filed against.
+    fn mood_events_to_file(&self, club: u32) -> Vec<(EpisodeKind, ActorRef)> {
         // Collected first because recording borrows the mind mutably
         // while the log lives on the same player.
         let mut filed: Vec<(EpisodeKind, ActorRef)> = Vec::new();
@@ -864,12 +900,6 @@ impl Player {
             filed.push((kind, who));
         }
 
-        if filed.is_empty() {
-            return;
-        }
-        let ctx = self.mind_context(now, Some(club));
-        for (kind, who) in filed {
-            self.mind.remember(kind, who, &ctx);
-        }
+        filed
     }
 }

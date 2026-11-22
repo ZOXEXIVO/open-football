@@ -2,8 +2,8 @@ use crate::Country;
 use crate::context::GlobalContext;
 use crate::continent::national::{NationalCompetitionConfig, NationalTeamCompetitions};
 use crate::continent::{
-    ContinentalCompetitions, ContinentalQualification, ContinentalRankings,
-    ContinentalRegulations, EconomicZone,
+    ContinentalCompetitions, ContinentalQualification, ContinentalRankings, ContinentalRegulations,
+    EconomicZone,
 };
 use crate::country::{CountryPendingState, CountryResult};
 use crate::league::FixtureRest;
@@ -341,7 +341,7 @@ impl Continent {
 mod continental_night_tests {
     use super::*;
     use crate::context::SimulationContext;
-    use crate::country::core::country::fixture_calendar_tests::september_country;
+    use crate::country::country::fixture_calendar_tests::september_country;
     use crate::transfers::market::PlacementReachIndex;
     use crate::transfers::market::map::MarketMap;
     use crate::transfers::view::world::WorldPool;

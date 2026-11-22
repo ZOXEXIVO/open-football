@@ -12,6 +12,7 @@ use super::config::TransferConfig;
 use super::execution::{ArrivalThreatProfile, SquadReactionPass, TransferExecution};
 use super::types::DeferredTransfer;
 use crate::Club;
+use crate::Player;
 use crate::club::player::contract::RENEWAL_OFFERED_LABEL;
 use crate::club::player::mailbox::handlers::contract_proposal::ProcessContractHandler;
 use crate::club::player::transfer::{FreeAgentBlockReason, LevelFloor, MarketStage};
@@ -526,6 +527,154 @@ struct EmergencyClubAnchors {
 /// The free market: who is out of contract, and who takes them.
 pub struct FreeAgentPass;
 
+struct ExpiryRenewalOffer {
+    player_id: u32,
+    proposal: PlayerContractProposal,
+    coach_name: String,
+}
+
+struct EmergencyFillContext<'a> {
+    country: &'a Country,
+    candidates: &'a [FreeAgentCandidate<'a>],
+    config: &'a TransferConfig,
+    visibility: &'a FreeAgentMarketVisibility,
+    registration: SquadRegistrationLimits,
+    base_per_club_cap: usize,
+    country_cap: usize,
+    buyer_country_code: String,
+    buyer_country_id: u32,
+    buyer_continent_id: u32,
+    buyer_rep: u16,
+    buyer_region_prestige: f32,
+}
+
+impl EmergencyFillContext<'_> {
+    fn fill_club(
+        &self,
+        club: &Club,
+        signings: &mut Vec<FreeAgentSigning>,
+        global_offered_ids: &mut Vec<u32>,
+        global_rejected_ids: &mut Vec<u32>,
+        recorder: &mut BlockReasonRecorder,
+        country_signed: &mut usize,
+        depth_intents: &mut Vec<EmergencyDepthRequestIntent>,
+    ) {
+        if *country_signed >= self.country_cap {
+            return;
+        }
+        let Some((mut projected, per_club_cap, anchors)) = FreeAgentPass::emergency_club_anchors(
+            self.country,
+            club,
+            self.config,
+            &self.registration,
+            self.base_per_club_cap,
+        ) else {
+            return;
+        };
+        let ladder = club.teams.main().map(|team| team.squad_ladder());
+        let mut club_signed = 0usize;
+        let mut rejected_locally: FxHashSet<u32> = FxHashSet::default();
+        let mut empty_groups: FxHashSet<PlayerFieldPositionGroup> = FxHashSet::default();
+
+        while club_signed < per_club_cap && *country_signed < self.country_cap {
+            if !projected.needs_more_signings(self.config.emergency_squad_size_threshold) {
+                break;
+            }
+            let Some(slot) = EmergencySlotPlanner::next_slot(&projected, &empty_groups) else {
+                break;
+            };
+            if slot.reason == "emergency_squad_fill_depth" {
+                depth_intents.push(EmergencyDepthRequestIntent {
+                    club_id: club.id,
+                    group: slot.group,
+                });
+                break;
+            }
+
+            let urgent = projected.is_urgent();
+            let strictness = EmergencySlotStrictness::from_reason(slot.reason, urgent);
+            let buyer_ctx = EmergencyBuyerContext {
+                country_reputation: self.buyer_rep,
+                country_code: self.buyer_country_code.clone(),
+                continent_id: self.buyer_continent_id,
+                region_prestige: self.buyer_region_prestige,
+                club_reputation_score: anchors.club_score,
+                league_reputation: anchors.league_reputation,
+                negotiator_skill: anchors.negotiator_skill,
+                urgent,
+                strictness,
+                import_capacity: self.visibility.import_capacity(),
+                country_id: self.buyer_country_id,
+                foreign_slots_free: anchors.foreign_slots.free(),
+            };
+
+            let Some(best) = EmergencyCandidatePicker::pick(
+                self.candidates,
+                signings,
+                &rejected_locally,
+                slot,
+                &buyer_ctx,
+                club.id,
+                self.visibility,
+                recorder,
+            ) else {
+                empty_groups.insert(slot.group);
+                continue;
+            };
+
+            let role = ladder
+                .as_ref()
+                .and_then(|ladder| {
+                    BuyerRoleFit::arriving(ladder, best.ability, best.age, slot.group)
+                })
+                .unwrap_or(BuyerRoleFit::Emergency);
+            let Some(pricing) = FreeAgentPass::emergency_offer_accepted(
+                best,
+                slot,
+                club,
+                role,
+                anchors.club_score,
+                anchors.league_reputation,
+                anchors.negotiator_skill,
+                self.buyer_rep,
+                global_offered_ids,
+                global_rejected_ids,
+                &mut rejected_locally,
+            ) else {
+                continue;
+            };
+
+            signings.push(FreeAgentSigning {
+                player_id: best.player_id,
+                player_name: best.player_name.to_string(),
+                from_club_id: best.club_id,
+                from_club_name: best.club_name.to_string(),
+                to_club_id: club.id,
+                reason: TransferReason::key(slot.reason),
+                terms: Some(pricing.signed_terms(best)),
+                fills_group: Some(slot.group),
+            });
+            projected.apply_signing(slot.group);
+            club_signed += 1;
+            *country_signed += 1;
+            debug!(
+                "Emergency squad fill: club {} → player {} ({:?}, {}, wage={})",
+                club.id, best.player_id, slot.group, slot.reason, pricing.offer_wage
+            );
+        }
+    }
+}
+
+struct ClearingOffer {
+    buyer_club_id: u32,
+    buyer_league_reputation: u16,
+    buyer_country_reputation: u16,
+    pricing: FreeAgentOfferPricing,
+    rep_drop: i32,
+    wage_fit: f32,
+    quality_fit: f32,
+}
+
 impl FreeAgentPass {
     /// Handle expiring contracts and free agent signings.
     ///
@@ -654,32 +803,29 @@ impl FreeAgentPass {
         date: NaiveDate,
         expired_player_ids: &[u32],
     ) -> FxHashSet<u32> {
-        let mut renewed: FxHashSet<u32> = FxHashSet::default();
         if expired_player_ids.is_empty() {
-            return renewed;
+            return FxHashSet::default();
         }
         let expired_set: FxHashSet<u32> = expired_player_ids.iter().copied().collect();
+        let offers = Self::collect_expiry_offers(country, date, &expired_set);
+        Self::apply_expiry_offers(country, date, offers)
+    }
 
-        struct ExpiryRenewalOffer {
-            player_id: u32,
-            proposal: PlayerContractProposal,
-            coach_name: String,
-        }
-        let mut offers: Vec<ExpiryRenewalOffer> = Vec::new();
-
-        // Phase A (immutable): build proposals. The main team anchors the
-        // wage structure / staff context — same convention as the proactive
-        // monthly pass and the parent-loanee pass.
+    fn collect_expiry_offers(
+        country: &Country,
+        date: NaiveDate,
+        expired_set: &FxHashSet<u32>,
+    ) -> Vec<ExpiryRenewalOffer> {
+        let mut offers = Vec::new();
         for club in &country.clubs {
             let Some(main_team) = club.teams.main().or_else(|| club.teams.teams.first()) else {
                 continue;
             };
-            // Cheap pre-check before snapshotting the wage structure.
-            let club_has_expired = club.teams.teams.iter().any(|t| {
-                t.players
+            let club_has_expired = club.teams.teams.iter().any(|team| {
+                team.players
                     .players
                     .iter()
-                    .any(|p| expired_set.contains(&p.id))
+                    .any(|player| expired_set.contains(&player.id))
             });
             if !club_has_expired {
                 continue;
@@ -689,15 +835,18 @@ impl FreeAgentPass {
                 .finance
                 .wage_budget
                 .as_ref()
-                .map(|b| b.amount.max(0.0) as u32);
+                .map(|budget| budget.amount.max(0.0) as u32);
             let league_reputation = main_team
                 .league_id
-                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-                .map(|l| l.reputation)
+                .and_then(|league_id| {
+                    country
+                        .leagues
+                        .leagues
+                        .iter()
+                        .find(|league| league.id == league_id)
+                })
+                .map(|league| league.reputation)
                 .unwrap_or(0);
-            // Caps anchor on the main team's hierarchy; the budget gate
-            // compares against the CLUB-wide bill (the wage budget is a
-            // club-level pot, not a per-team one).
             let mut structure = WageStructureSnapshot::from_team(main_team);
             structure.current_bill = WageStructureSnapshot::club_wide_bill(&club.teams.teams);
 
@@ -725,55 +874,58 @@ impl FreeAgentPass {
                 }
             }
         }
+        offers
+    }
 
-        // Phase B (mutable): record the offer and run acceptance in place.
+    fn apply_expiry_offers(
+        country: &mut Country,
+        date: NaiveDate,
+        offers: Vec<ExpiryRenewalOffer>,
+    ) -> FxHashSet<u32> {
+        let mut renewed = FxHashSet::default();
         for offer in offers {
             'apply: for club in country.clubs.iter_mut() {
                 for team in club.teams.teams.iter_mut() {
-                    if let Some(player) = team
+                    let Some(player) = team
                         .players
                         .players
                         .iter_mut()
-                        .find(|p| p.id == offer.player_id)
-                    {
-                        let movement = format!(
-                            "{}y · ${}/y",
-                            offer.proposal.years,
-                            FormattingUtils::format_money(offer.proposal.salary as f64)
-                        );
-                        player.decision_history.add(
-                            date,
-                            movement,
-                            RENEWAL_OFFERED_LABEL.to_string(),
-                            offer.coach_name.clone(),
-                        );
+                        .find(|player| player.id == offer.player_id)
+                    else {
+                        continue;
+                    };
+                    let movement = format!(
+                        "{}y · ${}/y",
+                        offer.proposal.years,
+                        FormattingUtils::format_money(offer.proposal.salary as f64)
+                    );
+                    player.decision_history.add(
+                        date,
+                        movement,
+                        RENEWAL_OFFERED_LABEL.to_string(),
+                        offer.coach_name.clone(),
+                    );
 
-                        let mut result = PlayerResult::new(player.id);
-                        ProcessContractHandler::process(player, offer.proposal, date, &mut result);
+                    let mut result = PlayerResult::new(player.id);
+                    ProcessContractHandler::process(player, offer.proposal, date, &mut result);
 
-                        // Accepted iff a live contract is now installed —
-                        // rejection leaves the lapsed one in place.
-                        let renewed_now = player
-                            .contract
-                            .as_ref()
-                            .map(|c| c.expiration > date)
-                            .unwrap_or(false);
-                        if renewed_now {
-                            renewed.insert(player.id);
-                            // He's staying — void any pre-contract he had
-                            // agreed with a rival so it can't fire later.
-                            player.clear_pre_contract();
-                            debug!(
-                                "Expiry-day renewal accepted: player {} ({}) stays at {}",
-                                player.full_name, player.id, club.name
-                            );
-                        }
-                        break 'apply;
+                    let renewed_now = player
+                        .contract
+                        .as_ref()
+                        .map(|contract| contract.expiration > date)
+                        .unwrap_or(false);
+                    if renewed_now {
+                        renewed.insert(player.id);
+                        player.clear_pre_contract();
+                        debug!(
+                            "Expiry-day renewal accepted: player {} ({}) stays at {}",
+                            player.full_name, player.id, club.name
+                        );
                     }
+                    break 'apply;
                 }
             }
         }
-
         renewed
     }
 
@@ -820,176 +972,50 @@ impl FreeAgentPass {
         global_rejected_ids: &mut Vec<u32>,
         recorder: &mut BlockReasonRecorder,
     ) -> Vec<EmergencyDepthRequestIntent> {
-        let mut depth_intents: Vec<EmergencyDepthRequestIntent> = Vec::new();
         if candidates.is_empty() {
-            return depth_intents;
+            return Vec::new();
         }
         let country_cap = config.emergency_max_signings_per_country_per_day;
         let base_per_club_cap = config.emergency_max_signings_per_club_per_day;
         if country_cap == 0 || base_per_club_cap == 0 {
-            return depth_intents;
+            return Vec::new();
         }
-        let mut country_signed = 0usize;
-        let buyer_country_code = country.code.clone();
-        let buyer_country_id = country.id;
-        let buyer_continent_id = country.continent_id;
-        let buyer_rep = country.reputation;
-        let registration = SquadRegistrationLimits::new(country.id, &country.regulations);
-        // Same anchor every realism gate in the project uses for the
-        // buyer side: continent + country code → scouting region →
-        // prestige score. Pre-computed once per country so the per-slot
-        // buyer context build is a couple of field assignments.
-        let buyer_region_prestige =
-            ScoutingRegion::from_country(country.continent_id, &country.code).league_prestige();
 
+        let ctx = EmergencyFillContext {
+            country,
+            candidates,
+            config,
+            visibility,
+            registration: SquadRegistrationLimits::new(country.id, &country.regulations),
+            base_per_club_cap,
+            country_cap,
+            buyer_country_code: country.code.clone(),
+            buyer_country_id: country.id,
+            buyer_continent_id: country.continent_id,
+            buyer_rep: country.reputation,
+            buyer_region_prestige: ScoutingRegion::from_country(
+                country.continent_id,
+                &country.code,
+            )
+            .league_prestige(),
+        };
+
+        let mut country_signed = 0usize;
+        let mut depth_intents = Vec::new();
         for club in &country.clubs {
             if country_signed >= country_cap {
                 break;
             }
-            let Some((mut projected, per_club_cap, anchors)) = Self::emergency_club_anchors(
-                country,
+            ctx.fill_club(
                 club,
-                config,
-                &registration,
-                base_per_club_cap,
-            ) else {
-                continue;
-            };
-            let buyer_club_score = anchors.club_score;
-            let buyer_league_reputation = anchors.league_reputation;
-            let buyer_negotiator_skill = anchors.negotiator_skill;
-            let buyer_foreign_slots = anchors.foreign_slots;
-            let ladder = club.teams.main().map(|t| t.squad_ladder());
-
-            let mut club_signed = 0usize;
-            // Player ids that already rejected an emergency offer
-            // from this club in this tick — used to dedup retries
-            // so a single rejection doesn't lock the slot for the
-            // whole pass.
-            let mut rejected_locally: FxHashSet<u32> = FxHashSet::default();
-            // Groups the picker has reported empty for this tick —
-            // the planner skips them on subsequent iterations so we
-            // don't spin re-selecting the same dead slot. Without
-            // this a club short of GKs with no GK candidates would
-            // never sign anyone, because the planner keeps emitting
-            // the GK slot and the picker keeps returning None.
-            let mut empty_groups: FxHashSet<PlayerFieldPositionGroup> = FxHashSet::default();
-
-            // Sign up to per_club_cap times; each iteration recomputes
-            // the buyer urgency flag and the next-best slot from the
-            // current projection. The loop bound (per_club_cap) caps
-            // staged signings; the inner `pick` may return None when no
-            // candidate clears the score gate, in which case we mark
-            // the group as empty for this tick and try the next one.
-            while club_signed < per_club_cap && country_signed < country_cap {
-                // Stop emergency fill once the projected squad meets
-                // the threshold AND every group minimum is satisfied.
-                if !projected.needs_more_signings(config.emergency_squad_size_threshold) {
-                    break;
-                }
-
-                // Pick the next slot dynamically — once the urgent
-                // groups are filled, the depth tail rotates into the
-                // currently thinnest group instead of always being a
-                // midfielder. Groups whose pool is empty this tick
-                // are excluded so the planner can move on.
-                let slot = EmergencySlotPlanner::next_slot(&projected, &empty_groups);
-                let Some(slot) = slot else { break };
-
-                // Depth slots never sign directly. The shortfall turns
-                // into a DepthCover pipeline request and the staged-
-                // negotiation flow takes it from there. Depth is the
-                // planner's terminal state for this club (group
-                // minimums met or unfillable this tick), so stop here.
-                if slot.reason == "emergency_squad_fill_depth" {
-                    depth_intents.push(EmergencyDepthRequestIntent {
-                        club_id: club.id,
-                        group: slot.group,
-                    });
-                    break;
-                }
-
-                // Strictness is derived per-slot from the reason tag
-                // so the depth slot can fire the realism gates at full
-                // strength while a no-keeper GK fill stays permissive.
-                let urgent = projected.is_urgent();
-                let strictness = EmergencySlotStrictness::from_reason(slot.reason, urgent);
-                let buyer_ctx = EmergencyBuyerContext {
-                    country_reputation: buyer_rep,
-                    country_code: buyer_country_code.clone(),
-                    continent_id: buyer_continent_id,
-                    region_prestige: buyer_region_prestige,
-                    club_reputation_score: buyer_club_score,
-                    league_reputation: buyer_league_reputation,
-                    negotiator_skill: buyer_negotiator_skill,
-                    urgent,
-                    strictness,
-                    import_capacity: visibility.import_capacity(),
-                    country_id: buyer_country_id,
-                    foreign_slots_free: buyer_foreign_slots.free(),
-                };
-
-                let pick = EmergencyCandidatePicker::pick(
-                    candidates,
-                    signings,
-                    &rejected_locally,
-                    slot,
-                    &buyer_ctx,
-                    club.id,
-                    visibility,
-                    recorder,
-                );
-                let Some(best) = pick else {
-                    // No viable candidate for this slot this tick —
-                    // mark the group as empty so the planner moves to
-                    // the next-most-needed group on the next iteration.
-                    empty_groups.insert(slot.group);
-                    continue;
-                };
-
-                // Offered the role his arrival would give him. A side that
-                // cannot be fielded still takes who it can get, so a man
-                // who would otherwise read as surplus is the stop-gap.
-                let role = ladder
-                    .as_ref()
-                    .and_then(|l| BuyerRoleFit::arriving(l, best.ability, best.age, slot.group))
-                    .unwrap_or(BuyerRoleFit::Emergency);
-                let Some(pricing) = Self::emergency_offer_accepted(
-                    best,
-                    slot,
-                    club,
-                    role,
-                    buyer_club_score,
-                    buyer_league_reputation,
-                    buyer_negotiator_skill,
-                    buyer_rep,
-                    global_offered_ids,
-                    global_rejected_ids,
-                    &mut rejected_locally,
-                ) else {
-                    continue;
-                };
-
-                signings.push(FreeAgentSigning {
-                    player_id: best.player_id,
-                    player_name: best.player_name.to_string(),
-                    from_club_id: best.club_id,
-                    from_club_name: best.club_name.to_string(),
-                    to_club_id: club.id,
-                    reason: TransferReason::key(slot.reason),
-                    terms: Some(pricing.signed_terms(best)),
-                    fills_group: Some(slot.group),
-                });
-                projected.apply_signing(slot.group);
-                club_signed += 1;
-                country_signed += 1;
-                debug!(
-                    "Emergency squad fill: club {} → player {} ({:?}, {}, wage={})",
-                    club.id, best.player_id, slot.group, slot.reason, pricing.offer_wage
-                );
-            }
+                signings,
+                global_offered_ids,
+                global_rejected_ids,
+                recorder,
+                &mut country_signed,
+                &mut depth_intents,
+            );
         }
-
         depth_intents
     }
 
@@ -1142,13 +1168,6 @@ impl FreeAgentPass {
         fitting.last().copied()
     }
 
-    /// Run one market-clearing tier over the long-tail pool. Soft and
-    /// hard tiers share this body; [`MarketClearingTier`] sets the
-    /// eligibility thresholds, the per-day cap, whether candidates are
-    /// restricted to the buyer country's domestic / continental market,
-    /// and whether the opportunistic squad-fit gate fires before an
-    /// offer is made.
-    #[allow(clippy::too_many_arguments)]
     fn run_market_clearing_tier(
         country: &Country,
         candidates: &[FreeAgentCandidate],
@@ -1171,7 +1190,6 @@ impl FreeAgentPass {
         let buyer_country_code = country.code.as_str();
         let buyer_region_prestige =
             ScoutingRegion::from_country(country.continent_id, &country.code).league_prestige();
-
         let eligible = Self::clearing_queue(
             candidates,
             &tier,
@@ -1186,11 +1204,6 @@ impl FreeAgentPass {
             if cleared >= tier.cap {
                 break;
             }
-
-            // Organic pacing, lifted by the anti-RNG pity bonus so a
-            // structurally-signable long-tail player isn't left waiting
-            // on dice alone, and by the peak-window bonus so summer
-            // clearing runs faster.
             let daily = FreeAgentMarketCalculator::daily_signing_chance(
                 candidate.career_pressure,
                 candidate.ability,
@@ -1202,128 +1215,174 @@ impl FreeAgentPass {
                 continue;
             }
 
-            let Some(rep_drop) = Self::clearing_realism_gates(
-                candidate,
-                buyer_country_reputation,
-                buyer_continent_id,
-                buyer_region_prestige,
-                visibility,
-                recorder,
-            ) else {
-                continue;
-            };
-
-            // How well each fitting club knows where he comes from —
-            // resolved per candidate, read per club below.
-            let candidate_market = ClearingMarketKnowledge {
+            let Some(offer) = Self::clearing_offer(
                 country,
-                map: market_map,
-                date,
-                nationality_country_id: candidate.nationality_country_id,
-                last_country_id: candidate.last_country_id,
-            };
-
-            let Some((buyer, min_ca, max_ca)) = Self::choose_clearing_buyer(
                 candidate,
                 buyers,
                 &tier,
-                &candidate_market,
+                visibility,
                 signings,
                 recorder,
+                market_map,
+                date,
+                buyer_country_reputation,
+                buyer_continent_id,
+                buyer_country_code,
+                buyer_region_prestige,
             ) else {
                 continue;
             };
-
-            // The buyer was chosen because the man has a role there;
-            // `choose_clearing_buyer` already refused every club where he
-            // would land surplus.
-            let Some(role) = buyer.clearing_role(candidate) else {
-                continue;
-            };
-            let pricing = FreeAgentOfferPricing::compute(
+            if Self::complete_clearing_signing(
                 candidate,
-                candidate.position_group,
-                role,
-                buyer.club_score,
-                buyer.league_reputation,
-                buyer.negotiator_skill,
-                buyer_country_reputation,
-            );
-
-            let wage_fit =
-                FreeAgentMarketCalculator::wage_score(pricing.offer_wage, pricing.reservation_wage);
-            let quality_fit =
-                FreeAgentMarketCalculator::quality_fit_score(candidate.ability, min_ca, max_ca);
-
-            if Self::opportunistic_gate_blocks(
-                &tier,
-                candidate,
-                buyer,
-                buyer_country_code,
-                buyer_continent_id,
-                wage_fit,
-                quality_fit,
+                &offer,
+                signings,
+                global_offered_ids,
+                global_rejected_ids,
                 recorder,
+                &tier,
             ) {
-                continue;
+                cleared += 1;
             }
-
-            let score = FreeAgentMarketCalculator::acceptance_score(
-                wage_fit,
-                FreeAgentMarketCalculator::role_score(pricing.role),
-                FreeAgentMarketCalculator::prestige_score(
-                    buyer_country_reputation,
-                    candidate.reference_reputation,
-                    rep_drop,
-                ),
-                quality_fit,
-                candidate.career_pressure,
-            );
-            let threshold =
-                FreeAgentMarketCalculator::acceptance_threshold(candidate.career_pressure);
-            let prob = FreeAgentMarketCalculator::acceptance_probability(score, threshold)
-                * candidate.floor_allows(buyer.league_reputation);
-            global_offered_ids.push(candidate.player_id);
-            let acceptance_roll = IntegerUtils::random(1, 1000) as f32 / 1000.0;
-            if acceptance_roll > prob {
-                global_rejected_ids.push(candidate.player_id);
-                recorder.record(
-                    candidate.player_id,
-                    if wage_fit < 0.35 {
-                        FreeAgentBlockReason::WageReservationMismatch
-                    } else {
-                        FreeAgentBlockReason::AcceptanceRollFailed
-                    },
-                );
-                continue;
-            }
-
-            signings.push(FreeAgentSigning {
-                player_id: candidate.player_id,
-                player_name: candidate.player_name.to_string(),
-                from_club_id: candidate.club_id,
-                from_club_name: candidate.club_name.to_string(),
-                to_club_id: buyer.club_id,
-                reason: TransferReason::key("free_agent_market_clearing"),
-                terms: Some(pricing.signed_terms(candidate)),
-                // No transfer request is being serviced — leave the
-                // request bookkeeping untouched.
-                fills_group: None,
-            });
-            cleared += 1;
-            debug!(
-                "Market clearing ({} tier): club {} signs long-term free agent {} (cp={:.2}, days_free={})",
-                if tier.opportunistic_gate {
-                    "soft"
-                } else {
-                    "hard"
-                },
-                buyer.club_id,
-                candidate.player_id,
-                candidate.career_pressure,
-                candidate.days_free
-            );
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn clearing_offer(
+        country: &Country,
+        candidate: &FreeAgentCandidate<'_>,
+        buyers: &[MarketClearingBuyer],
+        tier: &MarketClearingTier,
+        visibility: &FreeAgentMarketVisibility,
+        signings: &[FreeAgentSigning],
+        recorder: &mut BlockReasonRecorder,
+        market_map: &MarketMap,
+        date: NaiveDate,
+        buyer_country_reputation: u16,
+        buyer_continent_id: u32,
+        buyer_country_code: &str,
+        buyer_region_prestige: f32,
+    ) -> Option<ClearingOffer> {
+        let rep_drop = Self::clearing_realism_gates(
+            candidate,
+            buyer_country_reputation,
+            buyer_continent_id,
+            buyer_region_prestige,
+            visibility,
+            recorder,
+        )?;
+        let candidate_market = ClearingMarketKnowledge {
+            country,
+            map: market_map,
+            date,
+            nationality_country_id: candidate.nationality_country_id,
+            last_country_id: candidate.last_country_id,
+        };
+        let (buyer, min_ca, max_ca) = Self::choose_clearing_buyer(
+            candidate,
+            buyers,
+            tier,
+            &candidate_market,
+            signings,
+            recorder,
+        )?;
+        let role = buyer.clearing_role(candidate)?;
+        let pricing = FreeAgentOfferPricing::compute(
+            candidate,
+            candidate.position_group,
+            role,
+            buyer.club_score,
+            buyer.league_reputation,
+            buyer.negotiator_skill,
+            buyer_country_reputation,
+        );
+        let wage_fit =
+            FreeAgentMarketCalculator::wage_score(pricing.offer_wage, pricing.reservation_wage);
+        let quality_fit =
+            FreeAgentMarketCalculator::quality_fit_score(candidate.ability, min_ca, max_ca);
+        if Self::opportunistic_gate_blocks(
+            tier,
+            candidate,
+            buyer,
+            buyer_country_code,
+            buyer_continent_id,
+            wage_fit,
+            quality_fit,
+            recorder,
+        ) {
+            return None;
+        }
+        Some(ClearingOffer {
+            buyer_club_id: buyer.club_id,
+            buyer_league_reputation: buyer.league_reputation,
+            buyer_country_reputation,
+            pricing,
+            rep_drop,
+            wage_fit,
+            quality_fit,
+        })
+    }
+
+    fn complete_clearing_signing(
+        candidate: &FreeAgentCandidate<'_>,
+        offer: &ClearingOffer,
+        signings: &mut Vec<FreeAgentSigning>,
+        global_offered_ids: &mut Vec<u32>,
+        global_rejected_ids: &mut Vec<u32>,
+        recorder: &mut BlockReasonRecorder,
+        tier: &MarketClearingTier,
+    ) -> bool {
+        let score = FreeAgentMarketCalculator::acceptance_score(
+            offer.wage_fit,
+            FreeAgentMarketCalculator::role_score(offer.pricing.role),
+            FreeAgentMarketCalculator::prestige_score(
+                offer.buyer_country_reputation,
+                candidate.reference_reputation,
+                offer.rep_drop,
+            ),
+            offer.quality_fit,
+            candidate.career_pressure,
+        );
+        let threshold = FreeAgentMarketCalculator::acceptance_threshold(candidate.career_pressure);
+        let prob = FreeAgentMarketCalculator::acceptance_probability(score, threshold)
+            * candidate.floor_allows(offer.buyer_league_reputation);
+        global_offered_ids.push(candidate.player_id);
+        let acceptance_roll = IntegerUtils::random(1, 1000) as f32 / 1000.0;
+        if acceptance_roll > prob {
+            global_rejected_ids.push(candidate.player_id);
+            recorder.record(
+                candidate.player_id,
+                if offer.wage_fit < 0.35 {
+                    FreeAgentBlockReason::WageReservationMismatch
+                } else {
+                    FreeAgentBlockReason::AcceptanceRollFailed
+                },
+            );
+            return false;
+        }
+
+        signings.push(FreeAgentSigning {
+            player_id: candidate.player_id,
+            player_name: candidate.player_name.to_string(),
+            from_club_id: candidate.club_id,
+            from_club_name: candidate.club_name.to_string(),
+            to_club_id: offer.buyer_club_id,
+            reason: TransferReason::key("free_agent_market_clearing"),
+            terms: Some(offer.pricing.signed_terms(candidate)),
+            fills_group: None,
+        });
+        debug!(
+            "Market clearing ({} tier): club {} signs long-term free agent {} (cp={:.2}, days_free={})",
+            if tier.opportunistic_gate {
+                "soft"
+            } else {
+                "hard"
+            },
+            offer.buyer_club_id,
+            candidate.player_id,
+            candidate.career_pressure,
+            candidate.days_free
+        );
+        true
     }
 
     /// Long-tail candidates eligible for this tier, most desperate first. The
@@ -2931,161 +2990,154 @@ impl GlobalFreeAgentPool {
         data: &mut SimulatorData,
         date: NaiveDate,
     ) -> Vec<GlobalFreeAgentSummary> {
-        // Pass 1 (immutable): resolve nationality info per unique country
-        // in parallel. Two-stage resolve mirrors the rest of the transfer
-        // pipeline: an active country (full `Country`) first, then the
-        // lighter `country_info` map. Without the second stage, the gates
-        // fall back to permissive defaults and an Argentinian free agent
-        // slips through to a Mali buyer. Build a cache keyed by country_id
-        // so the mutable pass below doesn't need a SimulatorData borrow.
-        let unique_country_ids: FxHashSet<u32> =
-            data.free_agents.iter().map(|p| p.country_id).collect();
-        let nationality_cache: FxHashMap<u32, (u16, u32, String)> = {
-            let data_ref: &SimulatorData = data;
-            unique_country_ids
-                .into_par_iter()
-                .map(|cid| {
-                    let resolved = data_ref
-                        .country(cid)
-                        .map(|c| (c.reputation, c.continent_id, c.code.clone()))
-                        .or_else(|| {
-                            data_ref
-                                .country_info
-                                .get(&cid)
-                                .map(|c| (c.reputation, c.continent_id, c.code.clone()))
-                        })
-                        // Truly unknown nationality: fail-closed on the rep
-                        // gate (`u16::MAX` blocks every buyer) and pin the
-                        // region to the most prestigious one so the
-                        // prestige gate also rejects, instead of opening
-                        // every door. Loudly: a player carrying this
-                        // fallback can NEVER be signed, so silent data
-                        // holes would read as "the market ignores him".
-                        .unwrap_or_else(|| {
-                            let first_report = UNKNOWN_NATIONALITY_WARNED
-                                .lock()
-                                .map(|mut seen| seen.insert(cid))
-                                .unwrap_or(true);
-                            if first_report {
-                                warn!(
-                                    "free-agent snapshot: unknown nationality country {cid} — \
-                                     affected players are blocked from every buyer until \
-                                     retirement resolves them"
-                                );
-                            } else {
-                                debug!("free-agent snapshot: unknown nationality country {cid}");
-                            }
-                            (u16::MAX, 1, "gb".to_string())
-                        });
-                    (cid, resolved)
-                })
-                .collect()
-        };
-
-        // Pass 2 (mutable on the pool only): seed market state for any
-        // free agent who arrived without it (database-only entries that
-        // never came through `on_release`), then build the snapshot row.
-        // Each iteration mutates only its own `Player`, so this runs in
-        // parallel safely.
+        let nationality_cache = Self::nationality_cache(data);
         data.free_agents
             .par_iter_mut()
-            .map(|player| {
-                let (nationality_rep, nationality_continent_id, nationality_country_code) =
-                    nationality_cache
-                        .get(&player.country_id)
-                        .cloned()
-                        .unwrap_or_else(|| (u16::MAX, 1, "gb".to_string()));
-                player.ensure_free_agent_state(date, nationality_rep);
-                // Unknown-nationality fallback can never pass the rep gate
-                // — stamp the diagnosis reason so the audit layer reports
-                // the data hole instead of a mysterious endless sit.
-                if nationality_rep == u16::MAX {
-                    player.on_market_blocked(date, FreeAgentBlockReason::UnknownNationality);
-                }
+            .map(|player| Self::summary_for_player(player, date, &nationality_cache))
+            .collect()
+    }
 
-                let career_pressure = player.career_pressure(date);
-                let (
-                    last_salary,
-                    last_country_reputation,
-                    last_league_reputation,
-                    days_free,
-                    last_country_id,
-                ) = player
-                    .free_agent_state()
-                    .map(|s| {
+    fn nationality_cache(data: &SimulatorData) -> FxHashMap<u32, (u16, u32, String)> {
+        let unique_country_ids: FxHashSet<u32> = data
+            .free_agents
+            .iter()
+            .map(|player| player.country_id)
+            .collect();
+        unique_country_ids
+            .into_par_iter()
+            .map(|country_id| {
+                let resolved = data
+                    .country(country_id)
+                    .map(|country| {
                         (
-                            s.last_salary,
-                            s.last_country_reputation,
-                            s.last_league_reputation,
-                            (date - s.free_since).num_days().max(0),
-                            // A database free agent who never held a modelled
-                            // contract has no last league; his own country is
-                            // the only market he is known in, which is the
-                            // truth about him rather than a fallback.
-                            s.last_country_id.unwrap_or(player.country_id),
+                            country.reputation,
+                            country.continent_id,
+                            country.code.clone(),
                         )
                     })
-                    .unwrap_or((
-                        0,
-                        nationality_rep,
-                        ((nationality_rep as f32) * 0.75) as u16,
-                        0,
-                        player.country_id,
-                    ));
-                // Time on the market erodes the old-league prestige the
-                // country/region gates key on — see
-                // `decayed_reference_reputation`. (The unknown-nationality
-                // u16::MAX sentinel survives the decay: 55% of MAX still
-                // out-reps every buyer, so the fail-closed block holds.)
-                let reference_reputation = FreeAgentMarketCalculator::decayed_reference_reputation(
-                    player.reference_reputation(nationality_rep),
-                    days_free,
-                );
-                let failed_approach_streak = player
-                    .free_agent_state()
-                    .map(|s| s.failed_approach_streak)
-                    .unwrap_or(0);
-
-                let let_go_by = player
-                    .free_agent_state()
-                    .and_then(|state| state.last_club_id)
-                    .filter(|_| days_free <= FreeAgentCandidate::LET_GO_STANDS_DAYS)
-                    .unwrap_or(0);
-
-                GlobalFreeAgentSummary {
-                    level_floor: player.free_agent_floor(date, career_pressure),
-                    let_go_by,
-                    player_id: player.id,
-                    player_name: player.full_name.to_string(),
-                    ability: player.player_attributes.current_ability,
-                    // Observable ceiling — pool matchers are club decisions
-                    // and must not see hidden biological PA.
-                    potential: PotentialEstimator::observable_ceiling(player, date),
-                    age: player.age(date),
-                    position_group: player.position().position_group(),
-                    nationality_country_reputation: nationality_rep,
-                    nationality_continent_id,
-                    nationality_region: ScoutingRegion::from_country(
-                        nationality_continent_id,
-                        &nationality_country_code,
-                    ),
-                    nationality_country_code,
-                    nationality_country_id: player.country_id,
-                    career_pressure,
-                    days_free,
-                    reference_reputation,
-                    last_salary,
-                    last_country_reputation,
-                    last_league_reputation,
-                    world_reputation: player.player_attributes.world_reputation,
-                    current_reputation: player.player_attributes.current_reputation,
-                    professionalism_norm: (player.attributes.professionalism / 20.0)
-                        .clamp(0.0, 1.0),
-                    failed_approach_streak,
-                    last_country_id,
-                }
+                    .or_else(|| {
+                        data.country_info.get(&country_id).map(|country| {
+                            (
+                                country.reputation,
+                                country.continent_id,
+                                country.code.clone(),
+                            )
+                        })
+                    })
+                    .unwrap_or_else(|| {
+                        let first_report = UNKNOWN_NATIONALITY_WARNED
+                            .lock()
+                            .map(|mut seen| seen.insert(country_id))
+                            .unwrap_or(true);
+                        if first_report {
+                            warn!(
+                                "free-agent snapshot: unknown nationality country {country_id} — \
+                                 affected players are blocked from every buyer until \
+                                 retirement resolves them"
+                            );
+                        } else {
+                            debug!("free-agent snapshot: unknown nationality country {country_id}");
+                        }
+                        (u16::MAX, 1, "gb".to_string())
+                    });
+                (country_id, resolved)
             })
             .collect()
+    }
+
+    fn summary_for_player(
+        player: &mut Player,
+        date: NaiveDate,
+        nationality_cache: &FxHashMap<u32, (u16, u32, String)>,
+    ) -> GlobalFreeAgentSummary {
+        let (nationality_rep, nationality_continent_id, nationality_country_code) =
+            nationality_cache
+                .get(&player.country_id)
+                .cloned()
+                .unwrap_or_else(|| (u16::MAX, 1, "gb".to_string()));
+        player.ensure_free_agent_state(date, nationality_rep);
+        if nationality_rep == u16::MAX {
+            player.on_market_blocked(date, FreeAgentBlockReason::UnknownNationality);
+        }
+
+        let career_pressure = player.career_pressure(date);
+        let (
+            last_salary,
+            last_country_reputation,
+            last_league_reputation,
+            days_free,
+            last_country_id,
+        ) = Self::market_state_facts(player, date, nationality_rep);
+        let reference_reputation = FreeAgentMarketCalculator::decayed_reference_reputation(
+            player.reference_reputation(nationality_rep),
+            days_free,
+        );
+        let failed_approach_streak = player
+            .free_agent_state()
+            .map(|state| state.failed_approach_streak)
+            .unwrap_or(0);
+        let let_go_by = player
+            .free_agent_state()
+            .and_then(|state| state.last_club_id)
+            .filter(|_| days_free <= FreeAgentCandidate::LET_GO_STANDS_DAYS)
+            .unwrap_or(0);
+
+        GlobalFreeAgentSummary {
+            level_floor: player.free_agent_floor(date, career_pressure),
+            let_go_by,
+            player_id: player.id,
+            player_name: player.full_name.to_string(),
+            ability: player.player_attributes.current_ability,
+            potential: PotentialEstimator::observable_ceiling(player, date),
+            age: player.age(date),
+            position_group: player.position().position_group(),
+            nationality_country_reputation: nationality_rep,
+            nationality_continent_id,
+            nationality_region: ScoutingRegion::from_country(
+                nationality_continent_id,
+                &nationality_country_code,
+            ),
+            nationality_country_code,
+            nationality_country_id: player.country_id,
+            career_pressure,
+            days_free,
+            reference_reputation,
+            last_salary,
+            last_country_reputation,
+            last_league_reputation,
+            world_reputation: player.player_attributes.world_reputation,
+            current_reputation: player.player_attributes.current_reputation,
+            professionalism_norm: (player.attributes.professionalism / 20.0).clamp(0.0, 1.0),
+            failed_approach_streak,
+            last_country_id,
+        }
+    }
+
+    fn market_state_facts(
+        player: &Player,
+        date: NaiveDate,
+        nationality_rep: u16,
+    ) -> (u32, u16, u16, i64, u32) {
+        player
+            .free_agent_state()
+            .map(|state| {
+                (
+                    state.last_salary,
+                    state.last_country_reputation,
+                    state.last_league_reputation,
+                    date.signed_duration_since(state.free_since)
+                        .num_days()
+                        .max(0),
+                    state.last_country_id.unwrap_or(player.country_id),
+                )
+            })
+            .unwrap_or((
+                0,
+                nationality_rep,
+                ((nationality_rep as f32) * 0.75) as u16,
+                0,
+                player.country_id,
+            ))
     }
 
     /// Resolve the buying club's `TeamInfo` and league reputation from a

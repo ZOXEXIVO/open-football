@@ -1,12 +1,10 @@
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{
+use crate::r#match::midfielders::states::shared::{
     ActivityIntensity, LaneAhead, MidfielderCondition, MidfielderRead, Opportunity, TakeOn, U_PER_M,
 };
-use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
-    ShotDecision, evaluate_forward_shot_decision,
-};
-use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
-use crate::r#match::player::strategies::common::states::EngagementClock;
+use crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::ShotDecision;
+use crate::r#match::player::strategies::shared::players::ops::midfielder_skill::MidfielderSkillProfile;
+use crate::r#match::player::strategies::shared::states::EngagementClock;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -45,7 +43,7 @@ impl StateProcessingHandler for MidfielderDribblingState {
         // alone produced ~26% of all MID shots and helped balloon the
         // MID goal share to 45% (target 32%). Routing through the helper
         // keeps the chance-quality logic in ONE place.
-        if let ShotDecision::Shoot { reason } = evaluate_forward_shot_decision(ctx, "MID_DRIB") {
+        if let ShotDecision::Shoot { reason } = ShotDecision::evaluate(ctx, "MID_DRIB") {
             return Some(
                 StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
                     .with_shot_reason(reason),

@@ -14,7 +14,7 @@ use crate::{Player, TeamType};
 use chrono::NaiveDate;
 
 use super::impressions::CoachDecisionState;
-use crate::club::staff::perception::{PlayerBias, date_to_week};
+use crate::club::staff::perception::{PerceptionNoise, PlayerBias};
 
 impl CoachDecisionState {
     /// Lens-weighted skill composite using the coach's perception lens
@@ -127,7 +127,7 @@ impl CoachDecisionState {
 
     /// Perceived quality: lens-weighted, bias-shifted, sticky noise, attitude bleed
     pub fn perceived_quality(&self, player: &Player, date: NaiveDate) -> f32 {
-        let week = date_to_week(date);
+        let week = PerceptionNoise::week(date);
 
         let (
             quality_offset,
@@ -270,7 +270,7 @@ impl CoachDecisionState {
     pub fn potential_impression(&self, player: &Player, date: NaiveDate) -> f32 {
         let quality = self.perceived_quality(player, date);
         let age = DateUtils::age(player.birth_date, date);
-        let week = date_to_week(date);
+        let week = PerceptionNoise::week(date);
 
         let age_bonus = match age {
             0..=15 => 1.5,

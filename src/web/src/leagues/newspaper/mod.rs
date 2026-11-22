@@ -1,7 +1,7 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::leagues::address::{LeagueAddress, LeaguePage};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::teams::newspaper::{IssueView, PaperFor, PressDesk, PressFocus};
 use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n, NewsI18n};
@@ -50,88 +50,92 @@ pub struct LeagueNewspaperTemplate {
     pub issues: Vec<IssueView>,
 }
 
-pub async fn league_newspaper_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<LeagueNewspaperRequest>,
-) -> ApiResult<Response> {
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let news = state.news_i18n.for_lang(&route_params.lang);
-    let guard = state.data.read().await;
+pub struct LeagueNewspaperPage;
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+impl LeagueNewspaperPage {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<LeagueNewspaperRequest>,
+    ) -> ApiResult<Response> {
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let news = state.news_i18n.for_lang(&route_params.lang);
+        let guard = state.data.read().await;
 
-    let (league, country) = match LeagueAddress::resolve(
-        simulator_data,
-        &route_params.lang,
-        &route_params.country_slug,
-        &route_params.league_slug,
-        "/newspaper",
-    )? {
-        LeaguePage::Found(league, country) => (league, country),
-        LeaguePage::Moved(response) => return Ok(response),
-    };
-    let league_url = LeagueAddress::new(&country.slug, &league.slug).url(&route_params.lang);
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let league_title = views::league_display_name(league, &i18n, simulator_data);
-    let masthead = PressDesk::masthead(league.newsroom.masthead_key(), &league.name, &news);
-    let issues = LeaguePress::typeset(simulator_data, league, &masthead, &i18n, &news);
+        let (league, country) = match LeagueAddress::resolve(
+            simulator_data,
+            &route_params.lang,
+            &route_params.country_slug,
+            &route_params.league_slug,
+            "/newspaper",
+        )? {
+            LeaguePage::Found(league, country) => (league, country),
+            LeaguePage::Moved(response) => return Ok(response),
+        };
+        let league_url = LeagueAddress::new(&country.slug, &league.slug).url(&route_params.lang);
 
-    Ok(LeagueNewspaperTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        title: format!("{} — {}", league_title, i18n.t("news")),
-        masthead,
-        sub_title_prefix: String::new(),
-        sub_title_suffix: String::new(),
-        sub_title: country.name.clone(),
-        sub_title_link: format!("/{}/countries/{}", route_params.lang, country.slug),
-        sub_title_flag: Some(SubTitleFlag::of(country, &route_params.lang)),
-        header_color: country.background_color.clone(),
-        foreground_color: country.foreground_color.clone(),
-        menu_sections: {
-            let mut cl: Vec<(u32, &str, &str)> = country
-                .leagues
-                .leagues
-                .iter()
-                .filter(|l| !l.friendly)
-                .map(|l| (l.id, l.name.as_str(), l.slug.as_str()))
-                .collect();
-            cl.sort_by_key(|(id, _, _)| *id);
-            let cl_refs: Vec<(&str, &str)> = cl.iter().map(|(_, n, s)| (*n, *s)).collect();
-            let current_path = format!("{}/newspaper", league_url);
-            let mp = views::MenuParams {
-                i18n: &i18n,
-                lang: &route_params.lang,
-                current_path: &current_path,
-                country_name: &country.name,
-                country_slug: &country.slug,
-            };
-            views::league_menu(
-                &mp,
-                &cl_refs,
-                country
-                    .domestic_cup
-                    .as_ref()
-                    .map(|c| (c.league.name.as_str(), c.league.slug.as_str())),
-                &country
-                    .playoffs
+        let league_title = views::Menus::league_display_name(league, &i18n, simulator_data);
+        let masthead = PressDesk::masthead(league.newsroom.masthead_key(), &league.name, &news);
+        let issues = LeaguePress::typeset(simulator_data, league, &masthead, &i18n, &news);
+
+        Ok(LeagueNewspaperTemplate {
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
+            cpu_brand: &CPU_BRAND,
+            cores_count: *CPU_CORES,
+            title: format!("{} — {}", league_title, i18n.t("news")),
+            masthead,
+            sub_title_prefix: String::new(),
+            sub_title_suffix: String::new(),
+            sub_title: country.name.clone(),
+            sub_title_link: format!("/{}/countries/{}", route_params.lang, country.slug),
+            sub_title_flag: Some(SubTitleFlag::of(country, &route_params.lang)),
+            header_color: country.background_color.clone(),
+            foreground_color: country.foreground_color.clone(),
+            menu_sections: {
+                let mut cl: Vec<(u32, &str, &str)> = country
+                    .leagues
+                    .leagues
                     .iter()
-                    .map(|p| (p.league.name.as_str(), p.league.slug.as_str()))
-                    .collect::<Vec<_>>(),
-            )
-        },
-        league_url,
-        newspaper_count: LeagueNewspaperCounter::count(league),
-        issues,
-        lang: route_params.lang,
-        i18n,
-        news,
+                    .filter(|l| !l.friendly)
+                    .map(|l| (l.id, l.name.as_str(), l.slug.as_str()))
+                    .collect();
+                cl.sort_by_key(|(id, _, _)| *id);
+                let cl_refs: Vec<(&str, &str)> = cl.iter().map(|(_, n, s)| (*n, *s)).collect();
+                let current_path = format!("{}/newspaper", league_url);
+                let mp = views::MenuParams {
+                    i18n: &i18n,
+                    lang: &route_params.lang,
+                    current_path: &current_path,
+                    country_name: &country.name,
+                    country_slug: &country.slug,
+                };
+                views::Menus::league_menu(
+                    &mp,
+                    &cl_refs,
+                    country
+                        .domestic_cup
+                        .as_ref()
+                        .map(|c| (c.league.name.as_str(), c.league.slug.as_str())),
+                    &country
+                        .playoffs
+                        .iter()
+                        .map(|p| (p.league.name.as_str(), p.league.slug.as_str()))
+                        .collect::<Vec<_>>(),
+                )
+            },
+            league_url,
+            newspaper_count: LeagueNewspaperCounter::count(league),
+            issues,
+            lang: route_params.lang,
+            i18n,
+            news,
+        }
+        .into_response())
     }
-    .into_response())
 }
 
 /// How many monthly editions the division has on the shelf, for the

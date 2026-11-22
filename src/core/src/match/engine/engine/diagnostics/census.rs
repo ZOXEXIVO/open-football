@@ -314,7 +314,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         field: &MatchField,
         context: &MatchContext,
     ) {
-        use crate::r#match::common_states::TackleEngagement;
+        use crate::r#match::shared_states::TackleEngagement;
         use crate::mid_run_diag::DuelDiag;
 
         /// Close enough to be in the picture the report describes. 24u = 3 m.
@@ -493,7 +493,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                             | ForwardFamily::Aerial
                             | ForwardFamily::Play => 7,
                         },
-                        PlayerState::Defender(DefenderState::Jockeying | DefenderState::Tackling) => 0,
+                        PlayerState::Defender(
+                            DefenderState::Jockeying | DefenderState::Tackling,
+                        ) => 0,
                         PlayerState::Defender(DefenderState::Pressing) => 1,
                         PlayerState::Defender(DefenderState::Marking) => 2,
                         PlayerState::Defender(DefenderState::Covering) => 3,
@@ -792,9 +794,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 | MidfielderFamily::Chase
                 | MidfielderFamily::Intercept
                 | MidfielderFamily::Aerial => 6,
-                MidfielderFamily::Recover
-                | MidfielderFamily::Support
-                | MidfielderFamily::Play => 7,
+                MidfielderFamily::Recover | MidfielderFamily::Support | MidfielderFamily::Play => 7,
             },
             PlayerState::Forward(s) => match s.family() {
                 ForwardFamily::Start => 1,
@@ -805,9 +805,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 | ForwardFamily::Chase
                 | ForwardFamily::Intercept
                 | ForwardFamily::Aerial => 6,
-                ForwardFamily::Recover
-                | ForwardFamily::Job
-                | ForwardFamily::Play => 7,
+                ForwardFamily::Recover | ForwardFamily::Job | ForwardFamily::Play => 7,
             },
             PlayerState::Defender(DefenderState::Marking) => 0,
             PlayerState::Defender(DefenderState::Standing) => 1,

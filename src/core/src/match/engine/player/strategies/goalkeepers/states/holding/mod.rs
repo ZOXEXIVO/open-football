@@ -2,12 +2,12 @@ use crate::r#match::engine::ball::ball::HandlingVerdict;
 use crate::r#match::engine::flow::context::MATCH_TIME_INCREMENT_MS;
 use crate::r#match::engine::officiating::management::TimeWastingRestart;
 use crate::r#match::events::Event;
-use crate::r#match::player::events::PlayerEvent;
-use crate::r#match::goalkeepers::states::common::{
+use crate::r#match::goalkeepers::states::shared::{
     ActivityIntensity, GoalkeeperCondition, KeeperAppetite, KeeperFeetDecision, KeeperRelease,
     KeeperSetPosition,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
+use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,

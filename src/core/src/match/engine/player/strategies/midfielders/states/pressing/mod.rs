@@ -1,8 +1,8 @@
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{
+use crate::r#match::midfielders::states::shared::{
     ActivityIntensity, MidfielderCondition, MidfielderRead, ReadLevel,
 };
-use crate::r#match::player::strategies::common::states::{
+use crate::r#match::player::strategies::shared::states::{
     ChallengeKind, ClosingPoint, RecoveryChallenge, TackleEngagement,
 };
 use crate::r#match::{

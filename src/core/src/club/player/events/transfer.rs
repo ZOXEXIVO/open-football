@@ -16,17 +16,15 @@ use crate::club::board::mandate::SigningMandate;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::player::adaptation::PendingSigning;
 use crate::club::player::calculators::WageCalculator;
-use crate::club::player::contract::contract::{
-    ContractBonus, ContractClause, ContractClauseType, is_inert_bonus, is_inert_clause,
-};
+use crate::club::player::contract::contract::{ContractBonus, ContractClause, ContractClauseType};
 use crate::club::player::mind::SpellChange;
 use crate::club::player::player::{Player, SellOnObligation};
 use crate::club::staff::perception::PotentialEstimator;
 use crate::transfers::deal::offer::{PersonalTermsOffer, PromisedSquadStatus};
 use crate::transfers::gate::TermsRefusalCause;
 use crate::{
-    ContractBonusType, HappinessEventType, Person, PlayerHappiness, PlayerPlan, PlayerSquadStatus,
-    PlayerStatusType,
+    ContractBonusType, HappinessEventType, Person, PlayerHappiness, PlayerPlan, PlayerPositionType,
+    PlayerSquadStatus, PlayerStatusType,
 };
 
 impl Player {
@@ -536,35 +534,18 @@ impl Player {
         personal_terms: Option<&PersonalTermsOffer>,
     ) {
         let age = self.age(date);
-        let years = personal_terms.and_then(|t| t.contract_years).unwrap_or({
-            if age < 24 {
-                5
-            } else if age < 28 {
-                4
-            } else if age < 32 {
-                3
-            } else {
-                2
-            }
-        });
+        let years = Self::transfer_contract_years(age, personal_terms);
         let expiry = date
-            .checked_add_signed(Duration::days(years as i64 * 365))
+            .checked_add_signed(Duration::days(years * 365))
             .unwrap_or(date);
 
-        // Resolved wage: structured terms beat the loose `agreed_wage`
-        // argument; both beat the calculator fallback.
-        let resolved_wage = personal_terms
-            .and_then(|t| t.annual_wage)
-            .or(agreed_wage)
-            .unwrap_or_else(|| {
-                let club_score = (buying_club_reputation as f32 / 10_000.0).clamp(0.0, 1.0);
-                WageCalculator::expected_annual_wage(
-                    self,
-                    age,
-                    club_score,
-                    buying_league_reputation,
-                )
-            });
+        let resolved_wage = self.resolve_transfer_wage(
+            age,
+            buying_club_reputation,
+            buying_league_reputation,
+            agreed_wage,
+            personal_terms,
+        );
         let mut contract = PlayerClubContract::new(resolved_wage, expiry);
         // Stamp the contract with its real start date so the wage-envy
         // grace window, yearly-rise anniversary, and loyalty-bonus
@@ -580,65 +561,120 @@ impl Player {
         // renewals. Without this every transfer signs a bare
         // salary/years deal and never pays a goal/clean-sheet/loyalty
         // bonus.
-        install_transfer_package(&mut contract, self, age, buying_club_reputation, date);
+        contract.install_transfer_package(self, age, buying_club_reputation, date);
 
-        // Honour the staged personal-terms additions.
         if let Some(terms) = personal_terms {
-            // Signing bonus stacks: if the profile already wrote one,
-            // the explicit personal-terms amount replaces it so the
-            // negotiated number sticks.
-            if let Some(amount) = terms.signing_bonus {
-                contract
-                    .bonuses
-                    .retain(|b| !matches!(b.bonus_type, ContractBonusType::SigningBonus));
-                contract.bonuses.push(ContractBonus::new(
-                    amount as i32,
-                    ContractBonusType::SigningBonus,
-                ));
-            }
-            // Release clause replaces any auto-installed one (the
-            // negotiation explicitly settled on this number).
-            if let Some(fee) = terms.release_clause_fee {
-                contract
-                    .clauses
-                    .retain(|c| !matches!(c.bonus_type, ContractClauseType::MinimumFeeRelease));
-                contract.clauses.push(ContractClause::new(
-                    fee as i32,
-                    ContractClauseType::MinimumFeeRelease,
-                ));
-            }
-            // Role promise — written onto the contract as Day-1 squad
-            // status. Without this the player walks in as `NotYetSet`
-            // and the next role-fit tick may downgrade them despite
-            // the buyer's promise.
-            if let Some(promise) = terms.squad_status_promise {
-                let promised = match promise {
-                    PromisedSquadStatus::KeyPlayer => PlayerSquadStatus::KeyPlayer,
-                    PromisedSquadStatus::FirstTeamRegular => PlayerSquadStatus::FirstTeamRegular,
-                    PromisedSquadStatus::MainBackupPlayer => PlayerSquadStatus::MainBackupPlayer,
-                    PromisedSquadStatus::FirstTeamSquadRotation => {
-                        PlayerSquadStatus::FirstTeamSquadRotation
-                    }
-                    PromisedSquadStatus::HotProspectForTheFuture => {
-                        PlayerSquadStatus::HotProspectForTheFuture
-                    }
-                };
-                contract.squad_status = promised.clone();
-                // Bind the promise for a season so the monthly CA-rank pass
-                // can't quietly demote below it (see
-                // PlayerClubContract::promised_squad_status). A broken promise
-                // then surfaces as real playing-time unhappiness instead of
-                // being silently absorbed by the recompute.
-                let until = date
-                    .checked_add_signed(Duration::days(PlayerClubContract::PROMISE_BINDING_DAYS))
-                    .unwrap_or(date);
-                contract.promised_squad_status = Some((promised, until));
-            }
+            Self::apply_personal_terms(&mut contract, terms, date);
         }
 
-        // Anchor international-cap baseline so any cap bonus added to
-        // this fresh contract pays only on FUTURE caps, not on the
-        // ones the player accumulated before the transfer.
+        self.anchor_international_cap_baseline(&contract);
+        self.contract = Some(contract);
+        self.contract_loan = None;
+    }
+
+    /// Age-banded contract length, overridden by an explicitly agreed
+    /// number of years.
+    fn transfer_contract_years(age: u8, personal_terms: Option<&PersonalTermsOffer>) -> i64 {
+        personal_terms.and_then(|t| t.contract_years).unwrap_or({
+            if age < 24 {
+                5
+            } else if age < 28 {
+                4
+            } else if age < 32 {
+                3
+            } else {
+                2
+            }
+        }) as i64
+    }
+
+    /// Resolved wage: structured terms beat the loose `agreed_wage`
+    /// argument; both beat the calculator fallback.
+    fn resolve_transfer_wage(
+        &self,
+        age: u8,
+        buying_club_reputation: u16,
+        buying_league_reputation: u16,
+        agreed_wage: Option<u32>,
+        personal_terms: Option<&PersonalTermsOffer>,
+    ) -> u32 {
+        personal_terms
+            .and_then(|t| t.annual_wage)
+            .or(agreed_wage)
+            .unwrap_or_else(|| {
+                let club_score = (buying_club_reputation as f32 / 10_000.0).clamp(0.0, 1.0);
+                WageCalculator::expected_annual_wage(
+                    self,
+                    age,
+                    club_score,
+                    buying_league_reputation,
+                )
+            })
+    }
+
+    /// Honour the staged personal-terms additions on top of the profile
+    /// package.
+    fn apply_personal_terms(
+        contract: &mut PlayerClubContract,
+        terms: &PersonalTermsOffer,
+        date: NaiveDate,
+    ) {
+        // Signing bonus stacks: if the profile already wrote one,
+        // the explicit personal-terms amount replaces it so the
+        // negotiated number sticks.
+        if let Some(amount) = terms.signing_bonus {
+            contract
+                .bonuses
+                .retain(|b| !matches!(b.bonus_type, ContractBonusType::SigningBonus));
+            contract.bonuses.push(ContractBonus::new(
+                amount as i32,
+                ContractBonusType::SigningBonus,
+            ));
+        }
+        // Release clause replaces any auto-installed one (the
+        // negotiation explicitly settled on this number).
+        if let Some(fee) = terms.release_clause_fee {
+            contract
+                .clauses
+                .retain(|c| !matches!(c.bonus_type, ContractClauseType::MinimumFeeRelease));
+            contract.clauses.push(ContractClause::new(
+                fee as i32,
+                ContractClauseType::MinimumFeeRelease,
+            ));
+        }
+        // Role promise — written onto the contract as Day-1 squad
+        // status. Without this the player walks in as `NotYetSet`
+        // and the next role-fit tick may downgrade them despite
+        // the buyer's promise.
+        if let Some(promise) = terms.squad_status_promise {
+            let promised = match promise {
+                PromisedSquadStatus::KeyPlayer => PlayerSquadStatus::KeyPlayer,
+                PromisedSquadStatus::FirstTeamRegular => PlayerSquadStatus::FirstTeamRegular,
+                PromisedSquadStatus::MainBackupPlayer => PlayerSquadStatus::MainBackupPlayer,
+                PromisedSquadStatus::FirstTeamSquadRotation => {
+                    PlayerSquadStatus::FirstTeamSquadRotation
+                }
+                PromisedSquadStatus::HotProspectForTheFuture => {
+                    PlayerSquadStatus::HotProspectForTheFuture
+                }
+            };
+            contract.squad_status = promised.clone();
+            // Bind the promise for a season so the monthly CA-rank pass
+            // can't quietly demote below it (see
+            // PlayerClubContract::promised_squad_status). A broken promise
+            // then surfaces as real playing-time unhappiness instead of
+            // being silently absorbed by the recompute.
+            let until = date
+                .checked_add_signed(Duration::days(PlayerClubContract::PROMISE_BINDING_DAYS))
+                .unwrap_or(date);
+            contract.promised_squad_status = Some((promised, until));
+        }
+    }
+
+    /// Anchor the international-cap baseline so any cap bonus added to
+    /// this fresh contract pays only on FUTURE caps, not on the ones the
+    /// player accumulated before the transfer.
+    fn anchor_international_cap_baseline(&mut self, contract: &PlayerClubContract) {
         if contract
             .bonuses
             .iter()
@@ -646,8 +682,6 @@ impl Player {
         {
             self.last_intl_caps_paid = self.player_attributes.international_apps;
         }
-        self.contract = Some(contract);
-        self.contract_loan = None;
     }
 
     /// Extend the parent contract (if needed) so it doesn't expire while the
@@ -687,130 +721,155 @@ impl Player {
 /// Relegation-risk clubs (low buying-club reputation) attach a
 /// relegation wage-drop clause so the cost-side trims if the club goes
 /// down. Top clubs don't need it.
-fn install_transfer_package(
-    contract: &mut PlayerClubContract,
-    player: &Player,
-    age: u8,
-    buying_club_reputation: u16,
-    date: NaiveDate,
-) {
-    let salary = contract.salary;
-    let pos = player.position();
-    let rep = player.player_attributes.current_reputation;
-    let ability = player.player_attributes.current_ability;
-    // Contract shape is a club decision — the prospect profile reads the
-    // observable ceiling, never the hidden biological PA.
-    let potential = PotentialEstimator::observable_ceiling(player, date);
-    let ambition = player.attributes.ambition;
-    let loyalty = player.attributes.loyalty;
-    let club_rep_score = (buying_club_reputation as f32 / 10_000.0).clamp(0.0, 1.0);
+impl PlayerClubContract {
+    fn install_transfer_package(
+        &mut self,
+        player: &Player,
+        age: u8,
+        buying_club_reputation: u16,
+        date: NaiveDate,
+    ) {
+        let salary = self.salary;
+        let pos = player.position();
+        let rep = player.player_attributes.current_reputation;
+        let ability = player.player_attributes.current_ability;
+        // Contract shape is a club decision — the prospect profile reads the
+        // observable ceiling, never the hidden biological PA.
+        let potential = PotentialEstimator::observable_ceiling(player, date);
+        let ambition = player.attributes.ambition;
+        let loyalty = player.attributes.loyalty;
+        let club_rep_score = (buying_club_reputation as f32 / 10_000.0).clamp(0.0, 1.0);
 
-    let is_star = rep > 5000 || ability >= 150;
-    let is_prospect = age <= 23 && potential >= 130;
-    let is_veteran = age >= 31;
+        if rep > 5000 || ability >= 150 {
+            self.install_star_package(salary, pos, ability, rep);
+        } else if age <= 23 && potential >= 130 {
+            self.install_prospect_package(ability, rep, ambition);
+        } else if age >= 31 {
+            self.install_veteran_package(salary, loyalty);
+        } else {
+            self.install_standard_package(salary);
+        }
 
-    if is_star {
-        // Signing + loyalty + position bonus + (large) release clause.
-        contract.bonuses.push(ContractBonus::new(
+        // Relegation-risk clubs add a wage-drop clause so the cost side
+        // trims if they go down. Threshold ≈ bottom-third of the league
+        // reputation distribution.
+        if club_rep_score < 0.35 {
+            self.clauses.push(ContractClause::new(
+                20,
+                ContractClauseType::RelegationWageDecrease,
+            ));
+        }
+
+        self.strip_inert_terms();
+    }
+
+    /// Star terms: signing + loyalty + position bonus + (large) release
+    /// clause.
+    fn install_star_package(
+        &mut self,
+        salary: u32,
+        pos: PlayerPositionType,
+        ability: u8,
+        reputation: i16,
+    ) {
+        self.bonuses.push(ContractBonus::new(
             ((salary as f32) * 0.30) as i32,
             ContractBonusType::SigningBonus,
         ));
-        contract.bonuses.push(ContractBonus::new(
+        self.bonuses.push(ContractBonus::new(
             ((salary as f32) * 0.15) as i32,
             ContractBonusType::LoyaltyBonus,
         ));
         if pos.is_forward() || pos.is_midfielder() {
-            contract.bonuses.push(ContractBonus::new(
+            self.bonuses.push(ContractBonus::new(
                 ((salary as f32) * 0.012) as i32,
                 ContractBonusType::GoalFee,
             ));
         } else if pos.is_goalkeeper() || pos.is_defender() {
-            contract.bonuses.push(ContractBonus::new(
+            self.bonuses.push(ContractBonus::new(
                 ((salary as f32) * 0.012) as i32,
                 ContractBonusType::CleanSheetFee,
             ));
         }
-        contract.bonuses.push(ContractBonus::new(
+        self.bonuses.push(ContractBonus::new(
             ((salary as f32) * 0.01) as i32,
             ContractBonusType::AppearanceFee,
         ));
-        let release_value = release_clause_value(ability, rep, 1.4);
-        contract.clauses.push(ContractClause::new(
+        let release_value = Self::release_clause_value(ability, reputation, 1.4);
+        self.clauses.push(ContractClause::new(
             release_value as i32,
             ContractClauseType::MinimumFeeRelease,
         ));
-    } else if is_prospect {
-        // Long progression — yearly rise, optional extension, apps step.
-        contract
-            .clauses
+    }
+
+    /// Prospect terms: long progression — yearly rise, optional
+    /// extension, apps step, and a release clause for ambitious ones.
+    fn install_prospect_package(&mut self, ability: u8, reputation: i16, ambition: f32) {
+        self.clauses
             .push(ContractClause::new(8, ContractClauseType::YearlyWageRise));
-        contract.clauses.push(ContractClause::new(
+        self.clauses.push(ContractClause::new(
             1,
             ContractClauseType::OptionalContractExtensionByClub,
         ));
-        contract.clauses.push(ContractClause::new_threshold_pct(
+        self.clauses.push(ContractClause::new_threshold_pct(
             50,
             25,
             ContractClauseType::WageAfterReachingClubCareerLeagueGames,
         ));
         if ambition >= 13.0 {
-            let release_value = release_clause_value(ability, rep, 1.0);
-            contract.clauses.push(ContractClause::new(
+            let release_value = Self::release_clause_value(ability, reputation, 1.0);
+            self.clauses.push(ContractClause::new(
                 release_value as i32,
                 ContractClauseType::MinimumFeeRelease,
             ));
         }
-    } else if is_veteran {
-        // Shorter-deal flavour — loyalty + appearance + extension on
-        // hitting a season's apps. No release clause; veterans don't
-        // negotiate them.
+    }
+
+    /// Veteran terms: shorter-deal flavour — loyalty + appearance +
+    /// extension on hitting a season's apps. No release clause;
+    /// veterans don't negotiate them.
+    fn install_veteran_package(&mut self, salary: u32, loyalty: f32) {
         if loyalty >= 10.0 {
-            contract.bonuses.push(ContractBonus::new(
+            self.bonuses.push(ContractBonus::new(
                 ((salary as f32) * 0.10) as i32,
                 ContractBonusType::LoyaltyBonus,
             ));
         }
-        contract.bonuses.push(ContractBonus::new(
+        self.bonuses.push(ContractBonus::new(
             ((salary as f32) * 0.02) as i32,
             ContractBonusType::AppearanceFee,
         ));
-        contract.clauses.push(ContractClause::new(
+        self.clauses.push(ContractClause::new(
             20,
             ContractClauseType::OneYearExtensionAfterLeagueGamesFinalSeason,
         ));
-    } else {
-        // Standard / backup — modest appearance + unused-sub fee.
-        contract.bonuses.push(ContractBonus::new(
+    }
+
+    /// Standard / backup terms: modest appearance + unused-sub fee.
+    fn install_standard_package(&mut self, salary: u32) {
+        self.bonuses.push(ContractBonus::new(
             ((salary as f32) * 0.04) as i32,
             ContractBonusType::AppearanceFee,
         ));
-        contract.bonuses.push(ContractBonus::new(
+        self.bonuses.push(ContractBonus::new(
             ((salary as f32) * 0.005) as i32,
             ContractBonusType::UnusedSubstitutionFee,
         ));
     }
 
-    // Relegation-risk clubs add a wage-drop clause so the cost side
-    // trims if they go down. Threshold ≈ bottom-third of the league
-    // reputation distribution.
-    if club_rep_score < 0.35 {
-        contract.clauses.push(ContractClause::new(
-            20,
-            ContractClauseType::RelegationWageDecrease,
-        ));
+    /// Final guard — strip any inert bonuses/clauses a future caller
+    /// might add. The is_inert_* lists are the source of truth for
+    /// "decorative without payout site"; the install path enforces it.
+    fn strip_inert_terms(&mut self) {
+        self.bonuses.retain(|b| !b.bonus_type.is_inert());
+        self.clauses.retain(|c| !c.bonus_type.is_inert());
     }
 
-    // Final guard — strip any inert bonuses/clauses a future caller
-    // might add. The is_inert_* lists are the source of truth for
-    // "decorative without payout site"; the install path enforces it.
-    contract.bonuses.retain(|b| !is_inert_bonus(&b.bonus_type));
-    contract.clauses.retain(|c| !is_inert_clause(&c.bonus_type));
-}
-
-fn release_clause_value(ability: u8, current_reputation: i16, scale: f32) -> u32 {
-    let base = (ability as u32) * (ability as u32) * 4_000;
-    let rep_boost = (current_reputation.max(0) as u32) * 8_000;
-    ((base + rep_boost) as f32 * scale) as u32
+    fn release_clause_value(ability: u8, current_reputation: i16, scale: f32) -> u32 {
+        let base = (ability as u32) * (ability as u32) * 4_000;
+        let rep_boost = (current_reputation.max(0) as u32) * 8_000;
+        ((base + rep_boost) as f32 * scale) as u32
+    }
 }
 
 #[cfg(test)]

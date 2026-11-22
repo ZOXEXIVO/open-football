@@ -1,8 +1,8 @@
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{
+use crate::r#match::forwarders::states::shared::{
     ActivityIntensity, ForwardCondition, ForwardRead,
 };
-use crate::r#match::player::strategies::common::players::ops::box_movement::BoxMovement;
+use crate::r#match::player::strategies::shared::players::ops::box_movement::BoxMovement;
 use crate::r#match::{
     ConditionContext, MatchContext, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -25,12 +25,14 @@ impl StateProcessingHandler for ForwardCrossReceivingState {
         let team = ctx.team();
         Some(match team.my_box_slot() {
             Some(slot) => BoxMovement::steer(ctx, slot),
-            None => SteeringBehavior::Arrive {
-                target: team.my_anchor(),
-                slowing_distance: 25.0,
+            None => {
+                SteeringBehavior::Arrive {
+                    target: team.my_anchor(),
+                    slowing_distance: 25.0,
+                }
+                .calculate(ctx.player)
+                .velocity
             }
-            .calculate(ctx.player)
-            .velocity,
         })
     }
 

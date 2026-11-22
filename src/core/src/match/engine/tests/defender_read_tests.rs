@@ -6,11 +6,8 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
-use crate::r#match::common_states::{
-    BlockChallenge, ChallengeKind, ShapeTempo, TackleEngagement, TackleOutcome,
-};
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{
+use crate::r#match::defenders::states::shared::{
     DefenderRead, DefensiveLine, DefensiveRecovery, DefensiveSlot, LineStep,
 };
 use crate::r#match::engine::ball::ball::{AwaitedRestart, PassOriginRestart, RestartQuiet};
@@ -36,6 +33,9 @@ use crate::r#match::player::strategies::players::ops::clearance::{
     DefensiveRelease, TouchlineCall,
 };
 use crate::r#match::player::transition::TransitionSource;
+use crate::r#match::shared_states::{
+    BlockChallenge, ChallengeKind, ShapeTempo, TackleEngagement, TackleOutcome,
+};
 use crate::r#match::{
     ActivityIntensity, ConditionContext, DefenceRefreshInputs, DefensiveDuty, DefensivePlan,
     GameTickContext, MatchContext, MatchField, MatchPlayerCollection, MatchRng, MovementEffort,

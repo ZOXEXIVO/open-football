@@ -1,7 +1,7 @@
 use crate::DatabaseEntity;
 use crate::generators::player::OdbPositionCode;
 use crate::generators::{PlayerGenerator, StaffGenerator};
-use crate::loaders::OdbPlayer;
+use crate::loaders::{ClubEntity, ClubTeamEntity, OdbPlayer, PlayersOdb};
 use chrono::{Datelike, Utc};
 use core::club::academy::ClubAcademy;
 use core::club::board::vision::VisionYouthFocus;
@@ -32,10 +32,15 @@ impl DatabaseGenerator {
         staff_generator: &StaffGenerator,
     ) -> Vec<Club> {
         let country_id = scout_seed.country_id;
-        let continent_id = scout_seed.continent_id;
-        let country_code = scout_seed.country_code;
-        let odb = data.players_odb.as_ref();
-        let now_year = Utc::now().date_naive().year();
+        let factory = ClubFactory {
+            scout_seed,
+            country_reputation,
+            data,
+            player_generator,
+            staff_generator,
+            odb: data.players_odb.as_ref(),
+            now_year: Utc::now().date_naive().year(),
+        };
 
         // Parallelise club construction: each club hydrates or generates 25-200
         // players across 1-5 teams plus 10-15 staff. Work is dominated by
@@ -46,286 +51,72 @@ impl DatabaseGenerator {
         data.clubs
             .par_iter()
             .filter(|c| c.country_id == country_id)
-            .map(|club| {
-                // Pre-distribute ODB players for this club into TeamType buckets.
-                // If the club has any ODB players, fake generation is skipped for
-                // every senior team (Main/Reserve/B/U20/U21/U23). Academy teams
-                // (U18/U19) always go through the existing generator regardless,
-                // because youth intake is owned by the academy system.
-                let odb_for_club: Option<HashMap<TeamType, Vec<OdbPlayer>>> = odb
-                    .and_then(|o| o.for_club(club.id))
-                    .filter(|players| !players.is_empty())
-                    .map(|players| {
-                        let available_team_types: Vec<TeamType> = club
-                            .teams
-                            .iter()
-                            .filter_map(|t| TeamType::from_str(&t.team_type).ok())
-                            .collect();
-                        // The club's own reputation stands in for its senior
-                        // bar wherever the source squad is too thin at a
-                        // position to state one — read from `club.json`,
-                        // like every other placement input.
-                        let club_reputation = club
-                            .teams
-                            .iter()
-                            .find(|t| t.team_type.eq_ignore_ascii_case("main"))
-                            .map(|t| {
-                                TeamReputation::new(
-                                    t.reputation.home,
-                                    t.reputation.national,
-                                    t.reputation.world,
-                                )
-                            })
-                            .unwrap_or_else(|| TeamReputation::new(0, 0, 0));
-                        OdbSquadPlacement::distribute(
-                            players,
-                            &available_team_types,
-                            now_year,
-                            club_reputation,
-                        )
-                    });
-
-                // Ground capacity: the data carries a typical gate, not a
-                // capacity, so gross it up. Falls back to a reputation
-                // estimate for clubs with no attendance record — never zero,
-                // or the club earns no matchday revenue at all.
-                let average_attendance = club.average_attendance.unwrap_or(0);
-                let club_reputation_score = club
-                    .teams
-                    .iter()
-                    .find(|t| t.team_type.eq_ignore_ascii_case("main"))
-                    .map(|t| t.reputation.world as f32 / 10_000.0)
-                    .unwrap_or(0.0);
-                let stadium_capacity =
-                    ClubFacilities::seed_capacity(average_attendance, club_reputation_score);
-
-                let facilities = match &club.facilities {
-                    Some(f) => ClubFacilities {
-                        training: FacilityLevel::from(f.training.as_str()),
-                        youth: FacilityLevel::from(f.youth.as_str()),
-                        academy: FacilityLevel::from(f.academy.as_str()),
-                        recruitment: FacilityLevel::from(f.recruitment.as_str()),
-                        average_attendance,
-                        stadium_capacity,
-                    },
-                    None => ClubFacilities {
-                        average_attendance,
-                        stadium_capacity,
-                        ..ClubFacilities::default()
-                    },
-                };
-
-                // Extract facility values for youth generation before facilities is moved
-                let academy_rating = facilities.academy.to_rating();
-
-                // What the club is FOR. The data says so when it says so;
-                // otherwise it is derived from the academy the club
-                // actually runs, exactly as `Club::new` and the monthly
-                // review derive it — a ladder of its own here and no
-                // loaded world has a club that trades players as a
-                // policy.
-                let philosophy = if let Some(ref p) = club.philosophy {
-                    match p.as_str() {
-                        "SignToCompete" => ClubPhilosophy::SignToCompete,
-                        "DevelopAndSell" => ClubPhilosophy::DevelopAndSell,
-                        "LoanFocused" => ClubPhilosophy::LoanFocused,
-                        _ => ClubPhilosophy::Balanced,
-                    }
-                } else {
-                    let academy = ClubAcademy::new(academy_rating);
-                    ClubPhilosophy::derive(
-                        VisionYouthFocus::Balanced,
-                        academy.tier().value(),
-                        academy.development_identity,
-                    )
-                };
-
-                let youth_quality = facilities.youth.multiplier();
-                let academy_quality = facilities.academy.multiplier();
-                let recruitment_quality = facilities.recruitment.multiplier();
-
-                let teams = TeamCollection::new(
-                    club.teams
-                        .iter()
-                        .map(|t| {
-                            let team_rep = t.reputation.world;
-                            let team_type = TeamType::from_str(&t.team_type).unwrap();
-
-                            // Main and the senior reserves (B, Second) carry
-                            // their full canonical name in the data
-                            // ("Spartak Moscow", "Spartak Moscow 2", "Real
-                            // Sociedad B"). Other sub-types (Reserve, U18..U23)
-                            // get their short type label appended at runtime.
-                            let team_name = match &team_type {
-                                TeamType::Main | TeamType::Second | TeamType::B => t.name.clone(),
-                                _ => format!("{} {}", t.name, team_type),
-                            };
-
-                            let players = PlayerCollection::new(build_team_players(
-                                player_generator,
-                                country_id,
-                                continent_id,
-                                country_code,
-                                team_rep,
-                                country_reputation,
-                                &team_type,
-                                t.league_id,
-                                data,
-                                academy_rating,
-                                youth_quality,
-                                academy_quality,
-                                recruitment_quality,
-                                odb_for_club.as_ref(),
-                            ));
-
-                            let staffs = StaffCollection::new(Self::generate_staffs(
-                                staff_generator,
-                                scout_seed,
-                                team_rep,
-                                &team_type,
-                            ));
-
-                            let mut team = Team::builder()
-                                .id(t.id)
-                                .league_id(t.league_id)
-                                .club_id(club.id)
-                                .name(team_name)
-                                .slug(t.slug.clone())
-                                .team_type(team_type)
-                                .training_schedule(TrainingSchedule::new(
-                                    NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
-                                    NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
-                                ))
-                                .reputation(TeamReputation::new(
-                                    t.reputation.home,
-                                    t.reputation.national,
-                                    t.reputation.world,
-                                ))
-                                .players(players)
-                                .staffs(staffs)
-                                .build()
-                                .expect("Failed to build Team");
-
-                            // Pre-select the persistent team tactic at
-                            // load time. Without this every team starts
-                            // at `tactics: None` and the web view falls
-                            // back to a hardcoded 4-4-2 until the season
-                            // tick first runs — and once that tick fires
-                            // the legacy selector locked the league at
-                            // T442 anyway. Pre-selecting on a properly
-                            // squad-aware scorer breaks that loop and
-                            // makes the tactics screen truthful from
-                            // the first request.
-                            let tactic = TacticsSelector::select(&team, team.staffs.head_coach());
-                            team.tactics = Some(tactic);
-                            team
-                        })
-                        .collect(),
-                );
-
-                // Day-one sponsorship book. Real clubs never operate with
-                // zero commercial deals; without seeding, sponsorship
-                // income is structurally $0 for every club (the monthly
-                // renewal pass only replaces deals that expire, and an
-                // empty book has nothing to expire). Sized off the main
-                // team's reputation tier and the country's sponsorship
-                // market — the same inputs the runtime renewal uses.
-                let main_rep_level = teams
-                    .main()
-                    .map(|t| t.reputation.level())
-                    .unwrap_or(ReputationLevel::Amateur);
-                let sponsor_market = CountryEconomicFactors::from_reputation(country_reputation)
-                    .sponsorship_market_strength;
-                let sponsorship_book = SponsorRenewalContext::new(
-                    main_rep_level,
-                    sponsor_market,
-                    SponsorPerformance::MidTable,
-                )
-                .generate_initial_portfolio(Utc::now().date_naive());
-
-                Club {
-                    id: club.id,
-                    name: club.name.clone(),
-                    location: Location {
-                        city_id: club.location.city_id,
-                    },
-                    board: ClubBoard::new(),
-                    status: ClubStatus::Professional,
-                    finance: ClubFinances::new(club.finance.balance as i64, sponsorship_book),
-                    academy: ClubAcademy::new(academy_rating),
-                    colors: ClubColors {
-                        background: club.colors.background.clone(),
-                        foreground: club.colors.foreground.clone(),
-                    },
-                    transfer_plan: ClubTransferPlan::new(),
-                    philosophy,
-                    philosophy_under_review: false,
-                    facilities,
-                    rivals: club.rivals.clone(),
-                    teams,
-                    // Bootstrapped from the squad's own foreign
-                    // nationalities once the world is assembled — see
-                    // `SimulatorData::bootstrap_market_ledgers`.
-                    market_ledger: ClubMarketLedger::default(),
-                    key_departures: Vec::new(),
-                    // …and the lending half of the same memory, from the
-                    // loanees the shipped world already has out.
-                    loan_placements: LoanPlacementLedger::default(),
-                    // A new world has no history behind it; the diary
-                    // starts on the first thing that happens to the club.
-                    affairs: ClubAffairLog::new(),
-                }
-            })
+            .map(|club| factory.build(club))
             .collect()
     }
-}
 
-/// Choose ODB-backed players if available for a senior team, otherwise fall
-/// back to the procedural generator. U18/U19 squads always go through the
-/// academy path — those players are owned by the youth/intake system.
-fn build_team_players(
-    player_generator: &PlayerGenerator,
-    country_id: u32,
-    continent_id: u32,
-    country_code: &str,
-    team_reputation: u16,
-    country_reputation: u16,
-    team_type: &TeamType,
-    league_id: Option<u32>,
-    data: &DatabaseEntity,
-    academy_level: u8,
-    youth_quality: f32,
-    academy_quality: f32,
-    recruitment_quality: f32,
-    odb_for_club: Option<&HashMap<TeamType, Vec<OdbPlayer>>>,
-) -> Vec<Player> {
-    // If the club has any ODB players, it is fully ODB-backed: hydrate every
-    // team (including U18/U19) exclusively from the file and skip synthetic
-    // generation entirely. Buckets without ODB players for this team type
-    // return an empty squad — we do not mix loaded and generated players.
-    if let Some(buckets) = odb_for_club {
-        return buckets
-            .get(team_type)
-            .map(|records| {
-                // ODB hydration is per-record skill generation — the same
-                // CPU-bound pipeline as procedural players. Parallelise the
-                // per-record mapping so large squads (main teams carry 25+
-                // records) don't serialise one whole club's hydration on a
-                // single thread.
-                records
-                    .par_iter()
-                    .map(|r| {
-                        PlayerGenerator::generate_from_odb(r, continent_id, country_code, data)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-    }
+    /// Choose ODB-backed players if available for a senior team, otherwise fall
+    /// back to the procedural generator. U18/U19 squads always go through the
+    /// academy path — those players are owned by the youth/intake system.
+    pub(super) fn build_team_players(
+        player_generator: &PlayerGenerator,
+        country_id: u32,
+        continent_id: u32,
+        country_code: &str,
+        team_reputation: u16,
+        country_reputation: u16,
+        team_type: &TeamType,
+        league_id: Option<u32>,
+        data: &DatabaseEntity,
+        academy_level: u8,
+        youth_quality: f32,
+        academy_quality: f32,
+        recruitment_quality: f32,
+        odb_for_club: Option<&HashMap<TeamType, Vec<OdbPlayer>>>,
+    ) -> Vec<Player> {
+        // If the club has any ODB players, it is fully ODB-backed: hydrate every
+        // team (including U18/U19) exclusively from the file and skip synthetic
+        // generation entirely. Buckets without ODB players for this team type
+        // return an empty squad — we do not mix loaded and generated players.
+        if let Some(buckets) = odb_for_club {
+            return buckets
+                .get(team_type)
+                .map(|records| {
+                    // ODB hydration is per-record skill generation — the same
+                    // CPU-bound pipeline as procedural players. Parallelise the
+                    // per-record mapping so large squads (main teams carry 25+
+                    // records) don't serialise one whole club's hydration on a
+                    // single thread.
+                    records
+                        .par_iter()
+                        .map(|r| {
+                            PlayerGenerator::generate_from_odb(r, continent_id, country_code, data)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+        }
 
-    // Academy teams for clubs without ODB data fall back to the academy
-    // generator — youth intake is owned by the academy system.
-    if matches!(team_type, TeamType::U18 | TeamType::U19) {
-        return DatabaseGenerator::generate_players(
+        // Academy teams for clubs without ODB data fall back to the academy
+        // generator — youth intake is owned by the academy system.
+        if matches!(team_type, TeamType::U18 | TeamType::U19) {
+            return DatabaseGenerator::generate_players(
+                player_generator,
+                country_id,
+                team_reputation,
+                country_reputation,
+                team_type,
+                league_id,
+                data,
+                academy_level,
+                youth_quality,
+                academy_quality,
+                recruitment_quality,
+            );
+        }
+
+        // No ODB data for this club — original synthetic path.
+        DatabaseGenerator::generate_players(
             player_generator,
             country_id,
             team_reputation,
@@ -337,23 +128,304 @@ fn build_team_players(
             youth_quality,
             academy_quality,
             recruitment_quality,
+        )
+    }
+}
+
+/// Assembles one club from its entity, the country it belongs to, and the
+/// shared generators. Owns the per-club borrows so the parallel map body
+/// stays a sequence of named steps.
+struct ClubFactory<'a, 'seed> {
+    scout_seed: &'a ScoutMarketSeed<'seed>,
+    country_reputation: u16,
+    data: &'a DatabaseEntity,
+    player_generator: &'a PlayerGenerator,
+    staff_generator: &'a StaffGenerator,
+    odb: Option<&'a PlayersOdb>,
+    now_year: i32,
+}
+
+impl ClubFactory<'_, '_> {
+    fn build(&self, club: &ClubEntity) -> Club {
+        let odb_for_club = self.odb_squads(club);
+
+        // Ground capacity: the data carries a typical gate, not a
+        // capacity, so gross it up. Falls back to a reputation
+        // estimate for clubs with no attendance record — never zero,
+        // or the club earns no matchday revenue at all.
+        let average_attendance = club.average_attendance.unwrap_or(0);
+        let club_reputation_score = club
+            .teams
+            .iter()
+            .find(|t| t.team_type.eq_ignore_ascii_case("main"))
+            .map(|t| t.reputation.world as f32 / 10_000.0)
+            .unwrap_or(0.0);
+        let stadium_capacity =
+            ClubFacilities::seed_capacity(average_attendance, club_reputation_score);
+        let facilities = Self::facilities(club, average_attendance, stadium_capacity);
+
+        // Extract facility values for youth generation before facilities is moved
+        let academy_rating = facilities.academy.to_rating();
+
+        // What the club is FOR. The data says so when it says so;
+        // otherwise it is derived from the academy the club
+        // actually runs, exactly as `Club::new` and the monthly
+        // review derive it — a ladder of its own here and no
+        // loaded world has a club that trades players as a
+        // policy.
+        let philosophy = Self::philosophy(club, academy_rating);
+
+        let youth_quality = facilities.youth.multiplier();
+        let academy_quality = facilities.academy.multiplier();
+        let recruitment_quality = facilities.recruitment.multiplier();
+
+        let teams = self.teams(
+            club,
+            odb_for_club.as_ref(),
+            academy_rating,
+            youth_quality,
+            academy_quality,
+            recruitment_quality,
         );
+
+        // Day-one sponsorship book. Real clubs never operate with
+        // zero commercial deals; without seeding, sponsorship
+        // income is structurally $0 for every club (the monthly
+        // renewal pass only replaces deals that expire, and an
+        // empty book has nothing to expire). Sized off the main
+        // team's reputation tier and the country's sponsorship
+        // market — the same inputs the runtime renewal uses.
+        let main_rep_level = teams
+            .main()
+            .map(|t| t.reputation.level())
+            .unwrap_or(ReputationLevel::Amateur);
+        let sponsor_market = CountryEconomicFactors::from_reputation(self.country_reputation)
+            .sponsorship_market_strength;
+        let sponsorship_book = SponsorRenewalContext::new(
+            main_rep_level,
+            sponsor_market,
+            SponsorPerformance::MidTable,
+        )
+        .generate_initial_portfolio(Utc::now().date_naive());
+
+        Club {
+            id: club.id,
+            name: club.name.clone(),
+            location: Location {
+                city_id: club.location.city_id,
+            },
+            board: ClubBoard::new(),
+            status: ClubStatus::Professional,
+            finance: ClubFinances::new(club.finance.balance as i64, sponsorship_book),
+            academy: ClubAcademy::new(academy_rating),
+            colors: ClubColors {
+                background: club.colors.background.clone(),
+                foreground: club.colors.foreground.clone(),
+            },
+            transfer_plan: ClubTransferPlan::new(),
+            philosophy,
+            philosophy_under_review: false,
+            facilities,
+            rivals: club.rivals.clone(),
+            teams,
+            // Bootstrapped from the squad's own foreign
+            // nationalities once the world is assembled — see
+            // `SimulatorData::bootstrap_market_ledgers`.
+            market_ledger: ClubMarketLedger::default(),
+            key_departures: Vec::new(),
+            // …and the lending half of the same memory, from the
+            // loanees the shipped world already has out.
+            loan_placements: LoanPlacementLedger::default(),
+            // A new world has no history behind it; the diary
+            // starts on the first thing that happens to the club.
+            affairs: ClubAffairLog::new(),
+        }
     }
 
-    // No ODB data for this club — original synthetic path.
-    DatabaseGenerator::generate_players(
-        player_generator,
-        country_id,
-        team_reputation,
-        country_reputation,
-        team_type,
-        league_id,
-        data,
-        academy_level,
-        youth_quality,
-        academy_quality,
-        recruitment_quality,
-    )
+    /// Pre-distribute ODB players for this club into `TeamType` buckets.
+    /// If the club has any ODB players, fake generation is skipped for every
+    /// senior team (Main/Reserve/B/U20/U21/U23). Academy teams (U18/U19)
+    /// always go through the existing generator regardless, because youth
+    /// intake is owned by the academy system.
+    fn odb_squads(&self, club: &ClubEntity) -> Option<HashMap<TeamType, Vec<OdbPlayer>>> {
+        let players = self
+            .odb?
+            .for_club(club.id)
+            .filter(|players| !players.is_empty())?;
+        let available_team_types: Vec<TeamType> = club
+            .teams
+            .iter()
+            .filter_map(|t| TeamType::from_str(&t.team_type).ok())
+            .collect();
+        // The club's own reputation stands in for its senior
+        // bar wherever the source squad is too thin at a
+        // position to state one — read from `club.json`,
+        // like every other placement input.
+        let club_reputation = club
+            .teams
+            .iter()
+            .find(|t| t.team_type.eq_ignore_ascii_case("main"))
+            .map(|t| {
+                TeamReputation::new(t.reputation.home, t.reputation.national, t.reputation.world)
+            })
+            .unwrap_or_else(|| TeamReputation::new(0, 0, 0));
+        Some(OdbSquadPlacement::distribute(
+            players,
+            &available_team_types,
+            self.now_year,
+            club_reputation,
+        ))
+    }
+
+    fn facilities(
+        club: &ClubEntity,
+        average_attendance: u32,
+        stadium_capacity: u32,
+    ) -> ClubFacilities {
+        match &club.facilities {
+            Some(f) => ClubFacilities {
+                training: FacilityLevel::from(f.training.as_str()),
+                youth: FacilityLevel::from(f.youth.as_str()),
+                academy: FacilityLevel::from(f.academy.as_str()),
+                recruitment: FacilityLevel::from(f.recruitment.as_str()),
+                average_attendance,
+                stadium_capacity,
+            },
+            None => ClubFacilities {
+                average_attendance,
+                stadium_capacity,
+                ..ClubFacilities::default()
+            },
+        }
+    }
+
+    fn philosophy(club: &ClubEntity, academy_rating: u8) -> ClubPhilosophy {
+        if let Some(ref p) = club.philosophy {
+            match p.as_str() {
+                "SignToCompete" => ClubPhilosophy::SignToCompete,
+                "DevelopAndSell" => ClubPhilosophy::DevelopAndSell,
+                "LoanFocused" => ClubPhilosophy::LoanFocused,
+                _ => ClubPhilosophy::Balanced,
+            }
+        } else {
+            let academy = ClubAcademy::new(academy_rating);
+            ClubPhilosophy::derive(
+                VisionYouthFocus::Balanced,
+                academy.tier().value(),
+                academy.development_identity,
+            )
+        }
+    }
+
+    fn teams(
+        &self,
+        club: &ClubEntity,
+        odb_for_club: Option<&HashMap<TeamType, Vec<OdbPlayer>>>,
+        academy_rating: u8,
+        youth_quality: f32,
+        academy_quality: f32,
+        recruitment_quality: f32,
+    ) -> TeamCollection {
+        TeamCollection::new(
+            club.teams
+                .iter()
+                .map(|team| {
+                    self.team(
+                        club,
+                        team,
+                        odb_for_club,
+                        academy_rating,
+                        youth_quality,
+                        academy_quality,
+                        recruitment_quality,
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    fn team(
+        &self,
+        club: &ClubEntity,
+        team: &ClubTeamEntity,
+        odb_for_club: Option<&HashMap<TeamType, Vec<OdbPlayer>>>,
+        academy_rating: u8,
+        youth_quality: f32,
+        academy_quality: f32,
+        recruitment_quality: f32,
+    ) -> Team {
+        let team_rep = team.reputation.world;
+        let team_type = TeamType::from_str(&team.team_type).unwrap();
+
+        // Main and the senior reserves (B, Second) carry
+        // their full canonical name in the data
+        // ("Spartak Moscow", "Spartak Moscow 2", "Real
+        // Sociedad B"). Other sub-types (Reserve, U18..U23)
+        // get their short type label appended at runtime.
+        let team_name = match &team_type {
+            TeamType::Main | TeamType::Second | TeamType::B => team.name.clone(),
+            _ => format!("{} {}", team.name, team_type),
+        };
+
+        let players = PlayerCollection::new(DatabaseGenerator::build_team_players(
+            self.player_generator,
+            self.scout_seed.country_id,
+            self.scout_seed.continent_id,
+            self.scout_seed.country_code,
+            team_rep,
+            self.country_reputation,
+            &team_type,
+            team.league_id,
+            self.data,
+            academy_rating,
+            youth_quality,
+            academy_quality,
+            recruitment_quality,
+            odb_for_club,
+        ));
+
+        let staffs = StaffCollection::new(DatabaseGenerator::generate_staffs(
+            self.staff_generator,
+            self.scout_seed,
+            team_rep,
+            &team_type,
+        ));
+
+        let mut team = Team::builder()
+            .id(team.id)
+            .league_id(team.league_id)
+            .club_id(club.id)
+            .name(team_name)
+            .slug(team.slug.clone())
+            .team_type(team_type)
+            .training_schedule(TrainingSchedule::new(
+                NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+            ))
+            .reputation(TeamReputation::new(
+                team.reputation.home,
+                team.reputation.national,
+                team.reputation.world,
+            ))
+            .players(players)
+            .staffs(staffs)
+            .build()
+            .expect("Failed to build Team");
+
+        // Pre-select the persistent team tactic at
+        // load time. Without this every team starts
+        // at `tactics: None` and the web view falls
+        // back to a hardcoded 4-4-2 until the season
+        // tick first runs — and once that tick fires
+        // the legacy selector locked the league at
+        // T442 anyway. Pre-selecting on a properly
+        // squad-aware scorer breaks that loop and
+        // makes the tactics screen truthful from
+        // the first request.
+        let tactic = TacticsSelector::select(&team, team.staffs.head_coach());
+        team.tactics = Some(tactic);
+        team
+    }
 }
 
 /// Where each ODB record starts its life — which of his club's squads he

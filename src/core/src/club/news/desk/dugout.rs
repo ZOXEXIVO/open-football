@@ -29,8 +29,16 @@ impl DugoutDesk {
         let feed = RecentEvents::week(player);
         let importance = PlayerStanding::importance(player);
 
-        // Squad-wide beats are tallied whether or not this player's own
-        // line makes the page.
+        Self::tally_squad_pulse(pulse, &feed);
+        if Self::file_player_grievances(out, player, &feed, importance, date) {
+            return;
+        }
+        Self::file_player_support(out, player, &feed, importance, date);
+    }
+
+    /// Squad-wide beats are tallied whether or not a player's own line
+    /// makes the page.
+    fn tally_squad_pulse(pulse: &mut SquadPulse, feed: &RecentEvents<'_>) {
         pulse.inquest |= feed.happened(HappinessEventType::DressingRoomInquest);
         pulse.rallied |= feed
             .any_of(&[
@@ -59,7 +67,17 @@ impl DugoutDesk {
         pulse.relegated |= feed.happened(HappinessEventType::Relegated);
         pulse.cup_final_lost |= feed.happened(HappinessEventType::CupFinalDefeat);
         pulse.europe |= feed.happened(HappinessEventType::QualifiedForEurope);
+    }
 
+    /// The sourest relationship beats, most corrosive first. Returns true
+    /// when one of them has taken the player's only line.
+    fn file_player_grievances(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        feed: &RecentEvents<'_>,
+        importance: i32,
+        date: NaiveDate,
+    ) -> bool {
         // A promise the club has gone back on. The loudest thing a
         // player can say about his manager, and the only one of these
         // the paper sets as a quote.
@@ -69,7 +87,7 @@ impl DugoutDesk {
                     .about(player.id)
                     .weighted(importance),
             );
-            return;
+            return true;
         }
 
         // Money off his wages is a club decision with a paper trail —
@@ -86,7 +104,7 @@ impl DugoutDesk {
                     .about(player.id)
                     .weighted(importance),
             );
-            return;
+            return true;
         }
 
         // Left out of the one that mattered. Reads only the big-match
@@ -100,7 +118,7 @@ impl DugoutDesk {
                     .about(player.id)
                     .weighted(importance),
             );
-            return;
+            return true;
         }
 
         if feed
@@ -116,7 +134,7 @@ impl DugoutDesk {
                     .about(player.id)
                     .weighted(importance),
             );
-            return;
+            return true;
         }
 
         // How he is being used rather than whether he is being picked:
@@ -135,9 +153,21 @@ impl DugoutDesk {
                     .about(player.id)
                     .weighted(importance / 2),
             );
-            return;
+            return true;
         }
 
+        false
+    }
+
+    /// The other half of the relationship: a man who wants a word, a
+    /// promise made to him, or the manager's public backing.
+    fn file_player_support(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        feed: &RecentEvents<'_>,
+        importance: i32,
+        date: NaiveDate,
+    ) {
         // He has asked for the conversation nobody wants to have.
         if feed.happened(HappinessEventType::AskedForPrivateTalk) {
             out.push(

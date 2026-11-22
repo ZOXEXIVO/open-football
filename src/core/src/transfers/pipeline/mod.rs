@@ -21,6 +21,7 @@ mod vacancy;
 
 use crate::club::board::mandate::MandateIncumbent;
 use crate::club::player::contract::PlayerSquadStatus;
+use crate::club::process::DepartedPlayer;
 use crate::transfers::gate::build::Suitor;
 use crate::transfers::gate::{
     MoveTerms, PursuitAction, TransferMoveAssessment, TransferMovePlausibility, TransferMoveStage,
@@ -35,7 +36,6 @@ use crate::transfers::squad::ledger::SellListEntry;
 use crate::transfers::squad::plan::{BriefSlot, BriefTier, RecruitmentBrief};
 use crate::transfers::view::world::WorldPool;
 use crate::transfers::{MarketMap, ScoutingRegion};
-use crate::club::core::DepartedPlayer;
 use crate::{
     Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerPreferredFoot, ReputationLevel,
 };

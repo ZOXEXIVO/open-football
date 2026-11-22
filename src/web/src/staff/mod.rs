@@ -4,8 +4,15 @@ pub mod personal;
 use crate::GameAppData;
 use axum::Router;
 
-pub fn staff_routes() -> Router<GameAppData> {
-    Router::new()
-        .merge(get::routes::routes())
-        .merge(personal::routes::routes())
+pub struct StaffRoutes;
+
+impl StaffRoutes {
+    pub fn router() -> Router<GameAppData> {
+        Router::new()
+            .merge(get::routes::StaffGetRoutes::router())
+            .merge(personal::routes::StaffPersonalRoutes::router())
+    }
 }
+
+#[allow(non_upper_case_globals)]
+pub const staff_routes: fn() -> Router<GameAppData> = StaffRoutes::router;

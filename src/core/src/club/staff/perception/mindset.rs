@@ -6,7 +6,7 @@
 //! much he goes for — and reads his head from that, as well as his own
 //! eye allows and no better than his sample does.
 
-use super::utils::perception_noise_raw;
+use super::noise::PerceptionNoise;
 use crate::Staff;
 use crate::club::staff::mind::organs::judgements::CoachMemory;
 
@@ -62,10 +62,11 @@ impl MindsetEstimator {
         let judging = (knowledge.judging_player_ability as f32 / 20.0).clamp(0.0, 1.0);
         let looks = (m.matches_observed as f32 / Self::FULL_LOOK).clamp(0.0, 1.0);
         let width = (1.2 - judging) * (1.0 - 0.5 * looks);
-        let noise = |salt: u32| perception_noise_raw(staff.id, player_id, Self::SALT + salt + week * 2);
+        let noise =
+            |salt: u32| PerceptionNoise::raw(staff.id, player_id, Self::SALT + salt + week * 2);
 
-        let assurance = m.observed_standard.unwrap_or(team_standard)
-            + noise(0) * Self::ASSURANCE_WIDTH * width;
+        let assurance =
+            m.observed_standard.unwrap_or(team_standard) + noise(0) * Self::ASSURANCE_WIDTH * width;
         let confidence = -(m.recent_errors() as f32) * Self::ERROR_WEIGHT
             + (m.recent_rating_ema - Self::NEUTRAL_RATING) * Self::RATING_WEIGHT
             + noise(1) * Self::CONFIDENCE_WIDTH * width;
@@ -164,10 +165,12 @@ mod tests {
                 store.observe(&observation(player_id, 0.64, 0, day), &profile);
             }
             let m = store.get(player_id);
-            good_err += (MindsetEstimator::estimate(&good, m, 0.6, player_id, 9).perceived_assurance
+            good_err += (MindsetEstimator::estimate(&good, m, 0.6, player_id, 9)
+                .perceived_assurance
                 - 0.64)
                 .abs();
-            poor_err += (MindsetEstimator::estimate(&poor, m, 0.6, player_id, 9).perceived_assurance
+            poor_err += (MindsetEstimator::estimate(&poor, m, 0.6, player_id, 9)
+                .perceived_assurance
                 - 0.64)
                 .abs();
         }

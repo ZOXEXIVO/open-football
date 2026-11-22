@@ -747,12 +747,14 @@ impl PlayerTrait {
     }
 }
 
-/// Whether any trait in the supplied set flags the player as risk-tolerant
-/// for passing decisions. Mirrors the inline check in
-/// `PassEvaluator::evaluate_pass`, but driven by registry metadata so new
-/// traits land without an evaluator edit.
-pub fn has_risk_tolerant_passing_trait(traits: &[PlayerTrait]) -> bool {
-    traits.iter().any(|t| t.is_risk_tolerant_passer())
+impl PlayerTrait {
+    /// Whether any trait in the supplied set flags the player as
+    /// risk-tolerant for passing decisions. Mirrors the inline check in
+    /// `PassEvaluator::evaluate_pass`, but driven by registry metadata so new
+    /// traits land without an evaluator edit.
+    pub fn any_risk_tolerant_passer(traits: &[PlayerTrait]) -> bool {
+        traits.iter().any(|t| t.is_risk_tolerant_passer())
+    }
 }
 
 // Reusable requirement constants — kept short so the registry below stays readable.
@@ -1441,10 +1443,10 @@ mod tests {
             );
         }
         // Helper sanity: an empty slice is not risk-tolerant.
-        assert!(!has_risk_tolerant_passing_trait(&[]));
+        assert!(!PlayerTrait::any_risk_tolerant_passer(&[]));
         // Helper sanity: any single risk-tolerant trait flips the result.
         for t in expected {
-            assert!(has_risk_tolerant_passing_trait(&[t]));
+            assert!(PlayerTrait::any_risk_tolerant_passer(&[t]));
         }
     }
 }

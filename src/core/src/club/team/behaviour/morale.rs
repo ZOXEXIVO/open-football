@@ -1,0 +1,6004 @@
+//! Morale-shifting events: contract jealousy from a teammate's fresh
+//! signing, monthly loan playing-time audits, controversy incidents, and
+//! the periodic peer-wage envy sweep.
+
+use super::TeamBehaviour;
+use crate::PlayerHappiness;
+use crate::club::person::Person;
+use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::player::calculators::{ContractValuation, PackageInputs, ValuationContext};
+use crate::club::player::contract::stalemate::{AffordabilityInput, ContractStalemate};
+use crate::club::player::happiness::PlayingTimeFrustrationConfig;
+use crate::club::player::lifecycle::CareerStageDetector;
+use crate::club::player::mind::{CareerArc, MindClock, PlanStage};
+use crate::club::player::{RestlessnessInputs, StuckCareerScan};
+use crate::club::staff::perception::AbilityEstimator;
+use crate::context::GlobalContext;
+use crate::utils::IntegerUtils;
+use crate::{
+    CareerDesireEventContext, CareerDesireEvidence, CareerDesireKind, ChangeType, ConflictLocation,
+    HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
+    HappinessEventScope, HappinessEventSeverity, HappinessEventType, LoanConcernReason,
+    LoanDevelopmentConcernReason, LoanEventContext, LoanEventKind, MatchExperienceBackground,
+    NewSigningThreatContext, NewSigningThreatReason, Player, PlayerClubContract, PlayerCollection,
+    PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatCompetitionKind, PlayerStatusType,
+    RelationshipChange, RivalThreatResponse, TeamType, TeammateConflictContext,
+    TeammateConflictReason,
+};
+use chrono::{Datelike, NaiveDate};
+use rustc_hash::FxHashMap;
+use std::cmp::Ordering;
+
+impl TeamBehaviour {
+    /// When a teammate signs a notably bigger deal and this player earns
+    /// meaningfully less, morale takes a hit — unless they're close friends.
+    /// Fires at most once per player per signing window (the signer's
+    /// `last_salary_negotiation` timestamp gates it). Gap threshold ≥25%.
+    pub(super) fn process_contract_jealousy(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        // Cutoff: teammate's raise within the last 14 days counts as fresh news.
+        let freshness_days = 14;
+
+        // Collect fresh signers first (id, salary, last_negotiation) so we
+        // don't clash borrows while mutating other players below.
+        // Loaned-in players are excluded as signers — their parent club's
+        // renewal isn't borrower-squad news, and the borrower's wage
+        // hierarchy doesn't include them anyway.
+        let signers: Vec<(u32, u32)> = players
+            .players
+            .iter()
+            .filter(|p| !p.is_on_loan())
+            .filter_map(|p| {
+                let last = p.happiness.last_salary_negotiation?;
+                let age_days = (today - last).num_days();
+                if age_days >= 0 && age_days <= freshness_days {
+                    p.contract.as_ref().map(|c| (p.id, c.salary))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if signers.is_empty() {
+            return;
+        }
+
+        for (signer_id, signer_salary) in signers {
+            if signer_salary == 0 {
+                continue;
+            }
+            for player in players.players.iter_mut() {
+                if player.id == signer_id {
+                    continue;
+                }
+                // Loanees see star wages every day at a top club — they
+                // know they're a temporary visitor on a different
+                // contract structure (the loan deal), so a star
+                // teammate's renewal isn't a personal slight.
+                if player.is_on_loan() {
+                    continue;
+                }
+                let own_salary = match player.contract.as_ref() {
+                    Some(c) if c.salary > 0 => c.salary,
+                    _ => continue,
+                };
+                // Only established players notice salary gaps. A reserve
+                // or recent academy graduate at a top club isn't unsettled
+                // when the star striker re-signs for ten times their wage —
+                // they're grateful to be in the changing room. Without this
+                // gate, a CA-60 squad filler at Real Madrid produces an
+                // "unsettled by teammate's salary" event every renewal.
+                if player.player_attributes.current_ability < 100
+                    && player.player_attributes.world_reputation < 3000
+                {
+                    continue;
+                }
+                // Only noticed when the gap is ≥25%.
+                let ratio = own_salary as f32 / signer_salary as f32;
+                if ratio >= 0.75 {
+                    continue;
+                }
+
+                // Close friends shrug it off.
+                let friendship = player
+                    .relations
+                    .get_player(signer_id)
+                    .map(|r| r.friendship)
+                    .unwrap_or(30.0);
+                if friendship >= 40.0 {
+                    continue;
+                }
+
+                // Late-career fair-wage guard: a fading veteran already
+                // paid fairly for his own age/ability (by his own
+                // `ContractValuation`) isn't unsettled when a prime
+                // teammate signs big — the gap is the market valuing
+                // youth, not a personal slight. Mirrors the periodic
+                // wage-envy gate so the two signals can't disagree about
+                // whether a wage is genuinely low.
+                let late_career_fair = player
+                    .contract
+                    .as_ref()
+                    .map(|c| {
+                        WageFairness::assess(player, c, today, ctx).late_career_wage_is_fair(player)
+                    })
+                    .unwrap_or(false);
+                if late_career_fair {
+                    continue;
+                }
+
+                // Magnitude scales with the gap: 25% gap → -1.5, 50% gap → -3.5, cap at -5.
+                // Cooldown prevents a fresh raise refiring inside the
+                // 14-day jealousy window from the same signer.
+                let gap = (1.0 - ratio).clamp(0.25, 0.9);
+                let magnitude =
+                    -((gap - 0.25) * 6.0 + 1.5).min(5.0) * Self::wage_claim(player, today);
+                let context = HappinessEventContext::new(
+                    HappinessEventCause::WageJealousy,
+                    HappinessEventSeverity::from_magnitude(magnitude),
+                    HappinessEventScope::DressingRoom,
+                )
+                .with_evidence(HappinessEventEvidence::WageGap)
+                .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+                player.happiness.add_event_with_context_and_cooldown(
+                    HappinessEventType::SalaryGapNoticed,
+                    magnitude,
+                    None,
+                    context,
+                    freshness_days as u16,
+                );
+            }
+        }
+    }
+
+    /// How much of a case a player has about money, 0.3..1, read off how
+    /// much of the club's football he is actually part of: a regular
+    /// trailing a new signing has a grievance, a spectator has an opinion.
+    /// Full until the club has played enough for the share to mean
+    /// anything.
+    fn wage_claim(player: &Player, today: NaiveDate) -> f32 {
+        let opp = player.playing_time_opportunity(today);
+        if opp.eligible_official_matches_since_join < 8 {
+            return 1.0;
+        }
+        let inclusion = opp.player_starts_since_join
+            + opp.player_sub_apps_since_join
+            + opp.player_unused_bench_since_join;
+        let share = inclusion as f32 / opp.eligible_official_matches_since_join as f32;
+        0.3 + 0.7 * (share / 0.5).clamp(0.0, 1.0)
+    }
+
+    /// Monthly audit of inbound loanees — did the borrowing club actually
+    /// give them the minutes the loan contract required? If pace falls
+    /// behind, open the recall window (parent may yank them back) and fire
+    /// `LackOfPlayingTime` on the player. Runs on day 1 only.
+    pub(super) fn process_loan_playing_time_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+
+        for player in players.players.iter_mut() {
+            let (min_apps, loan_start, parent_club_id, loan_club_id, permanent_option) =
+                match player.contract_loan.as_ref() {
+                    Some(l) => match (l.loan_min_appearances, l.started) {
+                        (Some(m), Some(s)) => (
+                            m,
+                            s,
+                            l.loan_from_club_id,
+                            l.loan_to_club_id,
+                            l.loan_future_fee.is_some(),
+                        ),
+                        _ => continue,
+                    },
+                    None => continue,
+                };
+            // Too early to judge pace at all.
+            let loan_days_elapsed = (today - loan_start).num_days();
+            if loan_days_elapsed < 30 {
+                continue;
+            }
+
+            // Match-opportunity model: judge the loan against the official
+            // fixtures the borrowing club has actually played since the
+            // player arrived — never elapsed calendar time. A loan window
+            // crossing an international break / winter gap with no matches
+            // leaves the audit silent (zero-match invariant), and the gate
+            // also enforces the grace window + status-specific sample.
+            let opp = player.playing_time_opportunity(today);
+            let cfg = PlayingTimeFrustrationConfig::default();
+            let status = player.contract.as_ref().map(|c| &c.squad_status);
+            if opp.can_judge(status, &cfg, Some(min_apps)).is_none() {
+                continue;
+            }
+
+            let eligible = opp.eligible_official_matches_since_join;
+            let actual = player.statistics.played + player.statistics.played_subs;
+            // Expected apps so far scale with matches actually played
+            // (capped at the contractual season minimum): a loanee sent
+            // out for minutes is expected to feature in the bulk of the
+            // games the club plays.
+            let expected_by_now = (((eligible as f32) * 0.6).floor() as u16).min(min_apps);
+            if expected_by_now == 0 || actual >= expected_by_now {
+                continue;
+            }
+
+            let deficit = expected_by_now.saturating_sub(actual);
+            // Open the recall window for any meaningful shortfall.
+            if let Some(loan) = player.contract_loan.as_mut()
+                && loan.loan_recall_available_after.is_none()
+            {
+                loan.loan_recall_available_after = Some(today);
+            }
+            // Morale hit scales with how badly we're trailing.
+            let magnitude = -((deficit as f32 * 0.8).min(6.0) + 1.0);
+            let lctx = LoanEventContext::new(LoanEventKind::LoanMinutesConcern);
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::Boardroom,
+            )
+            .with_loan_context(lctx);
+            player.happiness.add_event_with_context(
+                HappinessEventType::LackOfPlayingTime,
+                magnitude,
+                None,
+                happiness_ctx,
+            );
+
+            // Recall request — the parent-club / player pressure layer
+            // above the minutes-concern note. Fires only on a meaningful
+            // shortfall (the deficit is real, not a quiet month), and is
+            // cooldown-gated so a still-open recall window doesn't refire
+            // it monthly. The minutes-concern event above remains the
+            // ambient signal; this is the escalation.
+            let meaningful = (expected_by_now >= 3 && deficit >= 2)
+                || (expected_by_now > 0 && (actual as f32 / expected_by_now as f32) < 0.5);
+            if meaningful {
+                let recall_mag = -((deficit as f32 * 0.6).min(4.0) + 1.5);
+                let mut recall_ctx = LoanEventContext::new(LoanEventKind::LoanRecallRequested)
+                    .with_recall_reason(LoanConcernReason::InsufficientMinutes)
+                    .with_expected_apps(expected_by_now)
+                    .with_actual_apps(actual)
+                    .with_deficit_apps(deficit)
+                    .with_permanent_option(permanent_option)
+                    .with_loan_days_elapsed(loan_days_elapsed.clamp(0, u16::MAX as i64) as u16);
+                if let Some(pid) = parent_club_id {
+                    recall_ctx = recall_ctx.with_parent_club(pid);
+                }
+                if let Some(lid) = loan_club_id {
+                    recall_ctx = recall_ctx.with_loan_club(lid);
+                }
+                let recall_happiness = HappinessEventContext::new(
+                    HappinessEventCause::Other,
+                    HappinessEventSeverity::from_magnitude(recall_mag),
+                    HappinessEventScope::Boardroom,
+                )
+                .with_loan_context(recall_ctx);
+                player.happiness.add_event_with_context_and_cooldown(
+                    HappinessEventType::LoanRecallRequested,
+                    recall_mag,
+                    None,
+                    recall_happiness,
+                    45,
+                );
+            }
+        }
+    }
+
+    pub(super) fn process_loan_development_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+
+        for player in players.players.iter_mut() {
+            let Some(concern) = player.loan_development_concern(today) else {
+                continue;
+            };
+            player.emit_loan_development_concern(concern);
+        }
+    }
+}
+
+struct LoanDevelopmentConcern {
+    loan_days_elapsed: i64,
+    minutes_share: f32,
+    starts: u16,
+    score: i32,
+    reasons: Vec<LoanDevelopmentConcernReason>,
+    status: Option<PlayerSquadStatus>,
+}
+
+impl Player {
+    fn loan_development_concern(&self, today: NaiveDate) -> Option<LoanDevelopmentConcern> {
+        if !self.is_on_loan() {
+            return None;
+        }
+        let loan_start = self.contract_loan.as_ref().and_then(|l| l.started)?;
+        let loan_days_elapsed = (today - loan_start).num_days();
+        if loan_days_elapsed < 60 {
+            return None;
+        }
+
+        let age = self.age(today);
+        let status = self.contract.as_ref().map(|c| c.squad_status.clone());
+        let is_prospect = matches!(
+            status,
+            Some(PlayerSquadStatus::HotProspectForTheFuture)
+                | Some(PlayerSquadStatus::DecentYoungster)
+        );
+        // Development loans are for youngsters and flagged prospects; an
+        // established senior on loan is judged by the recall audit.
+        if age > 23 && !is_prospect {
+            return None;
+        }
+        if self
+            .happiness
+            .has_recent_event(&HappinessEventType::LoanDevelopmentConcern, 60)
+        {
+            return None;
+        }
+
+        // Opportunity gate — same as the minutes audit. Enforces the grace
+        // window, status sample, and the zero-official-match invariant, so an
+        // injured / break-stranded loanee is never unfairly judged as a
+        // failed development.
+        let opp = self.playing_time_opportunity(today);
+        let cfg = PlayingTimeFrustrationConfig::default();
+        opp.can_judge(status.as_ref(), &cfg, None)?;
+
+        let eligible = opp.eligible_official_matches_since_join;
+        let starts = opp.player_starts_since_join;
+        let minutes_share = if eligible > 0 {
+            starts as f32 / eligible as f32
+        } else {
+            0.0
+        };
+        let (score, reasons) = self.loan_development_signals(eligible, minutes_share);
+        if score < 3 {
+            return None;
+        }
+
+        Some(LoanDevelopmentConcern {
+            loan_days_elapsed,
+            minutes_share,
+            starts,
+            score,
+            reasons,
+            status,
+        })
+    }
+
+    fn loan_development_signals(
+        &self,
+        eligible: u16,
+        minutes_share: f32,
+    ) -> (i32, Vec<LoanDevelopmentConcernReason>) {
+        let mut score = 0i32;
+        let mut reasons = Vec::new();
+
+        // Insufficient minutes — the loanee isn't starting often enough.
+        if eligible >= 4 && minutes_share < 0.4 {
+            score += 2;
+            reasons.push(LoanDevelopmentConcernReason::InsufficientMinutes);
+        }
+        // An active loan-tier mismatch is a strong development signal.
+        if self
+            .happiness
+            .has_recent_event(&HappinessEventType::LoanLevelMismatch, 90)
+        {
+            score += 2;
+            reasons.push(LoanDevelopmentConcernReason::LevelMismatch);
+        }
+        // Played out of position.
+        if self
+            .happiness
+            .has_recent_event(&HappinessEventType::RoleMismatch, 90)
+        {
+            score += 2;
+            reasons.push(LoanDevelopmentConcernReason::WrongRole);
+        }
+        // Repeated poor training environment.
+        let poor_training = self
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::PoorTraining && e.days_ago <= 90)
+            .count();
+        if poor_training >= 2 {
+            score += 1;
+            reasons.push(LoanDevelopmentConcernReason::PoorTrainingEnvironment);
+        }
+        // Poor match performances despite featuring.
+        let apps = self.statistics.played + self.statistics.played_subs;
+        if apps >= 3 && self.statistics.average_rating > 0.0 && self.statistics.average_rating < 6.5
+        {
+            score += 1;
+            reasons.push(LoanDevelopmentConcernReason::PoorMatchPerformance);
+        }
+
+        (score, reasons)
+    }
+
+    fn emit_loan_development_concern(&mut self, concern: LoanDevelopmentConcern) {
+        // Base -2.5, escalating with the number of failing signals.
+        let mut magnitude = if concern.score >= 6 {
+            -4.5
+        } else if concern.score >= 4 {
+            -3.5
+        } else {
+            HappinessConfig::default().catalog.loan_development_concern
+        };
+        // A high-professional still getting some starts is coping — dampen.
+        // Elite parent-club prospects feel a wasted loan more.
+        if self.attributes.professionalism >= 15.0 && concern.starts >= 1 {
+            magnitude *= 0.75;
+        }
+        if matches!(
+            concern.status,
+            Some(PlayerSquadStatus::HotProspectForTheFuture)
+        ) {
+            magnitude *= 1.20;
+        }
+
+        let (parent_club_id, loan_club_id, permanent_option) = self
+            .contract_loan
+            .as_ref()
+            .map(|l| {
+                (
+                    l.loan_from_club_id,
+                    l.loan_to_club_id,
+                    l.loan_future_fee.is_some(),
+                )
+            })
+            .unwrap_or((None, None, false));
+
+        let mut lctx = LoanEventContext::new(LoanEventKind::LoanDevelopmentConcern)
+            .with_minutes_share(concern.minutes_share)
+            .with_permanent_option(permanent_option)
+            .with_loan_days_elapsed(concern.loan_days_elapsed.clamp(0, u16::MAX as i64) as u16);
+        if let Some(pid) = parent_club_id {
+            lctx = lctx.with_parent_club(pid);
+        }
+        if let Some(lid) = loan_club_id {
+            lctx = lctx.with_loan_club(lid);
+        }
+        for reason in concern.reasons {
+            lctx = lctx.with_development_reason(reason);
+        }
+
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::Boardroom,
+        )
+        .with_loan_context(lctx)
+        .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+        self.happiness.add_event_with_context(
+            HappinessEventType::LoanDevelopmentConcern,
+            magnitude,
+            None,
+            happiness_ctx,
+        );
+    }
+}
+
+impl TeamBehaviour {
+    pub(super) fn process_controversy_incidents(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return; // Monthly cadence
+        }
+
+        let candidates = Self::controversy_candidates(players);
+        if candidates.is_empty() {
+            return;
+        }
+        let all_ids: Vec<u32> = players.players.iter().map(|p| p.id).collect();
+
+        for (offender_id, _, controversy) in candidates {
+            let victim_id = players
+                .find(offender_id)
+                .and_then(|offender| offender.controversy_victim(&all_ids));
+
+            if let Some(offender) = players.players.iter_mut().find(|p| p.id == offender_id) {
+                offender.apply_controversy_incident(controversy);
+            }
+            if let Some(vid) = victim_id
+                && let Some(victim) = players.players.iter_mut().find(|p| p.id == vid)
+            {
+                victim.apply_controversy_ripple(offender_id);
+            }
+        }
+    }
+
+    fn controversy_candidates(players: &PlayerCollection) -> Vec<(u32, u32, f32)> {
+        players
+            .players
+            .iter()
+            .filter_map(|p| {
+                let controversy = p.attributes.controversy;
+                let temperament = p.attributes.temperament;
+                let sportsmanship = p.attributes.sportsmanship;
+                if controversy < 12.0 {
+                    return None;
+                }
+                // Risk score: big when controversial + hot-tempered +
+                // unsporting.
+                let risk = controversy + (20.0 - temperament) * 0.6 + (20.0 - sportsmanship) * 0.4;
+                if risk < 35.0 {
+                    return None;
+                }
+                // Convert to 0-100 trigger chance this month.
+                let chance = ((risk - 35.0) * 1.8).clamp(0.0, 60.0);
+                let roll = IntegerUtils::random(0, 100) as f32;
+                if roll > chance {
+                    return None;
+                }
+                Some((p.id, 0u32, controversy))
+            })
+            .collect()
+    }
+}
+
+impl Player {
+    fn controversy_victim(&self, all_ids: &[u32]) -> Option<u32> {
+        for tid in all_ids {
+            if *tid == self.id {
+                continue;
+            }
+            let friendship = self
+                .relations
+                .get_player(*tid)
+                .map(|r| r.friendship)
+                .unwrap_or(30.0);
+            if friendship < 35.0 {
+                return Some(*tid);
+            }
+        }
+        None
+    }
+
+    fn apply_controversy_incident(&mut self, controversy: f32) {
+        let magnitude = -(3.0 + ((controversy - 12.0) * 0.3).clamp(0.0, 4.0));
+        let bust_up_eligible = controversy >= 15.0 && self.attributes.temperament <= 8.0;
+        // Hot-tempered offenders → training-ground scope; calmer
+        // controversies still surface as media noise.
+        let scope = if bust_up_eligible {
+            HappinessEventScope::TrainingGround
+        } else {
+            HappinessEventScope::Media
+        };
+        let cause = if bust_up_eligible {
+            HappinessEventCause::PersonalityClash
+        } else {
+            HappinessEventCause::MediaPressure
+        };
+
+        // Personality-shaped evidence — the user reads "high controversy +
+        // low temperament" as the why, not the catch-all "controversy
+        // incident".
+        let mut offender_evidence: Vec<HappinessEventEvidence> = Vec::new();
+        if controversy >= 12.0 {
+            offender_evidence.push(HappinessEventEvidence::HighControversy);
+        }
+        if self.attributes.temperament <= 8.0 {
+            offender_evidence.push(HappinessEventEvidence::LowTemperament);
+        }
+        if self.attributes.sportsmanship <= 8.0 {
+            offender_evidence.push(HappinessEventEvidence::LowSportsmanship);
+        }
+        offender_evidence.push(if bust_up_eligible {
+            HappinessEventEvidence::TrainingGroundIncident
+        } else {
+            HappinessEventEvidence::MediaIncident
+        });
+
+        let incident_ctx = HappinessEventContext::new(
+            cause,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            scope,
+        )
+        .with_evidence_iter(offender_evidence.iter().copied())
+        .with_follow_up(HappinessEventFollowUp::DressingRoomDamageRisk);
+        self.happiness.add_event_with_context(
+            HappinessEventType::ControversyIncident,
+            magnitude,
+            None,
+            incident_ctx,
+        );
+
+        // Bigger incidents (training-ground bust-ups) — only the hottest
+        // combinations trigger them, never every routine controversy.
+        // Cooldown 60d so a recurring offender's history is layered, not
+        // flooded.
+        if bust_up_eligible {
+            let prof_dampen =
+                crate::club::player::events::scaling::HappinessScaling::criticism_dampener(
+                    self.attributes.professionalism,
+                );
+            let cfg = HappinessConfig::default();
+            let mag = cfg.catalog.training_ground_bust_up * prof_dampen;
+            let bust_up_ctx = HappinessEventContext::new(
+                HappinessEventCause::PersonalityClash,
+                HappinessEventSeverity::from_magnitude(mag),
+                HappinessEventScope::TrainingGround,
+            )
+            .with_evidence(HappinessEventEvidence::TrainingGroundIncident)
+            .with_evidence(HappinessEventEvidence::HighControversy)
+            .with_evidence(HappinessEventEvidence::LowTemperament)
+            .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk);
+            self.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::TrainingGroundBustUp,
+                mag,
+                None,
+                bust_up_ctx,
+                60,
+            );
+        }
+
+        // Public apology — well-adjusted controversial players walk back the
+        // worst of the fallout. Soft positive (+1.0).
+        if self.attributes.professionalism >= 14.0 && controversy <= 12.0 {
+            self.happiness
+                .add_event_default_with_cooldown(HappinessEventType::PublicApology, 90);
+        }
+    }
+
+    fn apply_controversy_ripple(&mut self, offender_id: u32) {
+        // The victim was picked precisely because friendship was low —
+        // surface that as evidence so the UI explains why this teammate, not
+        // the generic "argued with a teammate".
+        let snapshot = self
+            .relations
+            .get_player(offender_id)
+            .map(|r| (r.level, r.trust, r.friendship, r.professional_respect));
+        let mut victim_evidence: Vec<HappinessEventEvidence> =
+            vec![HappinessEventEvidence::DressingRoomRow];
+        if let Some((level, trust, friendship, prof)) = snapshot {
+            if friendship <= 35.0 {
+                victim_evidence.push(HappinessEventEvidence::LowFriendship);
+            }
+            if trust <= 35.0 {
+                victim_evidence.push(HappinessEventEvidence::LowTrust);
+            }
+            if prof <= 35.0 {
+                victim_evidence.push(HappinessEventEvidence::LowProfessionalRespect);
+            }
+            if level <= -25.0 {
+                victim_evidence.push(HappinessEventEvidence::AlreadyStrainedRelationship);
+            }
+        }
+        let mut conflict_ctx = HappinessEventContext::new(
+            HappinessEventCause::PersonalityClash,
+            HappinessEventSeverity::from_magnitude(-2.0),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_evidence_iter(victim_evidence.iter().copied())
+        .with_follow_up(HappinessEventFollowUp::DressingRoomDamageRisk)
+        .with_teammate_conflict_context(TeammateConflictContext::new(
+            TeammateConflictReason::PersonalityClash,
+            ConflictLocation::DressingRoom,
+        ));
+        if let Some((level, trust, friendship, prof)) = snapshot {
+            conflict_ctx = conflict_ctx
+                .with_relationship_levels(level, level)
+                .with_relationship_axes(trust, friendship, prof);
+        }
+        // Shared same-tick budget + 45-day partner cooldown via the central
+        // helper, so the controversy emit can't quietly leapfrog the
+        // behaviour-pass cap or refire on a recurring offender/victim pair.
+        self.happiness
+            .try_add_partner_context_with_same_tick_budget(
+                HappinessEventType::ConflictWithTeammate,
+                -2.0,
+                offender_id,
+                || conflict_ctx,
+                45,
+                PlayerHappiness::MAX_CONFLICT_WITH_TEAMMATE_PER_TICK,
+            );
+    }
+}
+
+impl TeamBehaviour {
+    /// Monthly squad-wide wage audit: compare every player's salary to the
+    /// top earner at their position group. If they're a starter earning
+    /// <60% of the top salary in their slot, fire a gentle recurring
+    /// `SalaryGapNoticed` event. Complements `process_contract_jealousy`,
+    /// which only fires on fresh raises.
+    pub(super) fn process_periodic_wage_envy(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return; // Monthly only
+        }
+
+        // Build the top-earner-by-position map from permanent squad
+        // contracts only. Loanees' parent contracts may be huge (a Real
+        // Madrid loanee carrying a Madrid wage) or tiny (a youth loanee
+        // from a lower-league parent) and neither belongs in the
+        // borrower's wage structure.
+        let mut top_by_group: FxHashMap<PlayerFieldPositionGroup, u32> = FxHashMap::default();
+        for p in &players.players {
+            if p.is_on_loan() {
+                continue;
+            }
+            let Some(contract) = p.contract.as_ref() else {
+                continue;
+            };
+            if contract.salary == 0 {
+                continue;
+            }
+            let group = p.position().position_group();
+            let entry = top_by_group.entry(group).or_insert(0);
+            if contract.salary > *entry {
+                *entry = contract.salary;
+            }
+        }
+
+        for player in players.players.iter_mut() {
+            // Loanees know their wage at the borrower is the loan deal —
+            // not the parent contract — and that their stay is temporary.
+            // Comparing the parent salary to the borrower's stars is
+            // doubly nonsensical and produces the "low-CA loanee
+            // unsettled by stars" bug.
+            if player.is_on_loan() {
+                continue;
+            }
+            let Some(contract) = player.contract.as_ref() else {
+                continue;
+            };
+            if contract.salary == 0 {
+                continue;
+            }
+            // Only players who play a meaningful role care about the gap —
+            // the third-choice keeper being underpaid vs the #1 is the way
+            // the world works.
+            if !matches!(
+                contract.squad_status,
+                PlayerSquadStatus::KeyPlayer
+                    | PlayerSquadStatus::FirstTeamRegular
+                    | PlayerSquadStatus::FirstTeamSquadRotation
+            ) {
+                continue;
+            }
+            // Reputation gate (mirror of `process_contract_jealousy`).
+            // Squad-status alone isn't enough — a top club may slot a
+            // CA-60 youth into rotation as cover, and that player has no
+            // business being unsettled by the star earner's wages.
+            if player.player_attributes.current_ability < 100
+                && player.player_attributes.world_reputation < 3000
+            {
+                continue;
+            }
+            // Just-signed grace window: a player who agreed their wage
+            // in the last 90 days cannot credibly resent the squad's
+            // pay structure — they negotiated their slot in it. A
+            // youth-team graduate signing his first senior deal was
+            // previously getting an "Unsettled by squad wage
+            // hierarchy" event in the same month as the contract.
+            //
+            // For contracts without a stored start date (older save
+            // files, certain generator-produced contracts), fall back
+            // to the player's most recent transfer date — every
+            // signing path that mutates the senior contract also
+            // populates `last_transfer_date`. If both are missing the
+            // contract is treated as long-installed (the legacy
+            // behaviour), which is the safe default since the
+            // appearance gate below still keeps fresh graduates out.
+            let contract_age_days = contract
+                .started
+                .or(player.last_transfer_date)
+                .map(|d| (today - d).num_days())
+                .unwrap_or(i64::MAX);
+            if contract_age_days < 90 {
+                continue;
+            }
+            // Matchday-inclusion gate: even after grace, a player
+            // needs a genuine track record at the club before the
+            // squad-wide wage hierarchy becomes a personal grievance.
+            // Requires ≥8 eligible matches the club has played since
+            // the player joined AND ≥3 matchday inclusions
+            // (started / sub appearance / named to the bench — being
+            // travelled-with counts as "the manager saw fit to take
+            // me to the game"). Hot prospects who haven't been
+            // included yet, or established players whose first weeks
+            // fell across an international break, aren't candidates
+            // for this morale signal yet.
+            let opp = player.playing_time_opportunity(today);
+            if opp.eligible_official_matches_since_join < 8 {
+                continue;
+            }
+            let matchday_inclusion = opp.player_starts_since_join
+                + opp.player_sub_apps_since_join
+                + opp.player_unused_bench_since_join;
+            if matchday_inclusion < 3 {
+                continue;
+            }
+            let group = player.position().position_group();
+            let top = match top_by_group.get(&group) {
+                Some(t) if *t > 0 => *t,
+                _ => continue,
+            };
+            if player.id == 0 || contract.salary >= top {
+                continue;
+            }
+            // The raw peer ratio is only the entry signal. The full gate
+            // weighs it against the player's own fair valuation, age,
+            // current role, ambition and temperament — so a fairly-paid
+            // veteran merely trailing a prime star is never flagged, while
+            // a genuinely underpaid important player still is. The
+            // returned magnitude is already late-career-capped.
+            let Some(profile) = WageEnvyProfile::evaluate(player, contract, top, today, ctx) else {
+                continue;
+            };
+            // 28-day cooldown so the monthly audit doesn't re-fire the
+            // same player while last month's wage-envy event is still
+            // visible in the history.
+            let context = HappinessEventContext::new(
+                HappinessEventCause::WageJealousy,
+                HappinessEventSeverity::from_magnitude(profile.magnitude),
+                HappinessEventScope::DressingRoom,
+            )
+            .with_evidence(HappinessEventEvidence::WageGap)
+            .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+            player.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::SalaryGapNoticed,
+                profile.magnitude,
+                None,
+                context,
+                28,
+            );
+        }
+    }
+
+    pub(super) fn process_squad_ambition_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        let Some(baseline) = Self::squad_ambition_baseline(players) else {
+            return;
+        };
+
+        for player in players.players.iter_mut() {
+            let Some(desire) = player.squad_ambition_desire(&baseline) else {
+                continue;
+            };
+            let magnitude = HappinessConfig::default().catalog.wants_stronger_squad;
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::ReputationAdmiration,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::Boardroom,
+            )
+            .with_career_desire_context(desire)
+            .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+            player.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::WantsStrongerSquad,
+                magnitude,
+                None,
+                happiness_ctx,
+                90,
+            );
+        }
+    }
+
+    fn squad_ambition_baseline(players: &PlayerCollection) -> Option<SquadAmbitionBaseline> {
+        // Squad baseline from permanent (non-loan) players, plus per-unit
+        // averages / counts so we can name the weakest unit around a star.
+        let mut sum: u32 = 0;
+        let mut count: u32 = 0;
+        let mut by_group: FxHashMap<PlayerFieldPositionGroup, (u32, u32)> = FxHashMap::default();
+        for p in &players.players {
+            if p.is_on_loan() {
+                continue;
+            }
+            let ca = p.player_attributes.current_ability as u32;
+            sum += ca;
+            count += 1;
+            let group = p.position().position_group();
+            let entry = by_group.entry(group).or_insert((0, 0));
+            entry.0 += ca;
+            entry.1 += 1;
+        }
+        if count < 5 {
+            return None;
+        }
+        let squad_avg = (sum / count) as u8;
+
+        // Weakest unit overall — lowest average ability among groups that
+        // actually have players. Used as context + a thin-depth signal.
+        let weakest_unit = by_group
+            .iter()
+            .filter(|(_, (_, c))| *c > 0)
+            .min_by(|a, b| {
+                let aa = a.1.0 as f32 / a.1.1 as f32;
+                let bb = b.1.0 as f32 / b.1.1 as f32;
+                aa.partial_cmp(&bb).unwrap_or(Ordering::Equal)
+            })
+            .map(|(g, _)| *g);
+
+        Some(SquadAmbitionBaseline {
+            squad_avg,
+            weakest_unit,
+            by_group,
+        })
+    }
+}
+
+struct SquadAmbitionBaseline {
+    squad_avg: u8,
+    weakest_unit: Option<PlayerFieldPositionGroup>,
+    by_group: FxHashMap<PlayerFieldPositionGroup, (u32, u32)>,
+}
+
+impl Player {
+    fn squad_ambition_desire(
+        &self,
+        baseline: &SquadAmbitionBaseline,
+    ) -> Option<CareerDesireEventContext> {
+        if self.is_on_loan() {
+            return None;
+        }
+        let ambition = self.attributes.ambition;
+        if ambition < 14.0 {
+            return None;
+        }
+        let ca = self.player_attributes.current_ability;
+        let world_rep = self.player_attributes.world_reputation.max(0);
+        if ca < 130 && world_rep < 4500 {
+            return None;
+        }
+        // Only key figures carry this weight — a backup wanting the board to
+        // sign stars is not a realistic pressure source.
+        let is_key = self
+            .contract
+            .as_ref()
+            .map(|c| {
+                matches!(
+                    c.squad_status,
+                    PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
+                )
+            })
+            .unwrap_or(false);
+        if !is_key {
+            return None;
+        }
+        if self
+            .happiness
+            .has_recent_event(&HappinessEventType::WantsStrongerSquad, 90)
+        {
+            return None;
+        }
+
+        // Squad-weakness triggers: the star is meaningfully above the squad's
+        // level, or a close teammate / mentor just left and wasn't replaced.
+        let above_squad = (ca as i32) - (baseline.squad_avg as i32) >= 10;
+        let key_sold = self
+            .happiness
+            .has_recent_event(&HappinessEventType::CloseFriendSold, 60)
+            || self
+                .happiness
+                .has_recent_event(&HappinessEventType::MentorDeparted, 60);
+        if !above_squad && !key_sold {
+            return None;
+        }
+
+        let player_group = self.position().position_group();
+        let unit_thin = baseline
+            .by_group
+            .get(&player_group)
+            .map(|(_, c)| *c < 3)
+            .unwrap_or(true);
+
+        let mut desire = CareerDesireEventContext::new(CareerDesireKind::StrongerSquadAmbition)
+            .with_squad_average_ability(baseline.squad_avg)
+            .with_player_ability(ca)
+            .with_evidence(CareerDesireEvidence::HighAmbition);
+        if let Some(unit) = baseline.weakest_unit {
+            desire = desire.with_weakest_unit(unit);
+        }
+        if above_squad {
+            desire = desire
+                .with_evidence(CareerDesireEvidence::SquadQualityBelowPlayerLevel)
+                .with_evidence(CareerDesireEvidence::PlayerAboveClubLevel);
+        }
+        if key_sold {
+            desire = desire.with_evidence(CareerDesireEvidence::KeyPlayerSold);
+        }
+        if unit_thin {
+            desire = desire.with_evidence(CareerDesireEvidence::WeakDepthInPlayerUnit);
+        }
+        Some(desire)
+    }
+}
+
+impl TeamBehaviour {
+    /// Monthly contract-stalemate audit. Where the deterministic country
+    /// pipeline reasons about *listing*, this surfaces the player-facing
+    /// [`ContractTalksStalled`] signal once a renewal has genuinely broken
+    /// down (`Severe` / `Exhausted`). Affordability isn't known in the
+    /// squad-behaviour pass, so the assessment falls back to its
+    /// rejection-count rules (the assess helper treats unknown headroom
+    /// as "don't over-escalate"). Loaned-in players are skipped — the
+    /// parent contract owns the renewal. Runs on day 1 only.
+    ///
+    /// [`ContractTalksStalled`]: HappinessEventType::ContractTalksStalled
+    pub(super) fn process_contract_stalemate_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        for player in players.players.iter_mut() {
+            if player.is_on_loan() || player.is_retired() {
+                continue;
+            }
+            let current_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0);
+            if current_salary == 0 {
+                continue;
+            }
+            let stalemate = ContractStalemate::assess(
+                player,
+                today,
+                AffordabilityInput {
+                    wage_budget_headroom: None,
+                    current_salary,
+                },
+            );
+            player.maybe_emit_contract_talks_stalled(&stalemate, today);
+        }
+    }
+
+    /// Monthly title-ambition audit. Elite, ambitious players at a club
+    /// that is visibly off the title pace want to play for a genuine
+    /// challenger — a more specific frustration than wanting European
+    /// football. Reads league-table context off the [`ClubContext`]
+    /// (`ctx.club`): position, season progress, division tier, club
+    /// reputation. Rare and mostly affects stars; a runaway version would
+    /// strip every mid-table side of talent, so the gates are tight.
+    /// Runs on day 1 only.
+    ///
+    /// [`ClubContext`]: crate::club::context::ClubContext
+    pub(super) fn process_title_ambition_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        let Some(club) = ctx.club.as_ref() else {
+            return;
+        };
+        // Top flight only, unless a lower division carries elite prestige.
+        if club.main_league_tier > 1 && club.league_reputation < 8000 {
+            return;
+        }
+        if club.total_league_matches == 0 || club.league_position == 0 {
+            return;
+        }
+        // Need enough of the season gone for the table to mean something.
+        let progress = club.league_matches_played as f32 / club.total_league_matches.max(1) as f32;
+        if progress < 0.4 {
+            return;
+        }
+        // Inside the top four is a realistic title shot — no grievance.
+        let league_position = club.league_position;
+        if league_position <= 4 {
+            return;
+        }
+
+        let club_id = club.id;
+        let club_reputation = club.main_team_reputation;
+
+        for player in players.players.iter_mut() {
+            if player.is_on_loan() {
+                continue;
+            }
+            let ambition = player.attributes.ambition;
+            if ambition < 16.0 {
+                continue;
+            }
+            let age = player.age(today);
+            let world_rep = player.player_attributes.world_reputation.max(0) as u16;
+            let ca = player.player_attributes.current_ability;
+            // Prime window, or a reputation big enough to transcend age.
+            if !((24..=31).contains(&age) || world_rep >= 6500) {
+                continue;
+            }
+            // Only genuine top-tier talent generates this mood.
+            if ca < 145 && world_rep < 6000 {
+                continue;
+            }
+            // A fresh arrival hasn't earned the right to grumble yet.
+            if player
+                .days_since_transfer(today)
+                .map(|d| d < 180)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            if player
+                .happiness
+                .has_recent_event(&HappinessEventType::WantsTitleChallenge, 120)
+            {
+                continue;
+            }
+            // Loyal club legends at a favourite club give the project time.
+            if player.attributes.loyalty >= 17.0 && player.favorite_clubs.contains(&club_id) {
+                continue;
+            }
+            // If the club can't even offer Europe, that ambition is the
+            // primary grievance — don't stack a title demand on top.
+            if player
+                .happiness
+                .has_recent_event(&HappinessEventType::WantsEuropeanCompetition, 120)
+            {
+                continue;
+            }
+
+            let mut desire =
+                CareerDesireEventContext::new(CareerDesireKind::TitleChallengeAmbition)
+                    .with_league_position(league_position)
+                    .with_club_reputation(club_reputation)
+                    .with_player_ability(ca)
+                    .with_evidence(CareerDesireEvidence::HighAmbition)
+                    .with_evidence(CareerDesireEvidence::CurrentClubNotTitleContender);
+            if (24..=31).contains(&age) {
+                desire = desire.with_evidence(CareerDesireEvidence::PrimeCareerWindow);
+            }
+            if (world_rep as i32) > (club_reputation as i32) + 1000 {
+                desire = desire.with_evidence(CareerDesireEvidence::PlayerAboveClubLevel);
+            }
+
+            let magnitude = HappinessConfig::default().catalog.wants_title_challenge;
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::ReputationAdmiration,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::Personal,
+            )
+            .with_career_desire_context(desire)
+            .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+            player.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::WantsTitleChallenge,
+                magnitude,
+                None,
+                happiness_ctx,
+                120,
+            );
+        }
+    }
+
+    /// Monthly reserve-ambition audit. A senior player parked in a
+    /// B / Reserve / Second squad plays real football every week — but at
+    /// the wrong level, so the minutes-based playing-time machinery never
+    /// sees a grievance. This audit supplies the missing mood: he dreams
+    /// of genuine first-team football, at his own club or somewhere he'd
+    /// actually start. The weekly complaint pass escalates the lingering
+    /// mood into a loan / transfer request. Runs on day 1 only, and only
+    /// when the behaviour pass is executing for a senior reserve squad —
+    /// age-restricted youth teams (U18..U23) are the normal development
+    /// pathway, where being young in the youth side is a career on
+    /// track, not a career stuck.
+    pub(super) fn process_reserve_ambition_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        let is_senior_reserve = ctx
+            .team
+            .as_ref()
+            .and_then(|t| t.team_type)
+            .map(|t| t.is_senior_reserve())
+            .unwrap_or(false);
+        if !is_senior_reserve {
+            return;
+        }
+
+        for player in players.players.iter_mut() {
+            // Loanees belong to their parent club — their development
+            // grievances are the loan audits' concern.
+            if player.is_on_loan() {
+                continue;
+            }
+            let age = player.age(today);
+            // Teenagers in a reserve squad are still on a development
+            // arc; the dream starts once adulthood makes it a career.
+            if age < 20 {
+                continue;
+            }
+            // NotNeeded players have accepted their fate — the listing /
+            // release systems own their exit, not an ambition dream.
+            if player
+                .contract
+                .as_ref()
+                .map(|c| matches!(c.squad_status, PlayerSquadStatus::NotNeeded))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            // A fresh arrival is still settling in — no stuck-career
+            // story yet. Homegrown players (never transferred) pass.
+            if player
+                .days_since_transfer(today)
+                .map(|d| d < 300)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let ambition = player.attributes.ambition;
+            // A low-ambition veteran making a living in the reserves is
+            // a realistic career: he doesn't dream, he plays.
+            if ambition < 8.0 && age >= 29 {
+                continue;
+            }
+            // Past the position-adjusted prime the breakthrough dream
+            // fades on a continuous slope — every year it takes more
+            // ambition to still believe in it, and at the late-career
+            // line nobody does. A veteran seeing out his career in the
+            // reserves is the veteran systems' story (retirement,
+            // coaching interest), not an ambition dream.
+            let (_, prime_end, fade_end) =
+                StuckCareerScan::career_phases(player.position().is_goalkeeper());
+            let faded = ((age as f32 - prime_end) / (fade_end - prime_end)).clamp(0.0, 1.0);
+            if faded > 0.0 && ambition / 20.0 <= faded {
+                continue;
+            }
+
+            let days_at_club = player
+                .days_since_transfer(today)
+                .map(|d| d.clamp(0, u32::MAX as i64) as u32)
+                .unwrap_or(0);
+
+            let mut desire =
+                CareerDesireEventContext::new(CareerDesireKind::FirstTeamBreakthroughAmbition)
+                    .with_player_ability(player.player_attributes.current_ability)
+                    .with_evidence(CareerDesireEvidence::StuckInReserveSquad);
+            if days_at_club > 0 {
+                desire = desire.with_days_at_club(days_at_club);
+            }
+            if ambition >= 14.0 {
+                desire = desire.with_evidence(CareerDesireEvidence::HighAmbition);
+            }
+            if (24..=31).contains(&age) {
+                desire = desire.with_evidence(CareerDesireEvidence::PrimeCareerWindow);
+            }
+
+            let magnitude = HappinessConfig::default().catalog.wants_first_team_football;
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::ReputationAdmiration,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::Personal,
+            )
+            .with_career_desire_context(desire)
+            .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+            player.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::WantsFirstTeamFootball,
+                magnitude,
+                None,
+                happiness_ctx,
+                60,
+            );
+        }
+    }
+
+    /// Monthly perennial-backup audit for the MAIN squad. The
+    /// minutes-deficit model cannot see this player: a backup who makes
+    /// the bench every week banks enough involvement credit that his
+    /// playing-time factor never crosses the complaint threshold, no
+    /// matter how many seasons pass. This audit reads the career ledger
+    /// instead — season after season without real starts at the club,
+    /// where a year out on loan also counts as a year without a
+    /// first-team place — and weighs the push of ambition and a closing
+    /// career window against the realities that keep real players on a
+    /// big bench: a wage above their own fair value, the size of the
+    /// club, loyalty. When the push wins, the player starts dreaming of
+    /// being a regular somewhere else — possibly at a weaker club — and
+    /// the weekly complaint pass escalates the lingering mood into a
+    /// transfer request. Runs on day 1 only, main squad only; reserve
+    /// squads have their own level-based audit above.
+    pub(super) fn process_perennial_backup_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        let is_main_team = ctx
+            .team
+            .as_ref()
+            .and_then(|t| t.team_type)
+            .map(|t| matches!(t, TeamType::Main))
+            .unwrap_or(false);
+        if !is_main_team {
+            return;
+        }
+
+        // Squad keeper picture for the third-keeper reality check: how
+        // many keepers in this squad read observably ahead of each one.
+        let keeper_levels: Vec<u8> = players
+            .players
+            .iter()
+            .filter(|p| p.position().is_goalkeeper())
+            .map(AbilityEstimator::observable_level)
+            .collect();
+
+        for player in players.players.iter_mut() {
+            let keepers_clearly_ahead = if player.position().is_goalkeeper() {
+                let own = AbilityEstimator::observable_level(player);
+                keeper_levels.iter().filter(|&&l| l > own).count()
+            } else {
+                0
+            };
+            let Some(anxiety) =
+                BackupCareerAnxiety::evaluate(player, today, ctx, keepers_clearly_ahead)
+            else {
+                continue;
+            };
+
+            let days_at_club = player
+                .days_since_transfer(today)
+                .map(|d| d.clamp(0, u32::MAX as i64) as u32)
+                .unwrap_or(0);
+
+            let mut desire =
+                CareerDesireEventContext::new(CareerDesireKind::FirstTeamBreakthroughAmbition)
+                    .with_player_ability(player.player_attributes.current_ability)
+                    .with_evidence(CareerDesireEvidence::PerennialBackupRole);
+            if anxiety.serial_loanee {
+                desire = desire.with_evidence(CareerDesireEvidence::SerialLoanSpells);
+            }
+            if days_at_club > 0 {
+                desire = desire.with_days_at_club(days_at_club);
+            }
+            if player.attributes.ambition >= 14.0 {
+                desire = desire.with_evidence(CareerDesireEvidence::HighAmbition);
+            }
+            if anxiety.in_prime_window {
+                desire = desire.with_evidence(CareerDesireEvidence::PrimeCareerWindow);
+            }
+
+            let magnitude = HappinessConfig::default().catalog.wants_first_team_football;
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::ReputationAdmiration,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::Personal,
+            )
+            .with_career_desire_context(desire)
+            .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+            player.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::WantsFirstTeamFootball,
+                magnitude,
+                None,
+                happiness_ctx,
+                60,
+            );
+        }
+    }
+
+    /// Monthly loanee-permanence audit. A loanee who is thriving at the
+    /// borrowing club — starting regularly, performing — starts wanting
+    /// the move made permanent rather than returning to the parent's
+    /// fringe or the next loan of the carousel. Longing, not a
+    /// grievance; the visible beat that precedes the summer "sign him
+    /// permanently" saga. Runs on day 1 for whatever squad the loanee
+    /// is rostered in.
+    pub(super) fn process_loanee_permanence_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        for player in players.players.iter_mut() {
+            if !player.is_on_loan() {
+                continue;
+            }
+            let age = player.age(today);
+            // Teenage development loans end with a return by design —
+            // the longing to stay is a senior's story.
+            if age < 20 {
+                continue;
+            }
+            // Settled into the spell — at least ~3 months in.
+            let settled = player
+                .contract_loan
+                .as_ref()
+                .and_then(|l| l.started)
+                .map(|s| (today - s).num_days() >= 90)
+                .unwrap_or(false);
+            if !settled {
+                continue;
+            }
+            // Thriving: a real run of starts, performing.
+            let starts = player.statistics.played;
+            if starts < 8 {
+                continue;
+            }
+            let rating = player
+                .statistics
+                .average_rating_realistic(player.position().position_group());
+            if rating < 6.8 {
+                continue;
+            }
+
+            let mut desire =
+                CareerDesireEventContext::new(CareerDesireKind::LoanToPermanentAmbition)
+                    .with_player_ability(player.player_attributes.current_ability)
+                    .with_evidence(CareerDesireEvidence::ThrivingOnLoan);
+            if player.attributes.ambition >= 14.0 {
+                desire = desire.with_evidence(CareerDesireEvidence::HighAmbition);
+            }
+            if (24..=31).contains(&age) {
+                desire = desire.with_evidence(CareerDesireEvidence::PrimeCareerWindow);
+            }
+
+            let magnitude = HappinessConfig::default().catalog.wants_loan_made_permanent;
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::Personal,
+            )
+            .with_career_desire_context(desire);
+            player.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::WantsLoanMadePermanent,
+                magnitude,
+                None,
+                happiness_ctx,
+                75,
+            );
+        }
+    }
+
+    /// Monthly loan-fatigue audit — the other verdict a loanee can reach
+    /// about his own spell, and the one his OWN club hears about.
+    ///
+    /// [`Self::process_loanee_permanence_audit`] covers the loanee who
+    /// wants the borrowing club to keep him. This one covers the player
+    /// who has had enough of being lent out at all: seasons away, a
+    /// record of real football to show for them, and a parent club that
+    /// has still never given him a competitive minute. He does not want
+    /// another loan — he wants pre-season back home and a fight for the
+    /// shirt. The two moods are the same fatigue pointed in opposite
+    /// directions, so a player who has just asked the borrower to sign
+    /// him permanently is heavily braked here rather than gated out: the
+    /// fork belongs to his ambition and his years, not to a flag.
+    ///
+    /// The mood is a claim, not a request — a loanee has no standing to
+    /// take it to the borrowing club's manager, and the weekly complaint
+    /// pass skips him for exactly that reason. What gives it teeth is
+    /// that it survives the return: `execute_loan_return` carries it
+    /// into the parent spell, where the returnee-breakthrough audit
+    /// reads it as a declaration already made and shortens the fuse
+    /// before the dream becomes a transfer request.
+    ///
+    /// Runs on day 1 for whatever squad the loanee is rostered in.
+    pub(super) fn process_loan_fatigue_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+
+        for player in players.players.iter_mut() {
+            let Some(fatigue) = LoanCarouselFatigue::evaluate(player, today) else {
+                continue;
+            };
+
+            let mut desire =
+                CareerDesireEventContext::new(CareerDesireKind::ParentClubProvingGround)
+                    .with_player_ability(player.player_attributes.current_ability)
+                    .with_evidence(CareerDesireEvidence::SerialLoanSpells);
+            if fatigue.proven_away {
+                desire = desire.with_evidence(CareerDesireEvidence::ProvenOnLoan);
+            }
+            if player.attributes.ambition >= 14.0 {
+                desire = desire.with_evidence(CareerDesireEvidence::HighAmbition);
+            }
+            if fatigue.in_prime_window {
+                desire = desire.with_evidence(CareerDesireEvidence::PrimeCareerWindow);
+            }
+
+            let magnitude = HappinessConfig::default()
+                .catalog
+                .wants_to_prove_himself_at_parent;
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::Personal,
+            )
+            .with_career_desire_context(desire)
+            .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+            player.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::WantsToProveHimselfAtParent,
+                magnitude,
+                None,
+                happiness_ctx,
+                90,
+            );
+        }
+    }
+
+    /// Monthly returnee-breakthrough audit for the MAIN squad. The
+    /// under-24 gap in the stuck-career machinery is deliberate — the
+    /// prospect pathway owns the club's side of a young career — but a
+    /// returnee whose loan record says "first-team footballer" is no
+    /// longer a generic prospect, and until now he had no voice at all:
+    /// too young for `BackupCareerAnxiety`, possibly not fringe enough
+    /// for `UnsettledAfterLoanReturn`. This audit reads the same
+    /// match-experience background that raised his playing-time bar —
+    /// a real season of official loan starts behind him, no minutes at
+    /// the parent since — and lets him say it: play me or send me where
+    /// I play. The mood escalates through the existing weekly complaint
+    /// / transfer-desire machinery; the club-side stalled-prospect sweep
+    /// still owns the actual re-loan decision.
+    pub(super) fn process_returnee_breakthrough_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        let is_main_team = ctx
+            .team
+            .as_ref()
+            .and_then(|t| t.team_type)
+            .map(|t| matches!(t, TeamType::Main))
+            .unwrap_or(false);
+        if !is_main_team {
+            return;
+        }
+        let league_matches_played = ctx
+            .club
+            .as_ref()
+            .map(|c| c.league_matches_played)
+            .unwrap_or(0);
+        // Too early in the season to call the parent's silence a verdict.
+        if league_matches_played < 6 {
+            return;
+        }
+
+        for player in players.players.iter_mut() {
+            if player.is_on_loan() || player.is_force_match_selection {
+                continue;
+            }
+            let age = player.age(today);
+            if !(18..=23).contains(&age) {
+                continue;
+            }
+            let Some(contract) = player.contract.as_ref() else {
+                continue;
+            };
+            // Listed / written-off players belong to the exit pipelines.
+            if contract.is_transfer_listed
+                || matches!(contract.squad_status, PlayerSquadStatus::NotNeeded)
+            {
+                continue;
+            }
+            if player.statuses.has(PlayerStatusType::Req)
+                || player.statuses.has(PlayerStatusType::Loa)
+                || player.statuses.is_on_international_duty()
+            {
+                continue;
+            }
+            // He came home holding a claim on the shirt. The club was
+            // told what he wanted before he walked back through the
+            // door, so it does not also get the full grace period, and
+            // the record it has to answer is the one it already heard
+            // about. Read off the arc rather than off a mood: no mood
+            // crosses a return, since happiness is reset on the drive
+            // home.
+            let declared_away = player
+                .mind
+                .career
+                .plan_view(MindClock::day(today))
+                .holds(CareerArc::ClaimMyPlace);
+            let (settle_days, min_loan_starts, min_start_share) = if declared_away {
+                (30, 8, 0.30)
+            } else {
+                (60, 12, 0.40)
+            };
+
+            // A fair look first — a couple of months back at the parent.
+            let settled = player
+                .days_since_transfer(today)
+                .map(|d| d >= settle_days)
+                .unwrap_or(false);
+            if !settled {
+                continue;
+            }
+
+            // The record: a real season of official loan starts behind
+            // him. Background reads the frozen ledger + closed spells,
+            // so the just-returned loan counts immediately.
+            let background = MatchExperienceBackground::from_player(player);
+            if background.recent_loan_starts < min_loan_starts
+                || background.recent_start_share < min_start_share
+            {
+                continue;
+            }
+
+            // The silence: the parent has played its matches without him.
+            let share = player.statistics.played as f32 / league_matches_played as f32;
+            if share >= 0.30 {
+                continue;
+            }
+
+            let days_at_club = player
+                .days_since_transfer(today)
+                .map(|d| d.clamp(0, u32::MAX as i64) as u32)
+                .unwrap_or(0);
+            let mut desire =
+                CareerDesireEventContext::new(CareerDesireKind::FirstTeamBreakthroughAmbition)
+                    .with_player_ability(player.player_attributes.current_ability)
+                    .with_evidence(CareerDesireEvidence::ProvenOnLoan);
+            if days_at_club > 0 {
+                desire = desire.with_days_at_club(days_at_club);
+            }
+            if player.attributes.ambition >= 14.0 {
+                desire = desire.with_evidence(CareerDesireEvidence::HighAmbition);
+            }
+
+            let magnitude = HappinessConfig::default().catalog.wants_first_team_football;
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::ReputationAdmiration,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::Personal,
+            )
+            .with_career_desire_context(desire)
+            .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+            player.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::WantsFirstTeamFootball,
+                magnitude,
+                None,
+                happiness_ctx,
+                60,
+            );
+        }
+    }
+
+    /// Monthly big-club-aura audit — the squad-perception side of the
+    /// match-experience background. A player whose record was earned at
+    /// a club that clearly outshines this one (the small-town kid back
+    /// from a top-flight loan he owned, the arrival who once started for
+    /// the giant) is received like a star: an arrival-window admiration
+    /// beat on him, and a slow relation drift from teammates — the young
+    /// ones especially — toward him while the aura holds. The aura is
+    /// borrowed status, though: a visibly poor run pops it, the star
+    /// treatment stops, and the room re-rates him on what he actually
+    /// shows. Runs on day 1 for every squad.
+    pub(super) fn process_big_club_aura_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        let club_reputation = ctx
+            .club
+            .as_ref()
+            .map(|c| {
+                if c.main_team_reputation > 0 {
+                    c.main_team_reputation
+                } else {
+                    5_000
+                }
+            })
+            .unwrap_or(5_000);
+
+        for player in players.players.iter_mut() {
+            player.maybe_emit_big_club_arrival(today, club_reputation);
+        }
+
+        let (holders, popped) = Self::aura_state(players);
+        for player in players.players.iter_mut() {
+            if popped.contains(&player.id) {
+                let catalog = HappinessConfig::default().catalog;
+                player.happiness.add_event_with_cooldown(
+                    HappinessEventType::BigClubAuraFaded,
+                    catalog.big_club_aura_faded,
+                    300,
+                );
+                continue;
+            }
+            player.apply_aura_orbit(&holders, today);
+        }
+    }
+
+    fn aura_state(players: &PlayerCollection) -> (Vec<AuraHolder>, Vec<u32>) {
+        let mut holders: Vec<AuraHolder> = Vec::new();
+        let mut popped: Vec<u32> = Vec::new();
+        for player in players.players.iter() {
+            if !player
+                .happiness
+                .has_recent_event(&HappinessEventType::AdmiredForBigClubSpell, AURA_HOLD_DAYS)
+            {
+                continue;
+            }
+            if player
+                .happiness
+                .has_recent_event(&HappinessEventType::BigClubAuraFaded, AURA_HOLD_DAYS)
+            {
+                continue;
+            }
+            let apps = player.statistics.played + player.statistics.played_subs;
+            let rating = player
+                .statistics
+                .average_rating_realistic(player.position().position_group());
+            if apps >= FADE_MIN_APPS && rating < FADE_RATING {
+                popped.push(player.id);
+            } else {
+                holders.push(AuraHolder {
+                    id: player.id,
+                    group: player.position().position_group(),
+                    ability: player.player_attributes.current_ability,
+                });
+            }
+        }
+        (holders, popped)
+    }
+}
+
+/// How long the admiration beat keeps the star treatment alive.
+const AURA_HOLD_DAYS: u16 = 210;
+/// Rated official sample before form can pop the aura…
+const FADE_MIN_APPS: u16 = 5;
+/// …and the season average that reads as "not showing it".
+const FADE_RATING: f32 = 6.35;
+
+struct AuraHolder {
+    id: u32,
+    group: PlayerFieldPositionGroup,
+    ability: u8,
+}
+
+impl Player {
+    fn maybe_emit_big_club_arrival(&mut self, today: NaiveDate, club_reputation: u16) {
+        /// Background must outshine the club this much before the room treats
+        /// the record as an aura.
+        const MIN_AURA: f32 = 0.35;
+        /// Arrival window (days since transfer / loan return) for the
+        /// admiration beat.
+        const ARRIVAL_WINDOW_DAYS: i64 = 45;
+
+        let fresh_arrival = self
+            .days_since_transfer(today)
+            .map(|d| (0..=ARRIVAL_WINDOW_DAYS).contains(&d))
+            .unwrap_or(false);
+        if !fresh_arrival {
+            return;
+        }
+        let aura = MatchExperienceBackground::from_player(self).aura_over(club_reputation, today);
+        if aura < MIN_AURA {
+            return;
+        }
+        let catalog = HappinessConfig::default().catalog;
+        let magnitude = catalog.admired_for_big_club_spell * (0.7 + 0.6 * aura);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationAdmiration,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::Personal,
+        );
+        self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::AdmiredForBigClubSpell,
+            magnitude,
+            None,
+            happiness_ctx,
+            365,
+        );
+    }
+
+    /// Teammates orbit the aura holders — a monthly drip, stronger from the
+    /// young players who grew up watching that badge. The exception is the
+    /// man whose shirt the star is here to take: a credible rival in the same
+    /// position group feels the competition, not the glow — his side of the
+    /// story is the returning-rival audit, not this one. One band below the
+    /// contest sits the apprentice: a young understudy so far beneath the
+    /// star that there is no rivalry to feel — he gets a masterclass to study
+    /// every day, and the room reads it as mentorship, not displacement.
+    fn apply_aura_orbit(&mut self, holders: &[AuraHolder], today: NaiveDate) {
+        /// A same-group youngster this far below the star studies him
+        /// instead of contesting the shirt.
+        const APPRENTICE_ABILITY_GAP: u8 = 25;
+        /// Apprenticeship is for kids without a senior claim; a young
+        /// senior-label incumbent belongs to the threat band.
+        const APPRENTICE_MAX_AGE: u8 = 21;
+
+        for holder in holders {
+            if holder.id == self.id {
+                continue;
+            }
+            let same_group = self.position().position_group() == holder.group;
+            if same_group {
+                let own_ability = self.player_attributes.current_ability;
+                let senior_claim = self.contract.as_ref().is_some_and(|c| {
+                    matches!(
+                        c.squad_status,
+                        PlayerSquadStatus::KeyPlayer
+                            | PlayerSquadStatus::FirstTeamRegular
+                            | PlayerSquadStatus::FirstTeamSquadRotation
+                            | PlayerSquadStatus::MainBackupPlayer
+                    )
+                });
+                let apprentice = self.age(today) <= APPRENTICE_MAX_AGE
+                    && !senior_claim
+                    && holder.ability >= own_ability.saturating_add(APPRENTICE_ABILITY_GAP);
+                if apprentice {
+                    let catalog = HappinessConfig::default().catalog;
+                    let magnitude = catalog.learning_from_star_teammate;
+                    let happiness_ctx = HappinessEventContext::new(
+                        HappinessEventCause::ReputationAdmiration,
+                        HappinessEventSeverity::from_magnitude(magnitude),
+                        HappinessEventScope::Personal,
+                    );
+                    self.happiness.add_event_with_partner_context_and_cooldown(
+                        HappinessEventType::LearningFromStarTeammate,
+                        magnitude,
+                        holder.id,
+                        happiness_ctx,
+                        365,
+                    );
+                    self.relations.update_player_relationship(
+                        holder.id,
+                        RelationshipChange::positive(ChangeType::MentorshipBond, 0.35),
+                        today,
+                    );
+                    continue;
+                }
+                let credible_rival =
+                    holder.ability.saturating_add(10) >= self.player_attributes.current_ability;
+                if credible_rival {
+                    continue;
+                }
+            }
+            let admiration = if self.age(today) <= 23 { 0.35 } else { 0.20 };
+            self.relations.update_player_relationship(
+                holder.id,
+                RelationshipChange::positive(ChangeType::ReputationAdmiration, admiration),
+                today,
+            );
+        }
+    }
+}
+
+impl TeamBehaviour {
+    /// Monthly returning-rival audit — the incumbent's side of a loan
+    /// return. A loanee coming home with a starter's record is a new
+    /// signing in competition terms: the credible incumbents in his
+    /// position group feel the shirt contest (`ThreatenedByReturningLoanee`,
+    /// per-pair cooldown) and cool toward him — the one corner of the
+    /// dressing room that does not join the admiration. A rival clearly
+    /// below the incumbent's level is shrugged off, and fellow prospects
+    /// just gained a training partner, not a displacement. Runs on day 1.
+    pub(super) fn process_returning_rival_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        /// How fresh the return must be for the threat to land.
+        const ARRIVAL_WINDOW_DAYS: i64 = 45;
+        /// The returnee's record must show a real run of loan starts.
+        const MIN_RECORD_LOAN_STARTS: u16 = 12;
+        /// A rival this far below the incumbent on ability is shrugged off.
+        const CREDIBLE_ABILITY_MARGIN: u8 = 10;
+
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+
+        struct ReturningRival {
+            id: u32,
+            group: PlayerFieldPositionGroup,
+            ability: u8,
+            age: u8,
+        }
+        let rivals: Vec<ReturningRival> = players
+            .players
+            .iter()
+            .filter(|p| !p.is_on_loan())
+            .filter(|p| {
+                p.days_since_transfer(today)
+                    .map(|d| (0..=ARRIVAL_WINDOW_DAYS).contains(&d))
+                    .unwrap_or(false)
+            })
+            .filter(|p| {
+                MatchExperienceBackground::from_player(p).recent_loan_starts
+                    >= MIN_RECORD_LOAN_STARTS
+            })
+            .map(|p| ReturningRival {
+                id: p.id,
+                group: p.position().position_group(),
+                ability: p.player_attributes.current_ability,
+                age: p.age(today),
+            })
+            .collect();
+        if rivals.is_empty() {
+            return;
+        }
+
+        for player in players.players.iter_mut() {
+            if player.is_on_loan() {
+                continue;
+            }
+            let Some(status) = player.contract.as_ref().map(|c| c.squad_status.clone()) else {
+                continue;
+            };
+            // Only holders of (or contenders for) a senior place feel
+            // displaced.
+            if !matches!(
+                status,
+                PlayerSquadStatus::KeyPlayer
+                    | PlayerSquadStatus::FirstTeamRegular
+                    | PlayerSquadStatus::FirstTeamSquadRotation
+                    | PlayerSquadStatus::MainBackupPlayer
+            ) {
+                continue;
+            }
+            let own_ability = player.player_attributes.current_ability;
+            let own_age = player.age(today);
+            let own_group = player.position().position_group();
+            for rival in &rivals {
+                if rival.id == player.id || rival.group != own_group {
+                    continue;
+                }
+                if rival.ability.saturating_add(CREDIBLE_ABILITY_MARGIN) < own_ability {
+                    continue;
+                }
+                let primary = if rival.ability > own_ability {
+                    NewSigningThreatReason::HigherAbility
+                } else {
+                    NewSigningThreatReason::SamePosition
+                };
+                let threat_ctx = NewSigningThreatContext::new(rival.id, primary)
+                    .with_player_status(status.clone())
+                    .with_player_age(own_age)
+                    .with_rival_age(rival.age);
+                match player.on_returning_rival_threat(threat_ctx) {
+                    // The shirt is between them now — a cooling, not a
+                    // feud; bounded by the arrival window, so it applies
+                    // once or twice, not forever.
+                    RivalThreatResponse::Threatened => {
+                        player.relations.update_player_relationship(
+                            rival.id,
+                            RelationshipChange::negative(ChangeType::CompetitionRivalry, 0.4),
+                            today,
+                        );
+                    }
+                    // The professional veteran hands the shirt over
+                    // properly — the kid came home to a tutor, not an
+                    // enemy.
+                    RivalThreatResponse::Mentoring => {
+                        player.relations.update_player_relationship(
+                            rival.id,
+                            RelationshipChange::positive(ChangeType::MentorshipBond, 0.4),
+                            today,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// True when the player's career began at the club he is rostered
+    /// at today — the academy-product check shared by the dressing-room
+    /// politics audits. Survives loans out (the origin row never
+    /// changes); falls back to "never transferred" for generated kids
+    /// with no recorded history yet.
+    fn is_homegrown(player: &Player) -> bool {
+        match (
+            player.statistics_history.origin_team_slug(),
+            player.statistics_history.active_team_slug(),
+        ) {
+            (Some(origin), Some(active)) => origin == active,
+            _ => player.last_transfer_date.is_none(),
+        }
+    }
+
+    /// The arrival "came with weight": a serious fee on the current
+    /// spell (same bar as the fan-expectation gate) or a big-club
+    /// record fresh enough that the room still remembers the welcome.
+    fn arrived_with_weight(player: &Player) -> bool {
+        /// Fee that makes a signing a statement at any club level —
+        /// aligned with the `FanExpectationBurden` high-fee gate.
+        const WEIGHT_FEE_FLOOR: f64 = 10_000_000.0;
+        /// How long arrival hype stays a standard to be judged against.
+        const WEIGHT_MEMORY_DAYS: u16 = 365;
+
+        let open_spell_fee = player
+            .statistics_history
+            .current
+            .iter()
+            .find(|e| e.departed_date.is_none())
+            .and_then(|e| e.transfer_fee)
+            .unwrap_or(0.0);
+        open_spell_fee >= WEIGHT_FEE_FLOOR
+            || player.happiness.has_recent_event(
+                &HappinessEventType::AdmiredForBigClubSpell,
+                WEIGHT_MEMORY_DAYS,
+            )
+            || player
+                .happiness
+                .has_recent_event(&HappinessEventType::BigClubAuraFaded, WEIGHT_MEMORY_DAYS)
+    }
+
+    /// Players already routed to an exit or absence pipeline don't
+    /// take part in dressing-room politics — shared filter for the
+    /// flop-patience / blocked-pathway / favouritism audits.
+    fn is_politics_exempt(player: &Player) -> bool {
+        let Some(contract) = player.contract.as_ref() else {
+            return true;
+        };
+        if contract.is_transfer_listed
+            || matches!(contract.squad_status, PlayerSquadStatus::NotNeeded)
+        {
+            return true;
+        }
+        player.statuses.has(PlayerStatusType::Req)
+            || player.statuses.has(PlayerStatusType::Loa)
+            || player.statuses.is_on_international_duty()
+    }
+
+    /// Monthly flop-signing patience audit — the leaders' side of a big
+    /// arrival who isn't delivering. A signing who came with weight
+    /// (serious fee or big-club hype) and now owns a real sample of
+    /// matches clearly below the water line stops getting covered for:
+    /// the senior leaders lose patience (`LosingPatienceWithSigning`,
+    /// with a relation cooling toward him), and the flop feels the room
+    /// turn (`FeelsDressingRoomPressure`, scaled by how he handles
+    /// pressure). The deeply professional leader is the exception — he
+    /// keeps the frustration private and backs the struggler instead.
+    /// Runs on day 1, Main team only.
+    pub(super) fn process_flop_signing_patience_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        let is_main_team = ctx
+            .team
+            .as_ref()
+            .and_then(|t| t.team_type)
+            .map(|t| matches!(t, TeamType::Main))
+            .unwrap_or(false);
+        if !is_main_team {
+            return;
+        }
+
+        let flops = Self::flop_ids(players, today);
+        if flops.is_empty() {
+            return;
+        }
+        let leader_ids = Self::flop_leader_ids(players, today, &flops);
+        if leader_ids.is_empty() {
+            return;
+        }
+
+        // The leaders react — by personality. Track which flops actually
+        // drew a patience-loss row so only they feel the room.
+        let mut pressured: Vec<u32> = Vec::new();
+        for player in players.players.iter_mut() {
+            if !leader_ids.contains(&player.id) {
+                continue;
+            }
+            player.apply_flop_patience(&flops, today, &mut pressured);
+        }
+
+        // The flop senses it — how hard it lands is a question of how he
+        // handles pressure, same curve as the deflated loan return.
+        for player in players.players.iter_mut() {
+            if pressured.contains(&player.id) {
+                player.apply_flop_pressure();
+            }
+        }
+    }
+
+    /// The flops: permanent arrivals with weight, past the grace window,
+    /// sitting on a real sample well under the line.
+    fn flop_ids(players: &PlayerCollection, today: NaiveDate) -> Vec<u32> {
+        /// A fair look first — no verdicts inside the settling window.
+        const SETTLING_GRACE_DAYS: i64 = 60;
+        /// After a year he's not "the new signing" anymore — whatever he is
+        /// by then, the ordinary form machinery owns it.
+        const JUDGEMENT_WINDOW_DAYS: i64 = 400;
+        /// Rated official sample before the room may call it.
+        const MIN_SAMPLE_APPS: u16 = 8;
+        /// The season average that reads as clearly below the standard his
+        /// arrival set.
+        const FLOP_RATING: f32 = 6.2;
+
+        players
+            .players
+            .iter()
+            .filter(|p| !p.is_on_loan() && !Self::is_politics_exempt(p))
+            .filter(|p| {
+                p.days_since_transfer(today)
+                    .map(|d| (SETTLING_GRACE_DAYS..=JUDGEMENT_WINDOW_DAYS).contains(&d))
+                    .unwrap_or(false)
+            })
+            .filter(|p| Self::arrived_with_weight(p))
+            .filter(|p| {
+                let apps = p.statistics.played + p.statistics.played_subs;
+                let rating = p
+                    .statistics
+                    .average_rating_realistic(p.position().position_group());
+                apps >= MIN_SAMPLE_APPS && rating < FLOP_RATING
+            })
+            .map(|p| p.id)
+            .collect()
+    }
+
+    /// The leaders: strongest senior voices in the room, capped so a flop
+    /// doesn't collect a row from half the squad.
+    fn flop_leader_ids(players: &PlayerCollection, today: NaiveDate, flops: &[u32]) -> Vec<u32> {
+        /// Leadership attribute floor for a voice that carries.
+        const LEADER_MIN_LEADERSHIP: f32 = 14.0;
+        /// Only the strongest voices speak — not the whole XI.
+        const MAX_LEADERS: usize = 3;
+
+        let mut leaders: Vec<(u32, f32)> = players
+            .players
+            .iter()
+            .filter(|p| !p.is_on_loan() && !Self::is_politics_exempt(p))
+            .filter(|p| !flops.contains(&p.id))
+            .filter(|p| p.age(today) >= 26)
+            .filter(|p| p.skills.mental.leadership >= LEADER_MIN_LEADERSHIP)
+            .filter(|p| {
+                p.contract.as_ref().is_some_and(|c| {
+                    matches!(
+                        c.squad_status,
+                        PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
+                    )
+                })
+            })
+            .map(|p| (p.id, p.skills.mental.leadership))
+            .collect();
+        leaders.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+        leaders.truncate(MAX_LEADERS);
+        leaders.into_iter().map(|(id, _)| id).collect()
+    }
+}
+
+impl Player {
+    fn apply_flop_patience(&mut self, flops: &[u32], today: NaiveDate, pressured: &mut Vec<u32>) {
+        /// A leader this professional backs the struggler instead.
+        const PROFESSIONAL_FLOOR: f32 = 15.0;
+
+        for flop_id in flops {
+            if self.attributes.professionalism >= PROFESSIONAL_FLOOR {
+                // The professional keeps it in-house and puts an arm around
+                // the struggler instead.
+                self.relations.update_player_relationship(
+                    *flop_id,
+                    RelationshipChange::positive(ChangeType::PersonalSupport, 0.3),
+                    today,
+                );
+                continue;
+            }
+            let magnitude = HappinessConfig::default()
+                .catalog
+                .losing_patience_with_signing;
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::PoorFormPressure,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::DressingRoom,
+            );
+            let emitted = self.happiness.add_event_with_partner_context_and_cooldown(
+                HappinessEventType::LosingPatienceWithSigning,
+                magnitude,
+                *flop_id,
+                happiness_ctx,
+                120,
+            );
+            self.relations.update_player_relationship(
+                *flop_id,
+                RelationshipChange::negative(ChangeType::ReputationTension, 0.35),
+                today,
+            );
+            if emitted && !pressured.contains(flop_id) {
+                pressured.push(*flop_id);
+            }
+        }
+    }
+
+    fn apply_flop_pressure(&mut self) {
+        let pressure01 = (self.attributes.pressure / 20.0).clamp(0.0, 1.0);
+        let magnitude = HappinessConfig::default()
+            .catalog
+            .feels_dressing_room_pressure
+            * (1.3 - 0.6 * pressure01);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationTension,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_follow_up(HappinessEventFollowUp::PressureBuilding);
+        self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::FeelsDressingRoomPressure,
+            magnitude,
+            None,
+            happiness_ctx,
+            120,
+        );
+    }
+}
+
+impl TeamBehaviour {
+    /// Monthly blocked-homegrown audit — the club chose a borrowed
+    /// stopgap over its own kid. A loan-in holding a starter's share of
+    /// the group's minutes while an academy product of comparable level
+    /// can't buy a league start reads as a shut pathway: the kid gets
+    /// the sharper flavor of the playing-time grievance
+    /// (`PathwayBlockedByLoanSigning`, with a rivalry cooling toward
+    /// the loanee), and the homegrown senior core — the players who
+    /// walked that same pathway — bristles at the message it sends
+    /// (`UnhappyAboutBlockedHomegrown`, warming toward the kid). A
+    /// loanee clearly better than the kid is accepted as fair
+    /// competition. Runs on day 1, Main team only.
+    pub(super) fn process_blocked_homegrown_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        /// Enough of the season played for shares to mean something.
+        const MIN_TEAM_MATCHES: u8 = 6;
+
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        let is_main_team = ctx
+            .team
+            .as_ref()
+            .and_then(|t| t.team_type)
+            .map(|t| matches!(t, TeamType::Main))
+            .unwrap_or(false);
+        if !is_main_team {
+            return;
+        }
+        let league_matches_played = ctx
+            .club
+            .as_ref()
+            .map(|c| c.league_matches_played)
+            .unwrap_or(0);
+        if league_matches_played < MIN_TEAM_MATCHES {
+            return;
+        }
+        let matches = league_matches_played as f32;
+
+        let blockers = Self::loan_blockers(players, matches);
+        if blockers.is_empty() {
+            return;
+        }
+        let blocked_pairs = Self::blocked_homegrown_pairs(players, &blockers, matches, today);
+        if blocked_pairs.is_empty() {
+            return;
+        }
+
+        // The kid's own grievance — sharper than plain lack of minutes, and
+        // pointed: he knows exactly who is holding the door shut.
+        for player in players.players.iter_mut() {
+            let Some((_, blocker_id)) = blocked_pairs.iter().find(|(kid, _)| *kid == player.id)
+            else {
+                continue;
+            };
+            player.apply_blocked_pathway(*blocker_id, today);
+        }
+
+        // The homegrown senior core reacts to the headline case — the
+        // players who came through that same academy read the benched kid as
+        // a message about what the pathway is worth now.
+        let (headline_kid, _) = blocked_pairs[0];
+        let voice_ids = Self::blocked_homegrown_voices(players, today, headline_kid);
+        for player in players.players.iter_mut() {
+            if voice_ids.contains(&player.id) {
+                player.apply_blocked_homegrown_support(headline_kid, today);
+            }
+        }
+    }
+
+    fn loan_blockers(players: &PlayerCollection, matches: f32) -> Vec<LoanBlocker> {
+        /// Start share at which the loan-in owns the position.
+        const BLOCKER_SHARE: f32 = 0.45;
+
+        players
+            .players
+            .iter()
+            .filter(|p| p.is_on_loan())
+            .filter_map(|p| {
+                let share = p.statistics.played as f32 / matches;
+                if share < BLOCKER_SHARE {
+                    return None;
+                }
+                Some(LoanBlocker {
+                    id: p.id,
+                    group: p.position().position_group(),
+                    ability: p.player_attributes.current_ability,
+                    start_share: share,
+                })
+            })
+            .collect()
+    }
+
+    fn blocked_homegrown_pairs(
+        players: &PlayerCollection,
+        blockers: &[LoanBlocker],
+        matches: f32,
+        today: NaiveDate,
+    ) -> Vec<(u32, u32)> {
+        /// Start share under which the kid is being starved.
+        const KID_STARVED_SHARE: f32 = 0.20;
+        /// The pathway story is about academy-age players.
+        const KID_MAX_AGE: u8 = 22;
+        /// A loanee more than this above the kid is fair competition, not a
+        /// stopgap blocking a pathway.
+        const COMPARABLE_ABILITY_MARGIN: u8 = 10;
+
+        // The kids: homegrown, comparable level, starved of starts behind a
+        // borrowed player in their own position group.
+        players
+            .players
+            .iter()
+            .filter(|p| !p.is_on_loan() && !Self::is_politics_exempt(p))
+            .filter(|p| p.age(today) <= KID_MAX_AGE)
+            .filter(|p| Self::is_homegrown(p))
+            .filter(|p| (p.statistics.played as f32 / matches) <= KID_STARVED_SHARE)
+            .filter_map(|p| {
+                let own_group = p.position().position_group();
+                let own_ability = p.player_attributes.current_ability;
+                blockers
+                    .iter()
+                    .filter(|b| b.group == own_group)
+                    .filter(|b| own_ability.saturating_add(COMPARABLE_ABILITY_MARGIN) >= b.ability)
+                    .max_by(|a, b| {
+                        a.start_share
+                            .partial_cmp(&b.start_share)
+                            .unwrap_or(Ordering::Equal)
+                    })
+                    .map(|b| (p.id, b.id))
+            })
+            .collect()
+    }
+
+    fn blocked_homegrown_voices(
+        players: &PlayerCollection,
+        today: NaiveDate,
+        headline_kid: u32,
+    ) -> Vec<u32> {
+        /// Only the core's strongest voices carry the grievance.
+        const MAX_SENIOR_VOICES: usize = 3;
+
+        let mut voices: Vec<(u32, f32)> = players
+            .players
+            .iter()
+            .filter(|p| !p.is_on_loan() && !Self::is_politics_exempt(p))
+            .filter(|p| p.id != headline_kid)
+            .filter(|p| p.age(today) >= 24)
+            .filter(|p| Self::is_homegrown(p))
+            .filter(|p| {
+                p.contract.as_ref().is_some_and(|c| {
+                    matches!(
+                        c.squad_status,
+                        PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
+                    )
+                })
+            })
+            .map(|p| (p.id, p.skills.mental.leadership))
+            .collect();
+        voices.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+        voices.truncate(MAX_SENIOR_VOICES);
+        voices.into_iter().map(|(id, _)| id).collect()
+    }
+}
+
+struct LoanBlocker {
+    id: u32,
+    group: PlayerFieldPositionGroup,
+    ability: u8,
+    start_share: f32,
+}
+
+impl Player {
+    fn apply_blocked_pathway(&mut self, blocker_id: u32, today: NaiveDate) {
+        let magnitude = HappinessConfig::default()
+            .catalog
+            .pathway_blocked_by_loan_signing;
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::PositionalRivalry,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+        self.happiness.add_event_with_partner_context_and_cooldown(
+            HappinessEventType::PathwayBlockedByLoanSigning,
+            magnitude,
+            blocker_id,
+            happiness_ctx,
+            90,
+        );
+        self.relations.update_player_relationship(
+            blocker_id,
+            RelationshipChange::negative(ChangeType::CompetitionRivalry, 0.3),
+            today,
+        );
+    }
+
+    fn apply_blocked_homegrown_support(&mut self, headline_kid: u32, today: NaiveDate) {
+        let magnitude = HappinessConfig::default()
+            .catalog
+            .unhappy_about_blocked_homegrown;
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::LeadershipDispute,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::DressingRoom,
+        );
+        self.happiness.add_event_with_partner_context_and_cooldown(
+            HappinessEventType::UnhappyAboutBlockedHomegrown,
+            magnitude,
+            headline_kid,
+            happiness_ctx,
+            120,
+        );
+        // The kid gains an ally in the room even while the team sheet ignores
+        // him.
+        self.relations.update_player_relationship(
+            headline_kid,
+            RelationshipChange::positive(ChangeType::PersonalSupport, 0.3),
+            today,
+        );
+    }
+}
+
+impl TeamBehaviour {
+    /// Monthly selection-favouritism audit — "the name on the shirt
+    /// picks the team". When a player who arrived with weight keeps
+    /// starting on reputation while a teammate in the same position
+    /// group shows visibly better form from the bench (real samples on
+    /// both sides), the overlooked man reads the team sheet as
+    /// favouritism (`FeelsSelectionFavouritism`, with a relation
+    /// tension toward the favoured). Both gates are deliberately strict
+    /// so ordinary rotation never trips this. Runs on day 1, Main team
+    /// only.
+    pub(super) fn process_selection_favouritism_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        /// Enough of the season for the pattern to be a pattern.
+        const MIN_TEAM_MATCHES: u8 = 8;
+
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        let is_main_team = ctx
+            .team
+            .as_ref()
+            .and_then(|t| t.team_type)
+            .map(|t| matches!(t, TeamType::Main))
+            .unwrap_or(false);
+        if !is_main_team {
+            return;
+        }
+        let league_matches_played = ctx
+            .club
+            .as_ref()
+            .map(|c| c.league_matches_played)
+            .unwrap_or(0);
+        if league_matches_played < MIN_TEAM_MATCHES {
+            return;
+        }
+        let matches = league_matches_played as f32;
+
+        let favoured = Self::favoured_selections(players, matches);
+        if favoured.is_empty() {
+            return;
+        }
+
+        for player in players.players.iter_mut() {
+            if Self::is_politics_exempt(player) {
+                continue;
+            }
+            player.apply_selection_favouritism(&favoured, matches, today);
+        }
+    }
+
+    fn favoured_selections(players: &PlayerCollection, matches: f32) -> Vec<FavouredSelection> {
+        /// The favoured player owns the shirt…
+        const FAVOURED_SHARE: f32 = 0.55;
+        /// …with a real rated sample…
+        const FAVOURED_MIN_APPS: u16 = 6;
+        /// …that sits visibly under the line.
+        const FAVOURED_RATING_CEILING: f32 = 6.4;
+
+        // Loan-ins can be the favoured name too — a big-club loanee started
+        // on pedigree is exactly this story.
+        players
+            .players
+            .iter()
+            .filter(|p| Self::arrived_with_weight(p))
+            .filter_map(|p| {
+                let share = p.statistics.played as f32 / matches;
+                let apps = p.statistics.played + p.statistics.played_subs;
+                let rating = p
+                    .statistics
+                    .average_rating_realistic(p.position().position_group());
+                if share >= FAVOURED_SHARE
+                    && apps >= FAVOURED_MIN_APPS
+                    && rating < FAVOURED_RATING_CEILING
+                {
+                    Some(FavouredSelection {
+                        id: p.id,
+                        group: p.position().position_group(),
+                        rating,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+}
+
+struct FavouredSelection {
+    id: u32,
+    group: PlayerFieldPositionGroup,
+    rating: f32,
+}
+
+impl Player {
+    fn apply_selection_favouritism(
+        &mut self,
+        favoured: &[FavouredSelection],
+        matches: f32,
+        today: NaiveDate,
+    ) {
+        /// The overlooked player barely starts…
+        const OVERLOOKED_MAX_SHARE: f32 = 0.25;
+        /// …but has a real sample of his own (subs count — that's how the
+        /// overlooked build their case)…
+        const OVERLOOKED_MIN_APPS: u16 = 4;
+        /// …clearly ahead of the favoured man's.
+        const RATING_EDGE: f32 = 0.5;
+
+        if favoured.iter().any(|f| f.id == self.id) {
+            return;
+        }
+        let own_group = self.position().position_group();
+        let apps = self.statistics.played + self.statistics.played_subs;
+        let share = self.statistics.played as f32 / matches;
+        if apps < OVERLOOKED_MIN_APPS || share > OVERLOOKED_MAX_SHARE {
+            return;
+        }
+        let own_rating = self.statistics.average_rating_realistic(own_group);
+        let Some(fav) = favoured
+            .iter()
+            .find(|f| f.group == own_group && own_rating >= f.rating + RATING_EDGE)
+        else {
+            return;
+        };
+        let magnitude = HappinessConfig::default()
+            .catalog
+            .feels_selection_favouritism;
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationTension,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk);
+        self.happiness.add_event_with_partner_context_and_cooldown(
+            HappinessEventType::FeelsSelectionFavouritism,
+            magnitude,
+            fav.id,
+            happiness_ctx,
+            90,
+        );
+        self.relations.update_player_relationship(
+            fav.id,
+            RelationshipChange::negative(ChangeType::ReputationTension, 0.25),
+            today,
+        );
+    }
+}
+
+impl TeamBehaviour {
+    /// Monthly rival-past reception audit — the squad's side of the
+    /// `ColdShoulderOverRivalPast` arrival beat. While the arrival's
+    /// cold-shoulder mark is fresh, the long-serving homegrown core —
+    /// the players who carry the badge feeling — keeps its distance: a
+    /// monthly relation cooling toward him, bounded by the mark's
+    /// window so the frost thaws on its own as he becomes one of them.
+    /// No event rows on the seniors: the story is his, theirs is the
+    /// atmosphere. Runs on day 1 for every squad.
+    pub(super) fn process_rival_past_reception_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        /// How long the arrival's rival-past mark keeps the room cold.
+        const FROST_WINDOW_DAYS: u16 = 90;
+
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+
+        let arrivals: Vec<u32> = players
+            .players
+            .iter()
+            .filter(|p| {
+                p.happiness.has_recent_event(
+                    &HappinessEventType::ColdShoulderOverRivalPast,
+                    FROST_WINDOW_DAYS,
+                )
+            })
+            .map(|p| p.id)
+            .collect();
+        if arrivals.is_empty() {
+            return;
+        }
+
+        for player in players.players.iter_mut() {
+            if arrivals.contains(&player.id) {
+                continue;
+            }
+            if player.age(today) < 24 || !Self::is_homegrown(player) {
+                continue;
+            }
+            let senior = player.contract.as_ref().is_some_and(|c| {
+                matches!(
+                    c.squad_status,
+                    PlayerSquadStatus::KeyPlayer
+                        | PlayerSquadStatus::FirstTeamRegular
+                        | PlayerSquadStatus::FirstTeamSquadRotation
+                )
+            });
+            if !senior {
+                continue;
+            }
+            for arrival_id in &arrivals {
+                player.relations.update_player_relationship(
+                    *arrival_id,
+                    RelationshipChange::negative(ChangeType::ReputationTension, 0.3),
+                    today,
+                );
+            }
+        }
+    }
+
+    /// Monthly contract-horizon audit. A senior inside the final year
+    /// of his deal with NO renewal activity on record — no offer, no
+    /// stalled negotiation, just silence — reads the situation two
+    /// ways: a player in real form treats the run-in as a shop window
+    /// (`PlayingForNewContract`), everyone else starts to worry
+    /// (`ContractExpiryAnxiety`). Distinct from `ContractTalksStalled`,
+    /// where talks happened and broke down. Runs on day 1.
+    pub(super) fn process_contract_horizon_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        for player in players.players.iter_mut() {
+            if player.is_on_loan() {
+                continue;
+            }
+            let age = player.age(today);
+            // Youth renewals are the academy pipeline's routine; past
+            // the late-career line the horizon question is retirement,
+            // not renewal — the veteran audit owns it.
+            if age < 21 {
+                continue;
+            }
+            let late_line = if player.position().is_goalkeeper() {
+                37
+            } else {
+                34
+            };
+            if age >= late_line {
+                continue;
+            }
+            let Some((days_left, listed, not_needed)) = player.contract.as_ref().map(|c| {
+                (
+                    (c.expiration - today).num_days(),
+                    c.is_transfer_listed,
+                    matches!(c.squad_status, PlayerSquadStatus::NotNeeded),
+                )
+            }) else {
+                continue;
+            };
+            // Final year, but not the final month of chaos — the
+            // expiry-day machinery owns the endgame.
+            if !(30..=365).contains(&days_left) {
+                continue;
+            }
+            // Listed / written-off / asking-out players know exactly
+            // why nobody has called about a new deal.
+            if listed
+                || not_needed
+                || player.statuses.has(PlayerStatusType::Req)
+                || player.statuses.has(PlayerStatusType::Loa)
+            {
+                continue;
+            }
+            // "Silence" = no renewal activity on record in months.
+            let h = &player.happiness;
+            if h.has_recent_event(&HappinessEventType::ContractOffer, 90)
+                || h.has_recent_event(&HappinessEventType::ContractRenewal, 180)
+                || h.has_recent_event(&HappinessEventType::ContractTalksStalled, 90)
+                || h.has_recent_event(&HappinessEventType::RejectedContractOffer, 120)
+            {
+                continue;
+            }
+
+            // In-form seniors flip the anxiety into shop-window drive.
+            let apps = player.statistics.played + player.statistics.played_subs;
+            let rating = player
+                .statistics
+                .average_rating_realistic(player.position().position_group());
+            let cfg = HappinessConfig::default();
+            if apps >= 6 && rating >= 7.05 {
+                player.happiness.add_event_with_cooldown(
+                    HappinessEventType::PlayingForNewContract,
+                    cfg.catalog.playing_for_new_contract,
+                    90,
+                );
+            } else {
+                player.happiness.add_event_with_cooldown(
+                    HappinessEventType::ContractExpiryAnxiety,
+                    cfg.catalog.contract_expiry_anxiety,
+                    60,
+                );
+            }
+        }
+    }
+
+    /// Monthly late-career audit for contracted players. Older players
+    /// whose role has faded begin to weigh up retirement; veteran leaders
+    /// with the right temperament signal interest in coaching. Both gates
+    /// live in [`CareerStageDetector`]; this just walks the squad on the
+    /// monthly cadence. Loaned-in players are the parent club's concern.
+    pub(super) fn process_veteran_career_stage_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+        for player in players.players.iter_mut() {
+            if player.is_on_loan() {
+                continue;
+            }
+            CareerStageDetector::maybe_consider_retirement(player, today);
+            CareerStageDetector::maybe_show_coaching_interest(player, today);
+            CareerStageDetector::maybe_celebrate_club_service(player, today);
+            CareerStageDetector::maybe_retire_from_international_football(player, today);
+        }
+    }
+}
+
+/// Career-anxiety verdict for a settled main-squad player who is not
+/// getting first-team football — the perennial backup and the serial
+/// loanee. The push (ambition, the closing career window, seasons
+/// already lost, the loan carousel) is weighed against the comforts
+/// that keep real players on a big bench: a wage above their own fair
+/// value, the prestige of a big club, loyalty. Built by
+/// [`TeamBehaviour::process_perennial_backup_audit`]; `None` means the
+/// player accepts his role — which for a well-paid, unambitious #2 at a
+/// big club is a perfectly real career.
+struct BackupCareerAnxiety {
+    /// Two or more of the last four season-years were spent out on loan
+    /// — the player keeps being circulated instead of played.
+    serial_loanee: bool,
+    /// Inside the position-adjusted prime window at emit time.
+    in_prime_window: bool,
+}
+
+impl BackupCareerAnxiety {
+    fn evaluate(
+        player: &Player,
+        today: NaiveDate,
+        ctx: &GlobalContext<'_>,
+        keepers_clearly_ahead: usize,
+    ) -> Option<BackupCareerAnxiety> {
+        // Loanees belong to their parent club; a manager-pinned player
+        // IS first-team by definition.
+        if player.is_on_loan() || player.is_force_match_selection {
+            return None;
+        }
+        let contract = player.contract.as_ref()?;
+        // Already written off or already on the way out — the listing /
+        // release systems own those stories.
+        if matches!(contract.squad_status, PlayerSquadStatus::NotNeeded)
+            || contract.is_transfer_listed
+        {
+            return None;
+        }
+        if player.statuses.has(PlayerStatusType::Req) || player.statuses.has(PlayerStatusType::Loa)
+        {
+            return None;
+        }
+
+        let age = player.age(today);
+        let is_goalkeeper = player.position().is_goalkeeper();
+        // Past the late-career line the veteran audit owns the story — a
+        // 36-year-old #2 keeper seeing out his career is real life. Below
+        // it the restlessness curve decides how much a spectator minds;
+        // youth is a discount on it, not a closed door.
+        let (_, prime_end, fade_end) = StuckCareerScan::career_phases(is_goalkeeper);
+        if age as f32 >= fade_end {
+            return None;
+        }
+
+        // A third-choice keeper knows exactly what he is: with two men
+        // observably ahead of him, a veteran past his prime is not
+        // nursing a breakthrough dream — "one last number-one shirt" is
+        // the career #2's story, never the #3's (the Pinsoglio case). A
+        // younger third keeper still dreams; the reserve / prospect
+        // pathways own his route out.
+        if is_goalkeeper && keepers_clearly_ahead >= 2 && (age as f32) > prime_end {
+            return None;
+        }
+
+        // Still settling in after a move — no stuck story yet. Homegrown
+        // players (never transferred) pass.
+        if StuckCareerScan::club_tenure_days(player, today)
+            .map(|d| d < StuckCareerScan::TENURE_FOR_A_STUCK_STORY)
+            .unwrap_or(false)
+        {
+            return None;
+        }
+
+        // Loyal servants of a favourite club accept the squad role.
+        if let Some(club) = ctx.club.as_ref()
+            && player.attributes.loyalty >= 17.0
+            && player.favorite_clubs.contains(&club.id)
+        {
+            return None;
+        }
+
+        let scan = StuckCareerScan::of(player, today)?;
+        let serial_loanee = scan.serial_loanee;
+        if scan.stuck_years < 2 {
+            return None;
+        }
+
+        // Breaking through right now? A backup who has claimed the shirt
+        // this season is not stuck any more.
+        if let Some(club) = ctx.club.as_ref()
+            && club.league_matches_played >= 8
+        {
+            let share = player.statistics.played as f32 / club.league_matches_played as f32;
+            if share >= 0.40 {
+                return None;
+            }
+        }
+
+        // Eligibility: the perennial backup by squad status, or anyone
+        // the club keeps shipping out on loan instead of playing. Real
+        // rotation players with actual starts never get this far — the
+        // stuck-season scan already broke their chain.
+        let is_backup = matches!(contract.squad_status, PlayerSquadStatus::MainBackupPlayer);
+        if !is_backup && !serial_loanee {
+            return None;
+        }
+
+        // ── The push ──
+        // Being #2 at a genuinely big club is a career in itself — the
+        // shared restlessness curve weighs that prestige, the player's
+        // ambition and the years already lost against each other.
+        let club_rep = ctx
+            .club
+            .as_ref()
+            .map(|c| {
+                if c.main_team_reputation > 0 {
+                    c.main_team_reputation
+                } else {
+                    5_000
+                }
+            })
+            .unwrap_or(5_000) as f32;
+        let restlessness = scan.restlessness(RestlessnessInputs {
+            ambition: player.attributes.ambition,
+            determination: player.skills.mental.determination,
+            loyalty: player.attributes.loyalty,
+            age,
+            is_goalkeeper,
+            club_rep01: ((club_rep - 4_000.0) / 4_000.0).clamp(0.0, 1.0),
+        });
+
+        // ── The last comfort ──
+        // A wage clearly above his own fair valuation is exactly why
+        // real backups sign the next extension and stay put. Unlike the
+        // prestige of the badge it does not fade with the years — the
+        // money arrives every month whether he plays or not.
+        let ambition01 = (player.attributes.ambition / 20.0).clamp(0.0, 1.0);
+        let fair_ratio = WageFairness::assess(player, contract, today, ctx).fair_ratio;
+        let wage_comfort =
+            ((fair_ratio - 1.0) / 0.5).clamp(0.0, 1.0) * 0.15 * (1.0 - 0.5 * ambition01);
+
+        // What he has decided about it. A second restlessness curve
+        // beside the plan is two models of one feeling, and they
+        // disagreed about the same man on the same morning — the plan is
+        // formed from these very drives and holds its answer for
+        // seasons, which is what a career story needs.
+        let plan = player.mind.career.plan_view(MindClock::day(today));
+        let decided = plan.is(CareerArc::ProveOnLoan, PlanStage::Committed)
+            || plan.is(CareerArc::StepDownToPlay, PlanStage::Committed);
+        if !decided {
+            return None;
+        }
+        // …and the one comfort the arc does not carry: a wage clearly
+        // above his own fair valuation is exactly why real backups sign
+        // the next extension and stay put.
+        if wage_comfort >= restlessness.score {
+            return None;
+        }
+
+        Some(BackupCareerAnxiety {
+            serial_loanee,
+            in_prime_window: restlessness.in_prime_window,
+        })
+    }
+}
+
+/// Why a loanee stops wanting the next loan.
+///
+/// The carousel is a real career shape: a club keeps a player it rates
+/// on the books, lends him out every summer, and never actually gives
+/// him a competitive minute of its own. From the outside it looks like
+/// development; from the inside it is a career being spent somewhere
+/// else. This is the model of when that tips over — read entirely off
+/// the player's own record, because that is all he has to argue with:
+/// how many times he has been sent away, what he did while he was
+/// there, what the parent club gave him in between, and how many years
+/// of the career are left.
+///
+/// Nothing here is a hard rule beyond the shape of the situation — the
+/// weighting is a continuous push (ambition, the closing window, the
+/// number of spells, a record that speaks for itself) against the
+/// comforts that keep real players quiet (loyalty, and having just told
+/// the borrowing club he would happily stay). Returned by
+/// [`TeamBehaviour::process_loan_fatigue_audit`]; `None` means the
+/// player is on a normal loan and has nothing to say about it.
+struct LoanCarouselFatigue {
+    /// His record away from home backs the claim: a real run of official
+    /// starts on this spell or the last ones.
+    proven_away: bool,
+    /// Inside the position-adjusted prime window at emit time.
+    in_prime_window: bool,
+}
+
+impl LoanCarouselFatigue {
+    /// A loanee must clear this desire score before he says it.
+    const EMIT_THRESHOLD: f32 = 0.52;
+    /// Days into the spell before he has seen enough of it to judge.
+    const SETTLED_SPELL_DAYS: i64 = 90;
+    /// Below this age every loan is still the development arc.
+    const MIN_AGE: u8 = 20;
+    /// Season-years the ledger scan may walk back.
+    const MAX_LOOKBACK_YEARS: u16 = 5;
+    /// Parent-club league starts across the scanned window that still
+    /// read as a club which has never given him a chance. Deliberately
+    /// the same bar the backup audit calls a season without first-team
+    /// football.
+    const PARENT_STARTS_CEILING: u16 = 8;
+    /// Loan starts at which the record speaks for itself.
+    const PROVEN_LOAN_STARTS: f32 = 12.0;
+    /// A recorded loan season belongs to the CURRENT spell only once
+    /// that spell is old enough to have crossed a season boundary. A
+    /// younger spell cannot own the loan row already on the ledger, so
+    /// that row is a previous time out.
+    const SPELL_OWNS_A_LEDGER_SEASON_AFTER_DAYS: i64 = 300;
+    /// How long a "sign me permanently" declaration keeps braking the
+    /// opposite mood.
+    const PERMANENCE_BRAKE_DAYS: u16 = 90;
+
+    fn evaluate(player: &Player, today: NaiveDate) -> Option<LoanCarouselFatigue> {
+        let loan = player.contract_loan.as_ref()?;
+        // A spell he has not lived through yet says nothing. The start
+        // date is the truth here — `days_since_transfer` is stamped by
+        // the loan move as well, so it cannot tell a fresh spell from a
+        // long one at a different club.
+        let spell_days = (today - loan.started?).num_days();
+        if spell_days < Self::SETTLED_SPELL_DAYS {
+            return None;
+        }
+
+        let contract = player.contract.as_ref()?;
+        // Written off, on the way out, or already asking — the listing /
+        // exit pipelines own those players, and none of them is waiting
+        // for a chance at the parent club.
+        if contract.is_transfer_listed
+            || matches!(contract.squad_status, PlayerSquadStatus::NotNeeded)
+            || player.statuses.has(PlayerStatusType::Req)
+        {
+            return None;
+        }
+        // A player the parent already rates is out on loan for minutes or
+        // for fitness, not because the door is shut.
+        if matches!(
+            contract.squad_status,
+            PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
+        ) {
+            return None;
+        }
+
+        let age = player.age(today);
+        let is_goalkeeper = player.position().is_goalkeeper();
+        let (prime_start, prime_end, fade_end) = StuckCareerScan::career_phases(is_goalkeeper);
+        if age < Self::MIN_AGE || (age as f32) >= fade_end {
+            return None;
+        }
+
+        let (recorded_loan_years, parent_starts) = Self::scan_ledger(player)?;
+        // Being lent out once is a career step, not a carousel.
+        let previous_spells = if spell_days >= Self::SPELL_OWNS_A_LEDGER_SEASON_AFTER_DAYS {
+            recorded_loan_years.saturating_sub(1)
+        } else {
+            recorded_loan_years
+        };
+        if previous_spells == 0 {
+            return None;
+        }
+        // The club HAS played him — then the loan is a phase of a career
+        // at this club, not a substitute for one.
+        if parent_starts > Self::PARENT_STARTS_CEILING {
+            return None;
+        }
+
+        // ── The push ──
+        let ambition01 = (player.attributes.ambition / 20.0).clamp(0.0, 1.0);
+        let determination01 = (player.skills.mental.determination / 20.0).clamp(0.0, 1.0);
+        let loyalty01 = (player.attributes.loyalty / 20.0).clamp(0.0, 1.0);
+
+        // Age urgency: a second loan at twenty is a career being built,
+        // the same spell at twenty-six is a career being spent. Ramps to
+        // the prime, holds through it, then eases off as the player makes
+        // his peace with what the career turned out to be.
+        let a = age as f32;
+        let age_urgency = if a < prime_start {
+            0.35 + 0.65 * ((a - Self::MIN_AGE as f32) / (prime_start - Self::MIN_AGE as f32))
+        } else if a <= prime_end {
+            1.0
+        } else {
+            1.0 - 0.5 * ((a - prime_end) / (fade_end - prime_end)).clamp(0.0, 1.0)
+        };
+        let carousel_pressure = (previous_spells.min(3) as f32) / 3.0;
+
+        // What he did while he was away, live spell included — the
+        // ledger only freezes at season end, and the argument he is
+        // making is about the football he is playing right now.
+        let loan_starts = MatchExperienceBackground::from_player(player)
+            .recent_loan_starts
+            .max(player.statistics.played);
+        let proven01 = (loan_starts as f32 / Self::PROVEN_LOAN_STARTS).clamp(0.0, 1.0);
+
+        // ── The comforts ──
+        let loyalty_brake = loyalty01 * 0.08;
+        // He has just asked the borrowing club to keep him: the same
+        // fatigue, pointed at a different door. Which door wins is
+        // ambition's business — a modest player settles where he is
+        // wanted, an ambitious one still wants the shirt he was signed
+        // for.
+        let permanence_brake = if player.happiness.has_recent_event(
+            &HappinessEventType::WantsLoanMadePermanent,
+            Self::PERMANENCE_BRAKE_DAYS,
+        ) {
+            0.30 * (1.0 - 0.5 * ambition01)
+        } else {
+            0.0
+        };
+
+        let desire = 0.34 * ambition01
+            + 0.26 * age_urgency
+            + 0.20 * carousel_pressure
+            + 0.16 * proven01
+            + 0.08 * determination01
+            - loyalty_brake
+            - permanence_brake;
+
+        if desire < Self::EMIT_THRESHOLD {
+            return None;
+        }
+
+        Some(LoanCarouselFatigue {
+            proven_away: proven01 >= 0.75,
+            in_prime_window: a >= prime_start - 2.0 && a <= prime_end,
+        })
+    }
+
+    /// Walk the canonical season ledger for the shape of the carousel:
+    /// how many distinct season-years were spent out on loan, and how
+    /// many league starts the parent club gave him across the same
+    /// window. Seasons before he signed for the parent say nothing about
+    /// what the parent has done with him, so the scan floors at the
+    /// contract start when the deal carries one.
+    ///
+    /// Returns `(recorded loan season-years, parent league starts)`, or
+    /// `None` when there is no usable history at all.
+    fn scan_ledger(player: &Player) -> Option<(u16, u16)> {
+        let ledger = &player.statistics_history.season_ledger;
+        let join_year_floor = player
+            .contract
+            .as_ref()
+            .and_then(|c| c.started)
+            .map(|d| d.year() as u16);
+
+        let anchor = ledger
+            .iter()
+            .filter(|e| matches!(e.competition_kind, PlayerStatCompetitionKind::League))
+            .map(|e| e.season_start_year)
+            .max()?;
+        let floor = anchor
+            .saturating_sub(Self::MAX_LOOKBACK_YEARS - 1)
+            .max(join_year_floor.unwrap_or(0));
+
+        let mut loan_years: Vec<u16> = Vec::new();
+        let mut parent_starts: u16 = 0;
+
+        for entry in ledger
+            .iter()
+            .filter(|e| matches!(e.competition_kind, PlayerStatCompetitionKind::League))
+            .filter(|e| e.season_start_year >= floor && e.season_start_year <= anchor)
+        {
+            if entry.is_loan {
+                loan_years.push(entry.season_start_year);
+            } else {
+                parent_starts = parent_starts.saturating_add(entry.statistics.played);
+            }
+        }
+
+        loan_years.sort_unstable();
+        loan_years.dedup();
+
+        Some((loan_years.len() as u16, parent_starts))
+    }
+}
+
+/// A player's own fair-wage picture, shared by the periodic wage-envy
+/// sweep ([`WageEnvyProfile`]) and the fresh-renewal jealousy path
+/// ([`TeamBehaviour::process_contract_jealousy`]) so the two can never
+/// disagree about whether a wage is actually low.
+///
+/// `fair_ratio` compares the player's *effective* annual package (base
+/// plus realistically-weighted bonuses, via the shared
+/// [`expected_annual_value`] helper) against what [`ContractValuation`]
+/// says he should earn given his age, ability, status, club and league —
+/// the same curve the salary-happiness factor uses. Because the
+/// valuation bakes in the age decline, a fading veteran is measured
+/// against a *lower* bar, so a wage that merely trails a prime star is
+/// not treated as underpayment.
+struct WageFairness {
+    age: u8,
+    is_goalkeeper: bool,
+    /// 34+ for an outfielder, 37+ for a goalkeeper.
+    is_late_career: bool,
+    /// effective package / fair expected wage. ≥1.0 means paid at or
+    /// above his own valuation; well below 1.0 is genuine underpayment.
+    fair_ratio: f32,
+}
+
+impl WageFairness {
+    fn assess(
+        player: &Player,
+        contract: &PlayerClubContract,
+        today: NaiveDate,
+        ctx: &GlobalContext<'_>,
+    ) -> WageFairness {
+        let age = player.age(today);
+        let is_goalkeeper = player.position().is_goalkeeper();
+        let is_late_career = if is_goalkeeper { age >= 37 } else { age >= 34 };
+
+        // Club / league reputation feed the valuation curve. Fall back to
+        // a neutral mid-tier baseline when the club context is absent or
+        // unpopulated (older saves), mirroring `calculate_salary_factor`.
+        let (club_reputation_score, league_reputation) =
+            ctx.club.as_ref().map_or((0.5_f32, 5_000_u16), |club| {
+                let rep = if club.main_team_reputation > 0 {
+                    (club.main_team_reputation as f32 / 10_000.0).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+                let league = if club.league_reputation > 0 {
+                    club.league_reputation
+                } else {
+                    5_000
+                };
+                (rep, league)
+            });
+
+        // Approximate months left; only widens the valuation's leverage
+        // band, never the expected wage itself.
+        let months_remaining = ((contract.expiration - today).num_days() / 30) as i32;
+        let valuation_ctx = ValuationContext::happiness_default(
+            player,
+            age,
+            contract.squad_status.clone(),
+            club_reputation_score,
+            league_reputation,
+            months_remaining,
+        );
+        let expected_wage =
+            ContractValuation::evaluate(player, &valuation_ctx).expected_wage as f32;
+        let effective_salary =
+            PackageInputs::from_contract(contract, player).expected_annual_value() as f32;
+
+        // No meaningful expectation (youth / amateur edge) → treat as
+        // fairly paid so the gate can never fire on a divide-by-zero.
+        let fair_ratio = if expected_wage >= 1.0 {
+            effective_salary / expected_wage
+        } else {
+            1.0
+        };
+
+        WageFairness {
+            age,
+            is_goalkeeper,
+            is_late_career,
+            fair_ratio,
+        }
+    }
+
+    /// True when a late-career veteran is paid fairly enough relative to
+    /// his *own* declining valuation that a teammate's fresh raise — or
+    /// the squad wage hierarchy — should not unsettle him. Prime-age
+    /// players are never suppressed here; the caller's full gate handles
+    /// them.
+    fn late_career_wage_is_fair(&self, player: &Player) -> bool {
+        if !self.is_late_career {
+            return false;
+        }
+        // Within ~30% of his own fair value is not "underpaid" for a
+        // fading player.
+        if self.fair_ratio >= 0.70 {
+            return true;
+        }
+        // A loyal, professional veteran in the fair band lets it go.
+        player.attributes.loyalty >= 16.0
+            && player.attributes.professionalism >= 14.0
+            && self.fair_ratio >= 0.65
+    }
+}
+
+/// Outcome of the periodic wage-envy gate for one player. Built (via
+/// [`WageEnvyProfile::evaluate`]) only when the player is genuinely and
+/// materially underpaid for someone of his importance, age and current
+/// role — never merely because a prime-age star out-earns him. The
+/// embedded `magnitude` is the final, late-career-capped morale hit.
+struct WageEnvyProfile {
+    magnitude: f32,
+}
+
+impl WageEnvyProfile {
+    /// Decide whether `player` should resent the squad wage hierarchy
+    /// this month, and size the hit. Returns `None` (no event) unless
+    /// every gate passes. `top_group_salary` is the highest permanent
+    /// wage at the player's position group; the caller has already
+    /// applied the cheap squad-status / reputation / grace / appearance
+    /// pre-gates.
+    fn evaluate(
+        player: &Player,
+        contract: &PlayerClubContract,
+        top_group_salary: u32,
+        today: NaiveDate,
+        ctx: &GlobalContext<'_>,
+    ) -> Option<WageEnvyProfile> {
+        if top_group_salary == 0 || contract.salary == 0 {
+            return None;
+        }
+
+        let peer_ratio = contract.salary as f32 / top_group_salary as f32;
+
+        let fairness = WageFairness::assess(player, contract, today, ctx);
+        let fair_ratio = fairness.fair_ratio;
+        let is_late_career = fairness.is_late_career;
+
+        let squad_status = &contract.squad_status;
+        let is_key = matches!(squad_status, PlayerSquadStatus::KeyPlayer);
+        let starter_ratio = player.happiness.starter_ratio;
+        let ambition = player.attributes.ambition;
+        let loyalty = player.attributes.loyalty;
+        let professionalism = player.attributes.professionalism;
+
+        // ── Score ──────────────────────────────────────────────
+        let peer_gap = ((0.60 - peer_ratio) / 0.60).clamp(0.0, 1.0);
+        let fair_gap = ((0.82 - fair_ratio) / 0.82).clamp(0.0, 1.0);
+        let role_weight = match squad_status {
+            PlayerSquadStatus::KeyPlayer => 1.20,
+            PlayerSquadStatus::FirstTeamRegular => 1.00,
+            PlayerSquadStatus::FirstTeamSquadRotation => 0.70,
+            _ => 0.0,
+        };
+        let current_use_weight = 0.65 + 0.70 * starter_ratio.clamp(0.0, 1.0);
+        let ambition_weight = 0.70 + 0.60 * (ambition / 20.0);
+        let loyalty_damp = 1.0 - 0.25 * (loyalty / 20.0);
+        let professionalism_damp = 1.0 - 0.15 * (professionalism / 20.0);
+        let late_career_damp = Self::late_career_damp(&fairness, is_key, starter_ratio);
+
+        let salary_gap_score = (0.45 * peer_gap + 0.55 * fair_gap)
+            * role_weight
+            * current_use_weight
+            * ambition_weight
+            * loyalty_damp
+            * professionalism_damp
+            * late_career_damp;
+
+        // ── Gate ───────────────────────────────────────────────
+        if peer_ratio >= 0.60 || fair_ratio >= 0.82 || salary_gap_score < 1.0 {
+            return None;
+        }
+
+        // A player weighing retirement isn't chasing a new wage band —
+        // unless he's still a genuine, regularly-playing key man.
+        let recent_retirement = player
+            .happiness
+            .has_recent_event(&HappinessEventType::RetirementConsidering, 180);
+        if recent_retirement && !(is_key && starter_ratio >= 0.60) {
+            return None;
+        }
+
+        if is_late_career {
+            // Tighter bar: only a clearly-underpaid, still-ambitious,
+            // still-playing veteran is unsettled by the hierarchy.
+            if fair_ratio >= 0.70 || ambition < 14.0 {
+                return None;
+            }
+            if starter_ratio < 0.50 && !is_key {
+                return None;
+            }
+            // A loyal, professional veteran in the fair band lets it go.
+            if loyalty >= 16.0 && professionalism >= 14.0 && fair_ratio >= 0.65 {
+                return None;
+            }
+        }
+
+        // ── Magnitude ──────────────────────────────────────────
+        let mut magnitude = -(1.25 + salary_gap_score * 4.0).clamp(1.25, 5.0);
+        // A fading non-key veteran feels it, but it never becomes a
+        // dressing-room crisis.
+        if is_late_career && !is_key {
+            magnitude = magnitude.max(-2.5);
+        }
+        // Someone already mulling retirement shrugs most of it off.
+        if recent_retirement {
+            magnitude = magnitude.max(-1.5);
+        }
+
+        Some(WageEnvyProfile { magnitude })
+    }
+
+    /// Age-banded damp on the wage-envy score for late-career players.
+    /// Non-veterans are unaffected (1.0). A still-central key player who
+    /// is playing regularly keeps most of his voice (0.85); everyone else
+    /// is steeply discounted as they wind down (0.45 deep into the
+    /// decline, 0.65 at its start).
+    fn late_career_damp(fairness: &WageFairness, is_key: bool, starter_ratio: f32) -> f32 {
+        if !fairness.is_late_career {
+            return 1.0;
+        }
+        if is_key && starter_ratio >= 0.65 {
+            return 0.85;
+        }
+        let steep = if fairness.is_goalkeeper {
+            fairness.age >= 39
+        } else {
+            fairness.age >= 36
+        };
+        if steep { 0.45 } else { 0.65 }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::club::context::ClubContext;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::mind::{CareerMind, CareerPlan, GoalOrigin};
+    use crate::club::player::statistics::CurrentSeasonEntry;
+    use crate::context::SimulationContext;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, Player, PlayerAttributes, PlayerClubContract, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills, PlayerStatLedgerEntry, PlayerStatistics,
+        TeamContext, TeamType,
+    };
+    use chrono::{Duration, NaiveDate};
+
+    fn first_of_month(y: i32, m: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, 1).unwrap()
+    }
+
+    fn month_ctx<'a>(date: NaiveDate) -> GlobalContext<'a> {
+        let dt = date.and_hms_opt(0, 0, 0).unwrap();
+        GlobalContext::new(SimulationContext::new(dt))
+    }
+
+    fn attrs(ambition: f32) -> PersonAttributes {
+        PersonAttributes {
+            adaptability: 12.0,
+            ambition,
+            controversy: 5.0,
+            loyalty: 10.0,
+            pressure: 12.0,
+            professionalism: 12.0,
+            sportsmanship: 12.0,
+            temperament: 12.0,
+            consistency: 12.0,
+            important_matches: 12.0,
+            dirtiness: 5.0,
+        }
+    }
+
+    fn build_player(id: u32, birth: NaiveDate, ca: u8, world_rep: i16, ambition: f32) -> Player {
+        let pa = PlayerAttributes {
+            current_ability: ca,
+            world_reputation: world_rep,
+            current_reputation: world_rep,
+            ..Default::default()
+        };
+        PlayerBuilder::new()
+            .id(id)
+            .full_name(FullName::new("T".into(), id.to_string()))
+            .birth_date(birth)
+            .country_id(1)
+            .attributes(attrs(ambition))
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Striker,
+                    level: 20,
+                }],
+            })
+            .player_attributes(pa)
+            .build()
+            .unwrap()
+    }
+
+    fn with_contract(mut p: Player, status: PlayerSquadStatus) -> Player {
+        let mut c = PlayerClubContract::new(50_000, NaiveDate::from_ymd_opt(2028, 6, 30).unwrap());
+        c.squad_status = status;
+        p.contract = Some(c);
+        p
+    }
+
+    fn count(player: &Player, kind: HappinessEventType) -> usize {
+        player
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == kind)
+            .count()
+    }
+
+    // ── LoanRecallRequested ─────────────────────────────────────
+
+    /// A young loanee who started 90 days ago, was given the chance to
+    /// feature in plenty of matches, but barely played.
+    fn make_starved_loanee(today: NaiveDate) -> Player {
+        let mut p = build_player(
+            1,
+            NaiveDate::from_ymd_opt(2004, 1, 1).unwrap(),
+            120,
+            2_000,
+            12.0,
+        );
+        p = with_contract(p, PlayerSquadStatus::FirstTeamRegular);
+        let loan_start = today - chrono::Duration::days(90);
+        let mut loan = PlayerClubContract::new_loan(
+            40_000,
+            NaiveDate::from_ymd_opt(2027, 6, 30).unwrap(),
+            100,
+            101,
+            200,
+        );
+        loan.started = Some(loan_start);
+        loan.loan_min_appearances = Some(8);
+        p.contract_loan = Some(loan);
+        // Plenty of matches available, almost none played.
+        p.happiness.eligible_official_matches_since_join = 12;
+        p.happiness.starts_since_join = 1;
+        p.statistics.played = 1;
+        p.statistics.played_subs = 0;
+        p
+    }
+
+    #[test]
+    fn failing_loan_opens_recall_and_requests_it() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![make_starved_loanee(today)]);
+        TeamBehaviour::process_loan_playing_time_audit(&mut players, &month_ctx(today));
+
+        let p = &players.players[0];
+        assert_eq!(
+            count(p, HappinessEventType::LoanRecallRequested),
+            1,
+            "a clearly failing loan must request a recall"
+        );
+        assert!(
+            p.contract_loan
+                .as_ref()
+                .unwrap()
+                .loan_recall_available_after
+                .is_some(),
+            "the recall window must be opened"
+        );
+        // The existing minutes-concern signal still fires alongside it.
+        assert!(count(p, HappinessEventType::LackOfPlayingTime) >= 1);
+    }
+
+    #[test]
+    fn recall_respects_cooldown() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![make_starved_loanee(today)]);
+        TeamBehaviour::process_loan_playing_time_audit(&mut players, &month_ctx(today));
+        // Re-run the same monthly audit immediately — the 45-day cooldown
+        // must keep it from re-firing.
+        TeamBehaviour::process_loan_playing_time_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::LoanRecallRequested),
+            1,
+            "recall request must not refire inside its cooldown"
+        );
+    }
+
+    #[test]
+    fn early_loan_does_not_request_recall() {
+        let today = first_of_month(2026, 6);
+        let mut p = make_starved_loanee(today);
+        // Only 10 days into the loan — inside the 30-day grace.
+        p.contract_loan.as_mut().unwrap().started = Some(today - chrono::Duration::days(10));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_loan_playing_time_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::LoanRecallRequested),
+            0,
+            "no recall request inside the 30-day grace window"
+        );
+    }
+
+    // ── LoanDevelopmentConcern ──────────────────────────────────
+
+    #[test]
+    fn young_failing_loan_emits_development_concern() {
+        let today = first_of_month(2026, 6);
+        let mut p = make_starved_loanee(today);
+        // Featured a little, but poorly rated — adds the performance signal.
+        p.statistics.played = 3;
+        p.statistics.average_rating = 6.0;
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_loan_development_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::LoanDevelopmentConcern
+            ),
+            1,
+            "a young loanee with low minutes and poor performances is a development concern"
+        );
+    }
+
+    #[test]
+    fn senior_loanee_no_development_concern() {
+        let today = first_of_month(2026, 6);
+        let mut p = make_starved_loanee(today);
+        // A 30-year-old, not a prospect — judged by minutes, not development.
+        p.birth_date = NaiveDate::from_ymd_opt(1996, 1, 1).unwrap();
+        p.contract = Some({
+            let mut c =
+                PlayerClubContract::new(50_000, NaiveDate::from_ymd_opt(2028, 6, 30).unwrap());
+            c.squad_status = PlayerSquadStatus::FirstTeamRegular;
+            c
+        });
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_loan_development_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::LoanDevelopmentConcern
+            ),
+            0,
+            "an established senior is not a development-loan candidate"
+        );
+    }
+
+    // ── WantsStrongerSquad ──────────────────────────────────────
+
+    #[test]
+    fn star_far_above_squad_wants_stronger_squad() {
+        let today = first_of_month(2026, 6);
+        let birth = NaiveDate::from_ymd_opt(1998, 1, 1).unwrap();
+        let star = with_contract(
+            build_player(1, birth, 150, 5_000, 16.0),
+            PlayerSquadStatus::KeyPlayer,
+        );
+        let mut squad = vec![star];
+        for id in 2..=5u32 {
+            squad.push(with_contract(
+                build_player(id, birth, 100, 1_000, 10.0),
+                PlayerSquadStatus::MainBackupPlayer,
+            ));
+        }
+        let mut players = PlayerCollection::new(squad);
+        TeamBehaviour::process_squad_ambition_audit(&mut players, &month_ctx(today));
+
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsStrongerSquad),
+            1,
+            "the ambitious star far above the squad average should speak up"
+        );
+        // The weak, low-ambition squad players do not.
+        for p in &players.players[1..] {
+            assert_eq!(count(p, HappinessEventType::WantsStrongerSquad), 0);
+        }
+    }
+
+    #[test]
+    fn squad_ambition_respects_cooldown() {
+        let today = first_of_month(2026, 6);
+        let birth = NaiveDate::from_ymd_opt(1998, 1, 1).unwrap();
+        let star = with_contract(
+            build_player(1, birth, 150, 5_000, 16.0),
+            PlayerSquadStatus::KeyPlayer,
+        );
+        let mut squad = vec![star];
+        for id in 2..=5u32 {
+            squad.push(with_contract(
+                build_player(id, birth, 100, 1_000, 10.0),
+                PlayerSquadStatus::MainBackupPlayer,
+            ));
+        }
+        let mut players = PlayerCollection::new(squad);
+        TeamBehaviour::process_squad_ambition_audit(&mut players, &month_ctx(today));
+        TeamBehaviour::process_squad_ambition_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsStrongerSquad),
+            1,
+            "monthly re-run inside cooldown must not double-fire"
+        );
+    }
+
+    // ── WantsTitleChallenge ─────────────────────────────────────
+
+    fn title_ctx<'a>(date: NaiveDate, name: &'a str, position: u8) -> GlobalContext<'a> {
+        let mut ctx = month_ctx(date);
+        let cc = ClubContext::new(1, name)
+            .with_league_position(position, 20, 38, 22)
+            .with_main_league_tier(1)
+            .with_reputations(5_000, 5_000, 6_000, 6_000);
+        ctx.club = Some(cc);
+        ctx
+    }
+
+    #[test]
+    fn elite_star_at_midtable_wants_title_challenge() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let star = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(1998, 1, 1).unwrap(),
+                150,
+                7_000,
+                16.0,
+            ),
+            PlayerSquadStatus::KeyPlayer,
+        );
+        let mut players = PlayerCollection::new(vec![star]);
+        TeamBehaviour::process_title_ambition_audit(&mut players, &title_ctx(today, &name, 10));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsTitleChallenge),
+            1,
+            "an elite ambitious star at a mid-table club after mid-season should want a title challenger"
+        );
+    }
+
+    #[test]
+    fn elite_star_at_title_contender_does_not() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let star = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(1998, 1, 1).unwrap(),
+                150,
+                7_000,
+                16.0,
+            ),
+            PlayerSquadStatus::KeyPlayer,
+        );
+        let mut players = PlayerCollection::new(vec![star]);
+        // Sitting 2nd — a realistic title shot.
+        TeamBehaviour::process_title_ambition_audit(&mut players, &title_ctx(today, &name, 2));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::WantsTitleChallenge),
+            0,
+            "a top-four side is a realistic title challenge — no grievance"
+        );
+    }
+
+    // ── WantsFirstTeamFootball ──────────────────────────────────
+
+    fn reserve_ctx<'a>(date: NaiveDate, team_type: TeamType) -> GlobalContext<'a> {
+        let mut ctx = month_ctx(date);
+        ctx.team = Some(TeamContext::new(1).with_type(team_type));
+        ctx
+    }
+
+    /// A 24-year-old homegrown regular of the second squad — never
+    /// transferred, decent ambition, not written off. The canonical
+    /// "stuck in the reserves for seasons" case.
+    fn stuck_reserve_player() -> Player {
+        with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(2002, 1, 1).unwrap(),
+                90,
+                500,
+                12.0,
+            ),
+            PlayerSquadStatus::MainBackupPlayer,
+        )
+    }
+
+    #[test]
+    fn stuck_senior_reserve_dreams_of_first_team() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![stuck_reserve_player()]);
+        TeamBehaviour::process_reserve_ambition_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Second),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            1,
+            "a settled senior in the second squad should dream of first-team football"
+        );
+    }
+
+    #[test]
+    fn main_team_player_does_not_dream_of_first_team() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![stuck_reserve_player()]);
+        TeamBehaviour::process_reserve_ambition_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Main),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "the audit only applies to senior reserve squads"
+        );
+    }
+
+    #[test]
+    fn youth_squad_player_does_not_dream_yet() {
+        let today = first_of_month(2026, 6);
+        // 18-year-old in the second squad — still a development arc.
+        let teen = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(2008, 2, 1).unwrap(),
+                90,
+                500,
+                12.0,
+            ),
+            PlayerSquadStatus::DecentYoungster,
+        );
+        let mut players = PlayerCollection::new(vec![teen]);
+        TeamBehaviour::process_reserve_ambition_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Second),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "teenagers in a reserve squad are on the normal development pathway"
+        );
+    }
+
+    #[test]
+    fn fresh_signing_in_reserves_does_not_dream_yet() {
+        let today = first_of_month(2026, 6);
+        let mut p = stuck_reserve_player();
+        // Arrived 60 days ago — still settling in.
+        p.last_transfer_date = Some(today - Duration::days(60));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_reserve_ambition_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Second),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "a fresh arrival has no stuck-career story yet"
+        );
+    }
+
+    #[test]
+    fn reserve_ambition_respects_cooldown() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![stuck_reserve_player()]);
+        let ctx = reserve_ctx(today, TeamType::Second);
+        TeamBehaviour::process_reserve_ambition_audit(&mut players, &ctx);
+        TeamBehaviour::process_reserve_ambition_audit(&mut players, &ctx);
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            1,
+            "monthly re-run inside the 60-day cooldown must not double-fire"
+        );
+    }
+
+    // ── Perennial main-squad backup (WantsFirstTeamFootball) ────
+
+    fn ledger_row(year: u16, starts: u16, is_loan: bool) -> PlayerStatLedgerEntry {
+        PlayerStatLedgerEntry {
+            seq_id: 0,
+            season_start_year: year,
+            team_slug: "t".into(),
+            team_name: "T".into(),
+            team_reputation: 4_000,
+            league_slug: "l".into(),
+            league_name: "L".into(),
+            competition_kind: PlayerStatCompetitionKind::League,
+            competition_slug: "l".into(),
+            is_loan,
+            transfer_fee: None,
+            coverage_days: None,
+            spell_end: None,
+            statistics: PlayerStatistics {
+                played: starts,
+                ..Default::default()
+            },
+        }
+    }
+
+    /// A man who has decided he is going somewhere to play. The mood
+    /// reads the arc rather than a restlessness curve of its own, so a
+    /// fixture that wants the mood has to give him the decision.
+    fn decided_to_go(player: &mut Player, arc: CareerArc, today: NaiveDate) {
+        let mut plan = CareerPlan::new(
+            arc,
+            GoalOrigin::Survival,
+            0.7,
+            MindClock::day(today),
+            CareerPlan::DEFAULT_REVIEW_DAYS,
+            0.6,
+        );
+        plan.escalate(PlanStage::Committed);
+        player.mind.career.plan = Some(plan);
+    }
+
+    /// A 28-year-old homegrown main-squad backup: seasons of 2-3 league
+    /// starts on record, real determination — the career #2.
+    fn perennial_backup(ambition: f32) -> Player {
+        let today = first_of_month(2026, 6);
+        let mut p = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(1998, 3, 1).unwrap(),
+                90,
+                500,
+                ambition,
+            ),
+            PlayerSquadStatus::MainBackupPlayer,
+        );
+        p.skills.mental.determination = 12.0;
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2024, 3, false));
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 2, false));
+        // A man with this much ambition and this record has decided he
+        // is going somewhere to play. The mood reads that decision now
+        // rather than running a restlessness curve of its own beside it,
+        // so the fixture states it exactly as the weekly think would.
+        if ambition >= CareerMind::AMBITIOUS {
+            decided_to_go(&mut p, CareerArc::StepDownToPlay, today);
+        }
+        p
+    }
+
+    #[test]
+    fn perennial_main_backup_dreams_of_first_team() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![perennial_backup(12.0)]);
+        TeamBehaviour::process_perennial_backup_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Main),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            1,
+            "a settled main-squad backup with seasons of bench duty should dream of a starting role"
+        );
+    }
+
+    #[test]
+    fn recent_breakthrough_clears_the_backup_dream() {
+        let today = first_of_month(2026, 6);
+        let mut p = perennial_backup(12.0);
+        // Most recent completed season: he claimed the shirt.
+        p.statistics_history.season_ledger.pop();
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 20, false));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_perennial_backup_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Main),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "a real run of starts last season breaks the stuck-career story"
+        );
+    }
+
+    #[test]
+    fn content_low_ambition_backup_stays_put() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![perennial_backup(4.0)]);
+        TeamBehaviour::process_perennial_backup_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Main),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "an unambitious journeyman #2 accepts the role — that's a real career"
+        );
+    }
+
+    /// Big-club comfort + a wage far above his own fair value: the
+    /// average-ambition backup signs the next extension and stays.
+    #[test]
+    fn big_club_fat_contract_keeps_average_backup_content() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut p = perennial_backup(10.0);
+        p.contract.as_mut().unwrap().salary = 5_000_000;
+        let mut ctx = reserve_ctx(today, TeamType::Main);
+        ctx.club = Some(ClubContext::new(1, &name).with_reputations(8_500, 8_500, 6_000, 6_000));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_perennial_backup_audit(&mut players, &ctx);
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "an average-ambition man on a well-paid bench has decided nothing,              and a mood without a decision behind it is not a career story"
+        );
+    }
+
+    /// …but genuine ambition erodes both comforts — he wants to play,
+    /// even if it means a smaller club.
+    #[test]
+    fn ambitious_backup_leaves_even_a_big_club() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut p = perennial_backup(17.0);
+        p.contract.as_mut().unwrap().salary = 5_000_000;
+        let mut ctx = reserve_ctx(today, TeamType::Main);
+        ctx.club = Some(ClubContext::new(1, &name).with_reputations(8_500, 8_500, 6_000, 6_000));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_perennial_backup_audit(&mut players, &ctx);
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            1,
+            "high ambition outweighs the big-club bench and the fat wage"
+        );
+    }
+
+    #[test]
+    fn serial_loanee_wants_a_permanent_home() {
+        let today = first_of_month(2026, 6);
+        // 25-year-old rotation-status player who has spent three straight
+        // seasons out on loan — never a first-team place at the parent.
+        let mut p = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(2001, 3, 1).unwrap(),
+                90,
+                500,
+                12.0,
+            ),
+            PlayerSquadStatus::FirstTeamSquadRotation,
+        );
+        p.skills.mental.determination = 12.0;
+        for (year, starts) in [(2023u16, 28u16), (2024, 30), (2025, 26)] {
+            p.statistics_history
+                .season_ledger
+                .push(ledger_row(year, starts, true));
+        }
+        decided_to_go(&mut p, CareerArc::ProveOnLoan, today);
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_perennial_backup_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Main),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            1,
+            "the loan carousel counts as years without a first-team place at the parent club"
+        );
+    }
+
+    /// Re-pose a fixture player as a goalkeeper (build_player makes a
+    /// striker).
+    fn as_goalkeeper(mut p: Player) -> Player {
+        p.positions = PlayerPositions {
+            positions: vec![PlayerPosition {
+                position: PlayerPositionType::Goalkeeper,
+                level: 20,
+            }],
+        };
+        p
+    }
+
+    /// The Pinsoglio complaint: a 36-year-old THIRD keeper — two men
+    /// observably ahead of him — does not "dream of genuine first-team
+    /// football", however ambitious. "One last number-one shirt" is the
+    /// career #2's story (see `keeper_at_35_still_dreams_...`), never
+    /// the veteran #3's.
+    #[test]
+    fn veteran_third_keeper_does_not_dream_of_a_breakthrough() {
+        let today = first_of_month(2026, 6);
+        let mut veteran = as_goalkeeper(with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(1990, 3, 1).unwrap(), // 36 years old
+                90,
+                500,
+                17.0,
+            ),
+            PlayerSquadStatus::MainBackupPlayer,
+        ));
+        veteran.skills = PlayerSkills::flat_for_ability(90);
+        veteran.skills.mental.determination = 12.0;
+        veteran
+            .statistics_history
+            .season_ledger
+            .push(ledger_row(2024, 3, false));
+        veteran
+            .statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 2, false));
+        // Two clearly better keepers ahead of him in the same squad.
+        let mut first_choice = as_goalkeeper(with_contract(
+            build_player(
+                2,
+                NaiveDate::from_ymd_opt(1998, 1, 1).unwrap(),
+                140,
+                3_000,
+                10.0,
+            ),
+            PlayerSquadStatus::KeyPlayer,
+        ));
+        first_choice.skills = PlayerSkills::flat_for_ability(140);
+        let mut second_choice = as_goalkeeper(with_contract(
+            build_player(
+                3,
+                NaiveDate::from_ymd_opt(1996, 1, 1).unwrap(),
+                125,
+                2_000,
+                10.0,
+            ),
+            PlayerSquadStatus::MainBackupPlayer,
+        ));
+        second_choice.skills = PlayerSkills::flat_for_ability(125);
+
+        let mut players = PlayerCollection::new(vec![veteran, first_choice, second_choice]);
+        TeamBehaviour::process_perennial_backup_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Main),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "a 36-year-old third keeper seeing out his career must not dream of a breakthrough"
+        );
+    }
+
+    /// Same story in a senior reserve squad: past the position-adjusted
+    /// prime the dream demands ever more ambition, so an ordinary
+    /// veteran keeper parked in the reserves stays quiet.
+    #[test]
+    fn veteran_reserve_keeper_does_not_dream_of_first_team() {
+        let today = first_of_month(2026, 6);
+        let veteran = as_goalkeeper(with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(1990, 3, 1).unwrap(), // 36 years old
+                90,
+                500,
+                12.0,
+            ),
+            PlayerSquadStatus::MainBackupPlayer,
+        ));
+        let mut players = PlayerCollection::new(vec![veteran]);
+        TeamBehaviour::process_reserve_ambition_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Second),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "an ordinary-ambition 36-year-old keeper in the reserves does not dream of a breakthrough"
+        );
+    }
+
+    // ── Returnee breakthrough (WantsFirstTeamFootball, under-24) ──
+
+    /// Context for the returnee audit: main team, club mid-season with
+    /// 10 league matches already played.
+    fn returnee_ctx<'a>(date: NaiveDate, name: &'a str) -> GlobalContext<'a> {
+        let mut ctx = month_ctx(date);
+        ctx.team = Some(TeamContext::new(1).with_type(TeamType::Main));
+        ctx.club = Some(
+            ClubContext::new(1, name)
+                .with_league_position(10, 20, 38, 10)
+                .with_reputations(5_000, 5_000, 5_000, 5_000),
+        );
+        ctx
+    }
+
+    /// A 20-year-old back at the parent for three months, a full loan
+    /// season of starts in the record, one parent appearance since.
+    fn proven_returnee(today: NaiveDate) -> Player {
+        let mut p = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(2006, 3, 1).unwrap(),
+                110,
+                1_500,
+                12.0,
+            ),
+            PlayerSquadStatus::HotProspectForTheFuture,
+        );
+        p.last_transfer_date = Some(today - Duration::days(90));
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 24, true));
+        p.statistics.played = 1;
+        p
+    }
+
+    #[test]
+    fn proven_young_returnee_wants_first_team_football() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut players = PlayerCollection::new(vec![proven_returnee(today)]);
+        TeamBehaviour::process_returnee_breakthrough_audit(
+            &mut players,
+            &returnee_ctx(today, &name),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            1,
+            "a young returnee with a full loan season behind him and no parent minutes should speak up"
+        );
+    }
+
+    #[test]
+    fn returnee_without_a_loan_record_stays_quiet() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut p = proven_returnee(today);
+        // Same age and situation, but the record is three cameo starts.
+        p.statistics_history.season_ledger.clear();
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 3, true));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_returnee_breakthrough_audit(
+            &mut players,
+            &returnee_ctx(today, &name),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "without a real loan record the prospect pathway owns the story"
+        );
+    }
+
+    #[test]
+    fn returnee_getting_minutes_stays_quiet() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut p = proven_returnee(today);
+        // The parent IS playing him — 4 of the club's 10 league matches.
+        p.statistics.played = 4;
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_returnee_breakthrough_audit(
+            &mut players,
+            &returnee_ctx(today, &name),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "a returnee who is getting his chance has nothing to say"
+        );
+    }
+
+    #[test]
+    fn fresh_returnee_gets_a_fair_look_first() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut p = proven_returnee(today);
+        p.last_transfer_date = Some(today - Duration::days(20));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_returnee_breakthrough_audit(
+            &mut players,
+            &returnee_ctx(today, &name),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "twenty days after the return is too soon to call the silence a verdict"
+        );
+    }
+
+    #[test]
+    fn senior_returnee_is_not_this_audits_story() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut p = proven_returnee(today);
+        // 27 years old — the perennial-backup audit owns seniors.
+        p.birth_date = NaiveDate::from_ymd_opt(1999, 3, 1).unwrap();
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_returnee_breakthrough_audit(
+            &mut players,
+            &returnee_ctx(today, &name),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+        );
+    }
+
+    /// A returnee with a half-season of loan starts behind him — real
+    /// football, short of the full campaign the audit normally waits
+    /// for — home six weeks and playing none of it.
+    fn half_season_returnee(today: NaiveDate) -> Player {
+        let mut p = proven_returnee(today);
+        p.last_transfer_date = Some(today - Duration::days(45));
+        p.statistics_history.season_ledger.clear();
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 11, true));
+        p
+    }
+
+    #[test]
+    fn a_returnee_who_said_it_on_loan_is_heard_sooner() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+
+        let quiet = half_season_returnee(today);
+        let mut players = PlayerCollection::new(vec![quiet]);
+        TeamBehaviour::process_returnee_breakthrough_audit(
+            &mut players,
+            &returnee_ctx(today, &name),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "half a season of loan starts, six weeks home: the club still has time"
+        );
+
+        // He came home holding a claim on the shirt, which is what the
+        // audit reads: no mood crosses a return, and the one it used to
+        // read was reset with the rest of his happiness on the way home.
+        let mut declared = half_season_returnee(today);
+        decided_to_go(&mut declared, CareerArc::ClaimMyPlace, today);
+        let mut players = PlayerCollection::new(vec![declared]);
+        TeamBehaviour::process_returnee_breakthrough_audit(
+            &mut players,
+            &returnee_ctx(today, &name),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            1,
+            "he told them while he was away — the club does not get the full grace period twice"
+        );
+    }
+
+    // ── Big-club aura (AdmiredForBigClubSpell / BigClubAuraFaded) ──
+
+    fn small_club_ctx<'a>(date: NaiveDate, name: &'a str) -> GlobalContext<'a> {
+        let mut ctx = month_ctx(date);
+        ctx.club = Some(ClubContext::new(1, name).with_reputations(2_500, 2_500, 3_000, 3_000));
+        ctx
+    }
+
+    /// A 21-year-old freshly back at his small club from a top-club loan
+    /// he genuinely played through: 25 starts at a rep-8000 side.
+    fn aura_returnee(today: NaiveDate) -> Player {
+        let mut p = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(2005, 3, 1).unwrap(),
+                110,
+                2_000,
+                12.0,
+            ),
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        p.last_transfer_date = Some(today - Duration::days(20));
+        let mut row = ledger_row(2025, 25, true);
+        row.team_reputation = 8_000;
+        p.statistics_history.season_ledger.push(row);
+        p
+    }
+
+    #[test]
+    fn big_club_returnee_is_admired_at_his_small_club() {
+        let today = first_of_month(2026, 6);
+        let name = "Minnow".to_string();
+        let mut players = PlayerCollection::new(vec![aura_returnee(today)]);
+        TeamBehaviour::process_big_club_aura_audit(&mut players, &small_club_ctx(today, &name));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::AdmiredForBigClubSpell
+            ),
+            1,
+            "the room should receive the top-club returnee like a star"
+        );
+    }
+
+    #[test]
+    fn no_aura_among_peers_at_the_same_level() {
+        let today = first_of_month(2026, 6);
+        let name = "Giant".to_string();
+        let mut ctx = month_ctx(today);
+        ctx.club = Some(ClubContext::new(1, &name).with_reputations(8_000, 8_000, 8_000, 8_000));
+        let mut players = PlayerCollection::new(vec![aura_returnee(today)]);
+        TeamBehaviour::process_big_club_aura_audit(&mut players, &ctx);
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::AdmiredForBigClubSpell
+            ),
+            0,
+            "a big-club spell is unremarkable inside another big club"
+        );
+    }
+
+    #[test]
+    fn teammates_orbit_the_aura_holder_while_it_lasts() {
+        let today = first_of_month(2026, 6);
+        let name = "Minnow".to_string();
+        let star = aura_returnee(today);
+        // A defender — NOT competing for the returnee's shirt, so he
+        // joins the admiration rather than the rivalry.
+        let mut teammate = with_contract(
+            build_player(
+                2,
+                NaiveDate::from_ymd_opt(2005, 6, 1).unwrap(),
+                90,
+                500,
+                10.0,
+            ),
+            PlayerSquadStatus::FirstTeamSquadRotation,
+        );
+        teammate.positions = PlayerPositions {
+            positions: vec![PlayerPosition {
+                position: PlayerPositionType::DefenderCenter,
+                level: 20,
+            }],
+        };
+        let mut players = PlayerCollection::new(vec![star, teammate]);
+        let ctx = small_club_ctx(today, &name);
+        // First pass: the admiration beat lands. Second pass a month on:
+        // form is fine (no rated sample yet), so the star treatment drips
+        // into the teammate's relation toward him.
+        TeamBehaviour::process_big_club_aura_audit(&mut players, &ctx);
+        TeamBehaviour::process_big_club_aura_audit(
+            &mut players,
+            &small_club_ctx(first_of_month(2026, 7), &name),
+        );
+        let teammate = &players.players[1];
+        let level = teammate
+            .relations
+            .get_player(1)
+            .map(|r| r.level)
+            .unwrap_or(0.0);
+        assert!(
+            level > 0.0,
+            "the teammate should warm to the big-club returnee (got {level})"
+        );
+    }
+
+    // ── Returning rival (ThreatenedByReturningLoanee) ───────────
+
+    #[test]
+    fn incumbent_feels_the_returning_loanee_coming_for_his_shirt() {
+        let today = first_of_month(2026, 6);
+        // Returnee: 20yo striker, fresh return, full loan season, CA 110.
+        let mut returnee = proven_returnee(today);
+        returnee.last_transfer_date = Some(today - Duration::days(20));
+        // Incumbent: 26yo starting striker, CA 105 — a credible contest.
+        let incumbent = with_contract(
+            build_player(
+                2,
+                NaiveDate::from_ymd_opt(2000, 3, 1).unwrap(),
+                105,
+                2_000,
+                12.0,
+            ),
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        let mut players = PlayerCollection::new(vec![returnee, incumbent]);
+        TeamBehaviour::process_returning_rival_audit(&mut players, &month_ctx(today));
+
+        let incumbent = &players.players[1];
+        assert_eq!(
+            count(incumbent, HappinessEventType::ThreatenedByReturningLoanee),
+            1,
+            "the starting striker should feel the returnee contesting his shirt"
+        );
+        let level = incumbent
+            .relations
+            .get_player(1)
+            .map(|r| r.level)
+            .unwrap_or(0.0);
+        assert!(
+            level < 0.0,
+            "the incumbent cools toward the returnee, not warms (got {level})"
+        );
+        // The returnee himself feels nothing from this audit.
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::ThreatenedByReturningLoanee
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn clearly_better_incumbent_shrugs_off_the_returnee() {
+        let today = first_of_month(2026, 6);
+        let mut returnee = proven_returnee(today); // CA 110
+        returnee.last_transfer_date = Some(today - Duration::days(20));
+        let star_incumbent = with_contract(
+            build_player(
+                2,
+                NaiveDate::from_ymd_opt(1998, 3, 1).unwrap(),
+                150,
+                6_000,
+                12.0,
+            ),
+            PlayerSquadStatus::KeyPlayer,
+        );
+        let mut players = PlayerCollection::new(vec![returnee, star_incumbent]);
+        TeamBehaviour::process_returning_rival_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[1],
+                HappinessEventType::ThreatenedByReturningLoanee
+            ),
+            0,
+            "a star far above the returnee's level is not displaced by him"
+        );
+    }
+
+    #[test]
+    fn different_position_group_is_not_threatened() {
+        let today = first_of_month(2026, 6);
+        let mut returnee = proven_returnee(today);
+        returnee.last_transfer_date = Some(today - Duration::days(20));
+        let mut keeper = with_contract(
+            build_player(
+                2,
+                NaiveDate::from_ymd_opt(2000, 3, 1).unwrap(),
+                105,
+                2_000,
+                12.0,
+            ),
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        keeper.positions = PlayerPositions {
+            positions: vec![PlayerPosition {
+                position: PlayerPositionType::Goalkeeper,
+                level: 20,
+            }],
+        };
+        let mut players = PlayerCollection::new(vec![returnee, keeper]);
+        TeamBehaviour::process_returning_rival_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[1],
+                HappinessEventType::ThreatenedByReturningLoanee
+            ),
+            0,
+            "a returning striker does not contest the goalkeeper's shirt"
+        );
+    }
+
+    #[test]
+    fn returnee_without_a_record_threatens_no_one() {
+        let today = first_of_month(2026, 6);
+        let mut returnee = proven_returnee(today);
+        returnee.last_transfer_date = Some(today - Duration::days(20));
+        // Three cameo starts — came back quietly.
+        returnee.statistics_history.season_ledger.clear();
+        returnee
+            .statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 3, true));
+        let incumbent = with_contract(
+            build_player(
+                2,
+                NaiveDate::from_ymd_opt(2000, 3, 1).unwrap(),
+                105,
+                2_000,
+                12.0,
+            ),
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        let mut players = PlayerCollection::new(vec![returnee, incumbent]);
+        TeamBehaviour::process_returning_rival_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[1],
+                HappinessEventType::ThreatenedByReturningLoanee
+            ),
+            0,
+            "a returnee with no record contests nothing yet"
+        );
+    }
+
+    #[test]
+    fn poor_run_pops_the_aura() {
+        let today = first_of_month(2026, 6);
+        let name = "Minnow".to_string();
+        let mut star = aura_returnee(today);
+        let mut players = PlayerCollection::new(vec![star]);
+        TeamBehaviour::process_big_club_aura_audit(&mut players, &small_club_ctx(today, &name));
+        // A month later: a real rated sample, clearly below the water line.
+        star = players.players.remove(0);
+        star.statistics.played = 20;
+        star.statistics.rating_weight = 20.0;
+        star.statistics.rating_points = 20.0 * 5.2;
+        let mut players = PlayerCollection::new(vec![star]);
+        TeamBehaviour::process_big_club_aura_audit(
+            &mut players,
+            &small_club_ctx(first_of_month(2026, 7), &name),
+        );
+        let p = &players.players[0];
+        assert_eq!(
+            count(p, HappinessEventType::BigClubAuraFaded),
+            1,
+            "a visibly poor run must pop the aura"
+        );
+    }
+
+    #[test]
+    fn keeper_at_35_still_dreams_of_a_number_one_shirt() {
+        let today = first_of_month(2026, 6);
+        // Goalkeeper careers run later — 35 is still inside the window.
+        let mut p = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(1991, 3, 1).unwrap(),
+                90,
+                500,
+                12.0,
+            ),
+            PlayerSquadStatus::MainBackupPlayer,
+        );
+        p.positions = PlayerPositions {
+            positions: vec![PlayerPosition {
+                position: PlayerPositionType::Goalkeeper,
+                level: 20,
+            }],
+        };
+        p.skills.mental.determination = 12.0;
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2024, 2, false));
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 3, false));
+        decided_to_go(&mut p, CareerArc::StepDownToPlay, today);
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_perennial_backup_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Main),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            1,
+            "a 35-year-old career #2 keeper still wants one last number-one shirt"
+        );
+    }
+
+    #[test]
+    fn keeper_past_the_late_career_line_settles() {
+        let today = first_of_month(2026, 6);
+        let mut p = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(1988, 3, 1).unwrap(),
+                90,
+                500,
+                12.0,
+            ),
+            PlayerSquadStatus::MainBackupPlayer,
+        );
+        p.positions = PlayerPositions {
+            positions: vec![PlayerPosition {
+                position: PlayerPositionType::Goalkeeper,
+                level: 20,
+            }],
+        };
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2024, 2, false));
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 3, false));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_perennial_backup_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Main),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "a 38-year-old keeper is seeing out his career — the veteran audit owns him"
+        );
+    }
+
+    #[test]
+    fn perennial_backup_audit_skips_reserve_squads() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![perennial_backup(12.0)]);
+        TeamBehaviour::process_perennial_backup_audit(
+            &mut players,
+            &reserve_ctx(today, TeamType::Second),
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsFirstTeamFootball
+            ),
+            0,
+            "the perennial-backup audit only runs for the main squad"
+        );
+    }
+
+    // ── WantsLoanMadePermanent ──────────────────────────────────
+
+    /// A 25-year-old loanee, four months into the spell, starting and
+    /// performing at the borrowing club.
+    fn thriving_loanee(today: NaiveDate) -> Player {
+        let mut p = build_player(
+            1,
+            NaiveDate::from_ymd_opt(2001, 2, 1).unwrap(),
+            95,
+            500,
+            12.0,
+        );
+        let mut loan =
+            PlayerClubContract::new(20_000, NaiveDate::from_ymd_opt(2026, 12, 31).unwrap());
+        loan.started = Some(today - Duration::days(120));
+        loan.loan_from_club_id = Some(99);
+        p.contract_loan = Some(loan);
+        p.statistics.played = 15;
+        p.statistics.rating_points = 7.5 * 15.0;
+        p.statistics.rating_weight = 15.0;
+        p
+    }
+
+    #[test]
+    fn thriving_loanee_wants_the_move_made_permanent() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![thriving_loanee(today)]);
+        TeamBehaviour::process_loanee_permanence_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsLoanMadePermanent
+            ),
+            1,
+            "a loanee starting and performing should want the move made permanent"
+        );
+    }
+
+    #[test]
+    fn benched_loanee_does_not_ask_to_stay() {
+        let today = first_of_month(2026, 6);
+        let mut p = thriving_loanee(today);
+        p.statistics.played = 3;
+        p.statistics.rating_points = 7.5 * 3.0;
+        p.statistics.rating_weight = 3.0;
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_loanee_permanence_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsLoanMadePermanent
+            ),
+            0,
+            "a loanee who isn't playing has nothing to make permanent"
+        );
+    }
+
+    #[test]
+    fn fresh_loanee_waits_before_asking() {
+        let today = first_of_month(2026, 6);
+        let mut p = thriving_loanee(today);
+        p.contract_loan.as_mut().unwrap().started = Some(today - Duration::days(30));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_loanee_permanence_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsLoanMadePermanent
+            ),
+            0,
+            "a month into the loan is too early for a permanence ask"
+        );
+    }
+
+    // ── WantsToProveHimselfAtParent (the loan carousel) ─────────
+
+    /// A 23-year-old on his third time out: two full loan seasons on the
+    /// record, five months into the current spell, starting every week —
+    /// and two league starts for the club that owns him.
+    fn serial_loanee(today: NaiveDate, ambition: f32) -> Player {
+        let mut p = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(2003, 1, 1).unwrap(),
+                110,
+                1_200,
+                ambition,
+            ),
+            PlayerSquadStatus::MainBackupPlayer,
+        );
+        p.skills.mental.determination = 12.0;
+        if let Some(contract) = p.contract.as_mut() {
+            contract.started = Some(NaiveDate::from_ymd_opt(2021, 7, 1).unwrap());
+        }
+        let mut loan =
+            PlayerClubContract::new(20_000, NaiveDate::from_ymd_opt(2026, 12, 31).unwrap());
+        loan.started = Some(today - Duration::days(150));
+        loan.loan_from_club_id = Some(99);
+        p.contract_loan = Some(loan);
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2023, 2, false));
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2024, 25, true));
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 22, true));
+        // The current spell, still live and unfrozen.
+        p.statistics.played = 20;
+        p
+    }
+
+    #[test]
+    fn serial_loanee_wants_his_chance_at_the_club_that_owns_him() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![serial_loanee(today, 14.0)]);
+        TeamBehaviour::process_loan_fatigue_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsToProveHimselfAtParent
+            ),
+            1,
+            "three spells away, playing every week, and never a league start for his own club — \
+             that player wants to come home and fight for the shirt"
+        );
+    }
+
+    #[test]
+    fn a_first_loan_is_a_career_step_not_a_carousel() {
+        let today = first_of_month(2026, 6);
+        let mut p = serial_loanee(today, 14.0);
+        // Nothing but parent seasons behind him: this is his first
+        // spell away, which is how a career is supposed to start.
+        p.statistics_history.season_ledger.clear();
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 2, false));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_loan_fatigue_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsToProveHimselfAtParent
+            ),
+            0,
+            "being lent out once is a development loan, not a career being spent elsewhere"
+        );
+    }
+
+    #[test]
+    fn a_club_that_actually_plays_him_hears_nothing() {
+        let today = first_of_month(2026, 6);
+        let mut p = serial_loanee(today, 14.0);
+        // Same spells away, but a real season in the parent's own side
+        // in between — the loans are phases of a career at this club.
+        p.statistics_history.season_ledger.clear();
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2023, 22, false));
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2024, 25, true));
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 22, true));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_loan_fatigue_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsToProveHimselfAtParent
+            ),
+            0,
+            "a club that has given him a season of its own football is not shutting the door"
+        );
+    }
+
+    #[test]
+    fn a_fresh_spell_is_not_judged_yet() {
+        let today = first_of_month(2026, 6);
+        let mut p = serial_loanee(today, 14.0);
+        p.contract_loan.as_mut().unwrap().started = Some(today - Duration::days(40));
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_loan_fatigue_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsToProveHimselfAtParent
+            ),
+            0,
+            "six weeks into a spell he has not lived through enough of it to want out of it"
+        );
+    }
+
+    /// The fork between the two loan-fatigue moods. Both players have
+    /// just told the borrowing club they would happily stay; which door
+    /// they push on next is ambition's business, not a flag's.
+    #[test]
+    fn a_modest_loanee_settles_where_he_is_wanted() {
+        let today = first_of_month(2026, 6);
+        let mut p = serial_loanee(today, 10.0);
+        p.happiness
+            .add_event_default(HappinessEventType::WantsLoanMadePermanent);
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_loan_fatigue_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsToProveHimselfAtParent
+            ),
+            0,
+            "a player of ordinary ambition who has just asked to stay is not also demanding to go home"
+        );
+    }
+
+    #[test]
+    fn an_ambitious_loanee_still_wants_the_shirt_he_signed_for() {
+        let today = first_of_month(2026, 6);
+        let mut p = serial_loanee(today, 18.0);
+        p.happiness
+            .add_event_default(HappinessEventType::WantsLoanMadePermanent);
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_loan_fatigue_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::WantsToProveHimselfAtParent
+            ),
+            1,
+            "being wanted at the borrowing club does not settle an ambitious player's argument \
+             with his own"
+        );
+    }
+
+    // ── Contract-horizon (expiry anxiety / shop window) ─────────
+
+    /// A 27-year-old first-team regular with ~200 days left on his deal
+    /// and no renewal activity on record.
+    fn final_year_player() -> Player {
+        let mut p = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(1999, 1, 1).unwrap(),
+                100,
+                500,
+                12.0,
+            ),
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        p.contract.as_mut().unwrap().expiration = NaiveDate::from_ymd_opt(2026, 12, 15).unwrap();
+        p
+    }
+
+    #[test]
+    fn final_year_silence_breeds_anxiety() {
+        let today = first_of_month(2026, 6);
+        let mut players = PlayerCollection::new(vec![final_year_player()]);
+        TeamBehaviour::process_contract_horizon_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::ContractExpiryAnxiety
+            ),
+            1,
+            "final contract year with no talks opened should worry the player"
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::PlayingForNewContract
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn in_form_final_year_becomes_a_shop_window() {
+        let today = first_of_month(2026, 6);
+        let mut p = final_year_player();
+        p.statistics.played = 12;
+        p.statistics.rating_points = 7.8 * 12.0;
+        p.statistics.rating_weight = 12.0;
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_contract_horizon_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::PlayingForNewContract
+            ),
+            1,
+            "an in-form final-year player plays for the new deal instead of worrying"
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::ContractExpiryAnxiety
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn recent_offer_means_no_expiry_anxiety() {
+        let today = first_of_month(2026, 6);
+        let mut p = final_year_player();
+        p.happiness
+            .add_event(HappinessEventType::ContractOffer, 2.0);
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_contract_horizon_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::ContractExpiryAnxiety
+            ),
+            0,
+            "the club HAS been talking — no silence, no anxiety"
+        );
+    }
+
+    #[test]
+    fn listed_final_year_player_knows_why_nobody_called() {
+        let today = first_of_month(2026, 6);
+        let mut p = final_year_player();
+        p.contract.as_mut().unwrap().is_transfer_listed = true;
+        let mut players = PlayerCollection::new(vec![p]);
+        TeamBehaviour::process_contract_horizon_audit(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::ContractExpiryAnxiety
+            ),
+            0,
+            "a listed player's silence is explained — the anxiety event stays out"
+        );
+    }
+
+    // ── SalaryGapNoticed grace + appearance gate ────────────────
+
+    /// Build a squad that pairs a single starter earning a fraction of
+    /// the top wage (gap easily satisfies the 60% threshold) with a
+    /// top-earning star at the same position group. The starter's
+    /// match-opportunity counters are saturated so the appearance gate
+    /// passes — every test then varies only the grace state we want
+    /// to exercise.
+    fn build_wage_envy_pair(starter_contract_started: Option<NaiveDate>) -> Vec<Player> {
+        let birth = NaiveDate::from_ymd_opt(2002, 1, 1).unwrap();
+        // A prime-age (24), ambitious, ever-present regular earning a tiny
+        // fraction of his own fair value (20k vs a multi-million expected
+        // wage) — the canonical "genuinely underpaid important player" who
+        // *should* fire. The high ambition + starter_ratio carry the score
+        // past the new fair-value gate, so these grace / appearance tests
+        // actually exercise those gates rather than passing trivially
+        // because the scoring fell short.
+        let mut starter = build_player(1, birth, 130, 5_000, 16.0);
+        let mut starter_contract =
+            PlayerClubContract::new(20_000, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
+        starter_contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
+        starter_contract.started = starter_contract_started;
+        starter.contract = Some(starter_contract);
+        starter.happiness.eligible_official_matches_since_join = 12;
+        starter.happiness.starts_since_join = 6;
+        starter.happiness.starter_ratio = 0.9;
+
+        let star = with_contract(
+            build_player(2, birth, 160, 8_000, 14.0),
+            PlayerSquadStatus::KeyPlayer,
+        );
+        // Override the star wage so the ratio gap clearly trips the
+        // 60% threshold (20k / 200k = 0.10).
+        let mut star = star;
+        if let Some(c) = star.contract.as_mut() {
+            c.salary = 200_000;
+        }
+        vec![starter, star]
+    }
+
+    #[test]
+    fn new_contract_skips_periodic_wage_envy_until_grace_expires() {
+        let today = first_of_month(2026, 6);
+        // Contract signed 30 days ago — inside the 90-day grace.
+        let fresh_squad = build_wage_envy_pair(Some(today - chrono::Duration::days(30)));
+        let mut players = PlayerCollection::new(fresh_squad);
+        TeamBehaviour::process_periodic_wage_envy(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::SalaryGapNoticed),
+            0,
+            "a contract started 30 days ago must sit inside the grace window"
+        );
+
+        // Same setup, but the contract is now 120 days old — outside
+        // grace, appearance gate already satisfied, so the envy
+        // signal should fire.
+        let aged_squad = build_wage_envy_pair(Some(today - chrono::Duration::days(120)));
+        let mut players = PlayerCollection::new(aged_squad);
+        TeamBehaviour::process_periodic_wage_envy(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::SalaryGapNoticed),
+            1,
+            "an established player on a 120-day-old contract should notice the gap"
+        );
+    }
+
+    #[test]
+    fn wage_envy_requires_minimum_appearance_track_record() {
+        let today = first_of_month(2026, 6);
+        // Contract well outside grace, but the starter has not played
+        // enough eligible matches yet — the appearance gate must
+        // suppress the audit.
+        let mut squad = build_wage_envy_pair(Some(today - chrono::Duration::days(200)));
+        squad[0].happiness.eligible_official_matches_since_join = 3;
+        squad[0].happiness.starts_since_join = 1;
+        let mut players = PlayerCollection::new(squad);
+        TeamBehaviour::process_periodic_wage_envy(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::SalaryGapNoticed),
+            0,
+            "a fresh arrival with only 3 eligible matches must not yet resent the wage hierarchy"
+        );
+    }
+
+    // ── SalaryGapNoticed late-career / fair-wage gate ───────────
+
+    /// Builds a wage-envy scenario: the underpaid candidate (id 1) plus a
+    /// top-earning peer (id 2) in the same position group, so the
+    /// periodic sweep has a real wage ceiling to compare against. The
+    /// candidate always clears the cheap pre-gates (reputation, 90-day
+    /// grace, ≥8 eligible matches, ≥3 matchday inclusions); each test then
+    /// varies only the age / status / wage / temperament that the new gate
+    /// reasons about.
+    struct WageEnvyScenario {
+        age_years: i64,
+        is_goalkeeper: bool,
+        squad_status: PlayerSquadStatus,
+        ca: u8,
+        world_rep: i16,
+        salary: u32,
+        top_salary: u32,
+        starter_ratio: f32,
+        ambition: f32,
+        loyalty: f32,
+        professionalism: f32,
+        recent_retirement: bool,
+    }
+
+    impl WageEnvyScenario {
+        /// A drastically-underpaid, ever-present, prime-age (24) regular —
+        /// the canonical "genuinely underpaid important player".
+        fn prime_regular() -> Self {
+            WageEnvyScenario {
+                age_years: 24,
+                is_goalkeeper: false,
+                squad_status: PlayerSquadStatus::FirstTeamRegular,
+                ca: 140,
+                world_rep: 5_000,
+                salary: 20_000,
+                top_salary: 200_000,
+                starter_ratio: 0.90,
+                ambition: 16.0,
+                loyalty: 10.0,
+                professionalism: 12.0,
+                recent_retirement: false,
+            }
+        }
+
+        /// A 35-year-old outfield veteran; defaults otherwise as
+        /// [`Self::prime_regular`].
+        fn late_career_outfield() -> Self {
+            WageEnvyScenario {
+                age_years: 35,
+                ..Self::prime_regular()
+            }
+        }
+
+        fn position(&self) -> PlayerPositionType {
+            if self.is_goalkeeper {
+                PlayerPositionType::Goalkeeper
+            } else {
+                PlayerPositionType::Striker
+            }
+        }
+
+        fn squad(&self, today: NaiveDate) -> PlayerCollection {
+            let birth = today - chrono::Duration::days(self.age_years * 365);
+            let position = self.position();
+
+            let mut candidate = build_player(1, birth, self.ca, self.world_rep, self.ambition);
+            candidate.attributes.loyalty = self.loyalty;
+            candidate.attributes.professionalism = self.professionalism;
+            candidate.positions = PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position,
+                    level: 20,
+                }],
+            };
+            let mut contract =
+                PlayerClubContract::new(self.salary, NaiveDate::from_ymd_opt(2032, 6, 30).unwrap());
+            contract.squad_status = self.squad_status.clone();
+            // Well outside the 90-day grace window.
+            contract.started = Some(today - chrono::Duration::days(200));
+            candidate.contract = Some(contract);
+            // Saturate the appearance gate; starter_ratio is set
+            // independently so a benched veteran can carry a long history
+            // of starts yet a low recent ratio.
+            candidate.happiness.eligible_official_matches_since_join = 12;
+            candidate.happiness.starts_since_join = 9;
+            candidate.happiness.starter_ratio = self.starter_ratio;
+            if self.recent_retirement {
+                candidate
+                    .happiness
+                    .add_event(HappinessEventType::RetirementConsidering, -2.0);
+            }
+
+            // Prime-age key man on the ceiling wage in the same group.
+            // Never fires (its salary == the group top).
+            let mut peer = build_player(
+                2,
+                today - chrono::Duration::days(26 * 365),
+                165,
+                9_000,
+                14.0,
+            );
+            peer.positions = PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position,
+                    level: 20,
+                }],
+            };
+            let mut peer_contract = PlayerClubContract::new(
+                self.top_salary,
+                NaiveDate::from_ymd_opt(2032, 6, 30).unwrap(),
+            );
+            peer_contract.squad_status = PlayerSquadStatus::KeyPlayer;
+            peer.contract = Some(peer_contract);
+
+            PlayerCollection::new(vec![candidate, peer])
+        }
+    }
+
+    /// A veteran paid *fairly for his age* — he earns half the prime
+    /// star's wage but well above his own age-suppressed valuation
+    /// (fair_ratio ≥ 0.82). The squad wage hierarchy is not a grievance.
+    #[test]
+    fn fairly_paid_veteran_does_not_notice_wage_gap() {
+        let today = first_of_month(2026, 6);
+        let mut players = WageEnvyScenario {
+            salary: 1_400_000,
+            top_salary: 3_000_000,
+            ..WageEnvyScenario::late_career_outfield()
+        }
+        .squad(today);
+        TeamBehaviour::process_periodic_wage_envy(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::SalaryGapNoticed),
+            0,
+            "a veteran paid above his own fair value must not resent a prime star earning more"
+        );
+    }
+
+    /// A loyal, professional, benched 35-year-old who *is* somewhat
+    /// underpaid (fair_ratio ~0.68) still lets it go: a fading reserve is
+    /// not unsettled by the squad wage hierarchy.
+    #[test]
+    fn loyal_benched_veteran_does_not_notice_wage_gap() {
+        let today = first_of_month(2026, 6);
+        let mut players = WageEnvyScenario {
+            salary: 650_000,
+            top_salary: 1_400_000,
+            starter_ratio: 0.30,
+            ambition: 15.0,
+            loyalty: 17.0,
+            professionalism: 15.0,
+            ..WageEnvyScenario::late_career_outfield()
+        }
+        .squad(today);
+        TeamBehaviour::process_periodic_wage_envy(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::SalaryGapNoticed),
+            0,
+            "a loyal, benched late-career veteran must not be flagged"
+        );
+    }
+
+    /// An elite, still-central, still-ambitious 35-year-old key player who
+    /// is genuinely and badly underpaid (fair_ratio well below 0.70) is a
+    /// legitimate grievance — the event still fires.
+    #[test]
+    fn underpaid_elite_veteran_keyplayer_notices_wage_gap() {
+        let today = first_of_month(2026, 6);
+        let mut players = WageEnvyScenario {
+            squad_status: PlayerSquadStatus::KeyPlayer,
+            ca: 165,
+            world_rep: 9_000,
+            starter_ratio: 0.75,
+            ambition: 18.0,
+            ..WageEnvyScenario::late_career_outfield()
+        }
+        .squad(today);
+        TeamBehaviour::process_periodic_wage_envy(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::SalaryGapNoticed),
+            1,
+            "a genuinely-underpaid, still-key, ambitious veteran is a real grievance"
+        );
+    }
+
+    /// A drastically-underpaid prime-age regular fires — the gate must not
+    /// over-suppress the very players it is meant to protect.
+    #[test]
+    fn underpaid_prime_regular_notices_wage_gap() {
+        let today = first_of_month(2026, 6);
+        let mut players = WageEnvyScenario::prime_regular().squad(today);
+        TeamBehaviour::process_periodic_wage_envy(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::SalaryGapNoticed),
+            1,
+            "a drastically-underpaid prime regular should still notice the gap"
+        );
+    }
+
+    /// Someone already weighing retirement is suppressed — unless he's a
+    /// genuine, regularly-playing key man, in which case the hit still
+    /// lands but is capped soft (≥ -1.5).
+    #[test]
+    fn retirement_considering_suppresses_wage_envy_unless_genuine_keyplayer() {
+        let today = first_of_month(2026, 6);
+
+        // Rotation-ish key player (starter_ratio 0.55 < 0.60) mulling
+        // retirement → suppressed despite a firing-strength gap.
+        let mut winding_down = WageEnvyScenario {
+            squad_status: PlayerSquadStatus::KeyPlayer,
+            starter_ratio: 0.55,
+            recent_retirement: true,
+            ..WageEnvyScenario::prime_regular()
+        }
+        .squad(today);
+        TeamBehaviour::process_periodic_wage_envy(&mut winding_down, &month_ctx(today));
+        assert_eq!(
+            count(
+                &winding_down.players[0],
+                HappinessEventType::SalaryGapNoticed
+            ),
+            0,
+            "a player considering retirement and no longer a regular starter is suppressed"
+        );
+
+        // Genuine, ever-present key man considering retirement → still
+        // fires, but the magnitude is capped soft.
+        let mut still_key = WageEnvyScenario {
+            squad_status: PlayerSquadStatus::KeyPlayer,
+            starter_ratio: 0.70,
+            recent_retirement: true,
+            ..WageEnvyScenario::prime_regular()
+        }
+        .squad(today);
+        TeamBehaviour::process_periodic_wage_envy(&mut still_key, &month_ctx(today));
+        assert_eq!(
+            count(&still_key.players[0], HappinessEventType::SalaryGapNoticed),
+            1,
+            "a still-key regular starter weighing retirement may still feel underpaid"
+        );
+        let capped = still_key.players[0]
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::SalaryGapNoticed)
+            .map(|e| e.magnitude);
+        assert_eq!(
+            capped,
+            Some(-1.5),
+            "the retirement-window hit must be capped soft at -1.5"
+        );
+    }
+
+    /// The late-career boundary is position-specific: at 36 an outfield
+    /// player is "late career" (≥34) and suppressed, while a goalkeeper is
+    /// not yet (GK threshold is 37) and a genuinely underpaid one still
+    /// fires. Same age, same wage, same temperament — only the position
+    /// differs.
+    #[test]
+    fn late_career_boundary_is_position_specific() {
+        let today = first_of_month(2026, 6);
+
+        let mut gk = WageEnvyScenario {
+            age_years: 36,
+            is_goalkeeper: true,
+            ..WageEnvyScenario::prime_regular()
+        }
+        .squad(today);
+        TeamBehaviour::process_periodic_wage_envy(&mut gk, &month_ctx(today));
+        assert_eq!(
+            count(&gk.players[0], HappinessEventType::SalaryGapNoticed),
+            1,
+            "a 36-year-old keeper is not yet late-career, so a genuine gap still fires"
+        );
+
+        let mut outfield = WageEnvyScenario {
+            age_years: 36,
+            is_goalkeeper: false,
+            ..WageEnvyScenario::prime_regular()
+        }
+        .squad(today);
+        TeamBehaviour::process_periodic_wage_envy(&mut outfield, &month_ctx(today));
+        assert_eq!(
+            count(&outfield.players[0], HappinessEventType::SalaryGapNoticed),
+            0,
+            "a 36-year-old outfield player is late-career and steeply damped — suppressed"
+        );
+    }
+
+    /// Fresh-renewal jealousy ([`process_contract_jealousy`]) must not
+    /// unsettle a late-career veteran whose own valuation already says his
+    /// wage is fair — while a prime, underpaid teammate is still rattled by
+    /// the same signing.
+    #[test]
+    fn fresh_renewal_spares_fairly_paid_veteran_but_not_prime_teammate() {
+        let today = first_of_month(2026, 6);
+
+        // Veteran (id 1): 35, paid fairly for his age (900k vs his
+        // age-suppressed valuation → fair_ratio ≥ 0.70).
+        let mut veteran = build_player(
+            1,
+            today - chrono::Duration::days(35 * 365),
+            140,
+            4_000,
+            12.0,
+        );
+        let mut vet_contract =
+            PlayerClubContract::new(900_000, NaiveDate::from_ymd_opt(2032, 6, 30).unwrap());
+        vet_contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
+        veteran.contract = Some(vet_contract);
+
+        // Signer (id 2): a prime star who just agreed a huge fresh deal.
+        let mut signer = build_player(
+            2,
+            today - chrono::Duration::days(25 * 365),
+            165,
+            9_000,
+            14.0,
+        );
+        let mut signer_contract =
+            PlayerClubContract::new(2_000_000, NaiveDate::from_ymd_opt(2032, 6, 30).unwrap());
+        signer_contract.squad_status = PlayerSquadStatus::KeyPlayer;
+        signer.contract = Some(signer_contract);
+        signer.happiness.last_salary_negotiation = Some(today);
+
+        // Prime teammate (id 3): drastically underpaid, not late-career.
+        let mut prime = build_player(
+            3,
+            today - chrono::Duration::days(24 * 365),
+            140,
+            5_000,
+            14.0,
+        );
+        let mut prime_contract =
+            PlayerClubContract::new(200_000, NaiveDate::from_ymd_opt(2032, 6, 30).unwrap());
+        prime_contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
+        prime.contract = Some(prime_contract);
+
+        let mut players = PlayerCollection::new(vec![veteran, signer, prime]);
+        TeamBehaviour::process_contract_jealousy(&mut players, &month_ctx(today));
+
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::SalaryGapNoticed),
+            0,
+            "a fairly-paid late-career veteran should shrug off a teammate's fresh raise"
+        );
+        assert_eq!(
+            count(&players.players[2], HappinessEventType::SalaryGapNoticed),
+            1,
+            "a drastically-underpaid prime teammate is still unsettled by the same signing"
+        );
+    }
+
+    // ── Dressing-room politics: flop patience, blocked homegrown,
+    //    favouritism, apprentice band, mentor fork, cold reception ──
+
+    /// Open current-season spell at `slug` with an optional transfer fee
+    /// — the observable the weight / homegrown checks read.
+    fn open_spell(slug: &str, fee: Option<f64>) -> CurrentSeasonEntry {
+        CurrentSeasonEntry {
+            team_name: slug.to_string(),
+            team_slug: slug.to_string(),
+            team_reputation: 5_000,
+            league_name: String::new(),
+            league_slug: String::new(),
+            is_loan: false,
+            transfer_fee: fee,
+            statistics: PlayerStatistics::default(),
+            joined_date: NaiveDate::from_ymd_opt(2025, 8, 1).unwrap(),
+            departed_date: None,
+            seq_id: 0,
+        }
+    }
+
+    /// Set the season rating ledger directly: `raw` average over
+    /// `weight` full-match equivalents (realistic rating regresses
+    /// toward the positional neutral by weight / (weight + ~12)).
+    fn set_rating(p: &mut Player, raw: f32, weight: f32) {
+        p.statistics.rating_points = raw * weight;
+        p.statistics.rating_weight = weight;
+    }
+
+    /// A big-money arrival (20M, 120 days ago) sitting on a real sample
+    /// clearly under the line — the flop the leaders judge.
+    fn heavy_flop(today: NaiveDate) -> Player {
+        let mut p = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(2000, 3, 1).unwrap(),
+                130,
+                4_000,
+                12.0,
+            ),
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        p.last_transfer_date = Some(today - Duration::days(120));
+        p.statistics_history
+            .current
+            .push(open_spell("club", Some(20_000_000.0)));
+        p.statistics.played = 8;
+        p.statistics.played_subs = 2;
+        set_rating(&mut p, 5.2, 10.0);
+        p
+    }
+
+    /// A 30-year-old key player with the leadership to speak for the room.
+    fn squad_leader(id: u32) -> Player {
+        let mut p = with_contract(
+            build_player(
+                id,
+                NaiveDate::from_ymd_opt(1996, 3, 1).unwrap(),
+                135,
+                5_000,
+                12.0,
+            ),
+            PlayerSquadStatus::KeyPlayer,
+        );
+        p.skills.mental.leadership = 16.0;
+        p
+    }
+
+    #[test]
+    fn leaders_lose_patience_with_the_heavy_flop() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut players = PlayerCollection::new(vec![heavy_flop(today), squad_leader(2)]);
+        TeamBehaviour::process_flop_signing_patience_audit(
+            &mut players,
+            &returnee_ctx(today, &name),
+        );
+
+        let leader = &players.players[1];
+        assert_eq!(
+            count(leader, HappinessEventType::LosingPatienceWithSigning),
+            1,
+            "the impatient leader must go on record"
+        );
+        assert!(
+            leader
+                .relations
+                .get_player(1)
+                .is_some_and(|r| r.level < 0.0),
+            "the leader must cool toward the flop"
+        );
+        let flop = &players.players[0];
+        assert_eq!(
+            count(flop, HappinessEventType::FeelsDressingRoomPressure),
+            1,
+            "the flop must feel the room turning"
+        );
+    }
+
+    #[test]
+    fn professional_leader_backs_the_struggler_instead() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut leader = squad_leader(2);
+        leader.attributes.professionalism = 17.0;
+        let mut players = PlayerCollection::new(vec![heavy_flop(today), leader]);
+        TeamBehaviour::process_flop_signing_patience_audit(
+            &mut players,
+            &returnee_ctx(today, &name),
+        );
+
+        let leader = &players.players[1];
+        assert_eq!(
+            count(leader, HappinessEventType::LosingPatienceWithSigning),
+            0,
+            "a deeply professional leader keeps the frustration in-house"
+        );
+        assert!(
+            leader
+                .relations
+                .get_player(1)
+                .is_some_and(|r| r.level > 0.0),
+            "he puts an arm around the struggler instead"
+        );
+        assert_eq!(
+            count(
+                &players.players[0],
+                HappinessEventType::FeelsDressingRoomPressure
+            ),
+            0,
+            "with no one on record, the flop doesn't feel the room turn"
+        );
+    }
+
+    #[test]
+    fn ordinary_signing_in_poor_form_is_left_alone() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut flop = heavy_flop(today);
+        // Same poor form, but no fee and no arrival hype — a modest
+        // squad addition struggling is not a leaders' story.
+        flop.statistics_history.current.clear();
+        flop.statistics_history
+            .current
+            .push(open_spell("club", None));
+        let mut players = PlayerCollection::new(vec![flop, squad_leader(2)]);
+        TeamBehaviour::process_flop_signing_patience_audit(
+            &mut players,
+            &returnee_ctx(today, &name),
+        );
+        assert_eq!(
+            count(
+                &players.players[1],
+                HappinessEventType::LosingPatienceWithSigning
+            ),
+            0,
+            "no weight on arrival → no standard to lose patience against"
+        );
+    }
+
+    /// A loan-in striker owning 6 of the club's 10 league starts.
+    fn loan_blocker(today: NaiveDate, ca: u8) -> Player {
+        let mut p = with_contract(
+            build_player(
+                10,
+                NaiveDate::from_ymd_opt(2002, 3, 1).unwrap(),
+                ca,
+                3_000,
+                12.0,
+            ),
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        let mut loan = PlayerClubContract::new_loan(
+            40_000,
+            NaiveDate::from_ymd_opt(2027, 6, 30).unwrap(),
+            100,
+            101,
+            200,
+        );
+        loan.started = Some(today - Duration::days(120));
+        p.contract_loan = Some(loan);
+        p.statistics.played = 6;
+        p
+    }
+
+    /// A 19-year-old academy striker with no minutes: never transferred,
+    /// no history — the homegrown fallback signal.
+    fn academy_kid(id: u32) -> Player {
+        with_contract(
+            build_player(
+                id,
+                NaiveDate::from_ymd_opt(2007, 3, 1).unwrap(),
+                110,
+                800,
+                12.0,
+            ),
+            PlayerSquadStatus::HotProspectForTheFuture,
+        )
+    }
+
+    /// A 28-year-old homegrown key player — the academy-core voice.
+    fn homegrown_senior(id: u32) -> Player {
+        with_contract(
+            build_player(
+                id,
+                NaiveDate::from_ymd_opt(1998, 3, 1).unwrap(),
+                130,
+                4_000,
+                12.0,
+            ),
+            PlayerSquadStatus::KeyPlayer,
+        )
+    }
+
+    #[test]
+    fn blocked_academy_kid_resents_the_loan_stopgap() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut players = PlayerCollection::new(vec![
+            loan_blocker(today, 115),
+            academy_kid(2),
+            homegrown_senior(3),
+        ]);
+        TeamBehaviour::process_blocked_homegrown_audit(&mut players, &returnee_ctx(today, &name));
+
+        let kid = &players.players[1];
+        assert_eq!(
+            count(kid, HappinessEventType::PathwayBlockedByLoanSigning),
+            1,
+            "the starved comparable kid must read the pathway as blocked"
+        );
+        assert!(
+            kid.relations.get_player(10).is_some_and(|r| r.level < 0.0),
+            "the kid knows who is holding the door shut"
+        );
+        let senior = &players.players[2];
+        assert_eq!(
+            count(senior, HappinessEventType::UnhappyAboutBlockedHomegrown),
+            1,
+            "the homegrown core must bristle at the message"
+        );
+        assert!(
+            senior
+                .relations
+                .get_player(2)
+                .is_some_and(|r| r.level > 0.0),
+            "the kid gains an ally in the room"
+        );
+    }
+
+    #[test]
+    fn clearly_better_loanee_is_fair_competition() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut players = PlayerCollection::new(vec![
+            loan_blocker(today, 140),
+            academy_kid(2),
+            homegrown_senior(3),
+        ]);
+        TeamBehaviour::process_blocked_homegrown_audit(&mut players, &returnee_ctx(today, &name));
+        assert_eq!(
+            count(
+                &players.players[1],
+                HappinessEventType::PathwayBlockedByLoanSigning
+            ),
+            0,
+            "a loanee clearly above the kid's level is competition, not a stopgap"
+        );
+        assert_eq!(
+            count(
+                &players.players[2],
+                HappinessEventType::UnhappyAboutBlockedHomegrown
+            ),
+            0,
+        );
+    }
+
+    #[test]
+    fn overlooked_in_form_player_reads_the_team_sheet() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        // The favoured name: 20M signing, 7 of 10 starts, sample under
+        // the line. The overlooked man: six appearances mostly off the
+        // bench, visibly better ratings, two starts.
+        let favoured = heavy_flop(today);
+        let mut overlooked = with_contract(
+            build_player(
+                2,
+                NaiveDate::from_ymd_opt(2001, 3, 1).unwrap(),
+                125,
+                2_000,
+                12.0,
+            ),
+            PlayerSquadStatus::MainBackupPlayer,
+        );
+        overlooked.statistics.played = 1;
+        overlooked.statistics.played_subs = 5;
+        set_rating(&mut overlooked, 7.8, 4.0);
+        let mut players = PlayerCollection::new(vec![favoured, overlooked]);
+        TeamBehaviour::process_selection_favouritism_audit(
+            &mut players,
+            &returnee_ctx(today, &name),
+        );
+
+        let overlooked = &players.players[1];
+        assert_eq!(
+            count(overlooked, HappinessEventType::FeelsSelectionFavouritism),
+            1,
+            "real form ignored for a big name must register as favouritism"
+        );
+        assert!(
+            overlooked
+                .relations
+                .get_player(1)
+                .is_some_and(|r| r.level < 0.0),
+            "the tension points at the favoured name"
+        );
+    }
+
+    #[test]
+    fn favoured_name_in_real_form_is_untouchable() {
+        let today = first_of_month(2026, 6);
+        let name = "Club".to_string();
+        let mut favoured = heavy_flop(today);
+        // Same fee, same share — but he's actually delivering.
+        set_rating(&mut favoured, 7.0, 10.0);
+        let mut overlooked = with_contract(
+            build_player(
+                2,
+                NaiveDate::from_ymd_opt(2001, 3, 1).unwrap(),
+                125,
+                2_000,
+                12.0,
+            ),
+            PlayerSquadStatus::MainBackupPlayer,
+        );
+        overlooked.statistics.played = 1;
+        overlooked.statistics.played_subs = 5;
+        set_rating(&mut overlooked, 7.8, 4.0);
+        let mut players = PlayerCollection::new(vec![favoured, overlooked]);
+        TeamBehaviour::process_selection_favouritism_audit(
+            &mut players,
+            &returnee_ctx(today, &name),
+        );
+        assert_eq!(
+            count(
+                &players.players[1],
+                HappinessEventType::FeelsSelectionFavouritism
+            ),
+            0,
+            "a big name in real form picked every week is just the best player playing"
+        );
+    }
+
+    #[test]
+    fn young_understudy_learns_from_the_star() {
+        let today = first_of_month(2026, 6);
+        let name = "Minnow".to_string();
+        let mut star = aura_returnee(today);
+        star.player_attributes.current_ability = 150;
+        // An 18-year-old striker prospect 50 CA below the star — the
+        // same position, but no contest at that gap.
+        let kid = with_contract(
+            build_player(
+                2,
+                NaiveDate::from_ymd_opt(2008, 3, 1).unwrap(),
+                100,
+                500,
+                12.0,
+            ),
+            PlayerSquadStatus::HotProspectForTheFuture,
+        );
+        let mut players = PlayerCollection::new(vec![star, kid]);
+        TeamBehaviour::process_big_club_aura_audit(&mut players, &small_club_ctx(today, &name));
+
+        let kid = &players.players[1];
+        assert_eq!(
+            count(kid, HappinessEventType::LearningFromStarTeammate),
+            1,
+            "the understudy gets the apprenticeship beat, not the rivalry"
+        );
+        assert!(
+            kid.relations.get_player(1).is_some_and(|r| r.level > 0.0),
+            "the drift toward the star is a mentorship bond"
+        );
+    }
+
+    #[test]
+    fn professional_veteran_takes_returning_rival_under_wing() {
+        let today = first_of_month(2026, 6);
+        let mut returnee = proven_returnee(today);
+        returnee.last_transfer_date = Some(today - Duration::days(20));
+        let mut veteran = with_contract(
+            build_player(
+                2,
+                NaiveDate::from_ymd_opt(1993, 3, 1).unwrap(),
+                115,
+                4_000,
+                12.0,
+            ),
+            PlayerSquadStatus::KeyPlayer,
+        );
+        veteran.attributes.professionalism = 17.0;
+        let mut players = PlayerCollection::new(vec![returnee, veteran]);
+        TeamBehaviour::process_returning_rival_audit(&mut players, &month_ctx(today));
+
+        let veteran = &players.players[1];
+        assert_eq!(
+            count(veteran, HappinessEventType::TakesReplacementUnderWing),
+            1,
+            "the professional veteran passes the shirt on instead of defending it"
+        );
+        assert_eq!(
+            count(veteran, HappinessEventType::ThreatenedByReturningLoanee),
+            0,
+            "the threat and the mentorship are exclusive responses"
+        );
+        assert!(
+            veteran
+                .relations
+                .get_player(1)
+                .is_some_and(|r| r.level > 0.0),
+            "the relation drift must be a bond, not a rivalry"
+        );
+    }
+
+    #[test]
+    fn homegrown_core_cold_shoulders_the_rival_signing() {
+        let today = first_of_month(2026, 6);
+        let mut arrival = with_contract(
+            build_player(
+                1,
+                NaiveDate::from_ymd_opt(1999, 3, 1).unwrap(),
+                130,
+                5_000,
+                12.0,
+            ),
+            PlayerSquadStatus::FirstTeamRegular,
+        );
+        arrival
+            .happiness
+            .add_event(HappinessEventType::ColdShoulderOverRivalPast, -2.0);
+        let mut players = PlayerCollection::new(vec![arrival, homegrown_senior(2)]);
+        TeamBehaviour::process_rival_past_reception_audit(&mut players, &month_ctx(today));
+
+        let senior = &players.players[1];
+        assert!(
+            senior
+                .relations
+                .get_player(1)
+                .is_some_and(|r| r.level < 0.0),
+            "the homegrown core must keep its distance while the mark is fresh"
+        );
+        assert_eq!(
+            count(senior, HappinessEventType::ColdShoulderOverRivalPast),
+            0,
+            "the story is the arrival's — the seniors' side is atmosphere, not event rows"
+        );
+    }
+}

@@ -40,10 +40,10 @@
 //! is standing, in `DefenderRunningState`'s wide-area ladder — not here,
 //! and not by his position on the team sheet.
 
-use crate::r#match::defenders::states::common::{
+use crate::r#match::defenders::states::shared::{
     ActivityIntensity, DefenderCondition, DefenderRead, ReadLevel,
 };
-use crate::r#match::player::strategies::common::team::WideChannel;
+use crate::r#match::player::strategies::shared::team::WideChannel;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,

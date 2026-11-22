@@ -10,8 +10,7 @@ use crate::r#match::engine::flow::arena::formation_variant::{
     FormationLine, FormationVariant, VacatedSlot,
 };
 use crate::r#match::{
-    CoachCard, MatchCoach, MatchField, Outlook, PlayerSide, ReadCounters, Situation,
-    SquadFit,
+    CoachCard, MatchCoach, MatchField, Outlook, PlayerSide, ReadCounters, Situation, SquadFit,
 };
 
 fn holder(field: &MatchField, team_id: u32, position: PlayerPositionType) -> Option<u32> {

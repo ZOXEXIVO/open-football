@@ -1,16 +1,14 @@
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{
+use crate::r#match::forwarders::states::shared::{
     ActivityIntensity, ForwardCondition, ForwardRead,
 };
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::forward_census::{ForwardCensus, FwdRequest};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::player::strategies::common::players::ops::clearance::TouchlineCall;
-use crate::r#match::player::strategies::players::ops::forward_shot_decision::{
-    ShotDecision, evaluate_forward_shot_decision,
-};
+use crate::r#match::player::strategies::players::ops::forward_shot_decision::ShotDecision;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
+use crate::r#match::player::strategies::shared::players::ops::clearance::TouchlineCall;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -29,7 +27,9 @@ impl StateProcessingHandler for ForwardPassingState {
         // Check if the forward still has the ball
         if !ctx.player.has_ball(ctx) {
             // Lost possession, transition to Running state
-            return Some(StateChangeResult::with_forward_state(ForwardRead::released(ctx)));
+            return Some(StateChangeResult::with_forward_state(
+                ForwardRead::released(ctx),
+            ));
         }
 
         // Pinned at his own touchline with no safe out: over the line, up
@@ -77,7 +77,7 @@ impl StateProcessingHandler for ForwardPassingState {
         // in goals (4.74 -> 5.01 per match, inside a +/-0.3 run-to-run
         // spread) while removing the loop.
         if distance_to_goal < 40.0 && ctx.in_state_time == 0 {
-            match evaluate_forward_shot_decision(ctx, "FWD_PASSING_CLOSE") {
+            match ShotDecision::evaluate(ctx, "FWD_PASSING_CLOSE") {
                 ShotDecision::Shoot { reason } => {
                     return Some(
                         StateChangeResult::with_forward_state(ForwardState::Shooting)

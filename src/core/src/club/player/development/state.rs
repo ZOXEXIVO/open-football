@@ -5,7 +5,7 @@ use super::ceilings::PositionalSkillCeilings;
 use super::football::BankedFootball;
 use super::layoff::Layoff;
 use super::ledger::GrowthLedger;
-use super::skills_array::{SKILL_COUNT, skills_to_array};
+use super::skills_array::SKILL_COUNT;
 use super::timing::MaturationTiming;
 use crate::club::player::maturation::{MaturationGroup, SkillMaturation};
 use crate::club::player::player::Player;
@@ -40,7 +40,7 @@ impl PlayerDevelopment {
         let weights = if self.blueprint.is_drawn() {
             self.blueprint.weights()
         } else {
-            SkillBlueprint::project(&skills_to_array(player), &[1.0; MaturationGroup::COUNT])
+            SkillBlueprint::project(&player.skills_to_array(), &[1.0; MaturationGroup::COUNT])
                 .weights()
         };
         match &player.individual_training {
@@ -79,7 +79,7 @@ impl Player {
     pub(crate) fn draw_blueprint(&mut self, today: NaiveDate) {
         let age = DateUtils::age_in_years(self.birth_date, today);
         self.development.blueprint = SkillBlueprint::project(
-            &skills_to_array(self),
+            &self.skills_to_array(),
             &PositionalSkillCeilings::held_shares(self, age),
         );
     }

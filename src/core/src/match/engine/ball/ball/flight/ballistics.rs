@@ -1,6 +1,6 @@
 use crate::r#match::engine::ball::ball::flight::motion::SpinModel;
-use crate::r#match::engine::environment::EnvModifiers;
 use crate::r#match::engine::ball::ball::{AerialReach, Ball};
+use crate::r#match::engine::environment::EnvModifiers;
 use nalgebra::Vector3;
 
 /// Per-tick rolling-friction decay for a ball on the ground: each tick

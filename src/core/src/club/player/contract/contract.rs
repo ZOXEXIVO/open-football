@@ -989,35 +989,39 @@ impl PlayerClubContract {
     }
 }
 
-/// True for bonus types that have no payout site in the simulation.
-/// Acceptance/install code filters these out so the renewal or transfer
-/// AI can't accidentally install a decorative bonus that never costs
-/// the club anything but inflates the player's perceived package value.
-///
-/// To make a type "active" again, implement the payout (in
-/// `process_contract_bonuses` or `settle_lump_sum_bonuses`) and remove
-/// it from this list.
-pub fn is_inert_bonus(bonus_type: &ContractBonusType) -> bool {
-    matches!(
-        bonus_type,
-        ContractBonusType::TeamOfTheYear | ContractBonusType::TopGoalscorer
-    )
+impl ContractBonusType {
+    /// True for bonus types that have no payout site in the simulation.
+    /// Acceptance/install code filters these out so the renewal or transfer
+    /// AI can't accidentally install a decorative bonus that never costs
+    /// the club anything but inflates the player's perceived package value.
+    ///
+    /// To make a type "active" again, implement the payout (in
+    /// `process_contract_bonuses` or `settle_lump_sum_bonuses`) and remove
+    /// it from this list.
+    pub fn is_inert(&self) -> bool {
+        matches!(
+            self,
+            ContractBonusType::TeamOfTheYear | ContractBonusType::TopGoalscorer
+        )
+    }
 }
 
-/// True for clause types with no apply/lifecycle hook in the
-/// simulation. Acceptance filters them out for the same reason as
-/// `is_inert_bonus`.
-pub fn is_inert_clause(clause_type: &ContractClauseType) -> bool {
-    matches!(
-        clause_type,
-        ContractClauseType::SellOnFee
-            | ContractClauseType::SellOnFeeProfit
-            | ContractClauseType::SeasonalLandmarkGoalBonus
-            | ContractClauseType::StaffJobRelease
-            | ContractClauseType::MinimumFeeReleaseToHigherDivisionClubs
-            | ContractClauseType::TopDivisionPromotionWageRise
-            | ContractClauseType::TopDivisionRelegationWageDrop
-    )
+impl ContractClauseType {
+    /// True for clause types with no apply/lifecycle hook in the
+    /// simulation. Acceptance filters them out for the same reason as
+    /// [`ContractBonusType::is_inert`].
+    pub fn is_inert(&self) -> bool {
+        matches!(
+            self,
+            ContractClauseType::SellOnFee
+                | ContractClauseType::SellOnFeeProfit
+                | ContractClauseType::SeasonalLandmarkGoalBonus
+                | ContractClauseType::StaffJobRelease
+                | ContractClauseType::MinimumFeeReleaseToHigherDivisionClubs
+                | ContractClauseType::TopDivisionPromotionWageRise
+                | ContractClauseType::TopDivisionRelegationWageDrop
+        )
+    }
 }
 
 // Bonuses
@@ -1839,33 +1843,23 @@ mod clause_lifecycle_tests {
 
     #[test]
     fn inert_bonuses_and_clauses_are_recognised() {
-        // The is_inert_* lists are the source of truth used by the
+        // The `is_inert` methods are the source of truth used by the
         // accept-contract install path to strip decorative types.
-        assert!(is_inert_bonus(&ContractBonusType::TeamOfTheYear));
-        assert!(is_inert_bonus(&ContractBonusType::TopGoalscorer));
-        assert!(!is_inert_bonus(&ContractBonusType::SigningBonus));
-        assert!(!is_inert_bonus(&ContractBonusType::AppearanceFee));
+        assert!(ContractBonusType::TeamOfTheYear.is_inert());
+        assert!(ContractBonusType::TopGoalscorer.is_inert());
+        assert!(!ContractBonusType::SigningBonus.is_inert());
+        assert!(!ContractBonusType::AppearanceFee.is_inert());
 
-        assert!(is_inert_clause(&ContractClauseType::SellOnFee));
-        assert!(is_inert_clause(&ContractClauseType::SellOnFeeProfit));
-        assert!(is_inert_clause(
-            &ContractClauseType::SeasonalLandmarkGoalBonus
-        ));
-        assert!(is_inert_clause(&ContractClauseType::StaffJobRelease));
-        assert!(is_inert_clause(
-            &ContractClauseType::MinimumFeeReleaseToHigherDivisionClubs
-        ));
-        assert!(is_inert_clause(
-            &ContractClauseType::TopDivisionPromotionWageRise
-        ));
-        assert!(is_inert_clause(
-            &ContractClauseType::TopDivisionRelegationWageDrop
-        ));
+        assert!(ContractClauseType::SellOnFee.is_inert());
+        assert!(ContractClauseType::SellOnFeeProfit.is_inert());
+        assert!(ContractClauseType::SeasonalLandmarkGoalBonus.is_inert());
+        assert!(ContractClauseType::StaffJobRelease.is_inert());
+        assert!(ContractClauseType::MinimumFeeReleaseToHigherDivisionClubs.is_inert());
+        assert!(ContractClauseType::TopDivisionPromotionWageRise.is_inert());
+        assert!(ContractClauseType::TopDivisionRelegationWageDrop.is_inert());
         // Sanity: the active types are NOT marked inert.
-        assert!(!is_inert_clause(&ContractClauseType::MinimumFeeRelease));
-        assert!(!is_inert_clause(&ContractClauseType::YearlyWageRise));
-        assert!(!is_inert_clause(
-            &ContractClauseType::OptionalContractExtensionByClub
-        ));
+        assert!(!ContractClauseType::MinimumFeeRelease.is_inert());
+        assert!(!ContractClauseType::YearlyWageRise.is_inert());
+        assert!(!ContractClauseType::OptionalContractExtensionByClub.is_inert());
     }
 }

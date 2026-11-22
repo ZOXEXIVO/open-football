@@ -252,8 +252,16 @@ mod tests {
         assert!(owed.cameo_adjustment(75, 2, 1.0, 9) > 0.0);
         assert_eq!(owed.cameo_adjustment(65, 2, 1.0, 9), 0.0, "too early");
         assert_eq!(owed.cameo_adjustment(75, 0, 1.0, 9), 0.0, "no cushion");
-        assert_eq!(owed.cameo_adjustment(75, 2, 0.5, 9), 0.0, "not his position");
-        assert_eq!(owed.cameo_adjustment(75, 2, 1.0, 4), 0.0, "not the man he succeeds");
+        assert_eq!(
+            owed.cameo_adjustment(75, 2, 0.5, 9),
+            0.0,
+            "not his position"
+        );
+        assert_eq!(
+            owed.cameo_adjustment(75, 2, 1.0, 4),
+            0.0,
+            "not the man he succeeds"
+        );
         assert!(owed.cameo_adjustment(75, 2, 1.0, 9) <= 0.25);
 
         let ahead = PlayerMatchIntent { owed: -2.0, ..owed };

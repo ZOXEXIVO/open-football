@@ -16,8 +16,7 @@ use crate::Club;
 use crate::MatchRuntime;
 use crate::TeamType;
 use crate::context::GlobalContext;
-use crate::league::schedule::cup;
-use crate::league::schedule::cup::CupCalendar;
+use crate::league::schedule::cup::{CupBracket, CupCalendar};
 use crate::league::simulation::matchday::MatchdayCommitments;
 use crate::league::{
     CompetitionLevel, KickoffClock, League, LeagueBuildOutput, LeagueMatch, LeaguePendingState,
@@ -130,7 +129,7 @@ impl DomesticCup {
     /// Rounds from the first draw to the final, for the field the cup
     /// was seeded from.
     pub(crate) fn bracket_rounds(clubs: &[Club]) -> u8 {
-        cup::total_rounds(Self::seeded_participants(clubs).len())
+        CupBracket::total_rounds(Self::seeded_participants(clubs).len())
     }
 
     fn seeded_participants(clubs: &[Club]) -> Vec<u32> {
@@ -274,8 +273,8 @@ impl DomesticCup {
             return;
         }
 
-        let (pairings, _byes) = cup::pair_knockout_round(&field);
-        let total = cup::total_rounds(field.len());
+        let (pairings, _byes) = CupBracket::pair_knockout_round(&field);
+        let total = CupBracket::total_rounds(field.len());
         let (season_start, season_end) = self.season_window();
         let mut date = CupCalendar::round_date(season_start, season_end, 1, total);
         // If the game begins mid-season (e.g. a calendar-year league whose
@@ -306,7 +305,7 @@ impl DomesticCup {
             return;
         }
 
-        let alive = match cup::advancing_teams(&self.league.schedule.tours, &field) {
+        let alive = match CupBracket::advancing_teams(&self.league.schedule.tours, &field) {
             Some(a) => a,
             None => return, // a tie in the latest round is still pending
         };
@@ -315,13 +314,13 @@ impl DomesticCup {
         }
 
         let alive_seeded = Self::reseed(&field, &alive);
-        let (pairings, _byes) = cup::pair_knockout_round(&alive_seeded);
+        let (pairings, _byes) = CupBracket::pair_knockout_round(&alive_seeded);
         if pairings.is_empty() {
             return;
         }
 
         let next_round = (self.league.schedule.tours.len() + 1) as u8;
-        let total = cup::total_rounds(field.len());
+        let total = CupBracket::total_rounds(field.len());
         let (season_start, season_end) = self.season_window();
         let mut date = CupCalendar::round_date(season_start, season_end, next_round, total);
         // Never schedule into the past: the previous round may have run long
@@ -444,7 +443,7 @@ impl DomesticCup {
         if match_results.is_empty() {
             return Vec::new();
         }
-        let total_rounds = cup::total_rounds(Self::seeded_participants(clubs).len());
+        let total_rounds = CupBracket::total_rounds(Self::seeded_participants(clubs).len());
         let mut team_to_club: FxHashMap<u32, u32> = FxHashMap::default();
         for club in clubs {
             for team in &club.teams.teams {
@@ -469,7 +468,7 @@ impl DomesticCup {
                 MatchResultOutcome::HomeWin => mr.home_team_id,
                 MatchResultOutcome::AwayWin => mr.away_team_id,
                 // A knockout tie can't truly end level (penalties decide);
-                // mirror the deterministic guard in `cup::tie_winner`.
+                // mirror the deterministic guard in `CupBracket::tie_winner`.
                 MatchResultOutcome::Draw => mr.home_team_id,
             };
             if let Some(&club_id) = team_to_club.get(&winner) {
@@ -504,7 +503,7 @@ impl DomesticCup {
     /// then a bye in later rounds too, are still alive).
     pub fn champion(&self, clubs: &[Club]) -> Option<u32> {
         let field = Self::seeded_participants(clubs);
-        cup::cup_champion(&self.league.schedule.tours, &field)
+        CupBracket::cup_champion(&self.league.schedule.tours, &field)
     }
 
     /// Champion team id only if a fresh winner-trophy fan-out is owed for
@@ -556,7 +555,7 @@ mod tests {
     use super::{DomesticCup, DomesticCupPrizes};
     use crate::academy::ClubAcademy;
     use crate::context::{GlobalContext, SimulationContext};
-    use crate::league::schedule::cup;
+    use crate::league::schedule::cup::CupBracket;
     use crate::league::{
         DayMonthPeriod, League, LeagueSettings, Schedule, ScheduleItem, ScheduleTour,
     };
@@ -756,7 +755,7 @@ mod tests {
         cup.simulate(&clubs, &ctx);
 
         let tie_date = cup.league.schedule.tours[0].items[0].date.date();
-        let total = cup::total_rounds(DomesticCup::seeded_participants(&clubs).len());
+        let total = CupBracket::total_rounds(DomesticCup::seeded_participants(&clubs).len());
         let matches = cup.collect_today_matches(tie_date, total);
 
         assert!(

@@ -2,7 +2,6 @@ pub mod ability;
 pub mod calculators;
 pub mod condition;
 pub mod contract;
-pub mod core;
 pub mod development;
 pub mod events;
 pub mod generators;
@@ -12,6 +11,7 @@ pub mod lifecycle;
 pub mod mailbox;
 pub mod maturation;
 pub mod mind;
+pub mod model;
 pub mod personality;
 pub mod squad;
 pub mod statistics;
@@ -23,8 +23,6 @@ pub mod transfer;
 pub use ability::{attributes, position, position_weights, registry, skills, traits};
 pub use condition::load;
 pub use contract::agent;
-pub use core::PlayerUsage;
-pub use core::{builder, collection, player, result, utils};
 pub use events::{
     AwardReputationInput, AwardReputationKind, AwardTimelineEntry, PlayerAwardsCount,
 };
@@ -34,6 +32,8 @@ pub use mind::{
     MindEpisode, MindJournal, MindMemory, MindNote, MindNoteKind, MindOrgans, MindTickContext,
     MindTickReport, PlayerMind, RecallContext, RecallCue, RecallResult, SemanticFact,
 };
+pub use model::{PlayerGrowth, PlayerUsage};
+pub use model::{builder, collection, growth, player, result};
 pub use personality::{adaptation, behaviour_config, decisions, interaction, language, rapport};
 pub use squad::{plan, status};
 pub use transfer::free;
@@ -45,6 +45,7 @@ pub use collection::*;
 pub use contract::*;
 pub use decisions::*;
 pub use generators::*;
+pub use growth::*;
 pub use happiness::*;
 pub use injury::*;
 pub use interaction::*;
@@ -63,4 +64,3 @@ pub use statistics::*;
 pub use status::*;
 pub use training::*;
 pub use traits::*;
-pub use utils::*;

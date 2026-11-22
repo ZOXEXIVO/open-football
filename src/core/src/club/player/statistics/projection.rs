@@ -14,7 +14,7 @@
 //! any team/country state — calling it twice with the same input
 //! returns identical output.
 
-use super::history::PlayerStatisticsHistory;
+use super::history::{ContinentalSeasonStats, CurrentSeasonEntry, PlayerStatisticsHistory};
 use super::ledger::{
     DomesticCupOverride, PlayerCompetitionStatsRow, PlayerHistoryRow, PlayerHistoryRowBreakdown,
     PlayerLiveStatsInput, PlayerStatCompetitionKind, PlayerStatLedgerEntry,
@@ -99,10 +99,319 @@ impl DominantCompetitionSource {
     }
 }
 
+/// Accumulated current-season Overview rows: League / Friendly totals
+/// plus one row per cup competition, in first-seen order.
+struct OverviewAccumulator {
+    league_total: PlayerStatistics,
+    league_seen: bool,
+    friendly_total: PlayerStatistics,
+    friendly_seen: bool,
+    league_source: DominantCompetitionSource,
+    friendly_source: DominantCompetitionSource,
+    per_cup: FxHashMap<(PlayerStatCompetitionKind, String), PlayerCompetitionStatsRow>,
+    cup_order: Vec<(PlayerStatCompetitionKind, String)>,
+}
+
+impl OverviewAccumulator {
+    fn collect(
+        ledger: Vec<PlayerStatLedgerEntry>,
+        current_year: u16,
+        live: &PlayerLiveStatsInput<'_>,
+        domestic_cup: Option<&DomesticCupOverride>,
+    ) -> Self {
+        let mut acc = OverviewAccumulator {
+            league_total: PlayerStatistics::default(),
+            league_seen: false,
+            friendly_total: PlayerStatistics::default(),
+            friendly_seen: false,
+            league_source: DominantCompetitionSource::default(),
+            friendly_source: DominantCompetitionSource::default(),
+            per_cup: FxHashMap::default(),
+            cup_order: Vec::new(),
+        };
+
+        for entry in ledger
+            .into_iter()
+            .filter(|e| e.season_start_year == current_year)
+        {
+            match entry.competition_kind {
+                PlayerStatCompetitionKind::League => {
+                    acc.league_source.note(
+                        &entry.league_slug,
+                        &entry.league_name,
+                        entry.statistics.total_games(),
+                    );
+                    acc.league_total.merge_from(&entry.statistics);
+                    acc.league_seen = true;
+                }
+                PlayerStatCompetitionKind::Friendly => {
+                    acc.friendly_source.note(
+                        &entry.competition_slug,
+                        "",
+                        entry.statistics.total_games(),
+                    );
+                    acc.friendly_total.merge_from(&entry.statistics);
+                    acc.friendly_seen = true;
+                }
+                kind @ (PlayerStatCompetitionKind::DomesticCup
+                | PlayerStatCompetitionKind::ContinentalCup) => {
+                    let key = (kind, entry.competition_slug.clone());
+                    let row = acc.per_cup.entry(key.clone()).or_insert_with(|| {
+                        acc.cup_order.push(key.clone());
+                        PlayerCompetitionStatsRow {
+                            competition_kind: kind,
+                            competition_slug: entry.competition_slug.clone(),
+                            competition_name: PlayerStatisticsProjection::resolve_cup_name(
+                                &entry.competition_slug,
+                                live,
+                                domestic_cup,
+                            ),
+                            statistics: PlayerStatistics::default(),
+                        }
+                    });
+                    row.statistics.merge_from(&entry.statistics);
+                }
+            }
+        }
+        acc
+    }
+
+    fn into_rows(
+        self,
+        history: &PlayerStatisticsHistory,
+        current_date: NaiveDate,
+    ) -> Vec<PlayerCompetitionStatsRow> {
+        let mut rows: Vec<PlayerCompetitionStatsRow> = Vec::new();
+        if self.league_seen {
+            let (league_slug, league_name) = self.league_source.resolved();
+            rows.push(PlayerCompetitionStatsRow {
+                competition_kind: PlayerStatCompetitionKind::League,
+                competition_slug: league_slug,
+                competition_name: league_name,
+                statistics: self.league_total,
+            });
+        }
+        if self.friendly_seen && self.friendly_total.total_games() > 0 {
+            // A friendly slice whose source slug is just the anchor
+            // spell's own league is the recorder's "no specific source"
+            // fallback — a senior pre-season friendly. Strip it so the
+            // web layer renders the generic "Friendly" label; only a
+            // genuinely different source league earns the real name.
+            let anchor_league_slug =
+                PlayerStatisticsProjection::live_anchor_index(history, current_date)
+                    .map(|idx| history.current[idx].league_slug.as_str());
+            let (friendly_slug, _) = self.friendly_source.resolved();
+            let friendly_slug = if anchor_league_slug == Some(friendly_slug.as_str()) {
+                String::new()
+            } else {
+                friendly_slug
+            };
+            rows.push(PlayerCompetitionStatsRow {
+                competition_kind: PlayerStatCompetitionKind::Friendly,
+                competition_slug: friendly_slug,
+                competition_name: String::new(),
+                statistics: self.friendly_total,
+            });
+        }
+        // Domestic cups before continental ones, in stable insertion
+        // order within each block.
+        let mut per_cup = self.per_cup;
+        for key in self
+            .cup_order
+            .iter()
+            .filter(|(k, _)| *k == PlayerStatCompetitionKind::DomesticCup)
+        {
+            if let Some(row) = per_cup.remove(key) {
+                rows.push(row);
+            }
+        }
+        for key in self
+            .cup_order
+            .iter()
+            .filter(|(k, _)| *k == PlayerStatCompetitionKind::ContinentalCup)
+        {
+            if let Some(row) = per_cup.remove(key) {
+                rows.push(row);
+            }
+        }
+        rows
+    }
+}
+
 /// Pure-projection facade. All methods are read-only and side-effect
 /// free: handing the same `PlayerStatisticsHistory` + live inputs in
 /// twice yields identical results.
 pub struct PlayerStatisticsProjection;
+
+/// Row protection and drop rules for the History projection.
+struct HistoryNoiseFilter {
+    snapshot: Vec<PlayerHistoryRow>,
+    protected_seqs: Vec<u32>,
+    debut_year: Option<u16>,
+    origin_seq: Option<u32>,
+    row_coverage: FxHashMap<RowKey, Option<u16>>,
+}
+
+impl HistoryNoiseFilter {
+    fn new(
+        rows: &FxHashMap<RowKey, PlayerHistoryRow>,
+        protected_seqs: Vec<u32>,
+        row_coverage: FxHashMap<RowKey, Option<u16>>,
+    ) -> Self {
+        let snapshot: Vec<PlayerHistoryRow> = rows.values().cloned().collect();
+        // The player's first/debut season — its owning-club record is kept
+        // even when they were loaned out immediately ("where the career
+        // began"). Later full-loan seasons don't get that protection.
+        let debut_year: Option<u16> = snapshot.iter().map(|r| r.season.start_year).min();
+        // The career-origin row: the earliest spell of the debut season.
+        // The season-end drain keeps it forever; the projection must agree.
+        let origin_seq: Option<u32> = snapshot
+            .iter()
+            .filter(|r| Some(r.season.start_year) == debut_year)
+            .map(|r| r.seq_id)
+            .min();
+        HistoryNoiseFilter {
+            snapshot,
+            protected_seqs,
+            debut_year,
+            origin_seq,
+            row_coverage,
+        }
+    }
+
+    fn keeps(&self, key: &RowKey, row: &PlayerHistoryRow) -> bool {
+        if self.protected_seqs.contains(&row.seq_id) {
+            return true;
+        }
+        if Some(row.season.start_year) == self.debut_year && Some(row.seq_id) == self.origin_seq {
+            return true;
+        }
+        if row.statistics.total_games() > 0 {
+            return true;
+        }
+        // A real signing fee marks a real event — keep even at 0 apps.
+        // A paid fee on any row, and the `Some(0.0)` "free" sentinel on a
+        // PERMANENT row, both qualify. A free LOAN's sentinel is left to
+        // the loan branch, which owns phantom-loan detection.
+        let paid_fee = matches!(row.transfer_fee, Some(f) if f > 0.0);
+        if paid_fee || (row.transfer_fee.is_some() && !row.is_loan) {
+            return true;
+        }
+        if row.is_loan {
+            return self.keeps_loan(key, row);
+        }
+        self.keeps_non_loan(key, row)
+    }
+
+    /// Every loan spell is a real part of the career — even at 0 apps and
+    /// even short. The only loan rows dropped are the tail of an older
+    /// multi-season loan (a sliver under a season the player never really
+    /// spent there), and a zero-day window.
+    fn keeps_loan(&self, key: &RowKey, row: &PlayerHistoryRow) -> bool {
+        if let Some(days) = self.row_coverage.get(key).copied().flatten() {
+            if days == 0 {
+                return false;
+            }
+            let continues_prior_season_loan = self.snapshot.iter().any(|other| {
+                other.is_loan
+                    && other.team_slug == row.team_slug
+                    && other.season.start_year + 1 == row.season.start_year
+            });
+            if !continues_prior_season_loan {
+                return true;
+            }
+            let season_span = (row.season.end_date() - row.season.start_date())
+                .num_days()
+                .max(1) as f64;
+            return (days as f64 / season_span) * 100.0 >= MIN_COVERAGE_PCT_FOR_QUIET_ROW;
+        }
+        let player_actually_played_elsewhere = self.snapshot.iter().any(|other| {
+            other.season.start_year == row.season.start_year
+                && !(other.team_slug == row.team_slug && other.league_slug == row.league_slug)
+                && other.statistics.total_games() > 0
+        });
+        !player_actually_played_elsewhere
+    }
+
+    /// Time-based collapse for non-loan rows: a 0-app spell covering less
+    /// than 40% of the season is display noise. Without coverage data, a
+    /// 0-app row is dropped only when a sibling non-loan team in the same
+    /// season has real content — the intra-club bounce pattern.
+    fn keeps_non_loan(&self, key: &RowKey, row: &PlayerHistoryRow) -> bool {
+        if let Some(days) = self.row_coverage.get(key).copied().flatten() {
+            let season_span = (row.season.end_date() - row.season.start_date())
+                .num_days()
+                .max(1) as f64;
+            return (days as f64 / season_span) * 100.0 >= MIN_COVERAGE_PCT_FOR_QUIET_ROW;
+        }
+        let phantom_alongside_other_senior = self.snapshot.iter().any(|other| {
+            other.season.start_year == row.season.start_year
+                && !other.is_loan
+                && (other.team_slug != row.team_slug || other.league_slug != row.league_slug)
+                && (other.statistics.total_games() > 0 || other.transfer_fee.is_some())
+        });
+        if phantom_alongside_other_senior {
+            return false;
+        }
+        // Owning-club 0-app row during a loan-out season: the loan rows
+        // already represent the season. The debut season's owning-club
+        // record is preserved as "where the career began".
+        let loaned_out_this_season = self
+            .snapshot
+            .iter()
+            .any(|other| other.season.start_year == row.season.start_year && other.is_loan);
+        if loaned_out_this_season {
+            return Some(row.season.start_year) == self.debut_year;
+        }
+        // A 0-app non-loan row with no contesting sibling is the sole
+        // record of the season (the U18/U21 "career home" row) and is
+        // kept.
+        let is_sole_record_of_season = !self.snapshot.iter().any(|other| {
+            other.season.start_year == row.season.start_year
+                && (other.team_slug != row.team_slug || other.league_slug != row.league_slug)
+        });
+        is_sole_record_of_season || row.transfer_fee.is_some()
+    }
+}
+
+/// Precomputed bands for within-season row ordering.
+struct HistoryRowOrder {
+    active_row_key: Option<(u16, String, String)>,
+    seasons_ended_on_loan: FxHashSet<u16>,
+    continuing_homes: FxHashSet<(u16, String, String)>,
+}
+
+impl HistoryRowOrder {
+    /// Higher rank renders first (on top) within a season.
+    ///
+    ///   3 — the active spell: where the player is RIGHT NOW is the most
+    ///       recent thing in his career whatever the stored days say.
+    ///   2 — a continuing home (returned and STAYED).
+    ///   1 — every ordinary row, loan or home, left to the chronology.
+    ///   0 — a BARE REGISTRATION: a home row the player never appeared
+    ///       in and did not continue at.
+    fn rank(&self, row: &PlayerHistoryRow) -> u8 {
+        let is_continuing_home = !row.is_loan
+            && self.continuing_homes.contains(&(
+                row.season.start_year,
+                row.team_slug.clone(),
+                row.league_slug.clone(),
+            ));
+        let fee_proves_a_spell = row.transfer_fee.is_some()
+            && !self.seasons_ended_on_loan.contains(&row.season.start_year);
+        if self.active_row_key.as_ref().is_some_and(|(y, t, l)| {
+            row.season.start_year == *y && &row.team_slug == t && &row.league_slug == l
+        }) {
+            3
+        } else if is_continuing_home {
+            2
+        } else if !row.is_loan && row.statistics.total_games() == 0 && !fee_proves_a_spell {
+            0
+        } else {
+            1
+        }
+    }
+}
 
 impl PlayerStatisticsProjection {
     /// Build the canonical ledger from existing storage and the live
@@ -131,15 +440,54 @@ impl PlayerStatisticsProjection {
         // for calendar-year leagues (see `season_floor`).
         let season_floor = Self::season_floor(history);
 
-        // ── 1. Past-season frozen records ─────────────────────────
-        //
-        // Prefer the canonical `season_ledger` when populated: it was
-        // written before any storage filters could drop a row, so a
-        // quiet year that legacy `items` lost is still present here.
-        // Old saves predate the field — fall back to the legacy adapter
-        // for them.
-        let use_canonical = !history.season_ledger.is_empty();
-        if use_canonical {
+        Self::append_frozen_records(&mut ledger, history, current_year);
+
+        let occupied_career_years =
+            Self::occupied_career_years(history, current_year, season_floor);
+        let anchor_idx = Self::live_anchor_index(history, current_date);
+        Self::append_current_spells(
+            &mut ledger,
+            history,
+            live,
+            current_year,
+            season_floor,
+            &occupied_career_years,
+            anchor_idx,
+        );
+        Self::append_secondary_rows(&mut ledger, history);
+
+        // Resolve the anchor spell's `(team_slug, season_year)` once.
+        // Live cup / friendly slices belong to *this* spell only — never
+        // to a past row. The same fallback as the League counter above
+        // applies: with no active entry the latest spell anchors them,
+        // so a youth-squad player's live friendly (youth-league) games
+        // stay visible under the Main alias mid-season.
+        // No `is_loan` here: cup / friendly entries don't carry the
+        // loan flag because grouping ignores it (a match is a match,
+        // regardless of contract type).
+        let active_anchor: Option<(String, String, String, u16, u32)> =
+            anchor_idx.map(|idx| &history.current[idx]).map(|e| {
+                (
+                    e.team_slug.clone(),
+                    e.league_slug.clone(),
+                    e.league_name.clone(),
+                    current_year,
+                    e.seq_id,
+                )
+            });
+        Self::append_live_slice_rows(&mut ledger, live, domestic_cup, active_anchor.as_ref());
+        ledger
+    }
+
+    /// Past-season frozen records: the canonical `season_ledger` when
+    /// populated (it was written before any storage filters could drop a
+    /// row), otherwise the legacy adapter over `items` / `continental`.
+    fn append_frozen_records(
+        ledger: &mut Vec<PlayerStatLedgerEntry>,
+        history: &PlayerStatisticsHistory,
+        current_year: u16,
+    ) {
+        if !history.season_ledger.is_empty() {
             for entry in &history.season_ledger {
                 // League: load past seasons only — the in-progress
                 // year's League stats live in `history.current` + the
@@ -171,31 +519,9 @@ impl PlayerStatisticsProjection {
                         && e.team_slug == cont.team_slug
                         && e.competition_kind == PlayerStatCompetitionKind::ContinentalCup
                 });
-                if already_in_ledger {
-                    continue;
+                if !already_in_ledger {
+                    ledger.push(Self::continental_entry(history, cont));
                 }
-                let (seq_id, league_slug, league_name) = league_anchor_for(
-                    history,
-                    cont.season_year,
-                    &cont.team_slug,
-                )
-                .unwrap_or((0, String::new(), String::new()));
-                ledger.push(PlayerStatLedgerEntry {
-                    seq_id,
-                    season_start_year: cont.season_year,
-                    team_slug: cont.team_slug.clone(),
-                    team_name: cont.team_slug.clone(),
-                    team_reputation: 0,
-                    league_slug,
-                    league_name,
-                    competition_kind: PlayerStatCompetitionKind::ContinentalCup,
-                    competition_slug: String::new(),
-                    is_loan: false,
-                    transfer_fee: None,
-                    coverage_days: None,
-                    spell_end: None,
-                    statistics: cont.statistics.clone(),
-                });
             }
         } else {
             for item in &history.items {
@@ -219,79 +545,42 @@ impl PlayerStatisticsProjection {
 
             // Frozen continental rows (legacy adapter only).
             for cont in &history.continental {
-                let (seq_id, league_slug, league_name) = league_anchor_for(
-                    history,
-                    cont.season_year,
-                    &cont.team_slug,
-                )
-                .unwrap_or((0, String::new(), String::new()));
-                ledger.push(PlayerStatLedgerEntry {
-                    seq_id,
-                    season_start_year: cont.season_year,
-                    team_slug: cont.team_slug.clone(),
-                    team_name: cont.team_slug.clone(),
-                    team_reputation: 0,
-                    league_slug,
-                    league_name,
-                    competition_kind: PlayerStatCompetitionKind::ContinentalCup,
-                    competition_slug: String::new(),
-                    is_loan: false,
-                    transfer_fee: None,
-                    coverage_days: None,
-                    spell_end: None,
-                    statistics: cont.statistics.clone(),
-                });
+                ledger.push(Self::continental_entry(history, cont));
             }
         }
+    }
 
-        // ── 3. Current-season spells ──────────────────────────────
-        //
-        // The live League counter (`player.statistics`) is the
-        // authoritative tally for the player's *active* spell. The
-        // snapshot stored in an active `current` entry is only updated
-        // at event boundaries, where it is written from the drained
-        // live counter — so for the active spell it is always either
-        // empty (freshly seeded) or a stale duplicate of the live
-        // counter. Merging snapshot + live would therefore double-count
-        // and produce the unstable mid-season row this projection is
-        // meant to avoid; the active spell's stats come from
-        // `live.league` alone.
-        //
-        // Prior same-season spells at the same club survive as their own
-        // *departed* entries (see `record_intra_club_move`) and keep
-        // their stored snapshot, so an intra-club bounce still sums
-        // correctly once `player_history_rows` groups by
-        // (season, team, league, is_loan) — without the active row ever
-        // merging a snapshot.
-        //
-        // Only the FIRST active entry adopts the live counter; any
-        // further active entry (which a malformed or legacy save could
-        // carry) falls back to its snapshot so the live counter is never
-        // counted twice. Active rows are re-labelled to today's season —
-        // the snapshot's `joined_date` season can be stale when the next
-        // season-end has been delayed.
-        //
-        // Season-span backfill: an ACTIVE spell whose `joined_date`
-        // season predates the current one covers seasons the snapshot
-        // has not frozen yet. Emitting only the relabeled current-year
-        // row leaves those covered years as holes, and the gap-filler
-        // then invents a parent-club placeholder for them — the exact
-        // "2027/28 Juventus in the middle of a 3-year Palermo loan"
-        // report, visible every year between the Aug 1 calendar
-        // boundary and the league's actual snapshot day (and for as
-        // long as a snapshot misses the player). Each such HOLE year
-        // gets its own row for the SAME spell. The live counter sits on
-        // the OLDEST backfilled year — the one the pending freeze will
-        // drain it into — so the handoff to the frozen row is seamless;
-        // the current-year row is then the 0-app active registration
-        // ("where the player is now").
-        //
-        // Only true holes are filled: a year that already carries ANY
-        // career row (frozen, legacy, a departed spell, a borrowed-team
-        // slice) tells its own story, and stacking a synthetic spell row
-        // on it would double-cover the season (and hand the live counter
-        // to the wrong row).
-        let occupied_career_years: FxHashSet<u16> = history
+    fn continental_entry(
+        history: &PlayerStatisticsHistory,
+        cont: &ContinentalSeasonStats,
+    ) -> PlayerStatLedgerEntry {
+        let (seq_id, league_slug, league_name) = history
+            .league_anchor_for(cont.season_year, &cont.team_slug)
+            .unwrap_or((0, String::new(), String::new()));
+        PlayerStatLedgerEntry {
+            seq_id,
+            season_start_year: cont.season_year,
+            team_slug: cont.team_slug.clone(),
+            team_name: cont.team_slug.clone(),
+            team_reputation: 0,
+            league_slug,
+            league_name,
+            competition_kind: PlayerStatCompetitionKind::ContinentalCup,
+            competition_slug: String::new(),
+            is_loan: false,
+            transfer_fee: None,
+            coverage_days: None,
+            spell_end: None,
+            statistics: cont.statistics.clone(),
+        }
+    }
+
+    fn occupied_career_years(
+        history: &PlayerStatisticsHistory,
+        current_year: u16,
+        season_floor: u16,
+    ) -> FxHashSet<u16> {
+        history
             .season_ledger
             .iter()
             .filter(|e| e.competition_kind.counts_toward_career_history())
@@ -312,16 +601,23 @@ impl PlayerStatisticsProjection {
                         .max(season_floor)
                 })
             }))
-            .collect();
-        // The spell the live counters belong to. Normally the active
-        // entry; for a player with NO active spell (non-senior roster —
-        // see `live_anchor_index`) the latest departed entry adopts the
-        // counter instead, so senior-callup games booked while he sits
-        // on a youth squad still surface. The departed snapshot and the
-        // live counter are disjoint there — the departure drain zeroed
-        // the counter — so the anchor row SUMS them, unlike the active
-        // spell whose snapshot is a stale duplicate and is replaced.
-        let anchor_idx = Self::live_anchor_index(history, current_date);
+            .collect()
+    }
+
+    /// Emit a ledger row for every current spell, with the live League
+    /// counter applied to the anchor spell. Active rows are re-labelled
+    /// to today's season; a spell covering earlier seasons gets a
+    /// synthetic backfilled row for each hole so the live counter sits on
+    /// the year the pending freeze will drain it into.
+    fn append_current_spells(
+        ledger: &mut Vec<PlayerStatLedgerEntry>,
+        history: &PlayerStatisticsHistory,
+        live: &PlayerLiveStatsInput<'_>,
+        current_year: u16,
+        season_floor: u16,
+        occupied_career_years: &FxHashSet<u16>,
+        anchor_idx: Option<usize>,
+    ) {
         let mut live_applied = false;
         for (entry_idx, entry) in history.current.iter().enumerate() {
             let is_active = entry.departed_date.is_none();
@@ -332,15 +628,9 @@ impl PlayerStatisticsProjection {
                 current_year
             } else {
                 // A departed spell still in `current` is part of the
-                // in-progress campaign (genuinely past spells are flushed to
-                // `items`/ledger). `Season::from_date`'s Aug boundary maps a
-                // calendar-year-league stint joined Jan–Jul to the prior
-                // season, which would split the campaign across two rows and
-                // (display-)inflate the frozen row it merges into. Clamp UP to
-                // `season_floor` (one past the last frozen season) so the
-                // stint stays in the current campaign; the `.min(current_year)`
-                // still clamps a future re-seed DOWN. No-op for Aug-boundary
-                // leagues, where `from_date` already agrees.
+                // in-progress campaign. Clamp UP to `season_floor` so a
+                // calendar-year stint stays in the current campaign, and
+                // DOWN to `current_year` for a future re-seed.
                 joined_year.min(current_year).max(season_floor)
             };
 
@@ -349,74 +639,27 @@ impl PlayerStatisticsProjection {
             // fallback anchor is current-campaign by the flush invariant,
             // so it never covers hole years.
             if use_live && is_active {
-                for year in joined_year.min(current_year)..current_year {
-                    if occupied_career_years.contains(&year) {
-                        continue;
-                    }
-                    let adopt_live_here = !live_stats_backfilled;
-                    live_stats_backfilled = true;
-                    ledger.push(PlayerStatLedgerEntry {
-                        // seq 0 keeps synthetic span rows out of the
-                        // seq-based protections and the played-subs
-                        // "latest row" role.
-                        seq_id: 0,
-                        season_start_year: year,
-                        team_slug: entry.team_slug.clone(),
-                        team_name: entry.team_name.clone(),
-                        team_reputation: entry.team_reputation,
-                        league_slug: entry.league_slug.clone(),
-                        league_name: entry.league_name.clone(),
-                        competition_kind: PlayerStatCompetitionKind::League,
-                        competition_slug: entry.league_slug.clone(),
-                        is_loan: entry.is_loan,
-                        transfer_fee: entry.transfer_fee,
-                        coverage_days: Some(PlayerStatisticsHistory::spell_coverage_days(
-                            &Season::new(year),
-                            entry.joined_date,
-                            None,
-                        )),
-                        spell_end: Some(PlayerStatisticsHistory::spell_last_day(
-                            &Season::new(year),
-                            entry.joined_date,
-                            None,
-                        )),
-                        statistics: if adopt_live_here {
-                            live.league.clone()
-                        } else {
-                            PlayerStatistics::default()
-                        },
-                    });
-                }
+                Self::append_active_backfill(
+                    ledger,
+                    entry,
+                    joined_year.min(current_year),
+                    current_year,
+                    occupied_career_years,
+                    live,
+                    &mut live_stats_backfilled,
+                );
             }
 
-            let stats = if use_live {
+            let stats =
+                Self::current_entry_stats(entry, use_live, is_active, live, live_stats_backfilled);
+            if use_live {
                 live_applied = true;
-                if live_stats_backfilled {
-                    PlayerStatistics::default()
-                } else if is_active {
-                    live.league.clone()
-                } else {
-                    // Departed fallback anchor: pre-departure games live in
-                    // the snapshot, post-departure orphaned games in the
-                    // live counter — disjoint by the departure drain, so
-                    // the row carries their sum (what the season-end
-                    // freeze will write for this team).
-                    let mut merged = entry.statistics.clone();
-                    merged.merge_from(live.league);
-                    merged
-                }
-            } else {
-                entry.statistics.clone()
-            };
+            }
 
             // A departed in-progress-season spell carries its real
             // time-at-club so the collapse rule can drop a days-long
-            // phantom (e.g. a loan re-seed closed by a return processed
-            // right after the season snapshot) without waiting for the
-            // freeze. The active spell stays unknown — it is protected
-            // as the "where the player is now" row regardless; the
-            // fallback anchor plays that same role when nothing is
-            // active, so it is exempt from the collapse too.
+            // phantom. The active spell stays unknown — it is protected
+            // as the "where the player is now" row regardless.
             let coverage_days = if is_active || is_anchor {
                 None
             } else {
@@ -454,18 +697,92 @@ impl PlayerStatisticsProjection {
                 statistics: stats,
             });
         }
+    }
 
-        // ── 3b. Live secondary-team league appearances ────────────
-        //
-        // In-progress-season league games the player made for ANOTHER of
-        // his club's teams (a reserve pulled up to the main XI, or a senior
-        // fielded for the "2" side). These live on the player's history
-        // until the season-end snapshot freezes them, so the projection
-        // reads them straight from `current_secondary` and emits one
-        // current-season League row per team — the page then shows a line
-        // for every team the player turned out for this season instead of
-        // folding both teams' games under the active spell. seq_id 0 keeps
-        // these below the active home row in the per-season sort.
+    /// Push one synthetic League row per uncovered season between the
+    /// active spell's join year and the current year. The first such row
+    /// adopts the live counter; the current-year row keeps the
+    /// registration only.
+    fn append_active_backfill(
+        ledger: &mut Vec<PlayerStatLedgerEntry>,
+        entry: &CurrentSeasonEntry,
+        joined_year: u16,
+        current_year: u16,
+        occupied_career_years: &FxHashSet<u16>,
+        live: &PlayerLiveStatsInput<'_>,
+        live_stats_backfilled: &mut bool,
+    ) {
+        for year in joined_year..current_year {
+            if occupied_career_years.contains(&year) {
+                continue;
+            }
+            let adopt_live_here = !*live_stats_backfilled;
+            *live_stats_backfilled = true;
+            ledger.push(PlayerStatLedgerEntry {
+                // seq 0 keeps synthetic span rows out of the
+                // seq-based protections and the played-subs
+                // "latest row" role.
+                seq_id: 0,
+                season_start_year: year,
+                team_slug: entry.team_slug.clone(),
+                team_name: entry.team_name.clone(),
+                team_reputation: entry.team_reputation,
+                league_slug: entry.league_slug.clone(),
+                league_name: entry.league_name.clone(),
+                competition_kind: PlayerStatCompetitionKind::League,
+                competition_slug: entry.league_slug.clone(),
+                is_loan: entry.is_loan,
+                transfer_fee: entry.transfer_fee,
+                coverage_days: Some(PlayerStatisticsHistory::spell_coverage_days(
+                    &Season::new(year),
+                    entry.joined_date,
+                    None,
+                )),
+                spell_end: Some(PlayerStatisticsHistory::spell_last_day(
+                    &Season::new(year),
+                    entry.joined_date,
+                    None,
+                )),
+                statistics: if adopt_live_here {
+                    live.league.clone()
+                } else {
+                    PlayerStatistics::default()
+                },
+            });
+        }
+    }
+
+    fn current_entry_stats(
+        entry: &CurrentSeasonEntry,
+        use_live: bool,
+        is_active: bool,
+        live: &PlayerLiveStatsInput<'_>,
+        live_stats_backfilled: bool,
+    ) -> PlayerStatistics {
+        if !use_live {
+            return entry.statistics.clone();
+        }
+        if live_stats_backfilled {
+            return PlayerStatistics::default();
+        }
+        if is_active {
+            return live.league.clone();
+        }
+        // Departed fallback anchor: pre-departure games live in the
+        // snapshot, post-departure orphaned games in the live counter —
+        // disjoint by the departure drain, so the row carries their sum
+        // (what the season-end freeze will write for this team).
+        let mut merged = entry.statistics.clone();
+        merged.merge_from(live.league);
+        merged
+    }
+
+    /// In-progress-season league games the player made for ANOTHER of his
+    /// club's teams. seq_id 0 keeps these below the active home row.
+    fn append_secondary_rows(
+        ledger: &mut Vec<PlayerStatLedgerEntry>,
+        history: &PlayerStatisticsHistory,
+    ) {
         for slice in &history.current_secondary {
             if slice.statistics.total_games() == 0 {
                 continue;
@@ -487,114 +804,96 @@ impl PlayerStatisticsProjection {
                 statistics: slice.statistics.clone(),
             });
         }
+    }
 
-        // Resolve the anchor spell's `(team_slug, season_year)` once.
-        // Live cup / friendly slices belong to *this* spell only — never
-        // to a past row. The same fallback as the League counter above
-        // applies: with no active entry the latest spell anchors them,
-        // so a youth-squad player's live friendly (youth-league) games
-        // stay visible under the Main alias mid-season.
-        // No `is_loan` here: cup / friendly entries don't carry the
-        // loan flag because grouping ignores it (a match is a match,
-        // regardless of contract type).
-        let active_anchor: Option<(String, String, String, u16, u32)> =
-            anchor_idx.map(|idx| &history.current[idx]).map(|e| {
-                (
-                    e.team_slug.clone(),
-                    e.league_slug.clone(),
-                    e.league_name.clone(),
-                    current_year,
-                    e.seq_id,
-                )
-            });
-
-        // ── 4. Live per-competition cup slices ────────────────────
-        //
+    /// Live cup, domestic-cup override, and friendly slices, all attributed
+    /// to the anchor spell.
+    fn append_live_slice_rows(
+        ledger: &mut Vec<PlayerStatLedgerEntry>,
+        live: &PlayerLiveStatsInput<'_>,
+        domestic_cup: Option<&DomesticCupOverride>,
+        active_anchor: Option<&(String, String, String, u16, u32)>,
+    ) {
         // The domestic-cup override (if any) wins over the live slice
-        // with the same slug: cups must be read from exactly one
-        // source per render, and the records-based aggregate is the
-        // authoritative one because the live per-spell counter gets
-        // drained on intra-club moves.
+        // with the same slug: cups must be read from exactly one source
+        // per render.
         let domestic_slug = domestic_cup.map(|d| d.competition_slug.as_str());
-        if let Some((team_slug, league_slug, league_name, season_year, active_seq)) =
-            active_anchor.as_ref()
-        {
-            for slice in live.cups {
-                if Some(slice.competition_slug) == domestic_slug {
-                    continue;
-                }
-                if slice.statistics.total_games() == 0 {
-                    continue;
-                }
-                ledger.push(PlayerStatLedgerEntry {
-                    seq_id: *active_seq,
-                    season_start_year: *season_year,
-                    team_slug: team_slug.clone(),
-                    team_name: team_slug.clone(),
-                    team_reputation: 0,
-                    league_slug: league_slug.clone(),
-                    league_name: league_name.clone(),
-                    competition_kind: PlayerStatCompetitionKind::from_cup_slug(
-                        slice.competition_slug,
-                    ),
-                    competition_slug: slice.competition_slug.to_string(),
-                    is_loan: false,
-                    transfer_fee: None,
-                    coverage_days: None,
-                    spell_end: None,
-                    statistics: slice.statistics.clone(),
-                });
-            }
+        let Some((team_slug, league_slug, league_name, season_year, active_seq)) = active_anchor
+        else {
+            return;
+        };
 
-            // ── 5. Domestic-cup override (records-sourced) ────────
-            if let Some(dc) = domestic_cup
-                && dc.statistics.total_games() > 0
-            {
-                ledger.push(PlayerStatLedgerEntry {
-                    seq_id: *active_seq,
-                    season_start_year: *season_year,
-                    team_slug: team_slug.clone(),
-                    team_name: team_slug.clone(),
-                    team_reputation: 0,
-                    league_slug: league_slug.clone(),
-                    league_name: league_name.clone(),
-                    competition_kind: PlayerStatCompetitionKind::DomesticCup,
-                    competition_slug: dc.competition_slug.clone(),
-                    is_loan: false,
-                    transfer_fee: None,
-                    coverage_days: None,
-                    spell_end: None,
-                    statistics: dc.statistics.clone(),
-                });
+        for slice in live.cups {
+            if Some(slice.competition_slug) == domestic_slug {
+                continue;
             }
-
-            // ── 6. Live friendly slice ───────────────────────────
-            if live.friendly.total_games() > 0 {
-                let friendly_slug = if live.friendly_source_slug.is_empty() {
-                    league_slug.clone()
-                } else {
-                    live.friendly_source_slug.to_string()
-                };
-                ledger.push(PlayerStatLedgerEntry {
-                    seq_id: *active_seq,
-                    season_start_year: *season_year,
-                    team_slug: team_slug.clone(),
-                    team_name: team_slug.clone(),
-                    team_reputation: 0,
-                    league_slug: league_slug.clone(),
-                    league_name: league_name.clone(),
-                    competition_kind: PlayerStatCompetitionKind::Friendly,
-                    competition_slug: friendly_slug,
-                    is_loan: false,
-                    transfer_fee: None,
-                    coverage_days: None,
-                    spell_end: None,
-                    statistics: live.friendly.clone(),
-                });
+            if slice.statistics.total_games() == 0 {
+                continue;
             }
+            ledger.push(PlayerStatLedgerEntry {
+                seq_id: *active_seq,
+                season_start_year: *season_year,
+                team_slug: team_slug.clone(),
+                team_name: team_slug.clone(),
+                team_reputation: 0,
+                league_slug: league_slug.clone(),
+                league_name: league_name.clone(),
+                competition_kind: PlayerStatCompetitionKind::from_cup_slug(slice.competition_slug),
+                competition_slug: slice.competition_slug.to_string(),
+                is_loan: false,
+                transfer_fee: None,
+                coverage_days: None,
+                spell_end: None,
+                statistics: slice.statistics.clone(),
+            });
         }
 
-        ledger
+        // Domestic-cup override (records-sourced).
+        if let Some(dc) = domestic_cup
+            && dc.statistics.total_games() > 0
+        {
+            ledger.push(PlayerStatLedgerEntry {
+                seq_id: *active_seq,
+                season_start_year: *season_year,
+                team_slug: team_slug.clone(),
+                team_name: team_slug.clone(),
+                team_reputation: 0,
+                league_slug: league_slug.clone(),
+                league_name: league_name.clone(),
+                competition_kind: PlayerStatCompetitionKind::DomesticCup,
+                competition_slug: dc.competition_slug.clone(),
+                is_loan: false,
+                transfer_fee: None,
+                coverage_days: None,
+                spell_end: None,
+                statistics: dc.statistics.clone(),
+            });
+        }
+
+        // Live friendly slice.
+        if live.friendly.total_games() > 0 {
+            let friendly_slug = if live.friendly_source_slug.is_empty() {
+                league_slug.clone()
+            } else {
+                live.friendly_source_slug.to_string()
+            };
+            ledger.push(PlayerStatLedgerEntry {
+                seq_id: *active_seq,
+                season_start_year: *season_year,
+                team_slug: team_slug.clone(),
+                team_name: team_slug.clone(),
+                team_reputation: 0,
+                league_slug: league_slug.clone(),
+                league_name: league_name.clone(),
+                competition_kind: PlayerStatCompetitionKind::Friendly,
+                competition_slug: friendly_slug,
+                is_loan: false,
+                transfer_fee: None,
+                coverage_days: None,
+                spell_end: None,
+                statistics: live.friendly.clone(),
+            });
+        }
     }
 
     /// The season year the player's still-active spell belongs to — the
@@ -715,120 +1014,8 @@ impl PlayerStatisticsProjection {
     ) -> Vec<PlayerCompetitionStatsRow> {
         let ledger = Self::build_ledger(history, live, domestic_cup, current_date);
         let current_year = Self::current_season_year(history, current_date);
-
-        // Accumulators keyed by (kind, slug) so a stale duplicate (e.g. a
-        // legacy live cup slice plus an override that matches it) cannot
-        // bleed into two rows.
-        let mut league_total = PlayerStatistics::default();
-        let mut league_seen = false;
-        let mut friendly_total = PlayerStatistics::default();
-        let mut friendly_seen = false;
-        // Competition identity for the aggregated League / Friendly rows:
-        // the dominant source league across the merged entries, so the
-        // web layer labels the row with the real league — "First League",
-        // "Premier League U19" — instead of a generic kind label.
-        let mut league_source = DominantCompetitionSource::default();
-        let mut friendly_source = DominantCompetitionSource::default();
-        let mut per_cup: FxHashMap<(PlayerStatCompetitionKind, String), PlayerCompetitionStatsRow> =
-            FxHashMap::default();
-        // Stable order for the per-cup rows in the output.
-        let mut cup_order: Vec<(PlayerStatCompetitionKind, String)> = Vec::new();
-
-        for entry in ledger
-            .into_iter()
-            .filter(|e| e.season_start_year == current_year)
-        {
-            match entry.competition_kind {
-                PlayerStatCompetitionKind::League => {
-                    league_source.note(
-                        &entry.league_slug,
-                        &entry.league_name,
-                        entry.statistics.total_games(),
-                    );
-                    league_total.merge_from(&entry.statistics);
-                    league_seen = true;
-                }
-                PlayerStatCompetitionKind::Friendly => {
-                    friendly_source.note(
-                        &entry.competition_slug,
-                        "",
-                        entry.statistics.total_games(),
-                    );
-                    friendly_total.merge_from(&entry.statistics);
-                    friendly_seen = true;
-                }
-                kind @ (PlayerStatCompetitionKind::DomesticCup
-                | PlayerStatCompetitionKind::ContinentalCup) => {
-                    let key = (kind, entry.competition_slug.clone());
-                    let row = per_cup.entry(key.clone()).or_insert_with(|| {
-                        cup_order.push(key.clone());
-                        PlayerCompetitionStatsRow {
-                            competition_kind: kind,
-                            competition_slug: entry.competition_slug.clone(),
-                            competition_name: Self::resolve_cup_name(
-                                &entry.competition_slug,
-                                live,
-                                domestic_cup,
-                            ),
-                            statistics: PlayerStatistics::default(),
-                        }
-                    });
-                    row.statistics.merge_from(&entry.statistics);
-                }
-            }
-        }
-
-        let mut rows: Vec<PlayerCompetitionStatsRow> = Vec::new();
-        if league_seen {
-            let (league_slug, league_name) = league_source.resolved();
-            rows.push(PlayerCompetitionStatsRow {
-                competition_kind: PlayerStatCompetitionKind::League,
-                competition_slug: league_slug,
-                competition_name: league_name,
-                statistics: league_total,
-            });
-        }
-        if friendly_seen && friendly_total.total_games() > 0 {
-            // A friendly slice whose source slug is just the anchor
-            // spell's own league is the recorder's "no specific source"
-            // fallback — a senior pre-season friendly. Strip it so the
-            // web layer renders the generic "Friendly" label; only a
-            // genuinely different source league (a youth league the
-            // player actually turned out in) earns the real name.
-            let anchor_league_slug: Option<&str> = Self::live_anchor_index(history, current_date)
-                .map(|idx| history.current[idx].league_slug.as_str());
-            let (friendly_slug, _) = friendly_source.resolved();
-            let friendly_slug = if anchor_league_slug == Some(friendly_slug.as_str()) {
-                String::new()
-            } else {
-                friendly_slug
-            };
-            rows.push(PlayerCompetitionStatsRow {
-                competition_kind: PlayerStatCompetitionKind::Friendly,
-                competition_slug: friendly_slug,
-                competition_name: String::new(),
-                statistics: friendly_total,
-            });
-        }
-        // Domestic cups before continental ones, in stable insertion
-        // order within each block.
-        for key in cup_order
-            .iter()
-            .filter(|(k, _)| *k == PlayerStatCompetitionKind::DomesticCup)
-        {
-            if let Some(row) = per_cup.remove(key) {
-                rows.push(row);
-            }
-        }
-        for key in cup_order
-            .iter()
-            .filter(|(k, _)| *k == PlayerStatCompetitionKind::ContinentalCup)
-        {
-            if let Some(row) = per_cup.remove(key) {
-                rows.push(row);
-            }
-        }
-        rows
+        OverviewAccumulator::collect(ledger, current_year, live, domestic_cup)
+            .into_rows(history, current_date)
     }
 
     /// Project the ledger into History rows, grouped by
@@ -857,12 +1044,39 @@ impl PlayerStatisticsProjection {
         // career rows so domestic cups are counted from exactly one
         // source.
         let ledger = Self::build_ledger(history, live, None, current_date);
+        let (mut rows, order, row_coverage) = Self::collect_history_rows(ledger);
 
-        // (season, team, league) → row. HashMap is fine for grouping;
-        // we re-sort the result vector below for stable rendering.
+        let protected_seqs = Self::protected_history_seqs(history, current_date);
+        let filter = HistoryNoiseFilter::new(&rows, protected_seqs, row_coverage);
+        // Drop noise rows: 0-game / no-fee entries that are neither
+        // protected nor the sole record of the season.
+        rows.retain(|key, row| filter.keeps(key, row));
+
+        let mut result: Vec<PlayerHistoryRow> = order
+            .into_iter()
+            .filter_map(|key| rows.remove(&key))
+            .collect();
+
+        // Continuity gap-fill: every season the player demonstrably
+        // existed at a club must surface at least one row, even if the
+        // storage layer dropped the seed.
+        Self::fill_career_gaps(&mut result);
+        Self::order_history_rows(&mut result, history, current_date);
+        Self::fold_history_subs(&mut result);
+        result
+    }
+
+    /// Group the ledger into one row per `(season, team, league)`, in
+    /// first-seen order, while accumulating League coverage and the
+    /// latest League spell metadata per row.
+    fn collect_history_rows(
+        ledger: Vec<PlayerStatLedgerEntry>,
+    ) -> (
+        FxHashMap<RowKey, PlayerHistoryRow>,
+        Vec<RowKey>,
+        FxHashMap<RowKey, Option<u16>>,
+    ) {
         let mut rows: FxHashMap<RowKey, PlayerHistoryRow> = FxHashMap::default();
-        // Stable insertion order for rows that share their sort key
-        // (rare, but keeps test output deterministic).
         let mut order: Vec<RowKey> = Vec::new();
         // Highest seq_id of a LEAGUE entry seen per row. League entries
         // own the spell metadata (is_loan, transfer_fee). Cup / friendly
@@ -870,35 +1084,8 @@ impl PlayerStatisticsProjection {
         // overwrite the row's loan label with their hardcoded `false`.
         let mut latest_league_seq: FxHashMap<RowKey, u32> = FxHashMap::default();
         // Summed time-at-club (days within the season window) across the
-        // row's League entries — `None` when no entry knows its span
-        // (legacy adapters, synthetic rows). Drives the "<40% of the
-        // season and never played → collapse" rule below. Loan and
-        // non-loan spells at the same (season, team, league) fold into
-        // one row, so their coverage sums too.
+        // row's League entries.
         let mut row_coverage: FxHashMap<RowKey, Option<u16>> = FxHashMap::default();
-
-        // The anchor current-season spell is always shown — even at
-        // 0 games — so the renderer can say "this is where the player
-        // is right now". With no active entry (non-senior roster) the
-        // latest spell plays that role — same fallback the ledger uses
-        // to attribute the live counters. The earliest seq_id in the
-        // player's career is protected on a first/only season so a
-        // manual transfer out before any senior game cannot erase the
-        // origin row.
-        let active_seq: Option<u32> =
-            Self::live_anchor_index(history, current_date).map(|idx| history.current[idx].seq_id);
-        let initial_seq: Option<u32> = if history.items.is_empty() {
-            history.current.iter().map(|e| e.seq_id).min()
-        } else {
-            None
-        };
-        let mut protected_seqs: Vec<u32> = Vec::new();
-        if let Some(s) = active_seq {
-            protected_seqs.push(s);
-        }
-        if let Some(s) = initial_seq {
-            protected_seqs.push(s);
-        }
 
         for entry in ledger {
             if !entry.competition_kind.counts_toward_career_history() {
@@ -962,441 +1149,150 @@ impl PlayerStatisticsProjection {
                 row.league_slug = entry.league_slug;
             }
         }
+        (rows, order, row_coverage)
+    }
 
-        // Drop noise rows: 0-game / no-fee entries that are neither
-        // protected nor the sole record of the season. Same shape as
-        // the legacy merge step — but here the protection set is
-        // visible in one place instead of two duplicated helpers.
-        let snapshot: Vec<PlayerHistoryRow> = rows.values().cloned().collect();
-        // The player's first/debut season — its owning-club record is kept
-        // even when they were loaned out immediately ("where the career
-        // began"). Later full-loan seasons don't get that protection.
-        let debut_year: Option<u16> = snapshot.iter().map(|r| r.season.start_year).min();
-        // The career-origin row: the earliest spell of the debut season.
-        // The season-end drain keeps it forever (`is_initial_record` —
-        // "the very first career record is always kept, even with 0
-        // games — it's the player's starting club") and the projection
-        // must agree. The `initial_seq` protection above only covers the
-        // pre-freeze window (`items` still empty); without this, a player
-        // sold before his first senior appearance loses the origin club
-        // from the page at the first season-end freeze, while the
-        // transfers page still shows the move.
-        let origin_seq: Option<u32> = snapshot
-            .iter()
-            .filter(|r| Some(r.season.start_year) == debut_year)
-            .map(|r| r.seq_id)
-            .min();
-        rows.retain(|key, row| {
-            if protected_seqs.contains(&row.seq_id) {
-                return true;
-            }
-            if Some(row.season.start_year) == debut_year && Some(row.seq_id) == origin_seq {
-                return true;
-            }
-            if row.statistics.total_games() > 0 {
-                return true;
-            }
-            // A real signing fee marks a real event — keep even at 0 apps.
-            // Two cases qualify:
-            //   * a *paid* fee on any row (loan or permanent), and
-            //   * the `Some(0.0)` "free" sentinel on a PERMANENT row — a
-            //     free transfer / free signing is a genuine event, and
-            //     only the re-seed paths (season-end roll-over) ever write
-            //     a permanent row with `transfer_fee = None`, so a present
-            //     fee here can't be a phantom seed.
-            // A free LOAN's `Some(0.0)` is deliberately NOT short-circuited
-            // here: it must fall through to the `is_loan` branch below,
-            // which owns phantom-loan detection (a continued-loan re-seed
-            // can also carry `Some(0.0)`). Keeping the permanent free
-            // signing here, before the `phantom_alongside_other_senior`
-            // drop, is what lets its "Free" label survive once the row
-            // freezes alongside a played sibling spell from the same season
-            // (the reported "free move shows on transfers but not in
-            // history" bug).
-            let paid_fee = matches!(row.transfer_fee, Some(f) if f > 0.0);
-            if paid_fee || (row.transfer_fee.is_some() && !row.is_loan) {
-                return true;
-            }
-            // Every loan spell is a real part of the player's career and
-            // must show — even at 0 apps (injury, squad rotation, a loan
-            // they were registered for but never featured in) and even
-            // when it was SHORT. A four-week loan the player never
-            // featured in is still a club he was registered at, and the
-            // transfers page already lists both its legs; history that
-            // silently omits it contradicts the move the reader just saw.
-            //
-            // This sits ABOVE the time-based collapse on purpose. Loans
-            // are precisely the spells that legitimately cover a small
-            // slice of a season, so a coverage threshold reads every
-            // genuine short loan as noise — the reported case (Sokolić's
-            // brief Orel spell, visible on /transfers, absent from
-            // /history).
-            //
-            // What is NOT a new loan event is the tail of an older one. A
-            // multi-season loan is re-seeded by each season-end snapshot,
-            // so a loan that expires days into the new campaign leaves a
-            // sliver row under a season the player never really spent
-            // there. That row is a continuation — the same borrowing club
-            // already holds a loan row in the previous season, and the
-            // spell is fully told by those rows. Rendering it would
-            // announce a loan season that never happened. It is dropped
-            // only when it is also a sliver: a continuation that covers a
-            // real share of the season is a genuine middle year of a
-            // multi-season loan and stays.
-            //
-            // A loan that BEGINS in its season is always a new event and
-            // is never collapsed, however short — that is the difference
-            // between the reported Orel spell (kept) and the re-seed tail
-            // (dropped). The only other loan dropped is one that never
-            // happened in time at all: a zero-day window, the signature
-            // of a re-seed closed by a return processed in the same tick.
-            //
-            // When coverage is unknown (legacy adapters write `None`) we
-            // can't measure the span, so fall back to the sibling
-            // heuristic: a 0-app loan stamped under a season the player
-            // demonstrably spent ELSEWHERE, proven by a sibling row that
-            // actually PLAYED, is a mis-stamped event. A sibling that
-            // merely *exists* at 0 apps — the owning-club "career home"
-            // row — does NOT make the loan redundant; both coexist. The
-            // fee is irrelevant here: the re-seed for a continued loan
-            // drops it to `None`, so it can't distinguish a real spell
-            // from a seed.
-            if row.is_loan {
-                if let Some(days) = row_coverage.get(key).copied().flatten() {
-                    if days == 0 {
-                        return false;
-                    }
-                    let continues_prior_season_loan = snapshot.iter().any(|other| {
-                        other.is_loan
-                            && other.team_slug == row.team_slug
-                            && other.season.start_year + 1 == row.season.start_year
-                    });
-                    if !continues_prior_season_loan {
-                        return true;
-                    }
-                    let season_span = (row.season.end_date() - row.season.start_date())
-                        .num_days()
-                        .max(1) as f64;
-                    return (days as f64 / season_span) * 100.0 >= MIN_COVERAGE_PCT_FOR_QUIET_ROW;
-                }
-                let player_actually_played_elsewhere = snapshot.iter().any(|other| {
-                    other.season.start_year == row.season.start_year
-                        && !(other.team_slug == row.team_slug
-                            && other.league_slug == row.league_slug)
-                        && other.statistics.total_games() > 0
-                });
-                return !player_actually_played_elsewhere;
-            }
-            // Time-based collapse — the primary rule for NON-LOAN rows
-            // whenever real coverage data exists (the canonical ledger
-            // writes it; the legacy adapters don't). A 0-app spell that
-            // covered less than 40% of the season is display noise: a
-            // days-long re-seed, a brief registration stop before a move.
-            // One that covered 40%+ is a real part of the season and
-            // stays — including a half-season parent-club registration
-            // before a winter loan. Fee-backed rows never reach here
-            // (kept above), so this decides only fee-less rows; rows
-            // without coverage data fall through to the sibling
-            // heuristics below.
-            if let Some(days) = row_coverage.get(key).copied().flatten() {
-                let season_span = (row.season.end_date() - row.season.start_date())
-                    .num_days()
-                    .max(1) as f64;
-                return (days as f64 / season_span) * 100.0 >= MIN_COVERAGE_PCT_FOR_QUIET_ROW;
-            }
-            // Non-loan 0-app, no real fee. Drop when a sibling NON-LOAN
-            // team in the same season actually played or paid a real
-            // fee — that's the intra-club bounce pattern. A loan
-            // sibling does not trigger the drop: the parent-club row
-            // must coexist with a loan spell as the "career home"
-            // marker. A `Some(0.0)` sibling counts as content (a free
-            // signing record).
-            let phantom_alongside_other_senior = snapshot.iter().any(|other| {
-                other.season.start_year == row.season.start_year
-                    && !other.is_loan
-                    && (other.team_slug != row.team_slug || other.league_slug != row.league_slug)
-                    && (other.statistics.total_games() > 0 || other.transfer_fee.is_some())
-            });
-            if phantom_alongside_other_senior {
-                return false;
-            }
-            // Owning-club 0-app row during a loan-out season. The player
-            // spent the season away, so the loan row(s) already represent
-            // it; a 0-app parent line is redundant noise — EXCEPT for the
-            // player's debut season, whose owning-club record is preserved
-            // as the "where the career began" marker (the message the
-            // earlier "initial Spartak row collapsed" report was about).
-            let loaned_out_this_season = snapshot
-                .iter()
-                .any(|other| other.season.start_year == row.season.start_year && other.is_loan);
-            if loaned_out_this_season {
-                return Some(row.season.start_year) == debut_year;
-            }
-            // 0-app non-loan row with no contesting sibling. Two
-            // patterns land here and both must be kept:
-            //  * The U18/U21 alias "career home" row — a youth-only
-            //    season has no senior callups (0 apps) and no fee, but
-            //    the Main-aliased row is the sole record of where the
-            //    player spent the year. Without it, every past quiet
-            //    youth season vanishes from the history page.
-            //  * A `Some(0.0)` "Free" signing record — its fee marks a
-            //    real signing event for the season.
-            // If there's any sibling row at all for this season — even
-            // a 0-app one — the earlier branches already covered the
-            // content-bearing variants and this row is a phantom seed.
-            let is_sole_record_of_season = !snapshot.iter().any(|other| {
-                other.season.start_year == row.season.start_year
-                    && (other.team_slug != row.team_slug || other.league_slug != row.league_slug)
-            });
-            is_sole_record_of_season || row.transfer_fee.is_some()
-        });
+    /// The anchor current-season spell is always shown — even at 0 games —
+    /// so the renderer can say "this is where the player is right now".
+    /// With no active entry (non-senior roster) the latest spell plays that
+    /// role. The earliest seq_id in the player's career is protected on a
+    /// first/only season so a manual transfer out before any senior game
+    /// cannot erase the origin row.
+    fn protected_history_seqs(
+        history: &PlayerStatisticsHistory,
+        current_date: NaiveDate,
+    ) -> Vec<u32> {
+        let active_seq: Option<u32> =
+            Self::live_anchor_index(history, current_date).map(|idx| history.current[idx].seq_id);
+        let initial_seq: Option<u32> = if history.items.is_empty() {
+            history.current.iter().map(|e| e.seq_id).min()
+        } else {
+            None
+        };
+        [active_seq, initial_seq].into_iter().flatten().collect()
+    }
 
-        let mut result: Vec<PlayerHistoryRow> = order
-            .into_iter()
-            .filter_map(|key| rows.remove(&key))
-            .collect();
-
-        // Continuity gap-fill: every season the player demonstrably
-        // existed at a club must surface at least one row, even if the
-        // storage layer dropped the seed (a quiet U21 year between two
-        // played senior seasons is the classic case). When two non-loan
-        // rows for the same team bracket a gap of N missing years, we
-        // synthesise a 0-app placeholder for each gap year — but only
-        // when no other row of any kind already covers that year, so a
-        // loan-out spell or a different-team row in the gap is left
-        // alone.
-        Self::fill_career_gaps(&mut result);
-
-        // The anchor current-season spell — "where the player is right
-        // now" — is the most recent thing in his career and must top its
-        // season, even above a loan he played earlier that same season.
-        // The classic case: a multi-season loan that just ENDED, with the
-        // player back at his parent club (0 apps). Chronologically the loan
-        // came first and the return second, so the parent-return row sits
-        // on top; the loan-outranks-home rule below is for PAST seasons and
-        // must not float that finished loan above the club he now plays for.
-        // Matched by (season, team, league) rather than seq_id, which a
-        // reserve re-place can corrupt. Uses the same active-else-latest
-        // anchor as the ledger so the row carrying the live counter is
-        // also the one protected on top.
+    /// Order rows for one season: the active spell on top, then a
+    /// continuing home, then ordinary spells, with bare registrations
+    /// below. Within a band the spell that ended last comes first.
+    fn order_history_rows(
+        result: &mut [PlayerHistoryRow],
+        history: &PlayerStatisticsHistory,
+        current_date: NaiveDate,
+    ) {
         let current_year = Self::current_season_year(history, current_date);
         let anchor_entry =
             Self::live_anchor_index(history, current_date).map(|idx| &history.current[idx]);
         let active_row_key: Option<(u16, String, String)> =
             anchor_entry.map(|e| (current_year, e.team_slug.clone(), e.league_slug.clone()));
         // The club the player is registered at RIGHT NOW under a PERMANENT
-        // spell (a loan anchor is not a home continuation — the parent he is
-        // borrowed from is the Nava shape, and that registration must stay
-        // below the loan). Feeds the continuing-home test below.
+        // spell (a loan anchor is not a home continuation). Feeds the
+        // continuing-home test below.
         let active_home_slug: Option<&str> = anchor_entry
             .filter(|e| !e.is_loan)
             .map(|e| e.team_slug.as_str());
 
-        // Within-season ordering of a loan spell against the owning-club
-        // (home) row hinges on whether that home spell CONTINUES. Two
-        // mirror-image real cases share the same storage shape — one loan
-        // row plus one home row in a single season — yet want opposite
-        // orders:
-        //
-        //   * Reserve bounce-back (Pichienko) — a reserve-home player is
-        //     loaned out and returns, but leaves again next season. The
-        //     home row is just his registration; the loan is the season's
-        //     real story and belongs on top. A post-return reserve
-        //     re-place (`move_loan_returns_to_reserve`) can also inflate
-        //     the home seq_id above the loan, so seq alone can't decide it.
-        //   * Mid-season recall/return that STICKS (Sokolić) — a player on
-        //     loan is recalled or returned mid-season to his parent club
-        //     and STAYS: the parent owns the next season's row too (or is
-        //     his current club). That return is the later, ongoing spell
-        //     and must sit ABOVE the loan it followed, so the reader can
-        //     trace the current club straight down the page.
-        //
-        // A home row "continues" when the SAME club has a non-loan row in
-        // the very next season AND that continuation is backed by real
-        // content — the player either appeared for the club THIS season, OR
-        // the next-season row it continues into carries content of its own
-        // (appearances or a genuine `transfer_fee`; only the season roll-over
-        // re-seed paths write a permanent row with `None`, the invariant the
-        // noise-row retain above leans on). The next-season signal is
-        // independent of seq_id (which the reserve re-place corrupts), but on
-        // its own it over-matches a perpetual loanee who is merely REGISTERED
-        // at his parent club every season while playing none of it: that
-        // 0-app fee-less parent row trivially "continues" and would wrongly
-        // outrank the loan that IS the season's real story (the reported Nava
-        // case — a Juventus player on repeated loans to Palermo, whose 0-app
-        // Juventus row floated above his Palermo loan). The this-OR-next
-        // content test keeps both genuine returned-and-stayed shapes on top:
-        // Sokolić recalled to River mid-season and playing it out (apps THIS
-        // season), AND Sokolić recalled with 0 parent apps in the return
-        // season but STAYING and playing the NEXT one (content NEXT season —
-        // the live single-loan case, whose 0-app 2028/29 River return was
-        // mis-ranked below the Danubio loan it followed) — while still
-        // dropping the Nava registration below the loan, since his parent row
-        // is 0-app both this season and next (still loaned out).
-        //
-        // A third arm covers the season that has just ROLLED OVER — the
-        // reported Fernando Gimenez case (Nacional, three seasons on loan at
-        // Inter, then home). His 2034/35 Nacional return row has 0 apps, and
-        // so does the 2035/36 Nacional row it continues into, because that
-        // campaign has barely started: both content tests fail, and the
-        // finished Inter loan floated above the club he had already come
-        // home to. Standing at the club TODAY under a permanent registration
-        // is content in its own right — the strongest proof a return stuck —
-        // so a home row whose continuation is the live anchor is promoted
-        // whatever its apps say. A player still out on loan is untouched:
-        // his anchor is the BORROWING club, so the parent registration he is
-        // borrowed from never qualifies and Nava keeps his loan on top.
-        // Seasons the player was still OUT ON LOAN when they closed —
-        // proven either by a loan spell that ran to the season's last day,
-        // or (for rows written before spells carried an end day) by a loan
-        // at the same club carrying into the next season. NO home row of
-        // such a season can be the returned-and-stayed spell: the player
-        // never came back before the season turned over, so his parent-club
-        // row is the leg he left BEFORE the loan, not a return after it.
-        // This is what keeps the reported Maximenko shape honest — signed by
-        // Wikki Tourists in Aug 2026, loaned straight out to Zbrojovka Brno,
-        // recalled, then loaned to Rubin in Feb 2027 where he still is: the
-        // Wikki row carries real apps and a fee and does have a next-season
-        // row, so without this it was promoted above BOTH loans and buried
-        // the club he actually plays for.
-        let seasons_ended_on_loan: FxHashSet<u16> = {
-            let loan_seasons: FxHashSet<(u16, &str)> = result
-                .iter()
-                .filter(|r| r.is_loan)
-                .map(|r| (r.season.start_year, r.team_slug.as_str()))
-                .collect();
-            result
-                .iter()
-                .filter(|r| r.is_loan)
-                .filter(|r| {
-                    r.spell_end.is_some_and(|day| day >= r.season.end_date())
-                        || loan_seasons.contains(&(r.season.start_year + 1, r.team_slug.as_str()))
-                })
-                .map(|r| r.season.start_year)
-                .collect()
+        let seasons_ended_on_loan = Self::seasons_ended_on_loan(result);
+        let continuing_homes = Self::continuing_homes(
+            result,
+            current_year,
+            active_home_slug,
+            &seasons_ended_on_loan,
+        );
+        let order = HistoryRowOrder {
+            active_row_key,
+            seasons_ended_on_loan,
+            continuing_homes,
         };
-
-        let continuing_homes: FxHashSet<(u16, String, String)> = {
-            // Every (season, club) that has a NON-loan row — the raw "same
-            // club appears next season" continuity signal.
-            let non_loan_seasons: FxHashSet<(u16, &str)> = result
-                .iter()
-                .filter(|r| !r.is_loan)
-                .map(|r| (r.season.start_year, r.team_slug.as_str()))
-                .collect();
-            // The subset of those that carry real content (apps or a genuine
-            // signing fee). A returned-and-stayed parent proves itself real
-            // either now (this row) or in the season it continues into.
-            let non_loan_content_seasons: FxHashSet<(u16, &str)> = result
-                .iter()
-                .filter(|r| {
-                    !r.is_loan && (r.statistics.total_games() > 0 || r.transfer_fee.is_some())
-                })
-                .map(|r| (r.season.start_year, r.team_slug.as_str()))
-                .collect();
-            result
-                .iter()
-                .filter(|r| {
-                    if r.is_loan || seasons_ended_on_loan.contains(&r.season.start_year) {
-                        return false;
-                    }
-                    let next = (r.season.start_year + 1, r.team_slug.as_str());
-                    let this_content = r.statistics.total_games() > 0 || r.transfer_fee.is_some();
-                    // "He is there now" is content in its own right. The
-                    // season this row continues into is the CURRENT one, and
-                    // its 0 apps only mean the campaign has barely started —
-                    // the player is at that club today, under a permanent
-                    // registration, which is the strongest possible proof
-                    // the return stuck.
-                    let next_is_current_club = current_year == r.season.start_year + 1
-                        && active_home_slug.is_some_and(|slug| slug == r.team_slug);
-                    non_loan_seasons.contains(&next)
-                        && (this_content
-                            || non_loan_content_seasons.contains(&next)
-                            || next_is_current_club)
-                })
-                .map(|r| {
-                    (
-                        r.season.start_year,
-                        r.team_slug.clone(),
-                        r.league_slug.clone(),
-                    )
-                })
-                .collect()
-        };
-
-        // Higher rank renders first (on top) within a season. Only two
-        // bands break the chronology below:
-        //
-        //   3 — the active spell: where the player is RIGHT NOW is the most
-        //       recent thing in his career whatever the stored days say.
-        //   2 — a continuing home (returned and STAYED), so a legacy row
-        //       with no recorded end day still sorts above the loan it
-        //       followed.
-        //   1 — every ordinary row, loan or home, left to the chronology.
-        //   0 — a BARE REGISTRATION: a home row the player never appeared
-        //       in and did not continue at. It is paperwork, not a spell —
-        //       the reserve bounce-back (Pichienko) and the perpetual
-        //       loanee's parent club (Nava) both live here, and both must
-        //       sit below the loan that IS the season's story even though
-        //       the registration technically outlasted it. A signing fee
-        //       normally rescues a 0-app row (it marks a real move, where a
-        //       re-seed writes `None`) — but not in a season the player
-        //       ended on loan: being signed and shipped straight back out
-        //       still leaves the loan as the season's story (Sokolić's
-        //       Floriana, signed for 50K and loaned to Naxxar twice).
-        let within_season_rank = |r: &PlayerHistoryRow| -> u8 {
-            let is_continuing_home = !r.is_loan
-                && continuing_homes.contains(&(
-                    r.season.start_year,
-                    r.team_slug.clone(),
-                    r.league_slug.clone(),
-                ));
-            let fee_proves_a_spell =
-                r.transfer_fee.is_some() && !seasons_ended_on_loan.contains(&r.season.start_year);
-            if active_row_key.as_ref().is_some_and(|(y, t, l)| {
-                r.season.start_year == *y && &r.team_slug == t && &r.league_slug == l
-            }) {
-                3
-            } else if is_continuing_home {
-                2
-            } else if !r.is_loan && r.statistics.total_games() == 0 && !fee_proves_a_spell {
-                0
-            } else {
-                1
-            }
-        };
-
-        // Within a band, rows read in the order the spells actually
-        // happened — the one that ended LAST on top, mirroring the dates
-        // on the player's transfers page. `seq_id` is only the final
-        // tiebreak: a merged entry keeps the seq of its FIRST leg, so a
-        // club left and rejoined inside one season (signed, loaned out,
-        // recalled, loaned again) can only be placed by its end day.
-        // Rows with no recorded end day (legacy `items`, synthetic gap
-        // fills) sort last within their band and fall through to seq.
         result.sort_by(|a, b| {
             b.season
                 .start_year
                 .cmp(&a.season.start_year)
-                .then_with(|| within_season_rank(b).cmp(&within_season_rank(a)))
+                .then_with(|| order.rank(b).cmp(&order.rank(a)))
                 .then_with(|| b.spell_end.cmp(&a.spell_end))
                 .then(b.seq_id.cmp(&a.seq_id))
         });
+    }
 
+    /// Seasons the player was still OUT ON LOAN when they closed —
+    /// proven either by a loan spell that ran to the season's last day,
+    /// or by a loan at the same club carrying into the next season. NO
+    /// home row of such a season can be the returned-and-stayed spell.
+    fn seasons_ended_on_loan(result: &[PlayerHistoryRow]) -> FxHashSet<u16> {
+        let loan_seasons: FxHashSet<(u16, &str)> = result
+            .iter()
+            .filter(|r| r.is_loan)
+            .map(|r| (r.season.start_year, r.team_slug.as_str()))
+            .collect();
+        result
+            .iter()
+            .filter(|r| r.is_loan)
+            .filter(|r| {
+                r.spell_end.is_some_and(|day| day >= r.season.end_date())
+                    || loan_seasons.contains(&(r.season.start_year + 1, r.team_slug.as_str()))
+            })
+            .map(|r| r.season.start_year)
+            .collect()
+    }
+
+    /// Home rows that continue into the next season with real content (or
+    /// into the club the player is at today) — a return that stuck.
+    fn continuing_homes(
+        result: &[PlayerHistoryRow],
+        current_year: u16,
+        active_home_slug: Option<&str>,
+        seasons_ended_on_loan: &FxHashSet<u16>,
+    ) -> FxHashSet<(u16, String, String)> {
+        let non_loan_seasons: FxHashSet<(u16, &str)> = result
+            .iter()
+            .filter(|r| !r.is_loan)
+            .map(|r| (r.season.start_year, r.team_slug.as_str()))
+            .collect();
+        let non_loan_content_seasons: FxHashSet<(u16, &str)> = result
+            .iter()
+            .filter(|r| !r.is_loan && (r.statistics.total_games() > 0 || r.transfer_fee.is_some()))
+            .map(|r| (r.season.start_year, r.team_slug.as_str()))
+            .collect();
+        result
+            .iter()
+            .filter(|r| {
+                if r.is_loan || seasons_ended_on_loan.contains(&r.season.start_year) {
+                    return false;
+                }
+                let next = (r.season.start_year + 1, r.team_slug.as_str());
+                let this_content = r.statistics.total_games() > 0 || r.transfer_fee.is_some();
+                // "He is there now" is content in its own right. The
+                // season this row continues into is the CURRENT one, and
+                // its 0 apps only mean the campaign has barely started.
+                let next_is_current_club = current_year == r.season.start_year + 1
+                    && active_home_slug.is_some_and(|slug| slug == r.team_slug);
+                non_loan_seasons.contains(&next)
+                    && (this_content
+                        || non_loan_content_seasons.contains(&next)
+                        || next_is_current_club)
+            })
+            .map(|r| {
+                (
+                    r.season.start_year,
+                    r.team_slug.clone(),
+                    r.league_slug.clone(),
+                )
+            })
+            .collect()
+    }
+
+    fn fold_history_subs(result: &mut [PlayerHistoryRow]) {
         // Played-subs roll into played for all but the latest row, so
         // historical lines render as a single "appearances" column. The
         // most recent row keeps subs as a separate column per the UI.
         if let Some(max_seq) = result.iter().map(|r| r.seq_id).max() {
-            for row in &mut result {
+            for row in result.iter_mut() {
                 if row.seq_id != max_seq && row.statistics.played_subs > 0 {
                     row.statistics.played += row.statistics.played_subs;
                     row.statistics.played_subs = 0;
                 }
             }
         }
-
-        result
     }
 
     /// Insert 0-app placeholder rows for any year a player demonstrably
@@ -1515,7 +1411,19 @@ impl PlayerStatisticsProjection {
         current_date: NaiveDate,
     ) -> Vec<PlayerHistoryRowBreakdown> {
         let ledger = Self::build_ledger(history, live, None, current_date);
+        let (mut breakdowns, order) = Self::collect_breakdowns(ledger);
+        Self::normalize_breakdowns(&mut breakdowns);
+        order
+            .into_iter()
+            .filter_map(|key| breakdowns.remove(&key))
+            .collect()
+    }
 
+    /// Aggregate ledger entries into one breakdown per row, keeping the
+    /// first-seen order and the latest League entry's loan label.
+    fn collect_breakdowns(
+        ledger: Vec<PlayerStatLedgerEntry>,
+    ) -> (FxHashMap<RowKey, PlayerHistoryRowBreakdown>, Vec<RowKey>) {
         let mut breakdowns: FxHashMap<RowKey, PlayerHistoryRowBreakdown> = FxHashMap::default();
         let mut order: Vec<RowKey> = Vec::new();
         // Mirror the row's "latest League entry wins" rule for the
@@ -1558,13 +1466,12 @@ impl PlayerStatisticsProjection {
                 });
             }
         }
+        (breakdowns, order)
+    }
 
-        let kind_order = |k: PlayerStatCompetitionKind| match k {
-            PlayerStatCompetitionKind::League => 0,
-            PlayerStatCompetitionKind::ContinentalCup => 1,
-            PlayerStatCompetitionKind::DomesticCup => 2,
-            PlayerStatCompetitionKind::Friendly => 3,
-        };
+    /// Drop zero-appearance non-League lines, synthesise the League line
+    /// when missing, and sort by the page's kind order.
+    fn normalize_breakdowns(breakdowns: &mut FxHashMap<RowKey, PlayerHistoryRowBreakdown>) {
         for breakdown in breakdowns.values_mut() {
             breakdown.competitions.retain(|c| {
                 c.competition_kind == PlayerStatCompetitionKind::League
@@ -1587,13 +1494,17 @@ impl PlayerStatisticsProjection {
             // first written to the ledger.
             breakdown
                 .competitions
-                .sort_by_key(|c| kind_order(c.competition_kind));
+                .sort_by_key(|c| Self::competition_kind_order(c.competition_kind));
         }
+    }
 
-        order
-            .into_iter()
-            .filter_map(|key| breakdowns.remove(&key))
-            .collect()
+    fn competition_kind_order(kind: PlayerStatCompetitionKind) -> u8 {
+        match kind {
+            PlayerStatCompetitionKind::League => 0,
+            PlayerStatCompetitionKind::ContinentalCup => 1,
+            PlayerStatCompetitionKind::DomesticCup => 2,
+            PlayerStatCompetitionKind::Friendly => 3,
+        }
     }
 
     /// Display name for an Overview cup row, given its slug. The
@@ -1620,51 +1531,54 @@ impl PlayerStatisticsProjection {
         // matching name source, present the slug in Title Case so the
         // page reads "Copa Paraguay" instead of leaking the raw
         // kebab-case "copa-paraguay" identifier.
-        titlecase_slug(slug)
+        Self::titlecase_slug(slug)
     }
 }
 
-/// Convert a kebab-case competition slug into a presentable Title Case
-/// display string. Pure string transformation — no locale awareness —
-/// since this only runs when every other name source has missed and
-/// we'd otherwise leak the raw slug to the page.
-fn titlecase_slug(slug: &str) -> String {
-    if slug.is_empty() {
-        return String::new();
-    }
-    slug.split('-')
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => {
-                    let rest: String = chars.collect();
-                    format!("{}{}", first.to_uppercase(), rest)
+impl PlayerStatisticsProjection {
+    /// Convert a kebab-case competition slug into a presentable Title Case
+    /// display string. Pure string transformation — no locale awareness —
+    /// since this only runs when every other name source has missed and
+    /// we'd otherwise leak the raw slug to the page.
+    fn titlecase_slug(slug: &str) -> String {
+        if slug.is_empty() {
+            return String::new();
+        }
+        slug.split('-')
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                let mut chars = part.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(first) => {
+                        let rest: String = chars.collect();
+                        format!("{}{}", first.to_uppercase(), rest)
+                    }
                 }
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
 }
 
-fn league_anchor_for(
-    history: &PlayerStatisticsHistory,
-    season_year: u16,
-    team_slug: &str,
-) -> Option<(u32, String, String)> {
-    history
-        .items
-        .iter()
-        .filter(|item| item.season.start_year == season_year && item.team_slug == team_slug)
-        .max_by_key(|item| item.seq_id)
-        .map(|item| {
-            (
-                item.seq_id,
-                item.league_slug.clone(),
-                item.league_name.clone(),
-            )
-        })
+impl PlayerStatisticsHistory {
+    fn league_anchor_for(
+        &self,
+        season_year: u16,
+        team_slug: &str,
+    ) -> Option<(u32, String, String)> {
+        self.items
+            .iter()
+            .filter(|item| item.season.start_year == season_year && item.team_slug == team_slug)
+            .max_by_key(|item| item.seq_id)
+            .map(|item| {
+                (
+                    item.seq_id,
+                    item.league_slug.clone(),
+                    item.league_name.clone(),
+                )
+            })
+    }
 }
 
 #[cfg(test)]
@@ -4794,13 +4708,28 @@ mod projection_invariants_tests {
         // entry references a previous-country cup that doesn't appear
         // in the player's current spell, the projection now Title-
         // Cases the slug rather than leaking "copa-paraguay" verbatim.
-        assert_eq!(super::titlecase_slug("copa-paraguay"), "Copa Paraguay");
-        assert_eq!(super::titlecase_slug("fa-cup"), "Fa Cup");
-        assert_eq!(super::titlecase_slug("dfb-pokal"), "Dfb Pokal");
-        assert_eq!(super::titlecase_slug("league"), "League");
-        assert_eq!(super::titlecase_slug(""), "");
+        assert_eq!(
+            PlayerStatisticsProjection::titlecase_slug("copa-paraguay"),
+            "Copa Paraguay"
+        );
+        assert_eq!(
+            PlayerStatisticsProjection::titlecase_slug("fa-cup"),
+            "Fa Cup"
+        );
+        assert_eq!(
+            PlayerStatisticsProjection::titlecase_slug("dfb-pokal"),
+            "Dfb Pokal"
+        );
+        assert_eq!(
+            PlayerStatisticsProjection::titlecase_slug("league"),
+            "League"
+        );
+        assert_eq!(PlayerStatisticsProjection::titlecase_slug(""), "");
         // Stray double-dash shouldn't introduce a blank fragment.
-        assert_eq!(super::titlecase_slug("copa--del--rey"), "Copa Del Rey");
+        assert_eq!(
+            PlayerStatisticsProjection::titlecase_slug("copa--del--rey"),
+            "Copa Del Rey"
+        );
     }
 
     #[test]

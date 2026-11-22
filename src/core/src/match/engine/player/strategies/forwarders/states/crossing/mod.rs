@@ -1,12 +1,12 @@
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{
+use crate::r#match::forwarders::states::shared::{
     ActivityIntensity, ForwardCondition, ForwardRead,
 };
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::player::strategies::common::passing::CrossModel;
+use crate::r#match::player::strategies::shared::passing::CrossModel;
 #[cfg(feature = "match-logs")]
-use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::CrossDiag;
+use crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::mid_run_diag::CrossDiag;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -21,7 +21,9 @@ impl StateProcessingHandler for ForwardCrossingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Lost possession - transition out
         if !ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_forward_state(ForwardRead::released(ctx)));
+            return Some(StateChangeResult::with_forward_state(
+                ForwardRead::released(ctx),
+            ));
         }
 
         // Not in a wide position - should pass instead

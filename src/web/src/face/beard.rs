@@ -96,151 +96,185 @@ impl Region<'_> {
 
 impl FacialHair {
     pub fn paint(c: &mut Canvas, l: &Landmarks, t: &Tones, id: &Identity, age: u8) {
+        let region = Region::new(l);
+        let colors = BeardColors::of(t, id);
+        let s = &l.skull;
+        let sb_base = s.zygo_y + 22.0;
+
+        c.clip("hc");
+
+        if let Some(beard) = id.beard {
+            Self::beard(c, l, id, beard, &region, &colors);
+        } else if age >= 22
+            && !(id.phenotype.epicanthic() || id.phenotype == shared::Phenotype::Andean)
+        {
+            // Five o'clock shadow — deepens with maturity; sparse-growth
+            // classes never shadow the jaw
+            let (reg, _) = region.shape(sb_base + 6.0, l.nose + 9.0);
+            c.fill_evenodd(&reg, colors.shadow, 0.10 + l.maturity * 0.08, Blur::Vast);
+            Self::speckle(c, &reg, colors.shadow, 0.16 + l.maturity * 0.22);
+        }
+
+        Self::moustache(c, l, id, &colors);
+        Self::grey(c, l, t, id, &region, sb_base);
+        c.close("g");
+    }
+
+    fn beard(
+        c: &mut Canvas,
+        l: &Landmarks,
+        id: &Identity,
+        beard: Beard,
+        region: &Region<'_>,
+        colors: &BeardColors,
+    ) {
+        let s = &l.skull;
+        let sb_base = s.zygo_y + 22.0;
+        match beard {
+            Beard::Stubble => {
+                let (reg, edge) = region.shape(sb_base + 3.0, l.nose + 8.0);
+                c.fill_evenodd(&reg, colors.shadow, 0.22 + l.maturity * 0.1, Blur::Broad);
+                Self::speckle(c, &reg, colors.shadow, 0.62 + l.maturity * 0.18);
+                Self::fringe(c, &edge, colors.shadow, 5.0, 0.35);
+            }
+            Beard::Boxed => {
+                let (reg, edge) = region.shape(sb_base - 1.0, l.nose + 7.0);
+                c.fill_evenodd(&reg, colors.hair, 0.26, Blur::Broad);
+                c.fill_evenodd(&reg, colors.hair, 0.50, Blur::Fine);
+                Self::speckle(c, &reg, colors.stubble, 0.70);
+                Self::fringe(c, &edge, colors.stubble, 4.5, 0.50);
+                Self::grain(c, l, id, &reg, colors.hair_hi, colors.hair_dk, 120);
+            }
+            Beard::Full => Self::full(c, l, id, region, colors, sb_base),
+            Beard::Goatee => Self::goatee(c, l, id, region, colors),
+            Beard::Chinstrap => {
+                let strap = Self::chinstrap_path(l);
+                c.stroke(&strap, colors.hair, 7.0, 0.45, Blur::Fine);
+                Self::fringe(c, &strap, colors.stubble, 8.0, 0.75);
+            }
+        }
+    }
+
+    fn full(
+        c: &mut Canvas,
+        l: &Landmarks,
+        id: &Identity,
+        region: &Region<'_>,
+        colors: &BeardColors,
+        sb_base: f32,
+    ) {
+        let cx = l.cx;
+        let s = &l.skull;
+        let mw = l.mouth_shape.half;
+        let (reg, edge) = region.shape(sb_base - 6.0, l.nose + 4.0);
+        c.fill_evenodd(&reg, colors.hair, 0.40, Blur::Soft);
+        c.fill_evenodd(&reg, colors.hair, 0.62, Blur::Fine);
+        Self::speckle(c, &reg, colors.hair_hi, 0.20);
+        Self::fringe(c, &edge, colors.hair, 5.5, 0.55);
+        Self::grain(c, l, id, &reg, colors.hair_hi, colors.hair_dk, 200);
+        // Volume: the chin front catches the key light, the jaw
+        // underside stays in shadow
+        c.ellipse(
+            cx - 3.0,
+            s.chin - 13.0,
+            mw * 0.95,
+            9.0,
+            colors.hair_hi,
+            0.18,
+            Blur::Broad,
+            0.0,
+        );
+        let under = PathBuilder::arc(
+            (cx - s.jaw, s.jaw_y),
+            (cx, s.chin + 8.0),
+            (cx + s.jaw, s.jaw_y),
+        );
+        c.stroke(&under, colors.hair_dk, 8.0, 0.35, Blur::Broad);
+        c.ellipse(
+            cx + s.sub * 0.7,
+            s.sub_y + 8.0,
+            10.0,
+            16.0,
+            colors.hair_dk,
+            0.30,
+            Blur::Broad,
+            0.0,
+        );
+    }
+
+    fn goatee(
+        c: &mut Canvas,
+        l: &Landmarks,
+        id: &Identity,
+        region: &Region<'_>,
+        colors: &BeardColors,
+    ) {
+        // The moustache wraps the mouth corners into a chin patch,
+        // one connected ring; cheeks stay clean
         let cx = l.cx;
         let s = &l.skull;
         let ms = &l.mouth_shape;
         let my = l.mouth;
         let ny = l.nose;
         let mw = ms.half;
-        let maturity = l.maturity;
-        let region = Region::new(l);
-        let hair = t.hair_greyed(id.grey);
-        let stubble = hair.shade(0.72);
-        let shadow_col = t.beard_shadow;
-        let hair_hi = hair.lift(0.22);
-        let hair_dk = hair.shade(0.55);
-        let sb_base = s.zygo_y + 22.0;
+        let g_l = cx - mw - 4.0;
+        let g_r = cx + mw + 4.0;
+        let g_top = ny + 6.0;
+        let g_bot = s.chin + 1.0;
+        let g_side = my + 2.0;
+        let g_mid = g_side + (g_bot - g_side) * 0.55;
+        let goatee = format!(
+            "M{g_l:.1} {g_side:.1} C{g_l:.1} {:.1} {:.1} {g_top:.1} {:.1} {:.1} Q{cx:.1} {:.1} {:.1} {:.1} \
+             C{:.1} {g_top:.1} {g_r:.1} {:.1} {g_r:.1} {g_side:.1} \
+             C{:.1} {g_mid:.1} {:.1} {g_bot:.1} {cx:.1} {g_bot:.1} \
+             C{:.1} {g_bot:.1} {:.1} {g_mid:.1} {g_l:.1} {g_side:.1}Z {}",
+            g_top + 7.0,
+            cx - mw * 0.78,
+            cx - mw * 0.42,
+            g_top + 0.5,
+            g_top + 5.0,
+            cx + mw * 0.42,
+            g_top + 0.5,
+            cx + mw * 0.78,
+            g_top + 7.0,
+            cx + mw * 0.95,
+            cx + mw * 0.62,
+            cx - mw * 0.62,
+            cx - mw * 0.95,
+            region.lip_hole,
+        );
+        c.fill_evenodd(&goatee, colors.hair, 0.36, Blur::Soft);
+        c.fill_evenodd(&goatee, colors.hair, 0.62, Blur::Fine);
+        Self::speckle(c, &goatee, colors.stubble, 0.70);
+        Self::grain(c, l, id, &goatee, colors.hair_hi, colors.hair_dk, 40);
+    }
 
-        c.clip("hc");
+    fn chinstrap_path(l: &Landmarks) -> String {
+        let cx = l.cx;
+        let s = &l.skull;
+        format!(
+            "M{:.1} {:.1} C{:.1} {:.1} {:.1} {:.1} {cx:.1} {:.1} C{:.1} {:.1} {:.1} {:.1} {:.1} {:.1}",
+            cx - s.sub - 14.0,
+            s.zygo_y + 20.0,
+            cx - s.jaw - 6.0,
+            s.jaw_y,
+            cx - s.chin_half - 4.0,
+            s.chin + 2.0,
+            s.chin + 3.0,
+            cx + s.chin_half + 4.0,
+            s.chin + 2.0,
+            cx + s.jaw + 6.0,
+            s.jaw_y,
+            cx + s.sub + 14.0,
+            s.zygo_y + 20.0,
+        )
+    }
 
-        let speckle = |c: &mut Canvas, d: &str, col: Rgb, op: f32| {
-            c.raw(&format!(
-                r#"<path d="{d}" fill-rule="evenodd" fill="{col}" filter="url(#stb)" opacity="{op:.2}"/>"#
-            ));
-        };
-        let fringe = |c: &mut Canvas, d: &str, col: Rgb, w: f32, op: f32| {
-            c.raw(&format!(
-                r#"<path d="{d}" fill="none" stroke="{col}" stroke-width="{w:.1}" filter="url(#stb)" opacity="{op:.2}"/>"#
-            ));
-        };
-
-        if let Some(beard) = id.beard {
-            match beard {
-                Beard::Stubble => {
-                    let (reg, edge) = region.shape(sb_base + 3.0, ny + 8.0);
-                    c.fill_evenodd(&reg, shadow_col, 0.22 + maturity * 0.1, Blur::Broad);
-                    speckle(c, &reg, shadow_col, 0.62 + maturity * 0.18);
-                    fringe(c, &edge, shadow_col, 5.0, 0.35);
-                }
-                Beard::Boxed => {
-                    let (reg, edge) = region.shape(sb_base - 1.0, ny + 7.0);
-                    c.fill_evenodd(&reg, hair, 0.26, Blur::Broad);
-                    c.fill_evenodd(&reg, hair, 0.50, Blur::Fine);
-                    speckle(c, &reg, stubble, 0.70);
-                    fringe(c, &edge, stubble, 4.5, 0.50);
-                    Self::grain(c, l, id, &reg, hair_hi, hair_dk, 120);
-                }
-                Beard::Full => {
-                    let (reg, edge) = region.shape(sb_base - 6.0, ny + 4.0);
-                    c.fill_evenodd(&reg, hair, 0.40, Blur::Soft);
-                    c.fill_evenodd(&reg, hair, 0.62, Blur::Fine);
-                    speckle(c, &reg, hair_hi, 0.20);
-                    fringe(c, &edge, hair, 5.5, 0.55);
-                    Self::grain(c, l, id, &reg, hair_hi, hair_dk, 200);
-                    // Volume: the chin front catches the key light, the jaw
-                    // underside stays in shadow
-                    c.ellipse(
-                        cx - 3.0,
-                        s.chin - 13.0,
-                        mw * 0.95,
-                        9.0,
-                        hair_hi,
-                        0.18,
-                        Blur::Broad,
-                        0.0,
-                    );
-                    let under = PathBuilder::arc(
-                        (cx - s.jaw, s.jaw_y),
-                        (cx, s.chin + 8.0),
-                        (cx + s.jaw, s.jaw_y),
-                    );
-                    c.stroke(&under, hair_dk, 8.0, 0.35, Blur::Broad);
-                    c.ellipse(
-                        cx + s.sub * 0.7,
-                        s.sub_y + 8.0,
-                        10.0,
-                        16.0,
-                        hair_dk,
-                        0.30,
-                        Blur::Broad,
-                        0.0,
-                    );
-                }
-                Beard::Goatee => {
-                    // The moustache wraps the mouth corners into a chin patch,
-                    // one connected ring; cheeks stay clean
-                    let g_l = cx - mw - 4.0;
-                    let g_r = cx + mw + 4.0;
-                    let g_top = ny + 6.0;
-                    let g_bot = s.chin + 1.0;
-                    let g_side = my + 2.0;
-                    let g_mid = g_side + (g_bot - g_side) * 0.55;
-                    let goatee = format!(
-                        "M{g_l:.1} {g_side:.1} C{g_l:.1} {:.1} {:.1} {g_top:.1} {:.1} {:.1} Q{cx:.1} {:.1} {:.1} {:.1} \
-                         C{:.1} {g_top:.1} {g_r:.1} {:.1} {g_r:.1} {g_side:.1} \
-                         C{:.1} {g_mid:.1} {:.1} {g_bot:.1} {cx:.1} {g_bot:.1} \
-                         C{:.1} {g_bot:.1} {:.1} {g_mid:.1} {g_l:.1} {g_side:.1}Z {}",
-                        g_top + 7.0,
-                        cx - mw * 0.78,
-                        cx - mw * 0.42,
-                        g_top + 0.5,
-                        g_top + 5.0,
-                        cx + mw * 0.42,
-                        g_top + 0.5,
-                        cx + mw * 0.78,
-                        g_top + 7.0,
-                        cx + mw * 0.95,
-                        cx + mw * 0.62,
-                        cx - mw * 0.62,
-                        cx - mw * 0.95,
-                        region.lip_hole,
-                    );
-                    c.fill_evenodd(&goatee, hair, 0.36, Blur::Soft);
-                    c.fill_evenodd(&goatee, hair, 0.62, Blur::Fine);
-                    speckle(c, &goatee, stubble, 0.70);
-                    Self::grain(c, l, id, &goatee, hair_hi, hair_dk, 40);
-                }
-                Beard::Chinstrap => {
-                    let strap = format!(
-                        "M{:.1} {:.1} C{:.1} {:.1} {:.1} {:.1} {cx:.1} {:.1} C{:.1} {:.1} {:.1} {:.1} {:.1} {:.1}",
-                        cx - s.sub - 14.0,
-                        s.zygo_y + 20.0,
-                        cx - s.jaw - 6.0,
-                        s.jaw_y,
-                        cx - s.chin_half - 4.0,
-                        s.chin + 2.0,
-                        s.chin + 3.0,
-                        cx + s.chin_half + 4.0,
-                        s.chin + 2.0,
-                        cx + s.jaw + 6.0,
-                        s.jaw_y,
-                        cx + s.sub + 14.0,
-                        s.zygo_y + 20.0,
-                    );
-                    c.stroke(&strap, hair, 7.0, 0.45, Blur::Fine);
-                    fringe(c, &strap, stubble, 8.0, 0.75);
-                }
-            }
-        } else if age >= 22
-            && !(id.phenotype.epicanthic() || id.phenotype == shared::Phenotype::Andean)
-        {
-            // Five o'clock shadow — deepens with maturity; sparse-growth
-            // classes never shadow the jaw
-            let (reg, _) = region.shape(sb_base + 6.0, ny + 9.0);
-            c.fill_evenodd(&reg, shadow_col, 0.10 + maturity * 0.08, Blur::Vast);
-            speckle(c, &reg, shadow_col, 0.16 + maturity * 0.22);
-        }
-
+    fn moustache(c: &mut Canvas, l: &Landmarks, id: &Identity, colors: &BeardColors) {
+        let cx = l.cx;
+        let ms = &l.mouth_shape;
+        let my = l.mouth;
+        let mw = ms.half;
         // Every grown style except the chinstrap already carries its own
         // moustache band; a standalone one would only double the ink over
         // the philtrum
@@ -269,11 +303,12 @@ impl FacialHair {
             );
             if m == Moustache::Thin {
                 // A pencil line of growth, not a mass
-                c.fill(&d, hair, op, Blur::Soft);
+                c.fill(&d, colors.hair, op, Blur::Soft);
             } else {
-                c.fill(&d, hair, op * 0.55, Blur::Fine);
+                c.fill(&d, colors.hair, op * 0.55, Blur::Fine);
                 c.raw(&format!(
-                    r#"<path d="{d}" fill="{stubble}" filter="url(#stb)" opacity="{op:.2}"/>"#
+                    r#"<path d="{d}" fill="{}" filter="url(#stb)" opacity="{op:.2}"/>"#,
+                    colors.stubble
                 ));
             }
             if m == Moustache::Handlebar {
@@ -285,20 +320,62 @@ impl FacialHair {
                         dir * 2.4,
                         dir * 3.2
                     );
-                    c.stroke(&d, hair, 1.6, 0.6, Blur::Fine);
+                    c.stroke(&d, colors.hair, 1.6, 0.6, Blur::Fine);
                 }
             }
         }
-
-        // Grey threads through a beard before it does the hair
-        if id.grey > 0.05 && id.beard.is_some() {
-            let (reg, _) = region.shape(sb_base - 2.0, ny + 5.0);
-            speckle(c, &reg, t.grey_hair, (id.grey * 1.1).min(0.5));
-        }
-
-        c.close("g");
     }
 
+    /// Grey threads through a beard before it does the hair.
+    fn grey(
+        c: &mut Canvas,
+        l: &Landmarks,
+        t: &Tones,
+        id: &Identity,
+        region: &Region<'_>,
+        sb_base: f32,
+    ) {
+        if id.grey > 0.05 && id.beard.is_some() {
+            let (reg, _) = region.shape(sb_base - 2.0, l.nose + 5.0);
+            Self::speckle(c, &reg, t.grey_hair, (id.grey * 1.1).min(0.5));
+        }
+    }
+
+    fn speckle(c: &mut Canvas, d: &str, col: Rgb, op: f32) {
+        c.raw(&format!(
+            r#"<path d="{d}" fill-rule="evenodd" fill="{col}" filter="url(#stb)" opacity="{op:.2}"/>"#
+        ));
+    }
+
+    fn fringe(c: &mut Canvas, d: &str, col: Rgb, w: f32, op: f32) {
+        c.raw(&format!(
+            r#"<path d="{d}" fill="none" stroke="{col}" stroke-width="{w:.1}" filter="url(#stb)" opacity="{op:.2}"/>"#
+        ));
+    }
+}
+
+struct BeardColors {
+    hair: Rgb,
+    stubble: Rgb,
+    shadow: Rgb,
+    hair_hi: Rgb,
+    hair_dk: Rgb,
+}
+
+impl BeardColors {
+    fn of(t: &Tones, id: &Identity) -> BeardColors {
+        let hair = t.hair_greyed(id.grey);
+        BeardColors {
+            hair,
+            stubble: hair.shade(0.72),
+            shadow: t.beard_shadow,
+            hair_hi: hair.lift(0.22),
+            hair_dk: hair.shade(0.55),
+        }
+    }
+}
+
+impl FacialHair {
     /// Short downward strokes over a beard mass so it reads as hair, not
     /// paint. Clipped to the region.
     #[allow(clippy::too_many_arguments)]

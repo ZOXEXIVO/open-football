@@ -9,40 +9,14 @@ use crate::r#match::engine::teamplay::standard::MatchStandard;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     pub(in crate::r#match::engine::engine) fn build_result(
-        field: MatchField,
+        mut field: MatchField,
         mut context: MatchContext,
         mut match_position_data: ResultMatchPositionData,
     ) -> MatchResultRaw {
         let mut result = MatchResultRaw::with_match_time(context.total_match_time);
 
         context.fill_details();
-
-        result.additional_time_ms = context.additional_time_ms;
-        result.tally = context.tally.clone();
-        #[cfg(feature = "match-logs")]
-        context.keeper_census.get_mut().finish(&mut result.tally);
-        #[cfg(feature = "match-logs")]
-        context.defender_census.get_mut().finish(&mut result.tally);
-        #[cfg(feature = "match-logs")]
-        context.midfielder_census.get_mut().finish(&mut result.tally);
-        #[cfg(feature = "match-logs")]
-        context.forward_census.get_mut().finish(&mut result.tally);
-        #[cfg(feature = "match-logs")]
-        context.team_census.finish(&mut result.tally);
-        #[cfg(feature = "match-logs")]
-        {
-            result.tally.delivery = field.ball.delivery_tally.clone();
-        }
-        result.weather = context.environment.weather;
-        result.pitch = context.environment.pitch;
-        result.penalty_shootout = context.penalty_shootout_kicks.clone();
-        result.penalty_saves = context.penalty_saves.clone();
-        result.penalty_misses = context.penalty_misses.clone();
-        result.standard_of_football = context
-            .standard
-            .map(|r| r.outfield)
-            .unwrap_or(MatchStandard::CALIBRATION);
-        result.score = Some(context.score.clone());
+        Self::fill_result_totals(&field, &mut context, &mut result);
 
         // The near misses worth keeping, and — the same answer, said to the
         // recorder — which of its provisional chance clips to hold on to. One
@@ -56,9 +30,77 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         );
         result.chances = context.chances.clone();
 
-        // Assign squads based on team IDs, not field positions
-        let left_side_squad = field.left_side_players.expect("left team players");
-        let right_side_squad = field.right_side_players.expect("right team players");
+        Self::assign_result_squads(&mut field, &mut result);
+        result.starting_home_tactic = context.starting_home_tactic;
+        result.starting_away_tactic = context.starting_away_tactic;
+        result.coach_home = context.coach_home.record.clone();
+        result.coach_away = context.coach_away.record.clone();
+        Self::copy_substitution_records(&context, &mut result);
+
+        // Full time: release the goal-clip pre-roll (nothing will ever claim
+        // it now), drop the chance clips the shortlist above passed over, and
+        // trim what is left back to the final whistle.
+        match_position_data.finish_retaining(context.total_match_time, &kept_chances);
+        result.position_data = match_position_data;
+
+        Self::collect_player_stats(&field, &mut context, &mut result);
+
+        // ── Pass 2: raw (stat-line) + contextual (public) ratings ────────
+        MatchRatingPass::rate(&mut result, RatingVolumes::EngineCounters);
+
+        // Blowout diagnostic — off by default (see `match-logs` feature).
+        // The aggregation itself is O(players × stats), so we skip the
+        // whole block in production. Enable with `--features match-logs`
+        // in `.dev/match` to analyse shot / goal sources.
+        #[cfg(feature = "match-logs")]
+        Self::log_blowout_if_needed(&field, &context, &result);
+
+        result
+    }
+
+    /// The match-level totals every result carries: tally, weather, penalty
+    /// kicks, standard of football and the final score.
+    fn fill_result_totals(
+        _field: &MatchField,
+        context: &mut MatchContext,
+        result: &mut MatchResultRaw,
+    ) {
+        result.additional_time_ms = context.additional_time_ms;
+        result.tally = context.tally.clone();
+        #[cfg(feature = "match-logs")]
+        context.keeper_census.get_mut().finish(&mut result.tally);
+        #[cfg(feature = "match-logs")]
+        context.defender_census.get_mut().finish(&mut result.tally);
+        #[cfg(feature = "match-logs")]
+        context
+            .midfielder_census
+            .get_mut()
+            .finish(&mut result.tally);
+        #[cfg(feature = "match-logs")]
+        context.forward_census.get_mut().finish(&mut result.tally);
+        #[cfg(feature = "match-logs")]
+        context.team_census.finish(&mut result.tally);
+        #[cfg(feature = "match-logs")]
+        {
+            result.tally.delivery = _field.ball.delivery_tally.clone();
+        }
+        result.weather = context.environment.weather;
+        result.pitch = context.environment.pitch;
+        result.penalty_shootout = context.penalty_shootout_kicks.clone();
+        result.penalty_saves = context.penalty_saves.clone();
+        result.penalty_misses = context.penalty_misses.clone();
+        result.standard_of_football = context
+            .standard
+            .map(|r| r.outfield)
+            .unwrap_or(MatchStandard::CALIBRATION);
+        result.score = Some(context.score.clone());
+    }
+
+    /// Assign squads based on team IDs, not field positions, and map the
+    /// final left/right tactics back to home / away.
+    fn assign_result_squads(field: &mut MatchField, result: &mut MatchResultRaw) {
+        let left_side_squad = field.left_side_players.take().expect("left team players");
+        let right_side_squad = field.right_side_players.take().expect("right team players");
 
         // The engine swaps `left_team_tactics` / `right_team_tactics` on
         // every halftime swap, so at this point those fields track the
@@ -80,12 +122,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             result.final_home_tactic = Some(right_team_tac);
             result.final_away_tactic = Some(left_team_tac);
         }
-        result.starting_home_tactic = context.starting_home_tactic;
-        result.starting_away_tactic = context.starting_away_tactic;
-        result.coach_home = context.coach_home.record.clone();
-        result.coach_away = context.coach_away.record.clone();
+    }
 
-        // Copy substitution records to result
+    /// Copy substitution records to the result and mark the incoming players
+    /// as used on their squad sheets.
+    fn copy_substitution_records(context: &MatchContext, result: &mut MatchResultRaw) {
         for sub_record in &context.substitutions {
             if sub_record.team_id == result.left_team_players.team_id {
                 result
@@ -106,16 +147,17 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 break_ms: sub_record.break_ms,
             });
         }
+    }
 
-        // Full time: release the goal-clip pre-roll (nothing will ever claim
-        // it now), drop the chance clips the shortlist above passed over, and
-        // trim what is left back to the final whistle.
-        match_position_data.finish_retaining(context.total_match_time, &kept_chances);
-        result.position_data = match_position_data;
-
-        // Extract per-player stats, then rate them. The rating pass reads
-        // every stat line and physical snapshot, subs included, so all of
-        // them have to exist first.
+    /// Extract per-player stats and physical snapshots, then fold in the
+    /// players who left the pitch during the match.
+    fn collect_player_stats(
+        field: &MatchField,
+        context: &mut MatchContext,
+        result: &mut MatchResultRaw,
+    ) {
+        // The rating pass reads every stat line and physical snapshot, subs
+        // included, so all of them have to exist first.
 
         // A man who left the pitch folded his own in at the minute he went.
         #[cfg(feature = "match-logs")]
@@ -164,40 +206,33 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 .physical_snapshots
                 .insert(snapshot.player_id, snapshot);
         }
+    }
 
-        // ── Pass 2: raw (stat-line) + contextual (public) ratings ────────
-        MatchRatingPass::rate(&mut result, RatingVolumes::EngineCounters);
-
-        // Blowout diagnostic — off by default (see `match-logs` feature).
-        // The aggregation itself is O(players × stats), so we skip the
-        // whole block in production. Enable with `--features match-logs`
-        // in `.dev/match` to analyse shot / goal sources.
-        #[cfg(feature = "match-logs")]
-        {
-            let score_ref = result.score.as_ref().unwrap();
-            let home_goals = score_ref.home_team.get();
-            let away_goals = score_ref.away_team.get();
-            let home_team_id = score_ref.home_team.team_id;
-            let total_goals = home_goals + away_goals;
-            if total_goals >= 8 {
-                let away_team_id = if field.home_team_id == home_team_id {
-                    field.away_team_id
-                } else {
-                    field.home_team_id
-                };
-                Self::log_blowout_profile(
-                    &field.players,
-                    &context.substitutions,
-                    &result,
-                    home_team_id,
-                    away_team_id,
-                    home_goals,
-                    away_goals,
-                );
-            }
+    /// Blowout diagnostic — enabled only with `match-logs`, and only when
+    /// the scoreline is large enough to be worth profiling.
+    #[cfg(feature = "match-logs")]
+    fn log_blowout_if_needed(field: &MatchField, context: &MatchContext, result: &MatchResultRaw) {
+        let score_ref = result.score.as_ref().unwrap();
+        let home_goals = score_ref.home_team.get();
+        let away_goals = score_ref.away_team.get();
+        let home_team_id = score_ref.home_team.team_id;
+        let total_goals = home_goals + away_goals;
+        if total_goals >= 8 {
+            let away_team_id = if field.home_team_id == home_team_id {
+                field.away_team_id
+            } else {
+                field.home_team_id
+            };
+            Self::log_blowout_profile(
+                &field.players,
+                &context.substitutions,
+                result,
+                home_team_id,
+                away_team_id,
+                home_goals,
+                away_goals,
+            );
         }
-
-        result
     }
 
     /// Aggregate per-team skill dump for post-match analysis. Runs only

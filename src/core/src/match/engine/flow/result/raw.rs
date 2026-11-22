@@ -16,8 +16,8 @@ use crate::club::team::talks::TeamTalkTone;
 use crate::league::LeagueMatch;
 use crate::r#match::engine::environment::{Pitch, Weather};
 use crate::r#match::engine::teamplay::coach::CoachRecord;
-use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
+use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::squad::{OmittedPlayer, SelectionReading};
 use crate::r#match::{MatchSquad, RecordingArtifacts, ResultMatchPositionData};
 use crate::{MatchTacticType, PlayerPositionType};
@@ -258,7 +258,9 @@ impl MatchResultRaw {
             .detail()
             .iter()
             .filter(|g| g.stat_type == MatchStatisticType::Goal)
-            .filter_map(|g| team_of(g.player_id).map(|team| (g.time, (team == home_id) != g.is_auto_goal)))
+            .filter_map(|g| {
+                team_of(g.player_id).map(|team| (g.time, (team == home_id) != g.is_auto_goal))
+            })
             .collect();
         goals.sort_by_key(|&(time, _)| time);
         goals
@@ -276,7 +278,11 @@ impl MatchResultRaw {
 
     /// Spot-kicks this keeper kept out, in play and in a shoot-out.
     pub fn penalties_saved_by(&self, keeper_id: u32) -> u8 {
-        let in_play = self.penalty_saves.iter().filter(|&&k| k == keeper_id).count();
+        let in_play = self
+            .penalty_saves
+            .iter()
+            .filter(|&&k| k == keeper_id)
+            .count();
         let shootout = self
             .penalty_shootout
             .iter()
@@ -287,7 +293,11 @@ impl MatchResultRaw {
 
     /// Spot-kicks this taker failed to score, in play and in a shoot-out.
     pub fn penalties_missed_by(&self, taker_id: u32) -> u8 {
-        let in_play = self.penalty_misses.iter().filter(|&&t| t == taker_id).count();
+        let in_play = self
+            .penalty_misses
+            .iter()
+            .filter(|&&t| t == taker_id)
+            .count();
         let shootout = self
             .penalty_shootout
             .iter()
@@ -490,7 +500,11 @@ mod tests {
     fn a_keeper_is_credited_with_every_spot_kick_he_kept_out() {
         let mut result = MatchResultRaw::with_match_time(90 * 60 * 1000);
         result.penalty_saves = vec![1, 2, 1];
-        result.penalty_shootout = vec![kick(Some(1), false), kick(Some(1), true), kick(Some(2), false)];
+        result.penalty_shootout = vec![
+            kick(Some(1), false),
+            kick(Some(1), true),
+            kick(Some(2), false),
+        ];
         assert_eq!(result.penalties_saved_by(1), 3);
         assert_eq!(result.penalties_saved_by(2), 2);
         assert_eq!(result.penalties_saved_by(3), 0);

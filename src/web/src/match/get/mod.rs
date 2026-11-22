@@ -1,12 +1,12 @@
 pub mod routes;
 
-use crate::common::default_handler::{
+use crate::face::skin::CountrySkin;
+use crate::leagues::address::LeagueAddress;
+use crate::shared::default_handler::{
     COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION, MATCH_VIEWER_AVAILABLE, MATCH_VIEWER_BYTES,
     MATCH_VIEWER_VERSION,
 };
-use crate::common::slug::player_history_slug;
-use crate::face::skin::CountrySkin;
-use crate::leagues::address::LeagueAddress;
+use crate::shared::slug::PlayerSlug;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -16,8 +16,8 @@ use core::MatchRuntime;
 use core::NationalTeamLevel;
 use core::Player;
 use core::SimulatorData;
-use core::r#match::MatchResultRaw;
 use core::r#match::player::statistics::MatchStatisticType;
+use core::r#match::{MatchResult, MatchResultRaw};
 use serde::{Deserialize, Serialize};
 use shared::Appearance;
 
@@ -188,7 +188,7 @@ impl VenueJson {
     /// there is no ground to look up: those are played at a national stadium,
     /// which is what the default already describes.
     fn for_fixture(data: &SimulatorData, home_team_id: u32, away_team_id: u32) -> Self {
-        let field_style = shared::field::for_home_team(home_team_id);
+        let field_style = shared::field::FieldStyle::for_home_team(home_team_id);
         let Some(home) = data.team(home_team_id) else {
             return VenueJson {
                 field_style,
@@ -375,511 +375,644 @@ impl PlayerJson {
     }
 }
 
-pub async fn match_get_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<MatchGetRequest>,
-) -> ApiResult<impl IntoResponse> {
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let guard = state.data.read().await;
+pub struct MatchGetPage<'a> {
+    data: &'a SimulatorData,
+    i18n: I18n,
+    lang: String,
+    match_id: String,
+}
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+impl<'a> MatchGetPage<'a> {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<MatchGetRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let guard = state.data.read().await;
 
-    // Look up match from global store, then fall back to scanning leagues
-    let match_result = simulator_data
-        .match_store
-        .get(&route_params.match_id)
-        .or_else(|| {
-            // Fall back: scan each country's per-league match stores. The
-            // domestic cup and the playoffs live outside the `leagues`
-            // collection, so scan their inner leagues too — otherwise ties
-            // linked from a bracket or a schedule would 404.
-            simulator_data
-                .continents
-                .iter()
-                .flat_map(|c| &c.countries)
-                .find_map(|country| {
-                    country
-                        .leagues
-                        .leagues
-                        .iter()
-                        .chain(country.domestic_cup.as_ref().map(|cup| &cup.league))
-                        .chain(country.playoffs.iter().map(|playoff| &playoff.league))
-                        .find_map(|l| l.matches.get(&route_params.match_id))
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+
+        // Look up match from global store, then fall back to scanning leagues
+        let match_result = simulator_data
+            .match_store
+            .get(&route_params.match_id)
+            .or_else(|| {
+                // Fall back: scan each country's per-league match stores. The
+                // domestic cup and the playoffs live outside the `leagues`
+                // collection, so scan their inner leagues too — otherwise ties
+                // linked from a bracket or a schedule would 404.
+                simulator_data
+                    .continents
+                    .iter()
+                    .flat_map(|c| &c.countries)
+                    .find_map(|country| {
+                        country
+                            .leagues
+                            .leagues
+                            .iter()
+                            .chain(country.domestic_cup.as_ref().map(|cup| &cup.league))
+                            .chain(country.playoffs.iter().map(|playoff| &playoff.league))
+                            .find_map(|l| l.matches.get(&route_params.match_id))
+                    })
+            })
+            .ok_or_else(|| {
+                ApiError::NotFound(format!("Match '{}' not found", route_params.match_id))
+            })?;
+
+        let page = MatchGetPage {
+            data: simulator_data,
+            i18n,
+            lang: route_params.lang,
+            match_id: route_params.match_id.clone(),
+        };
+        Ok(page.render(match_result).into_response())
+    }
+
+    fn render(self, match_result: &MatchResult) -> ApiResult<MatchGetTemplate> {
+        let league = self.data.league(match_result.league_id);
+        let is_international = match_result.league_slug == "international";
+        let national_team_suffix = match NationalTeamLevel::of_match_id(&match_result.id) {
+            NationalTeamLevel::Senior => "",
+            NationalTeamLevel::Under21 => "/u21",
+        };
+
+        let teams =
+            MatchTeams::resolve(&self, match_result, is_international, national_team_suffix)?;
+
+        let result_details = match_result
+            .details
+            .as_ref()
+            .ok_or_else(|| ApiError::NotFound("Match details not available".to_string()))?;
+
+        let score = result_details
+            .score
+            .as_ref()
+            .ok_or_else(|| ApiError::NotFound("Match score not available".to_string()))?;
+
+        let viewer_config = self.viewer_config(
+            match_result,
+            result_details,
+            score,
+            &teams,
+            is_international,
+        );
+        let (motm_id, motm_name, motm_slug) = self.motm(result_details);
+
+        let (competition_name, competition_url) = self.competition(league, match_result);
+        let squads = MatchSquads::of(self.data, result_details, motm_id);
+
+        Ok(MatchGetTemplate {
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
+            cpu_brand: &CPU_BRAND,
+            cores_count: *CPU_CORES,
+            title: format!("{} - {}", teams.home_name, teams.away_name),
+            header_color: String::new(),
+            foreground_color: String::new(),
+            menu_sections: vec![],
+            competition_name,
+            competition_url,
+            home_team_name: teams.home_name.clone(),
+            home_team_url: teams.home_url,
+            home_goals: score.home_team.get(),
+            home_goal_events: GoalEventDisplay::events(
+                self.data,
+                &self.i18n,
+                result_details,
+                score,
+                true,
+            ),
+            home_squad_main: squads.home_main,
+            home_squad_subs: squads.home_subs,
+            away_team_name: teams.away_name.clone(),
+            away_team_url: teams.away_url,
+            away_goals: score.away_team.get(),
+            away_goal_events: GoalEventDisplay::events(
+                self.data,
+                &self.i18n,
+                result_details,
+                score,
+                false,
+            ),
+            away_squad_main: squads.away_main,
+            away_squad_subs: squads.away_subs,
+            viewer_config_json: viewer_config.to_script_literal(),
+            match_viewer_available: MATCH_VIEWER_AVAILABLE,
+            match_viewer_version: MATCH_VIEWER_VERSION,
+            match_viewer_bytes: MATCH_VIEWER_BYTES,
+            player_of_the_match_id: motm_id.unwrap_or(0),
+            player_of_the_match_slug: motm_slug,
+            player_of_the_match_name: motm_name,
+            // The same flag that decided whether to record decides whether to
+            // offer the replay — including for a friendly, which is a youth or
+            // reserve league fixture here (`League::friendly`). See `Match::play`
+            // for why those are no longer a special case.
+            match_recordings_enabled: MatchRuntime::recordings_mode(),
+            i18n: self.i18n,
+            lang: self.lang,
+        })
+    }
+
+    fn viewer_config(
+        &self,
+        match_result: &MatchResult,
+        result_details: &MatchResultRaw,
+        score: &core::r#match::Score,
+        teams: &MatchTeams,
+        is_international: bool,
+    ) -> ViewerConfigJson {
+        let players = PlayerJson::squad(self.data, result_details);
+        let goals = GoalEventJson::from_score(score);
+        let chances = result_details
+            .chances
+            .iter()
+            .map(ChanceEventJson::from_chance)
+            .collect();
+        let substitutions = result_details
+            .substitutions
+            .iter()
+            .map(SubstitutionEventJson::from_change)
+            .collect();
+        ViewerConfigJson::of(
+            &self,
+            match_result,
+            result_details,
+            teams,
+            players,
+            goals,
+            chances,
+            substitutions,
+            is_international,
+        )
+    }
+
+    fn motm(&self, result_details: &MatchResultRaw) -> (Option<u32>, String, String) {
+        let id = result_details.player_of_the_match_id;
+        let name = id
+            .and_then(|id| self.data.player(id))
+            .map(MatchPlayer::full_name)
+            .unwrap_or_default();
+        let slug = id
+            .map(|id| PlayerSlug::history(self.data, id, &name))
+            .unwrap_or_default();
+        (id, name, slug)
+    }
+
+    fn competition(
+        &self,
+        league: Option<&core::league::League>,
+        match_result: &MatchResult,
+    ) -> (String, String) {
+        // What the header's left rail names the match after. This used to be the
+        // layout's sub-title, and the scoreboard that replaced it inherits the
+        // sub-title's resolution rather than the raw league name: the display name
+        // is the localised, country-qualified one, and a continental tie is not a
+        // league at all — it has its own page, and `/leagues/champions-league`
+        // is not it.
+        if let Some(l) = league {
+            (
+                views::Menus::league_display_name(l, &self.i18n, self.data),
+                LeagueAddress::of(self.data, l).url(&self.lang),
+            )
+        } else {
+            let name = match match_result.league_slug.as_str() {
+                "champions-league" => "champions_league",
+                "europa-league" => "europa_league",
+                "conference-league" => "conference_league",
+                "copa-libertadores" => "copa_libertadores",
+                _ => "international",
+            };
+            let link = match match_result.league_slug.as_str() {
+                "champions-league" => format!("/{}/champions-league", self.lang),
+                "europa-league" => format!("/{}/europa-league", self.lang),
+                "conference-league" => format!("/{}/conference-league", self.lang),
+                "copa-libertadores" => format!("/{}/copa-libertadores", self.lang),
+                _ => String::new(),
+            };
+            (self.i18n.t(name).to_string(), link)
+        }
+    }
+}
+
+struct MatchTeams {
+    home_name: String,
+    home_url: String,
+    home_club_id: u32,
+    away_name: String,
+    away_url: String,
+    away_club_id: u32,
+}
+
+impl MatchTeams {
+    fn resolve(
+        page: &MatchGetPage<'_>,
+        match_result: &MatchResult,
+        is_international: bool,
+        national_team_suffix: &str,
+    ) -> ApiResult<MatchTeams> {
+        let (home_name, home_url, home_club_id) = Self::team_side(
+            page,
+            match_result.home_team_id,
+            is_international,
+            national_team_suffix,
+            true,
+        )?;
+        let (away_name, away_url, away_club_id) = Self::team_side(
+            page,
+            match_result.away_team_id,
+            is_international,
+            national_team_suffix,
+            false,
+        )?;
+        Ok(MatchTeams {
+            home_name,
+            home_url,
+            home_club_id,
+            away_name,
+            away_url,
+            away_club_id,
+        })
+    }
+
+    fn team_side(
+        page: &MatchGetPage<'_>,
+        team_id: u32,
+        is_international: bool,
+        national_team_suffix: &str,
+        home: bool,
+    ) -> ApiResult<(String, String, u32)> {
+        if is_international {
+            let (name, url) = page
+                .data
+                .country(team_id)
+                .map(|c| {
+                    let url = format!(
+                        "/{}/countries/{}{}",
+                        page.lang, c.slug, national_team_suffix
+                    );
+                    (c.name.clone(), url)
                 })
-        })
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("Match '{}' not found", route_params.match_id))
+                .unwrap_or_else(|| {
+                    let key = if home { "home_team" } else { "away_team" };
+                    (page.i18n.t(key).to_string(), String::new())
+                });
+            return Ok((name, url, 0u32));
+        }
+
+        let t = page.data.team(team_id).ok_or_else(|| {
+            ApiError::NotFound(if home {
+                "Home team not found".to_string()
+            } else {
+                "Away team not found".to_string()
+            })
         })?;
+        let url = format!("/{}/teams/{}", page.lang, t.slug);
+        Ok((t.name.clone(), url, t.club_id))
+    }
+}
 
-    let league = simulator_data.league(match_result.league_id);
+struct MatchSquads {
+    home_main: Vec<MatchPlayer>,
+    home_subs: Vec<MatchPlayer>,
+    away_main: Vec<MatchPlayer>,
+    away_subs: Vec<MatchPlayer>,
+}
 
-    let is_international = match_result.league_slug == "international";
+impl MatchSquads {
+    fn of(
+        data: &SimulatorData,
+        result_details: &MatchResultRaw,
+        motm_id: Option<u32>,
+    ) -> MatchSquads {
+        MatchSquads {
+            home_main: Self::main(
+                data,
+                &result_details.left_team_players.main,
+                motm_id,
+                result_details,
+            ),
+            home_subs: Self::subs(
+                data,
+                &result_details.left_team_players.substitutes,
+                motm_id,
+                result_details,
+            ),
+            away_main: Self::main(
+                data,
+                &result_details.right_team_players.main,
+                motm_id,
+                result_details,
+            ),
+            away_subs: Self::subs(
+                data,
+                &result_details.right_team_players.substitutes,
+                motm_id,
+                result_details,
+            ),
+        }
+    }
 
-    // For international matches, team IDs are country IDs — resolve names differently
-    let national_team_suffix = match NationalTeamLevel::of_match_id(&match_result.id) {
-        NationalTeamLevel::Senior => "",
-        NationalTeamLevel::Under21 => "/u21",
-    };
-    let (home_team_name, home_team_url, home_club_id) = if is_international {
-        let (name, url) = simulator_data
-            .country(match_result.home_team_id)
-            .map(|c| {
-                let url = format!(
-                    "/{}/countries/{}{}",
-                    route_params.lang, c.slug, national_team_suffix
-                );
-                (c.name.clone(), url)
+    fn main(
+        data: &SimulatorData,
+        ids: &[u32],
+        motm_id: Option<u32>,
+        result_details: &MatchResultRaw,
+    ) -> Vec<MatchPlayer> {
+        ids.iter()
+            .filter_map(|pid| {
+                let mut p = MatchPlayer::from_raw(*pid, data, motm_id, result_details)?;
+                if let Some(sub) = result_details
+                    .substitutions
+                    .iter()
+                    .find(|s| s.player_out_id == *pid)
+                {
+                    p.subbed_off_minute = Some(MatchPlayer::minute(
+                        sub.match_time_ms,
+                        result_details.match_time_ms,
+                    ));
+                }
+                Some(p)
             })
-            .unwrap_or_else(|| (i18n.t("home_team").to_string(), String::new()));
-        (name, url, 0u32)
-    } else {
-        let t = simulator_data
-            .team(match_result.home_team_id)
-            .ok_or_else(|| ApiError::NotFound("Home team not found".to_string()))?;
-        let url = format!("/{}/teams/{}", route_params.lang, t.slug);
-        (t.name.clone(), url, t.club_id)
-    };
+            .collect()
+    }
 
-    let (away_team_name, away_team_url, away_club_id) = if is_international {
-        let (name, url) = simulator_data
-            .country(match_result.away_team_id)
-            .map(|c| {
-                let url = format!(
-                    "/{}/countries/{}{}",
-                    route_params.lang, c.slug, national_team_suffix
-                );
-                (c.name.clone(), url)
+    fn subs(
+        data: &SimulatorData,
+        ids: &[u32],
+        motm_id: Option<u32>,
+        result_details: &MatchResultRaw,
+    ) -> Vec<MatchPlayer> {
+        ids.iter()
+            .filter_map(|pid| {
+                let mut p = MatchPlayer::from_raw(*pid, data, motm_id, result_details)?;
+                if let Some(sub) = result_details
+                    .substitutions
+                    .iter()
+                    .find(|s| s.player_in_id == *pid)
+                {
+                    p.sub_minute = Some(MatchPlayer::minute(
+                        sub.match_time_ms,
+                        result_details.match_time_ms,
+                    ));
+                }
+                // Check if this sub was also later subbed off (sub-of-sub)
+                if let Some(sub_off) = result_details
+                    .substitutions
+                    .iter()
+                    .find(|s| s.player_out_id == *pid)
+                {
+                    p.subbed_off_minute = Some(MatchPlayer::minute(
+                        sub_off.match_time_ms,
+                        result_details.match_time_ms,
+                    ));
+                }
+                Some(p)
             })
-            .unwrap_or_else(|| (i18n.t("away_team").to_string(), String::new()));
-        (name, url, 0u32)
-    } else {
-        let t = simulator_data
-            .team(match_result.away_team_id)
-            .ok_or_else(|| ApiError::NotFound("Away team not found".to_string()))?;
-        let url = format!("/{}/teams/{}", route_params.lang, t.slug);
-        (t.name.clone(), url, t.club_id)
-    };
+            .collect()
+    }
+}
 
-    let result_details = match_result
-        .details
-        .as_ref()
-        .ok_or_else(|| ApiError::NotFound("Match details not available".to_string()))?;
-
-    let score = result_details
-        .score
-        .as_ref()
-        .ok_or_else(|| ApiError::NotFound("Match score not available".to_string()))?;
-
-    let viewer_goals: Vec<GoalEventJson> = score
-        .detail()
-        .iter()
-        .filter(|goal| goal.stat_type == MatchStatisticType::Goal)
-        .map(|goal| GoalEventJson {
-            player_id: goal.player_id,
-            time: goal.time,
-            is_auto_goal: goal.is_auto_goal,
+impl MatchPlayer {
+    fn from_raw(
+        player_id: u32,
+        simulator_data: &SimulatorData,
+        motm_id: Option<u32>,
+        result_details: &MatchResultRaw,
+    ) -> Option<MatchPlayer> {
+        let player = simulator_data.player(player_id)?;
+        let (rating, rating_tier) = result_details
+            .player_stats
+            .get(&player_id)
+            .map(|s| {
+                let r = s.match_rating;
+                let tier = if r < 6.0 {
+                    "low"
+                } else if r < 7.0 {
+                    "mid"
+                } else if r < 8.0 {
+                    "good"
+                } else {
+                    "great"
+                };
+                (format!("{:.1}", r), tier)
+            })
+            .unwrap_or_else(|| (String::new(), ""));
+        Some(MatchPlayer {
+            slug: player.slug(),
+            last_name: player.full_name.display_last_name().to_string(),
+            position: player.position().get_short_name().to_string(),
+            sub_minute: None,
+            subbed_off_minute: None,
+            is_player_of_the_match: motm_id == Some(player_id),
+            rating,
+            rating_tier,
         })
-        .collect();
+    }
 
-    let viewer_chances: Vec<ChanceEventJson> = result_details
-        .chances
-        .iter()
-        .map(|chance| ChanceEventJson {
+    fn minute(match_time_ms: u64, total_match_time_ms: u64) -> u32 {
+        if total_match_time_ms == 0 {
+            return 0;
+        }
+        (match_time_ms * 90 / total_match_time_ms) as u32
+    }
+
+    fn full_name(player: &Player) -> String {
+        format!(
+            "{} {}",
+            player.full_name.display_first_name(),
+            player.full_name.display_last_name()
+        )
+    }
+}
+
+impl GoalEventDisplay {
+    fn events(
+        data: &SimulatorData,
+        i18n: &I18n,
+        result_details: &MatchResultRaw,
+        score: &core::r#match::Score,
+        home: bool,
+    ) -> Vec<GoalEventDisplay> {
+        score
+            .detail()
+            .iter()
+            .filter(|g| g.stat_type == MatchStatisticType::Goal)
+            .filter(|g| {
+                let is_side_player = if home {
+                    result_details.left_team_players.main.contains(&g.player_id)
+                        || result_details
+                            .left_team_players
+                            .substitutes
+                            .contains(&g.player_id)
+                } else {
+                    result_details
+                        .right_team_players
+                        .main
+                        .contains(&g.player_id)
+                        || result_details
+                            .right_team_players
+                            .substitutes
+                            .contains(&g.player_id)
+                };
+                if g.is_auto_goal {
+                    !is_side_player
+                } else {
+                    is_side_player
+                }
+            })
+            .map(|g| {
+                let player_name = data
+                    .player(g.player_id)
+                    .map(MatchPlayer::full_name)
+                    .unwrap_or_else(|| i18n.t("unknown").to_string());
+                let minute = (g.time * 90)
+                    .checked_div(result_details.match_time_ms)
+                    .unwrap_or(0) as u32;
+                GoalEventDisplay {
+                    player_slug: PlayerSlug::history(data, g.player_id, &player_name),
+                    player_name,
+                    minute,
+                    is_auto_goal: g.is_auto_goal,
+                }
+            })
+            .collect()
+    }
+}
+
+impl GoalEventJson {
+    fn from_score(score: &core::r#match::Score) -> Vec<GoalEventJson> {
+        score
+            .detail()
+            .iter()
+            .filter(|goal| goal.stat_type == MatchStatisticType::Goal)
+            .map(|goal| GoalEventJson {
+                player_id: goal.player_id,
+                time: goal.time,
+                is_auto_goal: goal.is_auto_goal,
+            })
+            .collect()
+    }
+}
+
+impl ChanceEventJson {
+    fn from_chance(chance: &core::r#match::ChanceDetail) -> ChanceEventJson {
+        ChanceEventJson {
             player_id: chance.player_id,
             time: chance.time,
-        })
-        .collect();
+        }
+    }
+}
 
-    let viewer_substitutions: Vec<SubstitutionEventJson> = result_details
-        .substitutions
-        .iter()
-        .map(|change| SubstitutionEventJson {
+impl SubstitutionEventJson {
+    fn from_change(change: &core::r#match::SubstitutionInfo) -> SubstitutionEventJson {
+        SubstitutionEventJson {
             player_in_id: change.player_in_id,
             player_out_id: change.player_out_id,
             time: change.match_time_ms,
             break_ms: change.break_ms,
-        })
-        .collect();
+        }
+    }
+}
 
-    let mut viewer_players: Vec<PlayerJson> = Vec::new();
+impl PlayerJson {
+    fn squad(data: &SimulatorData, result_details: &MatchResultRaw) -> Vec<PlayerJson> {
+        let mut viewer_players: Vec<PlayerJson> = Vec::new();
 
-    // Assign squad numbers (1-based) per team when shirt_number is not set
-    let mut home_number: u8 = 1;
-    PlayerJson::append(
-        &mut viewer_players,
-        simulator_data,
-        &result_details.left_team_players.main,
-        true,
-        true,
-        &mut home_number,
-    );
-    PlayerJson::append(
-        &mut viewer_players,
-        simulator_data,
-        &result_details.left_team_players.substitutes,
-        true,
-        false,
-        &mut home_number,
-    );
+        // Assign squad numbers (1-based) per team when shirt_number is not set
+        let mut home_number: u8 = 1;
+        PlayerJson::append(
+            &mut viewer_players,
+            data,
+            &result_details.left_team_players.main,
+            true,
+            true,
+            &mut home_number,
+        );
+        PlayerJson::append(
+            &mut viewer_players,
+            data,
+            &result_details.left_team_players.substitutes,
+            true,
+            false,
+            &mut home_number,
+        );
 
-    let mut away_number: u8 = 1;
-    PlayerJson::append(
-        &mut viewer_players,
-        simulator_data,
-        &result_details.right_team_players.main,
-        false,
-        true,
-        &mut away_number,
-    );
-    PlayerJson::append(
-        &mut viewer_players,
-        simulator_data,
-        &result_details.right_team_players.substitutes,
-        false,
-        false,
-        &mut away_number,
-    );
+        let mut away_number: u8 = 1;
+        PlayerJson::append(
+            &mut viewer_players,
+            data,
+            &result_details.right_team_players.main,
+            false,
+            true,
+            &mut away_number,
+        );
+        PlayerJson::append(
+            &mut viewer_players,
+            data,
+            &result_details.right_team_players.substitutes,
+            false,
+            false,
+            &mut away_number,
+        );
+        viewer_players
+    }
+}
 
-    let home_goals = score.home_team.get();
-    let away_goals = score.away_team.get();
-
-    let home_goal_events: Vec<GoalEventDisplay> = score
-        .detail()
-        .iter()
-        .filter(|g| g.stat_type == MatchStatisticType::Goal)
-        .filter(|g| {
-            let is_home_player = result_details.left_team_players.main.contains(&g.player_id)
-                || result_details
-                    .left_team_players
-                    .substitutes
-                    .contains(&g.player_id);
-            if g.is_auto_goal {
-                !is_home_player
+impl ViewerConfigJson {
+    fn of(
+        page: &MatchGetPage<'_>,
+        match_result: &MatchResult,
+        result_details: &MatchResultRaw,
+        teams: &MatchTeams,
+        players: Vec<PlayerJson>,
+        goals: Vec<GoalEventJson>,
+        chances: Vec<ChanceEventJson>,
+        substitutions: Vec<SubstitutionEventJson>,
+        is_international: bool,
+    ) -> ViewerConfigJson {
+        ViewerConfigJson {
+            canvas: "#match-canvas",
+            api_base: format!("/api/match/{}", page.match_id),
+            match_time_ms: result_details.match_time_ms,
+            home: TeamColorsJson::for_club(page.data, teams.home_club_id, "#00307d"),
+            away: TeamColorsJson::for_club(page.data, teams.away_club_id, "#b33f00"),
+            home_name: teams.home_name.clone(),
+            away_name: teams.away_name.clone(),
+            players,
+            goals,
+            chances,
+            substitutions,
+            labels: ViewerLabelsJson::of(&page.i18n),
+            venue: if is_international {
+                VenueJson {
+                    field_style: shared::field::FieldStyle::for_home_team(
+                        match_result.home_team_id,
+                    ),
+                    ..VenueJson::default()
+                }
             } else {
-                is_home_player
-            }
-        })
-        .map(|g| {
-            let player_name = simulator_data
-                .player(g.player_id)
-                .map(|p| {
-                    format!(
-                        "{} {}",
-                        p.full_name.display_first_name(),
-                        p.full_name.display_last_name()
-                    )
-                })
-                .unwrap_or_else(|| i18n.t("unknown").to_string());
-            let minute = (g.time * 90)
-                .checked_div(result_details.match_time_ms)
-                .unwrap_or(0) as u32;
-            GoalEventDisplay {
-                player_slug: player_history_slug(simulator_data, g.player_id, &player_name),
-                player_name,
-                minute,
-                is_auto_goal: g.is_auto_goal,
-            }
-        })
-        .collect();
+                VenueJson::for_fixture(
+                    page.data,
+                    match_result.home_team_id,
+                    match_result.away_team_id,
+                )
+            },
+            lineup: true,
+        }
+    }
+}
 
-    let away_goal_events: Vec<GoalEventDisplay> = score
-        .detail()
-        .iter()
-        .filter(|g| g.stat_type == MatchStatisticType::Goal)
-        .filter(|g| {
-            let is_away_player = result_details
-                .right_team_players
-                .main
-                .contains(&g.player_id)
-                || result_details
-                    .right_team_players
-                    .substitutes
-                    .contains(&g.player_id);
-            if g.is_auto_goal {
-                !is_away_player
-            } else {
-                is_away_player
-            }
-        })
-        .map(|g| {
-            let player_name = simulator_data
-                .player(g.player_id)
-                .map(|p| {
-                    format!(
-                        "{} {}",
-                        p.full_name.display_first_name(),
-                        p.full_name.display_last_name()
-                    )
-                })
-                .unwrap_or_else(|| i18n.t("unknown").to_string());
-            let minute = (g.time * 90)
-                .checked_div(result_details.match_time_ms)
-                .unwrap_or(0) as u32;
-            GoalEventDisplay {
-                player_slug: player_history_slug(simulator_data, g.player_id, &player_name),
-                player_name,
-                minute,
-                is_auto_goal: g.is_auto_goal,
-            }
-        })
-        .collect();
-
-    let motm_id = result_details.player_of_the_match_id;
-    let motm_name = motm_id
-        .and_then(|id| simulator_data.player(id))
-        .map(|p| {
-            format!(
-                "{} {}",
-                p.full_name.display_first_name(),
-                p.full_name.display_last_name()
-            )
-        })
-        .unwrap_or_default();
-    let motm_slug = motm_id
-        .map(|id| player_history_slug(simulator_data, id, &motm_name))
-        .unwrap_or_default();
-
-    let title = format!("{} - {}", home_team_name, away_team_name);
-
-    // What the header's left rail names the match after. This used to be the
-    // layout's sub-title, and the scoreboard that replaced it inherits the
-    // sub-title's resolution rather than the raw league name: the display name
-    // is the localised, country-qualified one, and a continental tie is not a
-    // league at all — it has its own page, and `/leagues/champions-league`
-    // is not it.
-    let (competition_name, competition_url) = if let Some(l) = league {
-        (
-            views::league_display_name(l, &i18n, simulator_data),
-            LeagueAddress::of(simulator_data, l).url(&route_params.lang),
-        )
-    } else {
-        let name = match match_result.league_slug.as_str() {
-            "champions-league" => "champions_league",
-            "europa-league" => "europa_league",
-            "conference-league" => "conference_league",
-            "copa-libertadores" => "copa_libertadores",
-            _ => "international",
-        };
-        let link = match match_result.league_slug.as_str() {
-            "champions-league" => format!("/{}/champions-league", route_params.lang),
-            "europa-league" => format!("/{}/europa-league", route_params.lang),
-            "conference-league" => format!("/{}/conference-league", route_params.lang),
-            "copa-libertadores" => format!("/{}/copa-libertadores", route_params.lang),
-            _ => String::new(),
-        };
-        (i18n.t(name).to_string(), link)
-    };
-
-    let viewer_config = ViewerConfigJson {
-        canvas: "#match-canvas",
-        api_base: format!("/api/match/{}", route_params.match_id),
-        match_time_ms: result_details.match_time_ms,
-        home: TeamColorsJson::for_club(simulator_data, home_club_id, "#00307d"),
-        away: TeamColorsJson::for_club(simulator_data, away_club_id, "#b33f00"),
-        home_name: home_team_name.clone(),
-        away_name: away_team_name.clone(),
-        players: viewer_players,
-        goals: viewer_goals,
-        chances: viewer_chances,
-        substitutions: viewer_substitutions,
-        labels: ViewerLabelsJson {
+impl ViewerLabelsJson {
+    fn of(i18n: &I18n) -> ViewerLabelsJson {
+        ViewerLabelsJson {
             first_half: i18n.t("first_half").to_string(),
             second_half: i18n.t("second_half").to_string(),
             loading: i18n.t("loading_match").to_string(),
             no_recording: i18n.t("match_no_recording").to_string(),
             full_time: i18n.t("full_time").to_string(),
             substitutes: i18n.t("substitutes").to_string(),
-        },
-        venue: if is_international {
-            VenueJson {
-                field_style: shared::field::for_home_team(match_result.home_team_id),
-                ..VenueJson::default()
-            }
-        } else {
-            VenueJson::for_fixture(
-                simulator_data,
-                match_result.home_team_id,
-                match_result.away_team_id,
-            )
-        },
-        lineup: true,
-    };
-
-    Ok(MatchGetTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        title,
-        header_color: String::new(),
-        foreground_color: String::new(),
-        menu_sections: vec![],
-        i18n,
-        lang: route_params.lang.clone(),
-        competition_name,
-        competition_url,
-        home_team_name: home_team_name.clone(),
-        home_team_url,
-        home_goals,
-        home_goal_events,
-        home_squad_main: result_details
-            .left_team_players
-            .main
-            .iter()
-            .filter_map(|pid| {
-                let mut p = to_match_player(*pid, simulator_data, motm_id, result_details)?;
-                if let Some(sub) = result_details
-                    .substitutions
-                    .iter()
-                    .find(|s| s.player_out_id == *pid)
-                {
-                    p.subbed_off_minute = Some(sub_time_to_minute(
-                        sub.match_time_ms,
-                        result_details.match_time_ms,
-                    ));
-                }
-                Some(p)
-            })
-            .collect(),
-        home_squad_subs: result_details
-            .left_team_players
-            .substitutes
-            .iter()
-            .filter_map(|pid| {
-                let mut p = to_match_player(*pid, simulator_data, motm_id, result_details)?;
-                if let Some(sub) = result_details
-                    .substitutions
-                    .iter()
-                    .find(|s| s.player_in_id == *pid)
-                {
-                    p.sub_minute = Some(sub_time_to_minute(
-                        sub.match_time_ms,
-                        result_details.match_time_ms,
-                    ));
-                }
-                // Check if this sub was also later subbed off (sub-of-sub)
-                if let Some(sub_off) = result_details
-                    .substitutions
-                    .iter()
-                    .find(|s| s.player_out_id == *pid)
-                {
-                    p.subbed_off_minute = Some(sub_time_to_minute(
-                        sub_off.match_time_ms,
-                        result_details.match_time_ms,
-                    ));
-                }
-                Some(p)
-            })
-            .collect(),
-        away_team_name: away_team_name.clone(),
-        away_team_url,
-        away_goals,
-        away_goal_events,
-        away_squad_main: result_details
-            .right_team_players
-            .main
-            .iter()
-            .filter_map(|pid| {
-                let mut p = to_match_player(*pid, simulator_data, motm_id, result_details)?;
-                if let Some(sub) = result_details
-                    .substitutions
-                    .iter()
-                    .find(|s| s.player_out_id == *pid)
-                {
-                    p.subbed_off_minute = Some(sub_time_to_minute(
-                        sub.match_time_ms,
-                        result_details.match_time_ms,
-                    ));
-                }
-                Some(p)
-            })
-            .collect(),
-        away_squad_subs: result_details
-            .right_team_players
-            .substitutes
-            .iter()
-            .filter_map(|pid| {
-                let mut p = to_match_player(*pid, simulator_data, motm_id, result_details)?;
-                if let Some(sub) = result_details
-                    .substitutions
-                    .iter()
-                    .find(|s| s.player_in_id == *pid)
-                {
-                    p.sub_minute = Some(sub_time_to_minute(
-                        sub.match_time_ms,
-                        result_details.match_time_ms,
-                    ));
-                }
-                // Check if this sub was also later subbed off (sub-of-sub)
-                if let Some(sub_off) = result_details
-                    .substitutions
-                    .iter()
-                    .find(|s| s.player_out_id == *pid)
-                {
-                    p.subbed_off_minute = Some(sub_time_to_minute(
-                        sub_off.match_time_ms,
-                        result_details.match_time_ms,
-                    ));
-                }
-                Some(p)
-            })
-            .collect(),
-        viewer_config_json: viewer_config.to_script_literal(),
-        match_viewer_available: MATCH_VIEWER_AVAILABLE,
-        match_viewer_version: MATCH_VIEWER_VERSION,
-        match_viewer_bytes: MATCH_VIEWER_BYTES,
-        player_of_the_match_id: motm_id.unwrap_or(0),
-        player_of_the_match_slug: motm_slug,
-        player_of_the_match_name: motm_name,
-        // The same flag that decided whether to record decides whether to
-        // offer the replay — including for a friendly, which is a youth or
-        // reserve league fixture here (`League::friendly`). See `Match::play`
-        // for why those are no longer a special case.
-        match_recordings_enabled: MatchRuntime::recordings_mode(),
-    })
-}
-
-fn to_match_player(
-    player_id: u32,
-    simulator_data: &SimulatorData,
-    motm_id: Option<u32>,
-    result_details: &MatchResultRaw,
-) -> Option<MatchPlayer> {
-    let player = simulator_data.player(player_id)?;
-    let (rating, rating_tier) = result_details
-        .player_stats
-        .get(&player_id)
-        .map(|s| {
-            let r = s.match_rating;
-            let tier = if r < 6.0 {
-                "low"
-            } else if r < 7.0 {
-                "mid"
-            } else if r < 8.0 {
-                "good"
-            } else {
-                "great"
-            };
-            (format!("{:.1}", r), tier)
-        })
-        .unwrap_or_else(|| (String::new(), ""));
-    Some(MatchPlayer {
-        slug: player.slug(),
-        last_name: player.full_name.display_last_name().to_string(),
-        position: player.position().get_short_name().to_string(),
-        sub_minute: None,
-        subbed_off_minute: None,
-        is_player_of_the_match: motm_id == Some(player_id),
-        rating,
-        rating_tier,
-    })
-}
-
-fn sub_time_to_minute(match_time_ms: u64, total_match_time_ms: u64) -> u32 {
-    if total_match_time_ms == 0 {
-        return 0;
+        }
     }
-    (match_time_ms * 90 / total_match_time_ms) as u32
 }

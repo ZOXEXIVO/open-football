@@ -174,11 +174,19 @@ impl I18n {
     }
 
     pub fn format_month_year(&self, date: NaiveDate) -> String {
-        format!("{} {}", self.t(MONTH_KEYS[date.month0() as usize]), date.year())
+        format!(
+            "{} {}",
+            self.t(MONTH_KEYS[date.month0() as usize]),
+            date.year()
+        )
     }
 
     pub fn format_day_month(&self, date: NaiveDate) -> String {
-        format!("{} {}", date.day(), self.t(MONTH_KEYS[date.month0() as usize]))
+        format!(
+            "{} {}",
+            date.day(),
+            self.t(MONTH_KEYS[date.month0() as usize])
+        )
     }
 
     pub fn t<'a>(&'a self, key: &'a str) -> &'a str {
@@ -261,41 +269,43 @@ impl I18n {
     }
 }
 
-/// Parse the `Accept-Language` header and return the best supported language.
-///
-/// Respects quality weights (e.g. `fr;q=0.9, de;q=0.8, en;q=0.5`).
-/// Falls back to `DEFAULT_LANGUAGE` if nothing matches.
-pub fn detect_language(accept_language: &str) -> String {
-    let mut candidates: Vec<(&str, f32)> = Vec::new();
+impl I18nManager {
+    /// Parse the `Accept-Language` header and return the best supported language.
+    ///
+    /// Respects quality weights (e.g. `fr;q=0.9, de;q=0.8, en;q=0.5`).
+    /// Falls back to `DEFAULT_LANGUAGE` if nothing matches.
+    pub fn detect_language(accept_language: &str) -> String {
+        let mut candidates: Vec<(&str, f32)> = Vec::new();
 
-    for part in accept_language.split(',') {
-        let mut sections = part.split(';');
-        let lang_tag = sections.next().unwrap_or("").trim();
-        let lang_prefix = lang_tag.split('-').next().unwrap_or("").trim();
+        for part in accept_language.split(',') {
+            let mut sections = part.split(';');
+            let lang_tag = sections.next().unwrap_or("").trim();
+            let lang_prefix = lang_tag.split('-').next().unwrap_or("").trim();
 
-        // Parse quality value: "q=0.8" → 0.8, absent → 1.0
-        let quality = sections
-            .find_map(|s| {
-                let s = s.trim();
-                s.strip_prefix("q=").and_then(|v| v.parse::<f32>().ok())
-            })
-            .unwrap_or(1.0);
+            // Parse quality value: "q=0.8" → 0.8, absent → 1.0
+            let quality = sections
+                .find_map(|s| {
+                    let s = s.trim();
+                    s.strip_prefix("q=").and_then(|v| v.parse::<f32>().ok())
+                })
+                .unwrap_or(1.0);
 
-        if let Some(&code) = SUPPORTED_LANG_CODES
-            .iter()
-            .find(|&&c| c.eq_ignore_ascii_case(lang_prefix))
-        {
-            candidates.push((code, quality));
+            if let Some(&code) = SUPPORTED_LANG_CODES
+                .iter()
+                .find(|&&c| c.eq_ignore_ascii_case(lang_prefix))
+            {
+                candidates.push((code, quality));
+            }
         }
+
+        // Highest quality first; on tie, keep original order (already stable)
+        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        candidates
+            .first()
+            .map(|(code, _)| code.to_string())
+            .unwrap_or_else(|| DEFAULT_LANGUAGE.to_string())
     }
-
-    // Highest quality first; on tie, keep original order (already stable)
-    candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    candidates
-        .first()
-        .map(|(code, _)| code.to_string())
-        .unwrap_or_else(|| DEFAULT_LANGUAGE.to_string())
 }
 
 #[cfg(test)]
@@ -435,7 +445,7 @@ pub(crate) mod bundle_tests {
 #[cfg(test)]
 mod tests {
     use super::bundle_tests;
-    use super::{DEFAULT_LANGUAGE, detect_language};
+    use super::{DEFAULT_LANGUAGE, I18nManager};
 
     /// Every shipped chrome bundle, paired with its language code.
     /// `en.json` is the reference the others are measured against.
@@ -588,8 +598,14 @@ mod tests {
 
     #[test]
     fn accept_language_header_picks_the_highest_quality_supported_tag() {
-        assert_eq!(detect_language("fr-FR,fr;q=0.9,en;q=0.8"), "fr");
-        assert_eq!(detect_language("en;q=0.5, de;q=0.8, fr;q=0.9"), "fr");
-        assert_eq!(detect_language("kl-GL,kl"), DEFAULT_LANGUAGE);
+        assert_eq!(
+            I18nManager::detect_language("fr-FR,fr;q=0.9,en;q=0.8"),
+            "fr"
+        );
+        assert_eq!(
+            I18nManager::detect_language("en;q=0.5, de;q=0.8, fr;q=0.9"),
+            "fr"
+        );
+        assert_eq!(I18nManager::detect_language("kl-GL,kl"), DEFAULT_LANGUAGE);
     }
 }

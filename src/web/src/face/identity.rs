@@ -194,7 +194,54 @@ impl Identity {
         let ph = look.phenotype;
 
         let face_var = rng.range(8);
+        let hair = Self::hair(rng, ph, age);
+        let brow_st = Self::brow_style(rng, ph);
+        let eye_st = Self::eye_style(rng, ph);
+        let nose_st = Self::nose_style(rng, ph);
+        let mouth_st = Self::mouth_style(rng, ph);
+        let seed = rng.range(9999);
+        let marks = rng.range(5);
+        let (beard, moustache) = Self::facial_hair(rng, ph, age);
+        let asym = (rng.frange(-0.8, 0.8), rng.frange(-0.5, 0.5));
+        let fw = Self::face_width(rng, age);
+        let morph = Self::morph(rng);
+        let tilt = rng.frange(-3.0, 3.0);
+        let turn = rng.frange(-1.0, 1.0);
+        let hairline = Self::hairline(rng, age);
+        let part_side = if rng.chance(50) { -1.0 } else { 1.0 };
+        let grey = Self::grey(rng, age);
 
+        // The scaffolding axes, drawn LAST off the stream: every draw above
+        // keeps the order (and so the value) it had before these existed,
+        // and the shared Appearance contract only pins the first draw.
+        let structure = Self::structure(rng);
+
+        Identity {
+            look,
+            phenotype: ph,
+            face_var,
+            hair,
+            hairline,
+            part_side,
+            brow_st,
+            eye_st,
+            nose_st,
+            mouth_st,
+            seed,
+            marks,
+            beard,
+            moustache,
+            asym,
+            fw,
+            morph,
+            structure,
+            tilt,
+            turn,
+            grey,
+        }
+    }
+
+    fn hair(rng: &mut AppearanceRng, ph: Phenotype, age: u8) -> HairStyle {
         // Weighted style roll — everyday cuts dominate; statement styles
         // (mohawk, afro, long hair) are rare accents like on a real pitch
         let hair = match rng.range(48) {
@@ -219,7 +266,7 @@ impl Identity {
         };
         // Hair texture follows the class: afro/cornrows need tight curls;
         // conversely straight-hair styles don't hold on afro-textured hair
-        let hair = if ph.afro_hair() {
+        if ph.afro_hair() {
             match hair {
                 HairStyle::SweptBack => HairStyle::Fade,
                 HairStyle::Long => HairStyle::Curly,
@@ -232,14 +279,19 @@ impl Identity {
                 HairStyle::Cornrows => HairStyle::Crop,
                 _ => hair,
             }
-        };
+        }
+    }
 
+    fn brow_style(rng: &mut AppearanceRng, ph: Phenotype) -> usize {
         let b_tbl = ph.brow_tbl();
-        let brow_st = b_tbl[rng.range(6) % b_tbl.len()];
+        b_tbl[rng.range(6) % b_tbl.len()]
+    }
+
+    fn eye_style(rng: &mut AppearanceRng, ph: Phenotype) -> usize {
         // Eye-shape roll by class family. Epicanthic classes draw monolid/thin
         // forms; the Andean family gets a milder fold; elsewhere open/large
         // forms are the majority so narrow forms stay distinct accents
-        let eye_st = if ph.epicanthic() {
+        if ph.epicanthic() {
             match rng.range(12) {
                 0..=5 => 3,
                 6..=8 => 5,
@@ -266,16 +318,26 @@ impl Identity {
                 10 => 5,
                 _ => 6,
             }
-        };
-        let n_tbl = ph.nose_tbl();
-        let nose_st = n_tbl[rng.range(6) % n_tbl.len()];
-        let m_tbl = ph.mouth_tbl();
-        let mouth_st = m_tbl[rng.range(5) % m_tbl.len()];
-        let seed = rng.range(9999);
-        let marks = rng.range(5);
+        }
+    }
 
-        // Facial hair by age, scaled by class density: MENA/South Asia carry
-        // the heaviest growth, East Asia the sparsest
+    fn nose_style(rng: &mut AppearanceRng, ph: Phenotype) -> usize {
+        let n_tbl = ph.nose_tbl();
+        n_tbl[rng.range(6) % n_tbl.len()]
+    }
+
+    fn mouth_style(rng: &mut AppearanceRng, ph: Phenotype) -> usize {
+        let m_tbl = ph.mouth_tbl();
+        m_tbl[rng.range(5) % m_tbl.len()]
+    }
+
+    /// Facial hair by age, scaled by class density: MENA/South Asia carry
+    /// the heaviest growth, East Asia the sparsest.
+    fn facial_hair(
+        rng: &mut AppearanceRng,
+        ph: Phenotype,
+        age: u8,
+    ) -> (Option<Beard>, Option<Moustache>) {
         let (bc, mc): (u8, u8) = match age {
             0..=19 => (0, 0),
             20..=24 => (18, 10),
@@ -303,19 +365,22 @@ impl Identity {
             2 => Moustache::Handlebar,
             _ => Moustache::Walrus,
         });
+        (beard, moustache)
+    }
 
-        let asym = (rng.frange(-0.8, 0.8), rng.frange(-0.5, 0.5));
-
+    fn face_width(rng: &mut AppearanceRng, age: u8) -> f32 {
         // Face width by age — soft tissue fills out through the twenties
-        let fw: f32 = match age {
+        match age {
             0..=19 => rng.frange(-1.1, 0.1),
             20..=24 => rng.frange(-0.5, 0.8),
             25..=29 => rng.frange(0.0, 1.6),
             30..=34 => rng.frange(0.8, 2.4),
             _ => rng.frange(1.3, 3.0),
-        };
+        }
+    }
 
-        let morph = Morph {
+    fn morph(rng: &mut AppearanceRng) -> Morph {
+        Morph {
             width: rng.frange(-2.2, 2.2),
             jaw: rng.frange(-2.4, 2.4),
             chin_w: rng.frange(-2.0, 2.2),
@@ -341,10 +406,10 @@ impl Identity {
             },
             jaw_angle: rng.frange(-1.5, 1.5),
             brow_ridge: rng.frange(-1.0, 1.0),
-        };
+        }
+    }
 
-        let tilt = rng.frange(-3.0, 3.0);
-        let turn = rng.frange(-1.0, 1.0);
+    fn hairline(rng: &mut AppearanceRng, age: u8) -> Hairline {
         let hairline = match rng.range(8) {
             0..=2 => Hairline::Rounded,
             3..=4 => Hairline::Straight,
@@ -353,24 +418,25 @@ impl Identity {
         };
         // Recession is a thing that happens to a man, not a thing he is born
         // with; under 26 the M reads as a rounded line
-        let hairline = if age < 26 && hairline == Hairline::Receding {
+        if age < 26 && hairline == Hairline::Receding {
             Hairline::Rounded
         } else {
             hairline
-        };
-        let part_side = if rng.chance(50) { -1.0 } else { 1.0 };
+        }
+    }
+
+    fn grey(rng: &mut AppearanceRng, age: u8) -> f32 {
         let grey_roll = rng.frange(0.0, 1.0);
-        let grey = match age {
+        match age {
             0..=29 => 0.0,
             30..=33 => grey_roll * 0.18,
             34..=36 => 0.08 + grey_roll * 0.30,
             _ => 0.18 + grey_roll * 0.45,
-        };
+        }
+    }
 
-        // The scaffolding axes, drawn LAST off the stream: every draw above
-        // keeps the order (and so the value) it had before these existed,
-        // and the shared Appearance contract only pins the first draw.
-        let structure = Structure {
+    fn structure(rng: &mut AppearanceRng) -> Structure {
+        Structure {
             zygo_dy: rng.frange(-1.0, 1.0),
             sub_dy: rng.frange(-1.0, 1.0),
             temple_dy: rng.frange(-1.0, 1.0),
@@ -382,30 +448,6 @@ impl Identity {
             nose_y: rng.frange(-1.0, 1.0),
             eye_y: rng.frange(-1.0, 1.0),
             smile: rng.frange(-1.0, 1.0),
-        };
-
-        Identity {
-            look,
-            phenotype: ph,
-            face_var,
-            hair,
-            hairline,
-            part_side,
-            brow_st,
-            eye_st,
-            nose_st,
-            mouth_st,
-            seed,
-            marks,
-            beard,
-            moustache,
-            asym,
-            fw,
-            morph,
-            structure,
-            tilt,
-            turn,
-            grey,
         }
     }
 

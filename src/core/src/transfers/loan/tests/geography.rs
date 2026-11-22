@@ -7,6 +7,9 @@ use rustc_hash::FxHashMap;
 use chrono::NaiveDate;
 
 use super::super::*;
+use crate::PlayerFieldPositionGroup;
+use crate::club::player::mind::CareerPlanView;
+use crate::transfers::MarketAffinity;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::market::knowledge::{
     LoanPlacementKnowledge, LoanPlacementLedger, PlacementReachIndex,
@@ -14,9 +17,6 @@ use crate::transfers::market::knowledge::{
 use crate::transfers::market::map::{
     CorridorWeight, CountryTransferProfile, MarketCountryFacts, MarketMap,
 };
-use crate::club::player::mind::CareerPlanView;
-use crate::transfers::MarketAffinity;
-use crate::PlayerFieldPositionGroup;
 
 /// A three-country world: a lender, the place it has always sent boys,
 /// and a place no card on either side names.
@@ -88,14 +88,7 @@ fn a_route_a_club_has_worked_is_a_route_it_knows() {
     for _ in 0..5 {
         ledger.record_placement(Geo::STRANGER, Geo::day());
     }
-    let trust = LoanPlacementKnowledge::of(
-        &map,
-        Geo::HOME,
-        &ledger,
-        0,
-        Geo::STRANGER,
-        Geo::day(),
-    );
+    let trust = LoanPlacementKnowledge::of(&map, Geo::HOME, &ledger, 0, Geo::STRANGER, Geo::day());
     assert!(
         trust > 0.9,
         "five boys placed there last month is a placement network: {trust}"

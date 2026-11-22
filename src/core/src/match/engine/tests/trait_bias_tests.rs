@@ -7,8 +7,8 @@
 use super::substitution_break_tests::kickoff;
 use crate::PlayerFieldPositionGroup;
 use crate::club::player::traits::PlayerTrait;
-use crate::r#match::common_states::TackleDecision;
 use crate::r#match::passing::FlankPlay;
+use crate::r#match::shared_states::TackleDecision;
 use crate::r#match::{
     GameTickContext, MatchContext, MatchField, PlayerSide, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, StateProcessor,

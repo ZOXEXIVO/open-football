@@ -110,7 +110,33 @@ impl OpponentSelectionProfile {
             (own_reputation.max(1) as f32 / opponent_reputation.max(1) as f32).clamp(0.25, 4.0);
         let expected_tactic = opponent.tactics.as_ref().map(|t| t.tactic_type);
 
-        let pace_threat = (Self::top_mean(
+        let pace_threat = Self::pace_threat(&roster);
+        let aerial_threat = Self::aerial_threat(&roster);
+        let pressing_intensity = Self::pressing_intensity(&roster, expected_tactic);
+        let low_block_likelihood = Self::low_block_likelihood(strength_ratio, expected_tactic);
+        let set_piece_threat = Self::set_piece_threat(&roster, aerial_threat);
+        // Flank threats are mirrored: the opponent's right side attacks
+        // the selecting side's left flank, and vice versa.
+        let wide_threat_left = Self::flank_quality(&roster, false);
+        let wide_threat_right = Self::flank_quality(&roster, true);
+        let central_overload = Self::central_overload(&roster, expected_tactic);
+
+        OpponentSelectionProfile {
+            expected_tactic,
+            strength_ratio,
+            pace_threat,
+            aerial_threat,
+            pressing_intensity,
+            low_block_likelihood,
+            set_piece_threat,
+            wide_threat_left,
+            wide_threat_right,
+            central_overload,
+        }
+    }
+
+    fn pace_threat(roster: &[&Player]) -> f32 {
+        (Self::top_mean(
             roster
                 .iter()
                 .filter(|p| {
@@ -127,17 +153,21 @@ impl OpponentSelectionProfile {
                 .collect(),
             3,
         ) / 20.0)
-            .clamp(0.0, 1.0);
+            .clamp(0.0, 1.0)
+    }
 
-        let aerial_threat = (Self::top_mean(
+    fn aerial_threat(roster: &[&Player]) -> f32 {
+        (Self::top_mean(
             roster
                 .iter()
                 .map(|p| (p.skills.technical.heading + p.skills.physical.jumping) * 0.5)
                 .collect(),
             3,
         ) / 20.0)
-            .clamp(0.0, 1.0);
+            .clamp(0.0, 1.0)
+    }
 
+    fn pressing_intensity(roster: &[&Player], expected_tactic: Option<MatchTacticType>) -> f32 {
         // Pressing read: the running power and bite of their engine room,
         // blended with what the shape usually implies.
         let press_engine = Self::top_mean(
@@ -156,17 +186,19 @@ impl OpponentSelectionProfile {
                 .collect(),
             6,
         ) / 20.0;
-        let pressing_intensity = (press_engine * 0.55
-            + Self::tactic_pressing_prior(expected_tactic) * 0.45)
-            .clamp(0.0, 1.0);
+        (press_engine * 0.55 + Self::tactic_pressing_prior(expected_tactic) * 0.45).clamp(0.0, 1.0)
+    }
 
+    fn low_block_likelihood(strength_ratio: f32, expected_tactic: Option<MatchTacticType>) -> f32 {
         // A clearly weaker opponent tends to sit deep; a defensive shape
         // reinforces the read. Continuous in the strength ratio.
-        let low_block_likelihood = (0.20
+        (0.20
             + (strength_ratio - 1.0).clamp(-0.6, 1.8) * 0.28
             + Self::tactic_defensiveness_prior(expected_tactic) * 0.35)
-            .clamp(0.0, 1.0);
+            .clamp(0.0, 1.0)
+    }
 
+    fn set_piece_threat(roster: &[&Player], aerial_threat: f32) -> f32 {
         let delivery = Self::top_mean(
             roster
                 .iter()
@@ -179,13 +211,10 @@ impl OpponentSelectionProfile {
                 .collect(),
             2,
         ) / 20.0;
-        let set_piece_threat = (delivery * 0.55 + aerial_threat * 0.45).clamp(0.0, 1.0);
+        (delivery * 0.55 + aerial_threat * 0.45).clamp(0.0, 1.0)
+    }
 
-        // Flank threats are mirrored: the opponent's right side attacks
-        // the selecting side's left flank, and vice versa.
-        let wide_threat_left = Self::flank_quality(&roster, false);
-        let wide_threat_right = Self::flank_quality(&roster, true);
-
+    fn central_overload(roster: &[&Player], expected_tactic: Option<MatchTacticType>) -> f32 {
         let central_mid_quality = Self::top_mean(
             roster
                 .iter()
@@ -208,22 +237,8 @@ impl OpponentSelectionProfile {
                 .collect(),
             3,
         ) / 20.0;
-        let central_overload = (central_mid_quality * 0.6
-            + Self::tactic_central_prior(expected_tactic) * 0.4)
-            .clamp(0.0, 1.0);
-
-        OpponentSelectionProfile {
-            expected_tactic,
-            strength_ratio,
-            pace_threat,
-            aerial_threat,
-            pressing_intensity,
-            low_block_likelihood,
-            set_piece_threat,
-            wide_threat_left,
-            wide_threat_right,
-            central_overload,
-        }
+        (central_mid_quality * 0.6 + Self::tactic_central_prior(expected_tactic) * 0.4)
+            .clamp(0.0, 1.0)
     }
 
     /// Mean of the strongest `n` values, on the raw 0..20 skill scale.
@@ -487,7 +502,10 @@ impl MatchSelectionGameModel {
             opponent_profile: OpponentSelectionProfile::neutral(),
             environmental_profile: EnvironmentSelectionProfile::neutral_home(),
             squad_state: SquadStateProfile::from_signals(available_len, staff),
-            coach_tendencies: CoachSelectionTendencies::from_profile(&profile, ctx.philosophy.as_ref()),
+            coach_tendencies: CoachSelectionTendencies::from_profile(
+                &profile,
+                ctx.philosophy.as_ref(),
+            ),
         }
     }
 

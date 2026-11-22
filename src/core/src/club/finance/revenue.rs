@@ -23,8 +23,6 @@
 //!   in reputation — the one line that *should* track prestige closely,
 //!   because shirt and sponsor money genuinely does.
 
-use crate::club::ClubFacilities;
-
 /// Everything the revenue model needs about a club and its surroundings for
 /// one monthly tick.
 #[derive(Debug, Clone)]
@@ -333,17 +331,6 @@ impl RevenueModel {
         let fixed = 6_000.0 + rep * rep * 900_000.0;
         (variable + fixed) as i64
     }
-}
-
-/// Convenience: the utilisation swing a club's form and standing produce,
-/// reusing the existing supporter-mood curve on [`ClubFacilities`].
-pub fn attendance_form_multiplier(
-    facilities: &ClubFacilities,
-    recent_wins_ratio: f32,
-    league_position: u16,
-    league_size: u16,
-) -> f32 {
-    facilities.dynamic_attendance_multiplier(recent_wins_ratio, league_position, league_size)
 }
 
 #[cfg(test)]

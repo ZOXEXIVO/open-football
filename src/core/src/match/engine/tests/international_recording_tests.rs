@@ -45,7 +45,8 @@ fn international_recording(base: u32) -> (bool, u64) {
         CompetitionKind::International,
         false,
     );
-    let mut results = pool.play_squads(vec![(0, squad(791, base), squad(799, base + 100), fixture)]);
+    let mut results =
+        pool.play_squads(vec![(0, squad(791, base), squad(799, base + 100), fixture)]);
     let (_, raw) = results.pop().expect("one fixture in, one result out");
     (
         !raw.position_data.is_empty(),

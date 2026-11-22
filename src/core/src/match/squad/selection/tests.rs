@@ -7,8 +7,8 @@ use crate::club::player::skills::{Goalkeeping, Mental, Physical, Technical};
 use crate::{
     ChangeType, IntegerUtils, MatchTacticType, PeopleNameGeneratorData, PlayerClubContract,
     PlayerCollection, PlayerGenerator, PlayerPosition, PlayerSkills, PlayerSquadStatus,
-    PlayerStatusType, RelationshipChange, StaffCollection, TeamBuilder,
-    TeamReputation, TeamType, TrainingSchedule,
+    PlayerStatusType, RelationshipChange, StaffCollection, TeamBuilder, TeamReputation, TeamType,
+    TrainingSchedule,
 };
 use chrono::NaiveDate;
 use chrono::{Datelike, Duration, NaiveTime, Utc};
@@ -539,10 +539,7 @@ fn settled_player_has_zero_want_away_adjustment() {
     let staff = generate_test_staff();
     let engine = ScoringEngine::from_staff(&staff);
     let p = make_test_player(1, &[(PlayerPositionType::MidfielderCenter, 16)], 130, date);
-    assert_eq!(
-        engine.want_away_adjustment(&p, &staff, date, false),
-        0.0
-    );
+    assert_eq!(engine.want_away_adjustment(&p, &staff, date, false), 0.0);
 }
 
 /// The paired cup roster with its right-back star's move at `status`.
@@ -1223,8 +1220,12 @@ fn a_crowded_week_does_not_rest_the_number_one() {
         },
         ..SelectionContext::default()
     };
-    let result =
-        SquadSelector::select_with_context(&team, &staff, &[], &with_brief(ctx, declared_order(Some(0.5))));
+    let result = SquadSelector::select_with_context(
+        &team,
+        &staff,
+        &[],
+        &with_brief(ctx, declared_order(Some(0.5))),
+    );
     assert_eq!(starting_goalkeeper_id(&result), Some(1));
     assert!(benched_as_goalkeeper(&result, 2));
 }
@@ -1866,7 +1867,6 @@ impl TestCoach {
     fn good_youth() -> Staff {
         Self::build(18, 17, 15, 16, 16, 15, 8, 6)
     }
-
 }
 
 /// Development-player factory: a fit player at a chosen slot with explicit
@@ -2288,11 +2288,7 @@ fn full_bench_replaces_lowest_outfield_sub_with_backup_gk() {
 
     scx.ensure_backup_goalkeeper(1, &mut subs, &mut used_ids, &remaining);
 
-    assert_eq!(
-        subs.len(),
-        BENCH,
-        "bench size stays at the cap"
-    );
+    assert_eq!(subs.len(), BENCH, "bench size stays at the cap");
     assert!(
         subs.iter()
             .any(|s| s.id == 9
@@ -2945,13 +2941,17 @@ mod game_model_tests {
     #[test]
     fn a_cup_tied_player_sits_that_cup_out_and_no_other_competition() {
         let player = player_with_cup_record(2);
-        let evaluate =
-            |cup: Option<&str>| EligibilityEvaluator::evaluate(&player, &fixture(cup), date(), false);
+        let evaluate = |cup: Option<&str>| {
+            EligibilityEvaluator::evaluate(&player, &fixture(cup), date(), false)
+        };
         assert!(matches!(
             evaluate(Some("the-cup")),
             EligibilityDecision::HardBlocked { .. }
         ));
-        assert!(matches!(evaluate(Some("another-cup")), EligibilityDecision::Eligible));
+        assert!(matches!(
+            evaluate(Some("another-cup")),
+            EligibilityDecision::Eligible
+        ));
         assert!(matches!(evaluate(None), EligibilityDecision::Eligible));
         assert!(player.cup_tied_in("the-cup", "new-club", date()));
         assert!(
@@ -2963,7 +2963,10 @@ mod game_model_tests {
     #[test]
     fn a_player_with_no_loan_and_no_cup_record_answers_no() {
         let unused = player_with_cup_record(0);
-        assert!(!unused.cup_tied_in("the-cup", "new-club", date()), "named and never used");
+        assert!(
+            !unused.cup_tied_in("the-cup", "new-club", date()),
+            "named and never used"
+        );
         let player = make_test_player(98, &[(PlayerPositionType::Striker, 16)], 130, date());
         assert!(!player.cup_tied_in("the-cup", "new-club", date()));
         assert!(!player.barred_against(77));
@@ -2994,7 +2997,10 @@ mod game_model_tests {
                 false,
             )
         };
-        assert!(matches!(against(77), EligibilityDecision::HardBlocked { .. }));
+        assert!(matches!(
+            against(77),
+            EligibilityDecision::HardBlocked { .. }
+        ));
         assert!(matches!(against(78), EligibilityDecision::Eligible));
     }
 
@@ -4003,8 +4009,18 @@ fn three_keeper_squad(date: NaiveDate) -> Team {
         .enumerate()
         .map(|(i, &slot)| make_test_player(i as u32 + 1, &[(slot, 18)], 150, date))
         .collect();
-    players.push(make_test_player(50, &[(PlayerPositionType::Goalkeeper, 20)], 150, date));
-    players.push(make_test_player(51, &[(PlayerPositionType::Goalkeeper, 20)], 148, date));
+    players.push(make_test_player(
+        50,
+        &[(PlayerPositionType::Goalkeeper, 20)],
+        150,
+        date,
+    ));
+    players.push(make_test_player(
+        51,
+        &[(PlayerPositionType::Goalkeeper, 20)],
+        148,
+        date,
+    ));
     for i in 0..8 {
         players.push(make_test_player(
             60 + i,
@@ -4027,7 +4043,11 @@ fn a_bench_of_seven_names_one_keeper_when_three_are_fit() {
     let bench_keepers = result
         .substitutes
         .iter()
-        .filter(|sub| team.players.find(sub.id).is_some_and(|p| p.positions.is_goalkeeper()))
+        .filter(|sub| {
+            team.players
+                .find(sub.id)
+                .is_some_and(|p| p.positions.is_goalkeeper())
+        })
         .count();
     assert_eq!(result.substitutes.len(), 7);
     assert_eq!(
@@ -4116,7 +4136,12 @@ mod rotation_scenarios {
             season
         }
 
-        fn context(&self, stakes: f32, week: ClubWeek, competition: SelectionCompetition) -> SelectionContext {
+        fn context(
+            &self,
+            stakes: f32,
+            week: ClubWeek,
+            competition: SelectionCompetition,
+        ) -> SelectionContext {
             SelectionContext {
                 date: self.date,
                 match_importance: stakes,
@@ -4143,7 +4168,13 @@ mod rotation_scenarios {
         }
 
         fn owed(&self, id: u32) -> f32 {
-            let player = self.team.players.players.iter().find(|p| p.id == id).unwrap();
+            let player = self
+                .team
+                .players
+                .players
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap();
             self.staff.squad_plan.entry(id).unwrap().owed(player)
         }
 
@@ -4159,11 +4190,21 @@ mod rotation_scenarios {
     #[test]
     fn a_must_win_leaves_no_room() {
         let season = Season::after_a_settled_run(20);
-        assert!(season.owed(5) < -1.0, "a first choice is well ahead of his share");
-        assert!(season.owed(25) > 1.0, "and the man behind him is owed football");
+        assert!(
+            season.owed(5) < -1.0,
+            "a first choice is well ahead of his share"
+        );
+        assert!(
+            season.owed(25) > 1.0,
+            "and the man behind him is owed football"
+        );
 
         let must_win = season.pick(&season.league(1.0));
-        assert_eq!(must_win, (1..=11).collect::<Vec<u32>>(), "nobody starts because he is owed");
+        assert_eq!(
+            must_win,
+            (1..=11).collect::<Vec<u32>>(),
+            "nobody starts because he is owed"
+        );
 
         let dead_rubber = season.pick(&season.league(0.1));
         assert!(
@@ -4245,8 +4286,14 @@ mod rotation_scenarios {
         );
         let xi = season.pick(&ctx);
         let owed: usize = xi.iter().filter(|id| season.owed(**id) > 0.0).count();
-        assert!(owed >= 6, "most of the side are men behind their share: {xi:?}");
-        assert!(xi.contains(&6), "a first choice who is behind his share may still start");
+        assert!(
+            owed >= 6,
+            "most of the side are men behind their share: {xi:?}"
+        );
+        assert!(
+            xi.contains(&6),
+            "a first choice who is behind his share may still start"
+        );
     }
 
     #[test]
@@ -4305,7 +4352,10 @@ mod rotation_scenarios {
             previous = Some(xi);
         }
         let mean = changes.iter().sum::<usize>() as f32 / changes.len() as f32;
-        assert!(mean <= 3.0, "changes from one match to the next: {changes:?}");
+        assert!(
+            mean <= 3.0,
+            "changes from one match to the next: {changes:?}"
+        );
         assert!(
             changes.iter().all(|c| *c <= 5),
             "no night turns the side over: {changes:?}"
@@ -4419,7 +4469,12 @@ mod development_sides {
         }
 
         fn player(&self, id: u32) -> &Player {
-            self.team.players.players.iter().find(|p| p.id == id).unwrap()
+            self.team
+                .players
+                .players
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap()
         }
 
         fn league(&self, stakes: f32) -> SelectionContext {
@@ -4561,7 +4616,12 @@ mod development_sides {
             starts(SENIOR + 20)
         );
         assert!(starts(SENIOR + 20) >= 4, "and his twin is not left to rot");
-        for player in team.players.players.iter().filter(|p| !p.positions.is_goalkeeper()) {
+        for player in team
+            .players
+            .players
+            .iter()
+            .filter(|p| !p.positions.is_goalkeeper())
+        {
             assert!(
                 player.friendly_statistics.played >= 4,
                 "player {} has {} starts of 20",
@@ -4608,16 +4668,21 @@ mod observable_only {
             players.push(one);
             players.push(other);
             let team = cup_team(players);
-            let result =
-                SquadSelector::select_with_context(&team, &staff, &[], &league_ctx(0.7));
+            let result = SquadSelector::select_with_context(&team, &staff, &[], &league_ctx(0.7));
             (scores, starting_goalkeeper_id(&result))
         };
         // The coach's eye is his own, so two men he sees the same may still
         // score a shade apart. What is hidden moves neither score.
         let (scores, first) = pick([180, 100]);
         let (swapped, second) = pick([100, 180]);
-        assert_eq!(scores, swapped, "each keeper scores the same whatever is hidden");
-        assert_eq!(first, second, "and what is hidden does not choose between them");
+        assert_eq!(
+            scores, swapped,
+            "each keeper scores the same whatever is hidden"
+        );
+        assert_eq!(
+            first, second,
+            "and what is hidden does not choose between them"
+        );
     }
 
     #[test]
@@ -4730,15 +4795,29 @@ mod bench_order {
 
     fn keepers_among(team: &Team, ids: &[u32]) -> usize {
         ids.iter()
-            .filter(|id| team.players.find(**id).is_some_and(|p| p.positions.is_goalkeeper()))
+            .filter(|id| {
+                team.players
+                    .find(**id)
+                    .is_some_and(|p| p.positions.is_goalkeeper())
+            })
             .count()
     }
 
     /// Twenty fit outfield players and three goalkeepers behind an eleven.
     fn deep_squad(date: NaiveDate) -> Team {
         let mut players = eleven(date);
-        players.push(make_test_player(50, &[(PlayerPositionType::Goalkeeper, 20)], 140, date));
-        players.push(make_test_player(51, &[(PlayerPositionType::Goalkeeper, 20)], 130, date));
+        players.push(make_test_player(
+            50,
+            &[(PlayerPositionType::Goalkeeper, 20)],
+            140,
+            date,
+        ));
+        players.push(make_test_player(
+            51,
+            &[(PlayerPositionType::Goalkeeper, 20)],
+            130,
+            date,
+        ));
         let spare = [
             PlayerPositionType::DefenderCenter,
             PlayerPositionType::DefenderLeft,
@@ -4768,7 +4847,11 @@ mod bench_order {
         };
         let bench = bench_of(&team, &staff, &ctx);
         assert_eq!(bench.len(), 9);
-        assert_eq!(keepers_among(&team, &bench), 1, "nine places still name one goalkeeper");
+        assert_eq!(
+            keepers_among(&team, &bench),
+            1,
+            "nine places still name one goalkeeper"
+        );
     }
 
     #[test]
@@ -4810,11 +4893,21 @@ mod bench_order {
     fn every_line_on_the_pitch_has_cover_before_a_seat_goes_on_quality() {
         let date = Utc::now().date_naive();
         let mut players = eleven(date);
-        players.push(make_test_player(50, &[(PlayerPositionType::Goalkeeper, 20)], 140, date));
+        players.push(make_test_player(
+            50,
+            &[(PlayerPositionType::Goalkeeper, 20)],
+            140,
+            date,
+        ));
         // Eight strikers better than anything else on the bench, and one
         // modest man for each of the other lines.
         for i in 0..8u32 {
-            players.push(make_test_player(60 + i, &[(PlayerPositionType::Striker, 20)], 148, date));
+            players.push(make_test_player(
+                60 + i,
+                &[(PlayerPositionType::Striker, 20)],
+                148,
+                date,
+            ));
         }
         let cover = [
             (80, PlayerPositionType::DefenderCenter),
@@ -4828,7 +4921,10 @@ mod bench_order {
         let team = cup_team(players);
         let bench = bench_of(&team, &generate_test_staff(), &SelectionContext::default());
         for (id, position) in cover {
-            assert!(bench.contains(&id), "no cover for {position:?} on {bench:?}");
+            assert!(
+                bench.contains(&id),
+                "no cover for {position:?} on {bench:?}"
+            );
         }
         assert_eq!(bench.len(), BENCH);
     }
@@ -4852,8 +4948,12 @@ mod bench_order {
     fn with_prospect(date: NaiveDate) -> (Team, Staff) {
         let (mut team, mut staff) = squad_with_a_prospect(date);
         // Every line already has better cover than him.
-        let prospect =
-            make_test_player(PROSPECT, &[(PlayerPositionType::MidfielderCenter, 18)], 112, date);
+        let prospect = make_test_player(
+            PROSPECT,
+            &[(PlayerPositionType::MidfielderCenter, 18)],
+            112,
+            date,
+        );
         team.players.players.push(prospect);
         // The generator's draw of age, name and sharpness is not what a
         // seat is decided on here: one boy, and men who are what they
@@ -4891,7 +4991,10 @@ mod bench_order {
                 ..SelectionContext::default()
             },
         );
-        assert!(quiet.contains(&PROSPECT), "a fixture with room names him: {quiet:?}");
+        assert!(
+            quiet.contains(&PROSPECT),
+            "a fixture with room names him: {quiet:?}"
+        );
 
         let must_win = bench_of(
             &team,

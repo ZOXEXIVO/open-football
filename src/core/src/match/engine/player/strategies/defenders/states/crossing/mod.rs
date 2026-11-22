@@ -1,8 +1,8 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::shared::{ActivityIntensity, DefenderCondition};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::player::strategies::common::passing::CrossModel;
+use crate::r#match::player::strategies::shared::passing::CrossModel;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };

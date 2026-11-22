@@ -158,7 +158,7 @@ impl ContractStalemate {
                     None => None,
                 });
 
-        let level = compute_level(
+        let level = ContractStalemate::compute_level(
             rejections,
             last_rejection_days_ago,
             days_to_expiry,
@@ -191,8 +191,8 @@ impl ContractStalemate {
     /// by the caller — that's a structural restriction, not a stalemate
     /// one.
     pub fn permits_listing(&self) -> bool {
-        let needed = required_level_for_status(&self.squad_status);
-        rank(self.level) >= rank(needed)
+        let needed = self.squad_status.required_stalemate_level();
+        self.level.rank() >= needed.rank()
     }
 
     /// True when the next sensible move is "offer again, this time
@@ -327,132 +327,141 @@ impl Player {
     }
 }
 
-fn rank(level: StalemateLevel) -> u8 {
-    match level {
-        StalemateLevel::None => 0,
-        StalemateLevel::Emerging => 1,
-        StalemateLevel::Severe => 2,
-        StalemateLevel::Exhausted => 3,
+impl StalemateLevel {
+    fn rank(self) -> u8 {
+        match self {
+            StalemateLevel::None => 0,
+            StalemateLevel::Emerging => 1,
+            StalemateLevel::Severe => 2,
+            StalemateLevel::Exhausted => 3,
+        }
     }
 }
 
-/// Minimum stalemate level required to list a player of this squad
-/// status. KeyPlayer / FirstTeamRegular / HotProspect need Exhausted —
-/// the club won't give up on a starter after one or two rejections.
-/// Fringe profiles can be listed at Severe; surplus (NotNeeded) leaves
-/// negotiation as soon as it has visibly failed once.
-pub fn required_level_for_status(status: &PlayerSquadStatus) -> StalemateLevel {
-    match status {
-        PlayerSquadStatus::KeyPlayer
-        | PlayerSquadStatus::FirstTeamRegular
-        | PlayerSquadStatus::HotProspectForTheFuture => StalemateLevel::Exhausted,
-        PlayerSquadStatus::FirstTeamSquadRotation
-        | PlayerSquadStatus::MainBackupPlayer
-        | PlayerSquadStatus::DecentYoungster => StalemateLevel::Severe,
-        PlayerSquadStatus::NotNeeded => StalemateLevel::Emerging,
-        _ => StalemateLevel::Severe,
+impl PlayerSquadStatus {
+    /// Minimum stalemate level required to list a player of this squad
+    /// status. KeyPlayer / FirstTeamRegular / HotProspect need Exhausted —
+    /// the club won't give up on a starter after one or two rejections.
+    /// Fringe profiles can be listed at Severe; surplus (NotNeeded) leaves
+    /// negotiation as soon as it has visibly failed once.
+    pub fn required_stalemate_level(&self) -> StalemateLevel {
+        match self {
+            PlayerSquadStatus::KeyPlayer
+            | PlayerSquadStatus::FirstTeamRegular
+            | PlayerSquadStatus::HotProspectForTheFuture => StalemateLevel::Exhausted,
+            PlayerSquadStatus::FirstTeamSquadRotation
+            | PlayerSquadStatus::MainBackupPlayer
+            | PlayerSquadStatus::DecentYoungster => StalemateLevel::Severe,
+            PlayerSquadStatus::NotNeeded => StalemateLevel::Emerging,
+            _ => StalemateLevel::Severe,
+        }
     }
 }
 
-fn compute_level(
-    rejections: u32,
-    last_rejection_days_ago: Option<i64>,
-    days_to_expiry: Option<i64>,
-    pending_ask: &Option<PlayerContractAsk>,
-    ask_affordable: Option<bool>,
-    is_unrest: bool,
-    squad_status: &PlayerSquadStatus,
-    current_salary: u32,
-) -> StalemateLevel {
-    if rejections == 0 {
-        // No rejections — bare expiry pressure alone doesn't constitute
-        // a stalemate. ContractRenewalManager will still try.
-        return StalemateLevel::None;
+impl ContractStalemate {
+    fn compute_level(
+        rejections: u32,
+        last_rejection_days_ago: Option<i64>,
+        days_to_expiry: Option<i64>,
+        pending_ask: &Option<PlayerContractAsk>,
+        ask_affordable: Option<bool>,
+        is_unrest: bool,
+        squad_status: &PlayerSquadStatus,
+        current_salary: u32,
+    ) -> StalemateLevel {
+        if rejections == 0 {
+            // No rejections — bare expiry pressure alone doesn't constitute
+            // a stalemate. ContractRenewalManager will still try.
+            return StalemateLevel::None;
+        }
+
+        let recent = last_rejection_days_ago
+            .map(|d| d <= RECENT_REJECTION_DAYS)
+            .unwrap_or(false);
+
+        let near_expiry = days_to_expiry
+            .map(|d| d > 0 && d <= EXPIRY_PRESSURE_DAYS)
+            .unwrap_or(false);
+
+        let critical_expiry = days_to_expiry
+            .map(|d| d > 0 && d <= EXPIRY_CRITICAL_DAYS)
+            .unwrap_or(false);
+
+        let ask_clearly_unaffordable = matches!(ask_affordable, Some(false));
+        let ask_clearly_affordable = matches!(ask_affordable, Some(true));
+        // "Unreasonable" = the player asks for far more than what they're on
+        // today. The renewal pipeline can sometimes match this; budget gates
+        // it elsewhere. Used as a soft signal for severity when affordability
+        // is unknown (no budget supplied).
+        let ask_unreasonable = pending_ask
+            .as_ref()
+            .map(|ask| {
+                if current_salary == 0 {
+                    return false;
+                }
+                let cap = current_salary.saturating_add(
+                    current_salary.saturating_mul(REASONABLE_ASK_HEADROOM_PCT) / 100,
+                );
+                ask.desired_salary > cap.saturating_mul(2)
+            })
+            .unwrap_or(false);
+
+        let surplus = matches!(squad_status, PlayerSquadStatus::NotNeeded);
+
+        // An affordable, concrete ask means the negotiation is structurally
+        // alive: the player has named a number the club can pay. We refuse to
+        // call this exhausted purely on rejection count — `should_improve_offer`
+        // is the right next move. Only a *concurrent* hard blocker
+        // (player demands departure / contract about to expire / open unrest)
+        // can still escalate the situation past Severe.
+        let affordable_actionable = ask_clearly_affordable && pending_ask.is_some();
+
+        // Exhausted: clear ceiling has been hit. Match-with-cap (3 / yr) is
+        // the canonical "the club has tried enough" signal — but only if the
+        // negotiation has actually broken down. When the pending ask fits
+        // wage headroom we stay at Severe and let the reactive renewal pass
+        // converge on the ask instead.
+        let count_alone_exhausts = rejections >= REJECTIONS_FOR_EXHAUSTED && !affordable_actionable;
+        if count_alone_exhausts
+            || (rejections >= REJECTIONS_FOR_SEVERE && critical_expiry && !affordable_actionable)
+            || (recent && ask_clearly_unaffordable && is_unrest)
+            || (surplus && recent && ask_clearly_unaffordable)
+            || (rejections >= REJECTIONS_FOR_EXHAUSTED && is_unrest)
+        {
+            return StalemateLevel::Exhausted;
+        }
+
+        // Severe: more than one rejection, or one rejection with concrete
+        // evidence the deal can't be done (expiry pressure, unaffordable ask,
+        // unrest, or a wildly out-of-band demand).
+        if rejections >= REJECTIONS_FOR_SEVERE
+            || (recent && near_expiry)
+            || (recent && ask_clearly_unaffordable)
+            || (recent && is_unrest)
+            || (recent && ask_unreasonable)
+            || (surplus && recent)
+        {
+            return StalemateLevel::Severe;
+        }
+
+        StalemateLevel::Emerging
     }
-
-    let recent = last_rejection_days_ago
-        .map(|d| d <= RECENT_REJECTION_DAYS)
-        .unwrap_or(false);
-
-    let near_expiry = days_to_expiry
-        .map(|d| d > 0 && d <= EXPIRY_PRESSURE_DAYS)
-        .unwrap_or(false);
-
-    let critical_expiry = days_to_expiry
-        .map(|d| d > 0 && d <= EXPIRY_CRITICAL_DAYS)
-        .unwrap_or(false);
-
-    let ask_clearly_unaffordable = matches!(ask_affordable, Some(false));
-    let ask_clearly_affordable = matches!(ask_affordable, Some(true));
-    // "Unreasonable" = the player asks for far more than what they're on
-    // today. The renewal pipeline can sometimes match this; budget gates
-    // it elsewhere. Used as a soft signal for severity when affordability
-    // is unknown (no budget supplied).
-    let ask_unreasonable = pending_ask
-        .as_ref()
-        .map(|ask| {
-            if current_salary == 0 {
-                return false;
-            }
-            let cap = current_salary
-                .saturating_add(current_salary.saturating_mul(REASONABLE_ASK_HEADROOM_PCT) / 100);
-            ask.desired_salary > cap.saturating_mul(2)
-        })
-        .unwrap_or(false);
-
-    let surplus = matches!(squad_status, PlayerSquadStatus::NotNeeded);
-
-    // An affordable, concrete ask means the negotiation is structurally
-    // alive: the player has named a number the club can pay. We refuse to
-    // call this exhausted purely on rejection count — `should_improve_offer`
-    // is the right next move. Only a *concurrent* hard blocker
-    // (player demands departure / contract about to expire / open unrest)
-    // can still escalate the situation past Severe.
-    let affordable_actionable = ask_clearly_affordable && pending_ask.is_some();
-
-    // Exhausted: clear ceiling has been hit. Match-with-cap (3 / yr) is
-    // the canonical "the club has tried enough" signal — but only if the
-    // negotiation has actually broken down. When the pending ask fits
-    // wage headroom we stay at Severe and let the reactive renewal pass
-    // converge on the ask instead.
-    let count_alone_exhausts = rejections >= REJECTIONS_FOR_EXHAUSTED && !affordable_actionable;
-    if count_alone_exhausts
-        || (rejections >= REJECTIONS_FOR_SEVERE && critical_expiry && !affordable_actionable)
-        || (recent && ask_clearly_unaffordable && is_unrest)
-        || (surplus && recent && ask_clearly_unaffordable)
-        || (rejections >= REJECTIONS_FOR_EXHAUSTED && is_unrest)
-    {
-        return StalemateLevel::Exhausted;
-    }
-
-    // Severe: more than one rejection, or one rejection with concrete
-    // evidence the deal can't be done (expiry pressure, unaffordable ask,
-    // unrest, or a wildly out-of-band demand).
-    if rejections >= REJECTIONS_FOR_SEVERE
-        || (recent && near_expiry)
-        || (recent && ask_clearly_unaffordable)
-        || (recent && is_unrest)
-        || (recent && ask_unreasonable)
-        || (surplus && recent)
-    {
-        return StalemateLevel::Severe;
-    }
-
-    StalemateLevel::Emerging
 }
 
-/// Translates a `RejectionReason` into a human-readable token for
-/// telemetry, prompts, and decision_history. Lower-snake_case so the AI
-/// can match on it like the existing reason keys.
-pub fn rejection_reason_token(reason: RejectionReason) -> &'static str {
-    match reason {
-        RejectionReason::LowSalary => "low_salary",
-        RejectionReason::ShortContract => "short_contract",
-        RejectionReason::StatusBelowExpectation => "status_below_expectation",
-        RejectionReason::NoReleaseClause => "no_release_clause",
-        RejectionReason::NoSweetener => "no_sweetener",
-        RejectionReason::AmbitionMismatch => "ambition_mismatch",
-        RejectionReason::WantsFirstTeamFootball => "wants_first_team_football",
+impl RejectionReason {
+    /// A human-readable token for telemetry, prompts, and
+    /// decision_history. Lower-snake_case so the AI can match on it like
+    /// the existing reason keys.
+    pub fn token(self) -> &'static str {
+        match self {
+            RejectionReason::LowSalary => "low_salary",
+            RejectionReason::ShortContract => "short_contract",
+            RejectionReason::StatusBelowExpectation => "status_below_expectation",
+            RejectionReason::NoReleaseClause => "no_release_clause",
+            RejectionReason::NoSweetener => "no_sweetener",
+            RejectionReason::AmbitionMismatch => "ambition_mismatch",
+            RejectionReason::WantsFirstTeamFootball => "wants_first_team_football",
+        }
     }
 }
 
@@ -460,8 +469,8 @@ pub fn rejection_reason_token(reason: RejectionReason) -> &'static str {
 mod tests {
     use super::*;
     use crate::club::PlayerSkills;
-    use crate::club::player::core::builder::PlayerBuilder;
     use crate::club::player::mailbox::{PlayerContractAsk, RejectionReason};
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::club::player::personality::PlayerDecisionHistory;
     use crate::shared::fullname::FullName;
     use crate::{
@@ -520,7 +529,7 @@ mod tests {
 
     #[test]
     fn level_no_rejections_is_none() {
-        let level = compute_level(
+        let level = ContractStalemate::compute_level(
             0,
             None,
             Some(400),
@@ -535,7 +544,7 @@ mod tests {
 
     #[test]
     fn level_single_rejection_is_emerging() {
-        let level = compute_level(
+        let level = ContractStalemate::compute_level(
             1,
             Some(10),
             Some(400),
@@ -550,7 +559,7 @@ mod tests {
 
     #[test]
     fn level_two_rejections_is_severe() {
-        let level = compute_level(
+        let level = ContractStalemate::compute_level(
             2,
             Some(10),
             Some(400),
@@ -565,7 +574,7 @@ mod tests {
 
     #[test]
     fn level_three_rejections_is_exhausted() {
-        let level = compute_level(
+        let level = ContractStalemate::compute_level(
             3,
             Some(10),
             Some(400),
@@ -592,7 +601,7 @@ mod tests {
             demanded_signing_bonus: None,
             rejection_reason: Some(RejectionReason::LowSalary),
         };
-        let level = compute_level(
+        let level = ContractStalemate::compute_level(
             3,
             Some(10),
             Some(400),
@@ -620,7 +629,7 @@ mod tests {
             demanded_signing_bonus: None,
             rejection_reason: Some(RejectionReason::LowSalary),
         };
-        let level = compute_level(
+        let level = ContractStalemate::compute_level(
             3,
             Some(10),
             Some(400),
@@ -646,7 +655,7 @@ mod tests {
             demanded_signing_bonus: None,
             rejection_reason: Some(RejectionReason::LowSalary),
         };
-        let level = compute_level(
+        let level = ContractStalemate::compute_level(
             3,
             Some(10),
             Some(400),
@@ -661,7 +670,7 @@ mod tests {
 
     #[test]
     fn level_one_rejection_with_expiry_pressure_is_severe() {
-        let level = compute_level(
+        let level = ContractStalemate::compute_level(
             1,
             Some(20),
             Some(120),
@@ -676,7 +685,7 @@ mod tests {
 
     #[test]
     fn level_critical_expiry_with_two_rejections_is_exhausted() {
-        let level = compute_level(
+        let level = ContractStalemate::compute_level(
             2,
             Some(5),
             Some(45),
@@ -691,7 +700,7 @@ mod tests {
 
     #[test]
     fn surplus_recent_rejection_escalates_to_severe() {
-        let level = compute_level(
+        let level = ContractStalemate::compute_level(
             1,
             Some(15),
             Some(400),

@@ -23,7 +23,7 @@
 use super::goal_celebration_tests::squad;
 use crate::r#match::engine::result::Score;
 use crate::r#match::goalkeepers::states::GoalkeeperKickingState;
-use crate::r#match::goalkeepers::states::common::KeeperPunt;
+use crate::r#match::goalkeepers::states::shared::KeeperPunt;
 use crate::r#match::player::events::{PlayerEvent, PlayerEventDispatcher};
 use crate::r#match::result::ResultMatchPositionData;
 use crate::r#match::{

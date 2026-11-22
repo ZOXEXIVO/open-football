@@ -9,7 +9,7 @@
 
 use chrono::NaiveDate;
 
-use super::scaling;
+use super::scaling::HappinessScaling;
 use crate::CareerDesireEventContext;
 use crate::CareerDesireEvidence;
 use crate::CareerDesireKind;
@@ -102,26 +102,6 @@ impl TransferInterestSignal {
 
     pub fn league_rep_diff(&self) -> i32 {
         self.buyer_league_rep as i32 - self.seller_league_rep as i32
-    }
-}
-
-fn cause_for_interest_kind(kind: TransferInterestKind) -> HappinessEventCause {
-    match kind {
-        TransferInterestKind::FavoriteClubInterest
-        | TransferInterestKind::Homecoming
-        | TransferInterestKind::FormerClubReturn => HappinessEventCause::AdaptationIsolation,
-        TransferInterestKind::RivalMove => HappinessEventCause::ReputationTension,
-        TransferInterestKind::StepUp | TransferInterestKind::BigLeagueOpportunity => {
-            HappinessEventCause::ReputationAdmiration
-        }
-        TransferInterestKind::EuropeanCompetitionOpportunity
-        | TransferInterestKind::CopaLibertadoresOpportunity => {
-            HappinessEventCause::ReputationAdmiration
-        }
-        TransferInterestKind::EscapeRoute | TransferInterestKind::StepDownWithMinutes => {
-            HappinessEventCause::PoorFormPressure
-        }
-        _ => HappinessEventCause::MediaPressure,
     }
 }
 
@@ -224,8 +204,8 @@ impl Player {
         if self.statuses.has(PlayerStatusType::Req) && rep_diff > -0.25 {
             let cfg = HappinessConfig::default();
             let mag = cfg.catalog.move_vetoed_by_club
-                * scaling::ambition_amplifier(ambition)
-                * scaling::criticism_dampener(self.attributes.professionalism);
+                * HappinessScaling::ambition_amplifier(ambition)
+                * HappinessScaling::criticism_dampener(self.attributes.professionalism);
             self.happiness
                 .add_event_with_cooldown(HappinessEventType::MoveVetoedByClub, mag, 45);
             return;
@@ -249,11 +229,11 @@ impl Player {
 
         let cfg = HappinessConfig::default();
         let base = cfg.catalog.transfer_bid_rejected;
-        let ambition_mul = scaling::ambition_amplifier(ambition);
+        let ambition_mul = HappinessScaling::ambition_amplifier(ambition);
         // Low loyalty stings more — the player wanted out.
         let loyalty = self.attributes.loyalty.clamp(0.0, 20.0) / 20.0;
         let loyalty_mul = 1.0 + (1.0 - loyalty) * 0.25;
-        let prof_dampen = scaling::criticism_dampener(self.attributes.professionalism);
+        let prof_dampen = HappinessScaling::criticism_dampener(self.attributes.professionalism);
         // Bigger gap, sharper hit — but capped so the magnitude band stays sane.
         let gap_mul = 1.0 + (rep_diff.max(0.0) - 0.10).clamp(0.0, 0.40) * 1.5;
         let favorite_mul = if was_favorite_club { 1.25 } else { 1.0 };
@@ -279,7 +259,7 @@ impl Player {
         }
         let cfg = HappinessConfig::default();
         let base = cfg.catalog.dream_move_collapsed;
-        let ambition_mul = scaling::ambition_amplifier(self.attributes.ambition);
+        let ambition_mul = HappinessScaling::ambition_amplifier(self.attributes.ambition);
         let favorite_mul = if was_favorite_club { 1.30 } else { 1.0 };
         // Loyal players feel it less — they were less invested in leaving.
         let loyalty = self.attributes.loyalty.clamp(0.0, 20.0) / 20.0;
@@ -473,7 +453,7 @@ impl Player {
 
         let follow_up = self.follow_up_for_signal(sig, kind, reaction);
         let mut ctx = HappinessEventContext::new(
-            cause_for_interest_kind(kind),
+            kind.happiness_cause(),
             HappinessEventSeverity::from_magnitude(magnitude),
             scope,
         )
@@ -885,165 +865,204 @@ impl Player {
         kind: TransferInterestKind,
         base_mag: f32,
     ) -> (TransferInterestReaction, Option<TransferSportingFit>, f32) {
+        let (reaction, fit) = self.reaction_and_fit(kind);
+        let magnitude = self.signal_magnitude(sig, base_mag);
+        (reaction, fit, magnitude)
+    }
+
+    /// Reaction and sporting-fit reading for the kind of interest.
+    fn reaction_and_fit(
+        &self,
+        kind: TransferInterestKind,
+    ) -> (TransferInterestReaction, Option<TransferSportingFit>) {
+        use TransferInterestKind as K;
+        match kind {
+            K::StepUp | K::BigLeagueOpportunity => self.reaction_for_step_up(),
+            K::FavoriteClubInterest => (
+                TransferInterestReaction::Excited,
+                Some(TransferSportingFit::EmotionalFit),
+            ),
+            K::FormerClubReturn => self.reaction_for_former_club(),
+            K::Homecoming => (
+                TransferInterestReaction::Excited,
+                Some(TransferSportingFit::EmotionalFit),
+            ),
+            K::RivalMove => self.reaction_for_rival(),
+            K::EscapeRoute => (
+                TransferInterestReaction::WantsTalks,
+                Some(TransferSportingFit::BetterPlayingTime),
+            ),
+            K::StepDownWithMinutes => self.reaction_for_step_down(),
+            K::LateralMove => (
+                if self.attributes.professionalism >= 14.0 {
+                    TransferInterestReaction::Focused
+                } else {
+                    TransferInterestReaction::Distracted
+                },
+                None,
+            ),
+            K::LoanDevelopment => (
+                TransferInterestReaction::Cautious,
+                Some(TransferSportingFit::BetterPlayingTime),
+            ),
+            K::Speculative => self.reaction_for_speculation(),
+            // Continental-path opportunities: stronger Excited /
+            // WantsTalks reactions when the player carries the
+            // matching desire mood, otherwise treat like a regular
+            // step-up.
+            K::EuropeanCompetitionOpportunity => self.reaction_for_european_competition(),
+            K::CopaLibertadoresOpportunity => self.reaction_for_libertadores(),
+        }
+    }
+
+    fn reaction_for_step_up(&self) -> (TransferInterestReaction, Option<TransferSportingFit>) {
+        let ambition = self.attributes.ambition;
+        let loyalty = self.attributes.loyalty;
+        let fringe = self.fringe_at_current_club();
+        if ambition >= 14.0 {
+            (
+                TransferInterestReaction::Excited,
+                Some(TransferSportingFit::ClearUpgrade),
+            )
+        } else if loyalty >= 14.0 {
+            (
+                TransferInterestReaction::PubliclyCalmPrivatelyInterested,
+                Some(TransferSportingFit::ClearUpgrade),
+            )
+        } else if fringe {
+            (
+                TransferInterestReaction::WantsTalks,
+                Some(TransferSportingFit::BiggerClubButHarderMinutes),
+            )
+        } else {
+            (
+                TransferInterestReaction::Flattered,
+                Some(TransferSportingFit::ClearUpgrade),
+            )
+        }
+    }
+
+    fn reaction_for_former_club(&self) -> (TransferInterestReaction, Option<TransferSportingFit>) {
+        if self.attributes.loyalty >= 13.0 {
+            (
+                TransferInterestReaction::Cautious,
+                Some(TransferSportingFit::EmotionalFit),
+            )
+        } else {
+            (
+                TransferInterestReaction::Flattered,
+                Some(TransferSportingFit::EmotionalFit),
+            )
+        }
+    }
+
+    fn reaction_for_rival(&self) -> (TransferInterestReaction, Option<TransferSportingFit>) {
+        let loyalty = self.attributes.loyalty;
+        let professionalism = self.attributes.professionalism;
+        if loyalty >= 13.0 {
+            (
+                TransferInterestReaction::LoyalToCurrentClub,
+                Some(TransferSportingFit::TacticalFit),
+            )
+        } else if professionalism >= 14.0 {
+            (
+                TransferInterestReaction::PubliclyCalmPrivatelyInterested,
+                Some(TransferSportingFit::TacticalFit),
+            )
+        } else {
+            (
+                TransferInterestReaction::AnnoyedBySpeculation,
+                Some(TransferSportingFit::TacticalFit),
+            )
+        }
+    }
+
+    fn reaction_for_step_down(&self) -> (TransferInterestReaction, Option<TransferSportingFit>) {
+        if self.fringe_at_current_club() {
+            (
+                TransferInterestReaction::WantsTalks,
+                Some(TransferSportingFit::BetterPlayingTime),
+            )
+        } else {
+            (
+                TransferInterestReaction::Cautious,
+                Some(TransferSportingFit::PoorRoleFit),
+            )
+        }
+    }
+
+    fn reaction_for_speculation(&self) -> (TransferInterestReaction, Option<TransferSportingFit>) {
+        let controversy = self.attributes.controversy;
+        let professionalism = self.attributes.professionalism;
+        (
+            if controversy >= 14.0 {
+                TransferInterestReaction::AnnoyedBySpeculation
+            } else if professionalism >= 14.0 {
+                TransferInterestReaction::Focused
+            } else {
+                TransferInterestReaction::Distracted
+            },
+            None,
+        )
+    }
+
+    fn reaction_for_european_competition(
+        &self,
+    ) -> (TransferInterestReaction, Option<TransferSportingFit>) {
+        let has_desire = self
+            .happiness
+            .has_recent_event(&HappinessEventType::WantsEuropeanCompetition, 120);
+        let ambition = self.attributes.ambition;
+        let loyalty = self.attributes.loyalty;
+        if has_desire || ambition >= 16.0 {
+            (
+                TransferInterestReaction::WantsTalks,
+                Some(TransferSportingFit::ClearUpgrade),
+            )
+        } else if loyalty >= 14.0 {
+            (
+                TransferInterestReaction::PubliclyCalmPrivatelyInterested,
+                Some(TransferSportingFit::ClearUpgrade),
+            )
+        } else {
+            (
+                TransferInterestReaction::Excited,
+                Some(TransferSportingFit::ClearUpgrade),
+            )
+        }
+    }
+
+    fn reaction_for_libertadores(&self) -> (TransferInterestReaction, Option<TransferSportingFit>) {
+        let has_desire = self
+            .happiness
+            .has_recent_event(&HappinessEventType::WantsCopaLibertadores, 120);
+        if has_desire {
+            (
+                TransferInterestReaction::WantsTalks,
+                Some(TransferSportingFit::EmotionalFit),
+            )
+        } else {
+            (
+                TransferInterestReaction::Excited,
+                Some(TransferSportingFit::EmotionalFit),
+            )
+        }
+    }
+
+    /// Magnitude — base scaled by personality + listed/unhappy + stage.
+    fn signal_magnitude(&self, sig: &TransferInterestSignal, base_mag: f32) -> f32 {
         let ambition = self.attributes.ambition;
         let loyalty = self.attributes.loyalty;
         let professionalism = self.attributes.professionalism;
-        let controversy = self.attributes.controversy;
-        let fringe = self.fringe_at_current_club();
         let listed_or_unhappy = self.statuses.has(PlayerStatusType::Lst)
             || self.statuses.has(PlayerStatusType::Req)
             || self.statuses.has(PlayerStatusType::Unh)
             || self.statuses.has(PlayerStatusType::Trn);
 
-        let (reaction, fit) = match kind {
-            TransferInterestKind::StepUp | TransferInterestKind::BigLeagueOpportunity => {
-                if ambition >= 14.0 {
-                    (
-                        TransferInterestReaction::Excited,
-                        Some(TransferSportingFit::ClearUpgrade),
-                    )
-                } else if loyalty >= 14.0 {
-                    (
-                        TransferInterestReaction::PubliclyCalmPrivatelyInterested,
-                        Some(TransferSportingFit::ClearUpgrade),
-                    )
-                } else if fringe {
-                    (
-                        TransferInterestReaction::WantsTalks,
-                        Some(TransferSportingFit::BiggerClubButHarderMinutes),
-                    )
-                } else {
-                    (
-                        TransferInterestReaction::Flattered,
-                        Some(TransferSportingFit::ClearUpgrade),
-                    )
-                }
-            }
-            TransferInterestKind::FavoriteClubInterest => (
-                TransferInterestReaction::Excited,
-                Some(TransferSportingFit::EmotionalFit),
-            ),
-            TransferInterestKind::FormerClubReturn => {
-                if loyalty >= 13.0 {
-                    (
-                        TransferInterestReaction::Cautious,
-                        Some(TransferSportingFit::EmotionalFit),
-                    )
-                } else {
-                    (
-                        TransferInterestReaction::Flattered,
-                        Some(TransferSportingFit::EmotionalFit),
-                    )
-                }
-            }
-            TransferInterestKind::Homecoming => (
-                TransferInterestReaction::Excited,
-                Some(TransferSportingFit::EmotionalFit),
-            ),
-            TransferInterestKind::RivalMove => {
-                if loyalty >= 13.0 {
-                    (
-                        TransferInterestReaction::LoyalToCurrentClub,
-                        Some(TransferSportingFit::TacticalFit),
-                    )
-                } else if professionalism >= 14.0 {
-                    (
-                        TransferInterestReaction::PubliclyCalmPrivatelyInterested,
-                        Some(TransferSportingFit::TacticalFit),
-                    )
-                } else {
-                    (
-                        TransferInterestReaction::AnnoyedBySpeculation,
-                        Some(TransferSportingFit::TacticalFit),
-                    )
-                }
-            }
-            TransferInterestKind::EscapeRoute => (
-                TransferInterestReaction::WantsTalks,
-                Some(TransferSportingFit::BetterPlayingTime),
-            ),
-            TransferInterestKind::StepDownWithMinutes => {
-                if fringe {
-                    (
-                        TransferInterestReaction::WantsTalks,
-                        Some(TransferSportingFit::BetterPlayingTime),
-                    )
-                } else {
-                    (
-                        TransferInterestReaction::Cautious,
-                        Some(TransferSportingFit::PoorRoleFit),
-                    )
-                }
-            }
-            TransferInterestKind::LateralMove => (
-                if professionalism >= 14.0 {
-                    TransferInterestReaction::Focused
-                } else {
-                    TransferInterestReaction::Distracted
-                },
-                None,
-            ),
-            TransferInterestKind::LoanDevelopment => (
-                TransferInterestReaction::Cautious,
-                Some(TransferSportingFit::BetterPlayingTime),
-            ),
-            TransferInterestKind::Speculative => (
-                if controversy >= 14.0 {
-                    TransferInterestReaction::AnnoyedBySpeculation
-                } else if professionalism >= 14.0 {
-                    TransferInterestReaction::Focused
-                } else {
-                    TransferInterestReaction::Distracted
-                },
-                None,
-            ),
-            // Continental-path opportunities: stronger Excited /
-            // WantsTalks reactions when the player carries the
-            // matching desire mood, otherwise treat like a regular
-            // step-up.
-            TransferInterestKind::EuropeanCompetitionOpportunity => {
-                let has_desire = self
-                    .happiness
-                    .has_recent_event(&HappinessEventType::WantsEuropeanCompetition, 120);
-                if has_desire || ambition >= 16.0 {
-                    (
-                        TransferInterestReaction::WantsTalks,
-                        Some(TransferSportingFit::ClearUpgrade),
-                    )
-                } else if loyalty >= 14.0 {
-                    (
-                        TransferInterestReaction::PubliclyCalmPrivatelyInterested,
-                        Some(TransferSportingFit::ClearUpgrade),
-                    )
-                } else {
-                    (
-                        TransferInterestReaction::Excited,
-                        Some(TransferSportingFit::ClearUpgrade),
-                    )
-                }
-            }
-            TransferInterestKind::CopaLibertadoresOpportunity => {
-                let has_desire = self
-                    .happiness
-                    .has_recent_event(&HappinessEventType::WantsCopaLibertadores, 120);
-                if has_desire {
-                    (
-                        TransferInterestReaction::WantsTalks,
-                        Some(TransferSportingFit::EmotionalFit),
-                    )
-                } else {
-                    (
-                        TransferInterestReaction::Excited,
-                        Some(TransferSportingFit::EmotionalFit),
-                    )
-                }
-            }
-        };
-
         // Magnitude — base scaled by personality + listed/unhappy + stage.
-        let amb_mul = scaling::ambition_amplifier(ambition);
-        let loy_mul = scaling::loyalty_amplifier(loyalty);
-        let prof_dampen = scaling::criticism_dampener(professionalism);
+        let amb_mul = HappinessScaling::ambition_amplifier(ambition);
+        let loy_mul = HappinessScaling::loyalty_amplifier(loyalty);
+        let prof_dampen = HappinessScaling::criticism_dampener(professionalism);
 
         let stage_factor = match sig.stage {
             TransferInterestStage::ScoutWatched => 0.7,
@@ -1088,7 +1107,7 @@ impl Player {
             mag = mag.min(-0.5);
         }
         let _ = loy_mul; // reserved for future fan-pressure ramp
-        (reaction, fit, mag)
+        mag
     }
 
     fn evidence_for_signal(
@@ -1096,7 +1115,17 @@ impl Player {
         sig: &TransferInterestSignal,
         kind: TransferInterestKind,
     ) -> Vec<TransferInterestEvidence> {
-        let mut out: Vec<TransferInterestEvidence> = Vec::new();
+        let mut out = self.club_evidence(sig);
+        out.extend(Self::source_evidence(sig));
+        out.extend(self.personality_evidence());
+        out.extend(self.playing_time_evidence(kind));
+        out.extend(self.career_desire_evidence(sig, kind));
+        out
+    }
+
+    /// What the two clubs' standing says about the approach.
+    fn club_evidence(&self, sig: &TransferInterestSignal) -> Vec<TransferInterestEvidence> {
+        let mut out = Vec::new();
         if sig.rep_diff() >= 0.15 {
             out.push(TransferInterestEvidence::BiggerClub);
         }
@@ -1122,6 +1151,13 @@ impl Player {
         if sig.repeated_attention {
             out.push(TransferInterestEvidence::RepeatedRumours);
         }
+        out
+    }
+
+    /// Where the story came from — scout, agent, press, fans, a rejected
+    /// bid.
+    fn source_evidence(sig: &TransferInterestSignal) -> Vec<TransferInterestEvidence> {
+        let mut out = Vec::new();
         if matches!(sig.source, TransferInterestSource::ScoutAttendance) {
             out.push(TransferInterestEvidence::ScoutAtMatch);
         }
@@ -1140,6 +1176,12 @@ impl Player {
         if matches!(sig.stage, TransferInterestStage::BidRejected) {
             out.push(TransferInterestEvidence::RejectedBid);
         }
+        out
+    }
+
+    /// The player's own traits, read by the renderer as context.
+    fn personality_evidence(&self) -> Vec<TransferInterestEvidence> {
+        let mut out = Vec::new();
         if self.attributes.ambition >= 15.0 {
             out.push(TransferInterestEvidence::HighAmbition);
         } else if self.attributes.ambition <= 7.0 {
@@ -1156,6 +1198,12 @@ impl Player {
         if self.attributes.controversy >= 15.0 {
             out.push(TransferInterestEvidence::HighControversy);
         }
+        out
+    }
+
+    /// Minutes / contract context behind the interest.
+    fn playing_time_evidence(&self, kind: TransferInterestKind) -> Vec<TransferInterestEvidence> {
+        let mut out = Vec::new();
         if self.fringe_at_current_club()
             && matches!(
                 kind,
@@ -1179,11 +1227,20 @@ impl Player {
         if self.statuses.has(PlayerStatusType::Unh) || self.statuses.has(PlayerStatusType::Req) {
             out.push(TransferInterestEvidence::CurrentClubAmbitionMismatch);
         }
-        // Career-desire alignment — when the player is carrying a
-        // documented career-desire mood, flag the matching evidence so
-        // the renderer can call out "answers his open homesickness"
-        // / "matches his European-ambition mood" instead of relying
-        // on generic step-up copy.
+        out
+    }
+
+    /// Career-desire alignment — when the player is carrying a
+    /// documented career-desire mood, flag the matching evidence so
+    /// the renderer can call out "answers his open homesickness"
+    /// / "matches his European-ambition mood" instead of relying
+    /// on generic step-up copy.
+    fn career_desire_evidence(
+        &self,
+        sig: &TransferInterestSignal,
+        kind: TransferInterestKind,
+    ) -> Vec<TransferInterestEvidence> {
+        let mut out = Vec::new();
         if matches!(kind, TransferInterestKind::EuropeanCompetitionOpportunity)
             || self
                 .happiness

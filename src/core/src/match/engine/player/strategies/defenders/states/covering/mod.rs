@@ -1,8 +1,8 @@
-use crate::r#match::defenders::states::common::{
+use crate::r#match::defenders::states::shared::{
     ActivityIntensity, DefenderCondition, DefenderRead, DefensiveLine, ReadLevel,
 };
-use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
-use crate::r#match::player::strategies::common::states::StationKeeping;
+use crate::r#match::player::strategies::shared::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::shared::states::StationKeeping;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -42,7 +42,9 @@ impl StateProcessingHandler for DefenderCoveringState {
                 .opponents()
                 .with_ball()
                 .next()
-                .map_or(ctx.tick_context.positions.ball.velocity, |c| c.velocity(ctx));
+                .map_or(ctx.tick_context.positions.ball.velocity, |c| {
+                    c.velocity(ctx)
+                });
             return Some(
                 StationKeeping::hold(point_velocity, to_target)
                     + ctx.player().separation_velocity() * 0.3,

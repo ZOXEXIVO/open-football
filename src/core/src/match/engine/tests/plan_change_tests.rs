@@ -6,7 +6,7 @@
 #![cfg(test)]
 
 use super::substitution_break_tests::kickoff;
-use crate::r#match::defenders::states::common::LineStep;
+use crate::r#match::defenders::states::shared::LineStep;
 use crate::r#match::engine::flow::arena::formation_variant::{FormationLine, FormationVariant};
 use crate::r#match::engine::substitutions::Substitutions;
 use crate::r#match::engine::teamplay::plans::line_step::LineStepCall;

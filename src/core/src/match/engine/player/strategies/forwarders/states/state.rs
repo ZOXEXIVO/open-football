@@ -2,11 +2,11 @@ use crate::r#match::forwarders::states::{
     ForwardCreatingSpaceState, ForwardCrossReceivingState, ForwardCrossingState,
     ForwardDribblingState, ForwardFinishingState, ForwardHeadingState, ForwardHoldingShapeState,
     ForwardHoldingWidthState, ForwardInterceptingState, ForwardJockeyingState, ForwardPassingState,
-    ForwardPressingState, ForwardReturningState, ForwardRunningInBehindState,
-    ForwardRunningState, ForwardShootingState, ForwardStandingState, ForwardTacklingState,
-    ForwardTakeBallState, ForwardWalkingState,
+    ForwardPressingState, ForwardReturningState, ForwardRunningInBehindState, ForwardRunningState,
+    ForwardShootingState, ForwardStandingState, ForwardTacklingState, ForwardTakeBallState,
+    ForwardWalkingState,
 };
-use crate::r#match::common_states::ShapeTempo;
+use crate::r#match::shared_states::ShapeTempo;
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::Result;
 use std::fmt::{Display, Formatter};
@@ -135,8 +135,10 @@ impl ForwardStrategies {
         // A man holding his place, or getting back to it, moves at the pace
         // the play asks for (`ShapeTempo`): the state chooses where, the
         // tempo how fast.
-        let tempo = (matches!(state.family(), ForwardFamily::Shape | ForwardFamily::Recover)
-            && !ShapeTempo::forwards_off())
+        let tempo = (matches!(
+            state.family(),
+            ForwardFamily::Shape | ForwardFamily::Recover
+        ) && !ShapeTempo::forwards_off())
         .then(|| {
             let ctx = state_processor.ctx();
             let place = ctx.team().my_anchor();

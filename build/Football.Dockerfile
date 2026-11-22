@@ -19,6 +19,19 @@ RUN rustup target add wasm32-unknown-unknown
 
 COPY ./ ./
 
+# ── LINT ──────────────────────────────────────────────────────────────
+#
+# Clippy gates the production tree. It compiles a different profile from the
+# test and release stages, so it gets its own target dir and cache ids.
+
+FROM source AS lint
+RUN --mount=type=cache,id=cargo-registry-lint,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=target-lint,target=/src/target \
+    --mount=type=cache,id=match-viewer-target-lint,target=/src/src/match/target \
+    cargo clippy --workspace --lib --bins --locked \
+    && cargo clippy --manifest-path src/match/Cargo.toml --target wasm32-unknown-unknown --lib --locked \
+    && touch /lint-passed
+
 # ── RUN TESTS ─────────────────────────────────────────────────────────
 #
 # Its own stage rather than a second `RUN` in front of the build, because
@@ -87,11 +100,12 @@ WORKDIR /app
 
 COPY --from=build-backend /open_football .
 
-# Nothing reads this file. It is here to put the `test` stage in the final
-# image's dependency graph: BuildKit only builds a stage something pulls
-# from, and without this edge the suite would never run — a green pipeline
-# that tested nothing. Last, so the marker's mtime does not invalidate the
-# binary layer above it.
+# Nothing reads these files. They are here to put the `lint` and `test`
+# stages in the final image's dependency graph: BuildKit only builds a stage
+# something pulls from, and without these edges the gates would never run —
+# a green pipeline that checked nothing. Last, so the markers' mtimes do not
+# invalidate the binary layer above them.
+COPY --from=lint /lint-passed /lint-passed
 COPY --from=test /tests-passed /tests-passed
 
 ENTRYPOINT ["./open_football"]

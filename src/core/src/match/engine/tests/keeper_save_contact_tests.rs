@@ -13,11 +13,11 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
+use crate::r#match::engine::player::events::players::PlayerEventDispatcher;
 use crate::r#match::engine::result::Score;
 use crate::r#match::goalkeepers::states::GoalkeeperPunchingState;
-use crate::r#match::goalkeepers::states::common::{AerialClaim, KeeperAerialClaim};
+use crate::r#match::goalkeepers::states::shared::{AerialClaim, KeeperAerialClaim};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::engine::player::events::players::PlayerEventDispatcher;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::transition::TransitionSource;
@@ -402,7 +402,10 @@ fn a_punch_clears_the_heads_without_becoming_a_lob() {
 fn a_howler_is_the_keepers_error() {
     let (mut field, mut context) = kickoff();
     let (keeper_id, _) = right_keeper_alone_at(&mut field, Vector3::new(811.0, 248.0, 0.0));
-    let before = context.psychology.get(keeper_id).map_or(0.0, |s| s.confidence);
+    let before = context
+        .psychology
+        .get(keeper_id)
+        .map_or(0.0, |s| s.confidence);
 
     let mut data = ResultMatchPositionData::new();
     PlayerEventDispatcher::dispatch(

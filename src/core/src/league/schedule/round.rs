@@ -206,7 +206,9 @@ impl ScheduleGenerator for RoundSchedule {
 
             let second_open = Self::on_or_after(opening, ending.from_month, ending.from_day);
             let second_close = Self::on_or_after(second_open, ending.to_month, ending.to_day);
-            let after_first = days.last().map_or(second_open, |last| last.succ_opt().unwrap());
+            let after_first = days
+                .last()
+                .map_or(second_open, |last| last.succ_opt().unwrap());
             let second_round = DateUtils::next_weekday(second_open.max(after_first), round_weekday);
             days.extend(plan(second_round, second_close, rounds - rounds / 2));
             days
@@ -622,7 +624,10 @@ mod tests {
                 item.date
             );
         }
-        let youth = fixtures(CompetitionLevel::Development, &(101..=120).collect::<Vec<_>>());
+        let youth = fixtures(
+            CompetitionLevel::Development,
+            &(101..=120).collect::<Vec<_>>(),
+        );
         for item in &youth {
             assert!(
                 InternationalCalendar::window_on(item.date.date()).is_none(),
@@ -656,11 +661,21 @@ mod tests {
         let mut last = None;
         for tour in &tours {
             let day = tour.items[0].date.date();
-            assert!(tour.items.iter().all(|i| i.date.date() == day), "one day per round");
+            assert!(
+                tour.items.iter().all(|i| i.date.date() == day),
+                "one day per round"
+            );
             assert!(day <= close, "round {} on {day} after the close", tour.num);
-            assert!(matches!(day.weekday(), Weekday::Sat | Weekday::Tue), "{day}");
+            assert!(
+                matches!(day.weekday(), Weekday::Sat | Weekday::Tue),
+                "{day}"
+            );
             if let Some(previous) = last {
-                assert!(day > previous, "round {} not after the one before", tour.num);
+                assert!(
+                    day > previous,
+                    "round {} not after the one before",
+                    tour.num
+                );
             }
             last = Some(day);
         }

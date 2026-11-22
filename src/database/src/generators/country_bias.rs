@@ -51,625 +51,739 @@ const SK_STRENGTH: usize = 35;
 
 const SKILL_COUNT: usize = 37;
 
-/// Returns per-skill additive bias for a player's country.
-/// Country-specific overrides take precedence over continent defaults.
-pub fn country_skill_bias(continent_id: u32, country_code: &str) -> [f32; SKILL_COUNT] {
-    let mut b = [0.0f32; SKILL_COUNT];
-
-    // Try country-specific bias first; fall back to continent/region
-    if !apply_country_bias(&mut b, country_code) {
-        apply_region_bias(&mut b, continent_id, country_code);
-    }
-
-    b
+/// One country's additive skill deltas. Multiple codes share a row where the
+/// data has always treated them as one football culture.
+struct CountrySkillBiasRow {
+    codes: &'static [&'static str],
+    deltas: &'static [(usize, f32)],
 }
 
-/// Country-specific biases for major football nations.
-/// Returns true if a specific bias was applied.
-fn apply_country_bias(b: &mut [f32; SKILL_COUNT], code: &str) -> bool {
-    match code {
-        // ── South America ──────────────────────────────────────────────
-        "br" => {
-            // Brazil: jogo bonito — flair, technique, creativity
-            b[SK_DRIBBLING] = 2.0;
-            b[SK_TECHNIQUE] = 1.5;
-            b[SK_FIRST_TOUCH] = 1.0;
-            b[SK_FINISHING] = 0.5;
-            b[SK_FREE_KICKS] = 0.5;
-            b[SK_FLAIR] = 2.0;
-            b[SK_OFF_THE_BALL] = 0.5;
-            b[SK_COMPOSURE] = 0.5;
-            b[SK_AGILITY] = 0.5;
-            b[SK_BALANCE] = 0.5;
-            b[SK_ACCELERATION] = 0.5;
+const COUNTRY_SKILL_BIASES: &[CountrySkillBiasRow] = &[
+    // ── South America ──────────────────────────────────────────────
+    CountrySkillBiasRow {
+        // Brazil: jogo bonito — flair, technique, creativity
+        codes: &["br"],
+        deltas: &[
+            (SK_DRIBBLING, 2.0),
+            (SK_TECHNIQUE, 1.5),
+            (SK_FIRST_TOUCH, 1.0),
+            (SK_FINISHING, 0.5),
+            (SK_FREE_KICKS, 0.5),
+            (SK_FLAIR, 2.0),
+            (SK_OFF_THE_BALL, 0.5),
+            (SK_COMPOSURE, 0.5),
+            (SK_AGILITY, 0.5),
+            (SK_BALANCE, 0.5),
+            (SK_ACCELERATION, 0.5),
             // Tradeoffs
-            b[SK_POSITIONING] = -0.5;
-            b[SK_TEAMWORK] = -0.5;
-            b[SK_CONCENTRATION] = -0.5;
-        }
-        "ar" => {
-            // Argentina: technique + mental toughness + garra
-            b[SK_TECHNIQUE] = 1.5;
-            b[SK_DRIBBLING] = 1.0;
-            b[SK_PASSING] = 0.5;
-            b[SK_FINISHING] = 0.5;
-            b[SK_COMPOSURE] = 1.0;
-            b[SK_DETERMINATION] = 0.5;
-            b[SK_AGGRESSION] = 0.5;
-            b[SK_FLAIR] = 0.5;
-            b[SK_BALANCE] = 0.5;
-        }
-        "uy" => {
-            // Uruguay: garra charrúa — fierce determination, defensive solidity
-            b[SK_DETERMINATION] = 2.0;
-            b[SK_AGGRESSION] = 1.0;
-            b[SK_BRAVERY] = 0.5;
-            b[SK_COMPOSURE] = 0.5;
-            b[SK_TACKLING] = 0.5;
-            b[SK_STRENGTH] = 0.5;
-        }
-        "co" => {
-            // Colombia: flair + technique, creative attackers
-            b[SK_TECHNIQUE] = 1.0;
-            b[SK_DRIBBLING] = 0.5;
-            b[SK_PASSING] = 0.5;
-            b[SK_FLAIR] = 1.0;
-            b[SK_COMPOSURE] = 0.5;
-            b[SK_PACE] = 0.5;
-            b[SK_AGILITY] = 0.5;
-        }
-        "cl" => {
-            // Chile: high-press intensity, work rate, aggression
-            b[SK_WORK_RATE] = 1.5;
-            b[SK_AGGRESSION] = 1.0;
-            b[SK_DETERMINATION] = 0.5;
-            b[SK_STAMINA] = 0.5;
-            b[SK_PACE] = 0.5;
-            b[SK_TECHNIQUE] = 0.5;
+            (SK_POSITIONING, -0.5),
+            (SK_TEAMWORK, -0.5),
+            (SK_CONCENTRATION, -0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Argentina: technique + mental toughness + garra
+        codes: &["ar"],
+        deltas: &[
+            (SK_TECHNIQUE, 1.5),
+            (SK_DRIBBLING, 1.0),
+            (SK_PASSING, 0.5),
+            (SK_FINISHING, 0.5),
+            (SK_COMPOSURE, 1.0),
+            (SK_DETERMINATION, 0.5),
+            (SK_AGGRESSION, 0.5),
+            (SK_FLAIR, 0.5),
+            (SK_BALANCE, 0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Uruguay: garra charrúa — fierce determination, defensive solidity
+        codes: &["uy"],
+        deltas: &[
+            (SK_DETERMINATION, 2.0),
+            (SK_AGGRESSION, 1.0),
+            (SK_BRAVERY, 0.5),
+            (SK_COMPOSURE, 0.5),
+            (SK_TACKLING, 0.5),
+            (SK_STRENGTH, 0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Colombia: flair + technique, creative attackers
+        codes: &["co"],
+        deltas: &[
+            (SK_TECHNIQUE, 1.0),
+            (SK_DRIBBLING, 0.5),
+            (SK_PASSING, 0.5),
+            (SK_FLAIR, 1.0),
+            (SK_COMPOSURE, 0.5),
+            (SK_PACE, 0.5),
+            (SK_AGILITY, 0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Chile: high-press intensity, work rate, aggression
+        codes: &["cl"],
+        deltas: &[
+            (SK_WORK_RATE, 1.5),
+            (SK_AGGRESSION, 1.0),
+            (SK_DETERMINATION, 0.5),
+            (SK_STAMINA, 0.5),
+            (SK_PACE, 0.5),
+            (SK_TECHNIQUE, 0.5),
+        ],
+    },
+    // ── Europe: major nations ──────────────────────────────────────
+    CountrySkillBiasRow {
+        // Spain: positional play, passing mastery
+        codes: &["es"],
+        deltas: &[
+            (SK_PASSING, 2.0),
+            (SK_FIRST_TOUCH, 1.5),
+            (SK_TECHNIQUE, 1.0),
+            (SK_VISION, 1.0),
+            (SK_COMPOSURE, 1.0),
+            (SK_DECISIONS, 0.5),
+            (SK_TEAMWORK, 0.5),
+            // Tradeoffs
+            (SK_STRENGTH, -0.5),
+            (SK_PACE, -0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Germany: organised, disciplined, physical + tactical
+        codes: &["de"],
+        deltas: &[
+            (SK_TEAMWORK, 1.5),
+            (SK_POSITIONING, 1.0),
+            (SK_WORK_RATE, 1.0),
+            (SK_CONCENTRATION, 0.5),
+            (SK_DETERMINATION, 0.5),
+            (SK_STAMINA, 1.0),
+            (SK_STRENGTH, 0.5),
+            (SK_PASSING, 0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Italy: tactical intelligence, defensive mastery, composure
+        codes: &["it"],
+        deltas: &[
+            (SK_POSITIONING, 1.5),
+            (SK_CONCENTRATION, 1.0),
+            (SK_COMPOSURE, 1.0),
+            (SK_ANTICIPATION, 0.5),
+            (SK_DECISIONS, 0.5),
+            (SK_MARKING, 0.5),
+            (SK_TACKLING, 0.5),
+            (SK_TECHNIQUE, 0.5),
+            // Tradeoff
+            (SK_PACE, -0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // France: athletic, versatile, physically dominant
+        codes: &["fr"],
+        deltas: &[
+            (SK_PACE, 1.5),
+            (SK_STRENGTH, 1.0),
+            (SK_ACCELERATION, 1.0),
+            (SK_NATURAL_FITNESS, 0.5),
+            (SK_TECHNIQUE, 0.5),
+            (SK_DRIBBLING, 0.5),
+            (SK_COMPOSURE, 0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Netherlands: total football — technical, intelligent
+        codes: &["nl"],
+        deltas: &[
+            (SK_PASSING, 1.5),
+            (SK_FIRST_TOUCH, 1.0),
+            (SK_TECHNIQUE, 1.0),
+            (SK_VISION, 1.0),
+            (SK_COMPOSURE, 0.5),
+            (SK_DECISIONS, 0.5),
+            (SK_STAMINA, 0.5),
+            // Tradeoff
+            (SK_STRENGTH, -0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Portugal: technical flair, dribbling culture
+        codes: &["pt"],
+        deltas: &[
+            (SK_DRIBBLING, 1.5),
+            (SK_TECHNIQUE, 1.0),
+            (SK_FIRST_TOUCH, 0.5),
+            (SK_CROSSING, 0.5),
+            (SK_FLAIR, 1.0),
+            (SK_COMPOSURE, 0.5),
+            (SK_AGILITY, 0.5),
+            (SK_BALANCE, 0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // England: direct, physical, determined
+        codes: &["gb"],
+        deltas: &[
+            (SK_HEADING, 0.5),
+            (SK_CROSSING, 0.5),
+            (SK_LONG_SHOTS, 0.5),
+            (SK_DETERMINATION, 1.0),
+            (SK_WORK_RATE, 1.0),
+            (SK_BRAVERY, 0.5),
+            (SK_AGGRESSION, 0.5),
+            (SK_PACE, 0.5),
+            (SK_STAMINA, 0.5),
+            (SK_STRENGTH, 0.5),
+            // Tradeoffs
+            (SK_TECHNIQUE, -0.5),
+            (SK_FLAIR, -0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Scotland: physical, direct, brave
+        codes: &["sc"],
+        deltas: &[
+            (SK_HEADING, 0.5),
+            (SK_DETERMINATION, 1.5),
+            (SK_WORK_RATE, 1.0),
+            (SK_BRAVERY, 1.0),
+            (SK_AGGRESSION, 0.5),
+            (SK_STAMINA, 0.5),
+            (SK_STRENGTH, 0.5),
+            // Tradeoffs
+            (SK_TECHNIQUE, -0.5),
+            (SK_FLAIR, -1.0),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Northern Ireland / Republic of Ireland: determined, physical
+        codes: &["ie", "ei"],
+        deltas: &[
+            (SK_DETERMINATION, 1.0),
+            (SK_WORK_RATE, 1.0),
+            (SK_BRAVERY, 0.5),
+            (SK_STAMINA, 0.5),
+            (SK_STRENGTH, 0.5),
+            (SK_FLAIR, -0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Belgium: modern blend — technical + physical
+        codes: &["be"],
+        deltas: &[
+            (SK_TECHNIQUE, 0.5),
+            (SK_PASSING, 0.5),
+            (SK_FIRST_TOUCH, 0.5),
+            (SK_PACE, 0.5),
+            (SK_STRENGTH, 0.5),
+            (SK_COMPOSURE, 0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Croatia: technical midfield tradition, tactical
+        codes: &["hr"],
+        deltas: &[
+            (SK_PASSING, 1.0),
+            (SK_TECHNIQUE, 1.0),
+            (SK_FIRST_TOUCH, 0.5),
+            (SK_VISION, 0.5),
+            (SK_COMPOSURE, 0.5),
+            (SK_DETERMINATION, 0.5),
+            (SK_STAMINA, 0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Serbia: technically solid, physical, determined
+        codes: &["rs"],
+        deltas: &[
+            (SK_TECHNIQUE, 0.5),
+            (SK_PASSING, 0.5),
+            (SK_HEADING, 0.5),
+            (SK_DETERMINATION, 1.0),
+            (SK_AGGRESSION, 0.5),
+            (SK_STRENGTH, 0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Turkey: passionate, physical, aggressive
+        codes: &["tr"],
+        deltas: &[
+            (SK_AGGRESSION, 1.0),
+            (SK_DETERMINATION, 0.5),
+            (SK_BRAVERY, 0.5),
+            (SK_STRENGTH, 0.5),
+            (SK_STAMINA, 0.5),
+            (SK_TECHNIQUE, 0.5),
+        ],
+    },
+    // ── Africa: specific nations ───────────────────────────────────
+    CountrySkillBiasRow {
+        // Nigeria: explosive athletes, raw talent
+        codes: &["ng"],
+        deltas: &[
+            (SK_PACE, 2.0),
+            (SK_ACCELERATION, 1.5),
+            (SK_STRENGTH, 1.5),
+            (SK_NATURAL_FITNESS, 1.0),
+            (SK_JUMPING, 0.5),
+            (SK_DRIBBLING, 0.5),
+            // Tradeoffs
+            (SK_POSITIONING, -0.5),
+            (SK_CONCENTRATION, -0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Ghana: physical + technical blend, flair
+        codes: &["gh"],
+        deltas: &[
+            (SK_PACE, 1.5),
+            (SK_ACCELERATION, 1.0),
+            (SK_STRENGTH, 1.0),
+            (SK_NATURAL_FITNESS, 0.5),
+            (SK_DRIBBLING, 1.0),
+            (SK_FLAIR, 0.5),
+            (SK_CONCENTRATION, -0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Cameroon: physically imposing, determined
+        codes: &["cm"],
+        deltas: &[
+            (SK_PACE, 1.5),
+            (SK_STRENGTH, 1.5),
+            (SK_ACCELERATION, 1.0),
+            (SK_JUMPING, 1.0),
+            (SK_NATURAL_FITNESS, 0.5),
+            (SK_DETERMINATION, 0.5),
+            (SK_AGGRESSION, 0.5),
+            (SK_CONCENTRATION, -0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Côte d'Ivoire: powerful, explosive
+        codes: &["ci"],
+        deltas: &[
+            (SK_PACE, 1.5),
+            (SK_STRENGTH, 1.5),
+            (SK_ACCELERATION, 1.0),
+            (SK_NATURAL_FITNESS, 0.5),
+            (SK_DRIBBLING, 0.5),
+            (SK_TECHNIQUE, 0.5),
+            (SK_POSITIONING, -0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Senegal: athletic, technically improving
+        codes: &["sn"],
+        deltas: &[
+            (SK_PACE, 1.5),
+            (SK_STRENGTH, 1.0),
+            (SK_ACCELERATION, 1.0),
+            (SK_NATURAL_FITNESS, 0.5),
+            (SK_DRIBBLING, 0.5),
+            (SK_DETERMINATION, 0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Morocco: technical, tactical awareness (North African style)
+        codes: &["ma"],
+        deltas: &[
+            (SK_TECHNIQUE, 1.0),
+            (SK_DRIBBLING, 1.0),
+            (SK_PASSING, 0.5),
+            (SK_FIRST_TOUCH, 0.5),
+            (SK_COMPOSURE, 0.5),
+            (SK_VISION, 0.5),
+            (SK_AGILITY, 0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Egypt: technical, creative
+        codes: &["eg"],
+        deltas: &[
+            (SK_TECHNIQUE, 1.0),
+            (SK_DRIBBLING, 0.5),
+            (SK_PASSING, 0.5),
+            (SK_FIRST_TOUCH, 0.5),
+            (SK_COMPOSURE, 0.5),
+            (SK_FLAIR, 0.5),
+            (SK_AGILITY, 0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Algeria, Tunisia: North African — technical, agile
+        codes: &["dz", "tn"],
+        deltas: &[
+            (SK_TECHNIQUE, 0.5),
+            (SK_DRIBBLING, 0.5),
+            (SK_PASSING, 0.5),
+            (SK_COMPOSURE, 0.5),
+            (SK_AGILITY, 0.5),
+            (SK_PACE, 0.5),
+        ],
+    },
+    // ── Asia ───────────────────────────────────────────────────────
+    CountrySkillBiasRow {
+        // Japan: technical excellence, discipline, agility
+        codes: &["jp"],
+        deltas: &[
+            (SK_FIRST_TOUCH, 1.5),
+            (SK_TECHNIQUE, 1.0),
+            (SK_PASSING, 1.0),
+            (SK_TEAMWORK, 1.5),
+            (SK_WORK_RATE, 1.0),
+            (SK_CONCENTRATION, 0.5),
+            (SK_DECISIONS, 0.5),
+            (SK_AGILITY, 1.5),
+            (SK_BALANCE, 1.0),
+            (SK_STAMINA, 0.5),
+            // Tradeoffs
+            (SK_STRENGTH, -2.0),
+            (SK_JUMPING, -1.0),
+            (SK_HEADING, -0.5),
+            (SK_AGGRESSION, -0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // South Korea: disciplined, high-stamina, technical-physical mix
+        codes: &["kr"],
+        deltas: &[
+            (SK_STAMINA, 1.5),
+            (SK_WORK_RATE, 1.5),
+            (SK_DETERMINATION, 1.0),
+            (SK_TEAMWORK, 1.0),
+            (SK_CONCENTRATION, 0.5),
+            (SK_PACE, 0.5),
+            (SK_AGILITY, 0.5),
+            (SK_TECHNIQUE, 0.5),
+            // Tradeoff
+            (SK_STRENGTH, -1.0),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Iran: technically competent, physical
+        codes: &["ir"],
+        deltas: &[
+            (SK_TECHNIQUE, 0.5),
+            (SK_PASSING, 0.5),
+            (SK_DETERMINATION, 0.5),
+            (SK_STRENGTH, 0.5),
+            (SK_HEADING, 0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Australia: physical, British-influenced style
+        codes: &["au"],
+        deltas: &[
+            (SK_STRENGTH, 0.5),
+            (SK_STAMINA, 0.5),
+            (SK_PACE, 0.5),
+            (SK_WORK_RATE, 0.5),
+            (SK_DETERMINATION, 0.5),
+            (SK_HEADING, 0.5),
+        ],
+    },
+    // ── North/Central America ──────────────────────────────────────
+    CountrySkillBiasRow {
+        // Mexico: technical, work rate, agile
+        codes: &["mx"],
+        deltas: &[
+            (SK_TECHNIQUE, 0.5),
+            (SK_DRIBBLING, 0.5),
+            (SK_PASSING, 0.5),
+            (SK_WORK_RATE, 1.0),
+            (SK_TEAMWORK, 0.5),
+            (SK_STAMINA, 0.5),
+            (SK_AGILITY, 0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // USA: athletic, physical, improving technically
+        codes: &["us"],
+        deltas: &[
+            (SK_PACE, 1.0),
+            (SK_STAMINA, 1.0),
+            (SK_STRENGTH, 0.5),
+            (SK_NATURAL_FITNESS, 0.5),
+            (SK_WORK_RATE, 0.5),
+            // Tradeoff
+            (SK_TECHNIQUE, -0.5),
+        ],
+    },
+    CountrySkillBiasRow {
+        // Jamaica: explosive speed
+        codes: &["jm"],
+        deltas: &[
+            (SK_PACE, 2.0),
+            (SK_ACCELERATION, 1.5),
+            (SK_STRENGTH, 0.5),
+            (SK_AGILITY, 0.5),
+            (SK_FLAIR, 0.5),
+            (SK_DRIBBLING, 0.5),
+        ],
+    },
+];
+
+/// Per-skill additive bias for a player's country, with country-specific
+/// overrides taking precedence over continent defaults.
+pub struct CountrySkillBias;
+
+impl CountrySkillBias {
+    pub fn for_country(continent_id: u32, country_code: &str) -> [f32; SKILL_COUNT] {
+        let mut b = [0.0f32; SKILL_COUNT];
+
+        // Try country-specific bias first; fall back to continent/region
+        if !Self::apply_country(&mut b, country_code) {
+            Self::apply_region(&mut b, continent_id, country_code);
         }
 
-        // ── Europe: major nations ──────────────────────────────────────
-        "es" => {
-            // Spain: positional play, passing mastery
-            b[SK_PASSING] = 2.0;
-            b[SK_FIRST_TOUCH] = 1.5;
-            b[SK_TECHNIQUE] = 1.0;
-            b[SK_VISION] = 1.0;
-            b[SK_COMPOSURE] = 1.0;
-            b[SK_DECISIONS] = 0.5;
-            b[SK_TEAMWORK] = 0.5;
-            // Tradeoffs
-            b[SK_STRENGTH] = -0.5;
-            b[SK_PACE] = -0.5;
+        b
+    }
+
+    /// Country-specific biases for major football nations.
+    /// Returns true if a specific bias was applied.
+    fn apply_country(b: &mut [f32; SKILL_COUNT], code: &str) -> bool {
+        let Some(bias) = COUNTRY_SKILL_BIASES
+            .iter()
+            .find(|bias| bias.codes.contains(&code))
+        else {
+            return false;
+        };
+        for &(skill, delta) in bias.deltas {
+            b[skill] = delta;
         }
-        "de" => {
-            // Germany: organised, disciplined, physical + tactical
-            b[SK_TEAMWORK] = 1.5;
-            b[SK_POSITIONING] = 1.0;
-            b[SK_WORK_RATE] = 1.0;
-            b[SK_CONCENTRATION] = 0.5;
-            b[SK_DETERMINATION] = 0.5;
-            b[SK_STAMINA] = 1.0;
-            b[SK_STRENGTH] = 0.5;
-            b[SK_PASSING] = 0.5;
+        true
+    }
+
+    /// Region/continent-level defaults for countries without specific biases.
+    fn apply_region(b: &mut [f32; SKILL_COUNT], continent_id: u32, code: &str) {
+        match continent_id {
+            0 => Self::apply_africa(b, code),
+            1 => Self::apply_europe(b, code),
+            2 => Self::apply_north_central_america(b, code),
+            3 => Self::apply_south_america(b),
+            4 => Self::apply_asia(b, code),
+            5 => Self::apply_oceania(b, code),
+            _ => {}
         }
-        "it" => {
-            // Italy: tactical intelligence, defensive mastery, composure
-            b[SK_POSITIONING] = 1.5;
-            b[SK_CONCENTRATION] = 1.0;
-            b[SK_COMPOSURE] = 1.0;
-            b[SK_ANTICIPATION] = 0.5;
-            b[SK_DECISIONS] = 0.5;
-            b[SK_MARKING] = 0.5;
-            b[SK_TACKLING] = 0.5;
-            b[SK_TECHNIQUE] = 0.5;
-            // Tradeoff
-            b[SK_PACE] = -0.5;
-        }
-        "fr" => {
-            // France: athletic, versatile, physically dominant
-            b[SK_PACE] = 1.5;
-            b[SK_STRENGTH] = 1.0;
-            b[SK_ACCELERATION] = 1.0;
-            b[SK_NATURAL_FITNESS] = 0.5;
+    }
+
+    fn apply_africa(b: &mut [f32; SKILL_COUNT], code: &str) {
+        // Sub-region: North Africa
+        if matches!(code, "ly" | "mr") {
             b[SK_TECHNIQUE] = 0.5;
             b[SK_DRIBBLING] = 0.5;
-            b[SK_COMPOSURE] = 0.5;
-        }
-        "nl" => {
-            // Netherlands: total football — technical, intelligent
-            b[SK_PASSING] = 1.5;
-            b[SK_FIRST_TOUCH] = 1.0;
-            b[SK_TECHNIQUE] = 1.0;
-            b[SK_VISION] = 1.0;
-            b[SK_COMPOSURE] = 0.5;
-            b[SK_DECISIONS] = 0.5;
-            b[SK_STAMINA] = 0.5;
-            // Tradeoff
-            b[SK_STRENGTH] = -0.5;
-        }
-        "pt" => {
-            // Portugal: technical flair, dribbling culture
-            b[SK_DRIBBLING] = 1.5;
-            b[SK_TECHNIQUE] = 1.0;
-            b[SK_FIRST_TOUCH] = 0.5;
-            b[SK_CROSSING] = 0.5;
-            b[SK_FLAIR] = 1.0;
-            b[SK_COMPOSURE] = 0.5;
             b[SK_AGILITY] = 0.5;
-            b[SK_BALANCE] = 0.5;
-        }
-        "gb" => {
-            // England: direct, physical, determined
-            b[SK_HEADING] = 0.5;
-            b[SK_CROSSING] = 0.5;
-            b[SK_LONG_SHOTS] = 0.5;
-            b[SK_DETERMINATION] = 1.0;
-            b[SK_WORK_RATE] = 1.0;
-            b[SK_BRAVERY] = 0.5;
-            b[SK_AGGRESSION] = 0.5;
-            b[SK_PACE] = 0.5;
-            b[SK_STAMINA] = 0.5;
-            b[SK_STRENGTH] = 0.5;
-            // Tradeoffs
-            b[SK_TECHNIQUE] = -0.5;
-            b[SK_FLAIR] = -0.5;
-        }
-        "sc" => {
-            // Scotland: physical, direct, brave
-            b[SK_HEADING] = 0.5;
-            b[SK_DETERMINATION] = 1.5;
-            b[SK_WORK_RATE] = 1.0;
-            b[SK_BRAVERY] = 1.0;
-            b[SK_AGGRESSION] = 0.5;
-            b[SK_STAMINA] = 0.5;
-            b[SK_STRENGTH] = 0.5;
-            // Tradeoffs
-            b[SK_TECHNIQUE] = -0.5;
-            b[SK_FLAIR] = -1.0;
-        }
-        "ie" | "ei" => {
-            // Northern Ireland / Republic of Ireland: determined, physical
-            b[SK_DETERMINATION] = 1.0;
-            b[SK_WORK_RATE] = 1.0;
-            b[SK_BRAVERY] = 0.5;
-            b[SK_STAMINA] = 0.5;
-            b[SK_STRENGTH] = 0.5;
-            b[SK_FLAIR] = -0.5;
-        }
-        "be" => {
-            // Belgium: modern blend — technical + physical
-            b[SK_TECHNIQUE] = 0.5;
-            b[SK_PASSING] = 0.5;
-            b[SK_FIRST_TOUCH] = 0.5;
-            b[SK_PACE] = 0.5;
-            b[SK_STRENGTH] = 0.5;
             b[SK_COMPOSURE] = 0.5;
+            return;
         }
-        "hr" => {
-            // Croatia: technical midfield tradition, tactical
-            b[SK_PASSING] = 1.0;
-            b[SK_TECHNIQUE] = 1.0;
-            b[SK_FIRST_TOUCH] = 0.5;
-            b[SK_VISION] = 0.5;
-            b[SK_COMPOSURE] = 0.5;
-            b[SK_DETERMINATION] = 0.5;
-            b[SK_STAMINA] = 0.5;
-        }
-        "rs" => {
-            // Serbia: technically solid, physical, determined
-            b[SK_TECHNIQUE] = 0.5;
-            b[SK_PASSING] = 0.5;
-            b[SK_HEADING] = 0.5;
-            b[SK_DETERMINATION] = 1.0;
-            b[SK_AGGRESSION] = 0.5;
-            b[SK_STRENGTH] = 0.5;
-        }
-        "tr" => {
-            // Turkey: passionate, physical, aggressive
-            b[SK_AGGRESSION] = 1.0;
-            b[SK_DETERMINATION] = 0.5;
-            b[SK_BRAVERY] = 0.5;
-            b[SK_STRENGTH] = 0.5;
-            b[SK_STAMINA] = 0.5;
-            b[SK_TECHNIQUE] = 0.5;
-        }
-
-        // ── Africa: specific nations ───────────────────────────────────
-        "ng" => {
-            // Nigeria: explosive athletes, raw talent
-            b[SK_PACE] = 2.0;
-            b[SK_ACCELERATION] = 1.5;
-            b[SK_STRENGTH] = 1.5;
+        // Sub-region: East Africa
+        if matches!(
+            code,
+            "ke" | "et" | "tz" | "ug" | "rw" | "bi" | "er" | "dj" | "so"
+        ) {
+            b[SK_STAMINA] = 2.0;
             b[SK_NATURAL_FITNESS] = 1.0;
-            b[SK_JUMPING] = 0.5;
-            b[SK_DRIBBLING] = 0.5;
-            // Tradeoffs
-            b[SK_POSITIONING] = -0.5;
-            b[SK_CONCENTRATION] = -0.5;
-        }
-        "gh" => {
-            // Ghana: physical + technical blend, flair
-            b[SK_PACE] = 1.5;
-            b[SK_ACCELERATION] = 1.0;
-            b[SK_STRENGTH] = 1.0;
-            b[SK_NATURAL_FITNESS] = 0.5;
-            b[SK_DRIBBLING] = 1.0;
-            b[SK_FLAIR] = 0.5;
-            b[SK_CONCENTRATION] = -0.5;
-        }
-        "cm" => {
-            // Cameroon: physically imposing, determined
-            b[SK_PACE] = 1.5;
-            b[SK_STRENGTH] = 1.5;
-            b[SK_ACCELERATION] = 1.0;
-            b[SK_JUMPING] = 1.0;
-            b[SK_NATURAL_FITNESS] = 0.5;
-            b[SK_DETERMINATION] = 0.5;
-            b[SK_AGGRESSION] = 0.5;
-            b[SK_CONCENTRATION] = -0.5;
-        }
-        "ci" => {
-            // Côte d'Ivoire: powerful, explosive
-            b[SK_PACE] = 1.5;
-            b[SK_STRENGTH] = 1.5;
-            b[SK_ACCELERATION] = 1.0;
-            b[SK_NATURAL_FITNESS] = 0.5;
-            b[SK_DRIBBLING] = 0.5;
-            b[SK_TECHNIQUE] = 0.5;
-            b[SK_POSITIONING] = -0.5;
-        }
-        "sn" => {
-            // Senegal: athletic, technically improving
-            b[SK_PACE] = 1.5;
-            b[SK_STRENGTH] = 1.0;
-            b[SK_ACCELERATION] = 1.0;
-            b[SK_NATURAL_FITNESS] = 0.5;
-            b[SK_DRIBBLING] = 0.5;
-            b[SK_DETERMINATION] = 0.5;
-        }
-        "ma" => {
-            // Morocco: technical, tactical awareness (North African style)
-            b[SK_TECHNIQUE] = 1.0;
-            b[SK_DRIBBLING] = 1.0;
-            b[SK_PASSING] = 0.5;
-            b[SK_FIRST_TOUCH] = 0.5;
-            b[SK_COMPOSURE] = 0.5;
-            b[SK_VISION] = 0.5;
-            b[SK_AGILITY] = 0.5;
-        }
-        "eg" => {
-            // Egypt: technical, creative
-            b[SK_TECHNIQUE] = 1.0;
-            b[SK_DRIBBLING] = 0.5;
-            b[SK_PASSING] = 0.5;
-            b[SK_FIRST_TOUCH] = 0.5;
-            b[SK_COMPOSURE] = 0.5;
-            b[SK_FLAIR] = 0.5;
-            b[SK_AGILITY] = 0.5;
-        }
-        "dz" | "tn" => {
-            // Algeria, Tunisia: North African — technical, agile
-            b[SK_TECHNIQUE] = 0.5;
-            b[SK_DRIBBLING] = 0.5;
-            b[SK_PASSING] = 0.5;
-            b[SK_COMPOSURE] = 0.5;
-            b[SK_AGILITY] = 0.5;
-            b[SK_PACE] = 0.5;
-        }
-
-        // ── Asia ───────────────────────────────────────────────────────
-        "jp" => {
-            // Japan: technical excellence, discipline, agility
-            b[SK_FIRST_TOUCH] = 1.5;
-            b[SK_TECHNIQUE] = 1.0;
-            b[SK_PASSING] = 1.0;
-            b[SK_TEAMWORK] = 1.5;
-            b[SK_WORK_RATE] = 1.0;
-            b[SK_CONCENTRATION] = 0.5;
-            b[SK_DECISIONS] = 0.5;
-            b[SK_AGILITY] = 1.5;
-            b[SK_BALANCE] = 1.0;
-            b[SK_STAMINA] = 0.5;
-            // Tradeoffs
-            b[SK_STRENGTH] = -2.0;
-            b[SK_JUMPING] = -1.0;
-            b[SK_HEADING] = -0.5;
-            b[SK_AGGRESSION] = -0.5;
-        }
-        "kr" => {
-            // South Korea: disciplined, high-stamina, technical-physical mix
-            b[SK_STAMINA] = 1.5;
-            b[SK_WORK_RATE] = 1.5;
-            b[SK_DETERMINATION] = 1.0;
-            b[SK_TEAMWORK] = 1.0;
-            b[SK_CONCENTRATION] = 0.5;
-            b[SK_PACE] = 0.5;
-            b[SK_AGILITY] = 0.5;
-            b[SK_TECHNIQUE] = 0.5;
-            // Tradeoff
-            b[SK_STRENGTH] = -1.0;
-        }
-        "ir" => {
-            // Iran: technically competent, physical
-            b[SK_TECHNIQUE] = 0.5;
-            b[SK_PASSING] = 0.5;
-            b[SK_DETERMINATION] = 0.5;
-            b[SK_STRENGTH] = 0.5;
-            b[SK_HEADING] = 0.5;
-        }
-        "au" => {
-            // Australia: physical, British-influenced style
-            b[SK_STRENGTH] = 0.5;
-            b[SK_STAMINA] = 0.5;
-            b[SK_PACE] = 0.5;
-            b[SK_WORK_RATE] = 0.5;
-            b[SK_DETERMINATION] = 0.5;
-            b[SK_HEADING] = 0.5;
-        }
-
-        // ── North/Central America ──────────────────────────────────────
-        "mx" => {
-            // Mexico: technical, work rate, agile
-            b[SK_TECHNIQUE] = 0.5;
-            b[SK_DRIBBLING] = 0.5;
-            b[SK_PASSING] = 0.5;
-            b[SK_WORK_RATE] = 1.0;
-            b[SK_TEAMWORK] = 0.5;
-            b[SK_STAMINA] = 0.5;
-            b[SK_AGILITY] = 0.5;
-        }
-        "us" => {
-            // USA: athletic, physical, improving technically
             b[SK_PACE] = 1.0;
-            b[SK_STAMINA] = 1.0;
+            b[SK_STRENGTH] = -1.0;
+            return;
+        }
+        // Default Africa: West/Central/Southern — explosive physicality
+        b[SK_PACE] = 1.5;
+        b[SK_ACCELERATION] = 1.5;
+        b[SK_STRENGTH] = 1.0;
+        b[SK_NATURAL_FITNESS] = 0.5;
+        b[SK_STAMINA] = 0.5;
+        b[SK_JUMPING] = 0.5;
+        b[SK_DRIBBLING] = 0.5;
+        // Tradeoffs
+        b[SK_POSITIONING] = -0.5;
+        b[SK_CONCENTRATION] = -0.5;
+    }
+
+    fn apply_europe(b: &mut [f32; SKILL_COUNT], code: &str) {
+        // Sub-region: Scandinavia
+        if matches!(code, "se" | "no" | "dk" | "fi" | "is" | "fo") {
+            b[SK_STRENGTH] = 1.5;
+            b[SK_JUMPING] = 1.0;
+            b[SK_HEADING] = 0.5;
+            b[SK_STAMINA] = 0.5;
+            b[SK_TEAMWORK] = 1.0;
+            b[SK_WORK_RATE] = 0.5;
+            b[SK_POSITIONING] = 0.5;
+            // Tradeoffs
+            b[SK_AGILITY] = -0.5;
+            b[SK_FLAIR] = -0.5;
+            return;
+        }
+        // Sub-region: Balkans
+        if matches!(code, "ba" | "me" | "mk" | "si" | "al") {
+            b[SK_TECHNIQUE] = 0.5;
+            b[SK_PASSING] = 0.5;
+            b[SK_DETERMINATION] = 1.0;
+            b[SK_AGGRESSION] = 0.5;
             b[SK_STRENGTH] = 0.5;
-            b[SK_NATURAL_FITNESS] = 0.5;
+            b[SK_STAMINA] = 0.5;
+            return;
+        }
+        // Sub-region: Eastern Europe
+        if matches!(
+            code,
+            "ru" | "ua"
+                | "by"
+                | "pl"
+                | "cz"
+                | "sk"
+                | "hu"
+                | "ro"
+                | "bg"
+                | "md"
+                | "lt"
+                | "lv"
+                | "ee"
+        ) {
+            b[SK_STRENGTH] = 1.0;
+            b[SK_STAMINA] = 1.0;
+            b[SK_DETERMINATION] = 0.5;
             b[SK_WORK_RATE] = 0.5;
             // Tradeoff
-            b[SK_TECHNIQUE] = -0.5;
+            b[SK_AGILITY] = -0.5;
+            return;
         }
-        "jm" => {
-            // Jamaica: explosive speed
-            b[SK_PACE] = 2.0;
-            b[SK_ACCELERATION] = 1.5;
-            b[SK_STRENGTH] = 0.5;
-            b[SK_AGILITY] = 0.5;
-            b[SK_FLAIR] = 0.5;
-            b[SK_DRIBBLING] = 0.5;
-        }
-
-        _ => return false,
-    }
-    true
-}
-
-/// Region/continent-level defaults for countries without specific biases.
-fn apply_region_bias(b: &mut [f32; SKILL_COUNT], continent_id: u32, code: &str) {
-    match continent_id {
-        // ── Africa (0) ─────────────────────────────────────────────────
-        0 => {
-            // Sub-region: North Africa
-            if matches!(code, "ly" | "mr") {
-                b[SK_TECHNIQUE] = 0.5;
-                b[SK_DRIBBLING] = 0.5;
-                b[SK_AGILITY] = 0.5;
-                b[SK_COMPOSURE] = 0.5;
-                return;
-            }
-            // Sub-region: East Africa
-            if matches!(
-                code,
-                "ke" | "et" | "tz" | "ug" | "rw" | "bi" | "er" | "dj" | "so"
-            ) {
-                b[SK_STAMINA] = 2.0;
-                b[SK_NATURAL_FITNESS] = 1.0;
-                b[SK_PACE] = 1.0;
-                b[SK_STRENGTH] = -1.0;
-                return;
-            }
-            // Default Africa: West/Central/Southern — explosive physicality
-            b[SK_PACE] = 1.5;
-            b[SK_ACCELERATION] = 1.5;
-            b[SK_STRENGTH] = 1.0;
-            b[SK_NATURAL_FITNESS] = 0.5;
-            b[SK_STAMINA] = 0.5;
-            b[SK_JUMPING] = 0.5;
-            b[SK_DRIBBLING] = 0.5;
-            // Tradeoffs
-            b[SK_POSITIONING] = -0.5;
-            b[SK_CONCENTRATION] = -0.5;
-        }
-
-        // ── Europe (1) ─────────────────────────────────────────────────
-        1 => {
-            // Sub-region: Scandinavia
-            if matches!(code, "se" | "no" | "dk" | "fi" | "is" | "fo") {
-                b[SK_STRENGTH] = 1.5;
-                b[SK_JUMPING] = 1.0;
-                b[SK_HEADING] = 0.5;
-                b[SK_STAMINA] = 0.5;
-                b[SK_TEAMWORK] = 1.0;
-                b[SK_WORK_RATE] = 0.5;
-                b[SK_POSITIONING] = 0.5;
-                // Tradeoffs
-                b[SK_AGILITY] = -0.5;
-                b[SK_FLAIR] = -0.5;
-                return;
-            }
-            // Sub-region: Balkans
-            if matches!(code, "ba" | "me" | "mk" | "si" | "al") {
-                b[SK_TECHNIQUE] = 0.5;
-                b[SK_PASSING] = 0.5;
-                b[SK_DETERMINATION] = 1.0;
-                b[SK_AGGRESSION] = 0.5;
-                b[SK_STRENGTH] = 0.5;
-                b[SK_STAMINA] = 0.5;
-                return;
-            }
-            // Sub-region: Eastern Europe
-            if matches!(
-                code,
-                "ru" | "ua"
-                    | "by"
-                    | "pl"
-                    | "cz"
-                    | "sk"
-                    | "hu"
-                    | "ro"
-                    | "bg"
-                    | "md"
-                    | "lt"
-                    | "lv"
-                    | "ee"
-            ) {
-                b[SK_STRENGTH] = 1.0;
-                b[SK_STAMINA] = 1.0;
-                b[SK_DETERMINATION] = 0.5;
-                b[SK_WORK_RATE] = 0.5;
-                // Tradeoff
-                b[SK_AGILITY] = -0.5;
-                return;
-            }
-            // Sub-region: Greece / Cyprus
-            if matches!(code, "gr" | "cy") {
-                b[SK_TEAMWORK] = 0.5;
-                b[SK_POSITIONING] = 0.5;
-                b[SK_CONCENTRATION] = 0.5;
-                b[SK_STAMINA] = 0.5;
-                b[SK_FLAIR] = -0.5;
-                return;
-            }
-            // Default Europe: Swiss, Austrian, etc. — balanced, organised
+        // Sub-region: Greece / Cyprus
+        if matches!(code, "gr" | "cy") {
             b[SK_TEAMWORK] = 0.5;
             b[SK_POSITIONING] = 0.5;
+            b[SK_CONCENTRATION] = 0.5;
             b[SK_STAMINA] = 0.5;
+            b[SK_FLAIR] = -0.5;
+            return;
         }
+        // Default Europe: Swiss, Austrian, etc. — balanced, organised
+        b[SK_TEAMWORK] = 0.5;
+        b[SK_POSITIONING] = 0.5;
+        b[SK_STAMINA] = 0.5;
+    }
 
-        // ── North / Central America & Caribbean (2) ────────────────────
-        2 => {
-            // Sub-region: Caribbean
-            if matches!(
-                code,
-                "tt" | "bb"
-                    | "gd"
-                    | "dm"
-                    | "lc"
-                    | "kn"
-                    | "vc"
-                    | "ag"
-                    | "ht"
-                    | "bs"
-                    | "ky"
-                    | "bm"
-                    | "vg"
-                    | "vi"
-                    | "tc"
-                    | "ms"
-                    | "ai"
-                    | "gp"
-                    | "mq"
-                    | "mf"
-                    | "pr"
-            ) {
-                b[SK_PACE] = 1.5;
-                b[SK_ACCELERATION] = 1.0;
-                b[SK_STRENGTH] = 0.5;
-                b[SK_AGILITY] = 0.5;
-                b[SK_FLAIR] = 0.5;
-                return;
-            }
-            // Sub-region: Central America
-            if matches!(code, "cr" | "hn" | "sv" | "gt" | "ni" | "pa" | "bz") {
-                b[SK_TECHNIQUE] = 0.5;
-                b[SK_AGILITY] = 0.5;
-                b[SK_BALANCE] = 0.5;
-                b[SK_WORK_RATE] = 0.5;
-                return;
-            }
-            // Default: Canada, Cuba, Dominican Republic — athletic
-            b[SK_PACE] = 0.5;
-            b[SK_STAMINA] = 0.5;
-        }
-
-        // ── South America (3) ──────────────────────────────────────────
-        3 => {
-            // Default South America: technical, flair (Paraguay, Ecuador, Peru, etc.)
-            b[SK_TECHNIQUE] = 0.5;
-            b[SK_DRIBBLING] = 0.5;
+    fn apply_north_central_america(b: &mut [f32; SKILL_COUNT], code: &str) {
+        // Sub-region: Caribbean
+        if matches!(
+            code,
+            "tt" | "bb"
+                | "gd"
+                | "dm"
+                | "lc"
+                | "kn"
+                | "vc"
+                | "ag"
+                | "ht"
+                | "bs"
+                | "ky"
+                | "bm"
+                | "vg"
+                | "vi"
+                | "tc"
+                | "ms"
+                | "ai"
+                | "gp"
+                | "mq"
+                | "mf"
+                | "pr"
+        ) {
+            b[SK_PACE] = 1.5;
+            b[SK_ACCELERATION] = 1.0;
+            b[SK_STRENGTH] = 0.5;
+            b[SK_AGILITY] = 0.5;
             b[SK_FLAIR] = 0.5;
+            return;
+        }
+        // Sub-region: Central America
+        if matches!(code, "cr" | "hn" | "sv" | "gt" | "ni" | "pa" | "bz") {
+            b[SK_TECHNIQUE] = 0.5;
+            b[SK_AGILITY] = 0.5;
             b[SK_BALANCE] = 0.5;
-        }
-
-        // ── Asia (4) ──────────────────────────────────────────────────
-        4 => {
-            // Sub-region: Gulf states
-            if matches!(code, "sa" | "ae" | "qa" | "kw" | "bh" | "om") {
-                b[SK_PACE] = 0.5;
-                b[SK_STRENGTH] = 0.5;
-                b[SK_DETERMINATION] = 0.5;
-                return;
-            }
-            // Sub-region: Central Asia
-            if matches!(code, "uz" | "kg" | "tj" | "tm" | "kz") {
-                b[SK_STRENGTH] = 0.5;
-                b[SK_STAMINA] = 0.5;
-                b[SK_DETERMINATION] = 0.5;
-                return;
-            }
-            // Sub-region: Southeast Asia
-            if matches!(
-                code,
-                "th" | "id" | "my" | "ph" | "sg" | "kh" | "mm" | "la" | "bn"
-            ) {
-                b[SK_AGILITY] = 1.0;
-                b[SK_BALANCE] = 0.5;
-                b[SK_PACE] = 0.5;
-                b[SK_STRENGTH] = -1.5;
-                b[SK_JUMPING] = -1.0;
-                b[SK_HEADING] = -0.5;
-                return;
-            }
-            // Sub-region: South Asia
-            if matches!(code, "in" | "pk" | "bd" | "lk" | "np") {
-                b[SK_STAMINA] = 0.5;
-                b[SK_TECHNIQUE] = -0.5;
-                return;
-            }
-            // Default Asia: China, Mongolia, etc. — developing
-            b[SK_STAMINA] = 0.5;
             b[SK_WORK_RATE] = 0.5;
+            return;
         }
+        // Default: Canada, Cuba, Dominican Republic — athletic
+        b[SK_PACE] = 0.5;
+        b[SK_STAMINA] = 0.5;
+    }
 
-        // ── Oceania (5) ────────────────────────────────────────────────
-        5 => {
-            // Sub-region: Pacific Islands
-            if matches!(
-                code,
-                "fj" | "pg"
-                    | "sb"
-                    | "vu"
-                    | "ws"
-                    | "to"
-                    | "ki"
-                    | "tv"
-                    | "ck"
-                    | "wf"
-                    | "fm"
-                    | "mp"
-                    | "th"
-            ) {
-                b[SK_STRENGTH] = 1.0;
-                b[SK_PACE] = 0.5;
-                b[SK_AGILITY] = -0.5;
-                return;
-            }
-            // Default Oceania (NZ, Guam, etc.)
+    fn apply_south_america(b: &mut [f32; SKILL_COUNT]) {
+        // Default South America: technical, flair (Paraguay, Ecuador, Peru, etc.)
+        b[SK_TECHNIQUE] = 0.5;
+        b[SK_DRIBBLING] = 0.5;
+        b[SK_FLAIR] = 0.5;
+        b[SK_BALANCE] = 0.5;
+    }
+
+    fn apply_asia(b: &mut [f32; SKILL_COUNT], code: &str) {
+        // Sub-region: Gulf states
+        if matches!(code, "sa" | "ae" | "qa" | "kw" | "bh" | "om") {
+            b[SK_PACE] = 0.5;
+            b[SK_STRENGTH] = 0.5;
+            b[SK_DETERMINATION] = 0.5;
+            return;
+        }
+        // Sub-region: Central Asia
+        if matches!(code, "uz" | "kg" | "tj" | "tm" | "kz") {
             b[SK_STRENGTH] = 0.5;
             b[SK_STAMINA] = 0.5;
-            b[SK_WORK_RATE] = 0.5;
+            b[SK_DETERMINATION] = 0.5;
+            return;
         }
+        // Sub-region: Southeast Asia
+        if matches!(
+            code,
+            "th" | "id" | "my" | "ph" | "sg" | "kh" | "mm" | "la" | "bn"
+        ) {
+            b[SK_AGILITY] = 1.0;
+            b[SK_BALANCE] = 0.5;
+            b[SK_PACE] = 0.5;
+            b[SK_STRENGTH] = -1.5;
+            b[SK_JUMPING] = -1.0;
+            b[SK_HEADING] = -0.5;
+            return;
+        }
+        // Sub-region: South Asia
+        if matches!(code, "in" | "pk" | "bd" | "lk" | "np") {
+            b[SK_STAMINA] = 0.5;
+            b[SK_TECHNIQUE] = -0.5;
+            return;
+        }
+        // Default Asia: China, Mongolia, etc. — developing
+        b[SK_STAMINA] = 0.5;
+        b[SK_WORK_RATE] = 0.5;
+    }
 
-        _ => {}
+    fn apply_oceania(b: &mut [f32; SKILL_COUNT], code: &str) {
+        // Sub-region: Pacific Islands
+        if matches!(
+            code,
+            "fj" | "pg"
+                | "sb"
+                | "vu"
+                | "ws"
+                | "to"
+                | "ki"
+                | "tv"
+                | "ck"
+                | "wf"
+                | "fm"
+                | "mp"
+                | "th"
+        ) {
+            b[SK_STRENGTH] = 1.0;
+            b[SK_PACE] = 0.5;
+            b[SK_AGILITY] = -0.5;
+            return;
+        }
+        // Default Oceania (NZ, Guam, etc.)
+        b[SK_STRENGTH] = 0.5;
+        b[SK_STAMINA] = 0.5;
+        b[SK_WORK_RATE] = 0.5;
     }
 }

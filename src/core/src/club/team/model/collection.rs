@@ -3,7 +3,7 @@ use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::mind::{ActorRef, EpisodeKind};
 use crate::club::staff::coach::standing::EvidenceLens;
 use crate::club::staff::mind::organs::judgements::CoachDecisionState;
-use crate::club::staff::perception::{CoachProfile, date_to_week};
+use crate::club::staff::perception::{CoachProfile, PerceptionNoise};
 use crate::club::team::squad::SquadSatisfaction;
 use crate::club::team::squad::{ContractRenewalManager, SquadManager};
 use crate::context::GlobalContext;
@@ -260,7 +260,7 @@ impl TeamCollection {
             if !same_man || !previously_bound {
                 coach.decision_state.bind(coach_id, profile, date);
             } else {
-                coach.decision_state.current_week = date_to_week(date);
+                coach.decision_state.current_week = PerceptionNoise::week(date);
             }
         }
 

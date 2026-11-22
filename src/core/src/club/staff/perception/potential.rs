@@ -3,8 +3,8 @@ use chrono::NaiveDate;
 use crate::utils::DateUtils;
 use crate::{Player, PlayerFieldPositionGroup, Staff};
 
+use super::noise::PerceptionNoise;
 use super::profile::CoachProfile;
-use super::utils::{date_to_week, perception_noise_raw};
 
 /// Staff-formed projection of a player's ceiling. Never reads
 /// `player_attributes.potential_ability` — coaches and scouts cannot see
@@ -274,12 +274,12 @@ impl PotentialEstimator {
         // not weekly — a coach's read of a ceiling drifts slowly, and a
         // weekly re-roll made borderline star ratings flip every Monday
         // on pure noise.
-        let period = date_to_week(date) / 4;
+        let period = PerceptionNoise::week(date) / 4;
         let salt = ctx
             .salt
             .wrapping_add(period.wrapping_mul(11))
             .wrapping_add(ctx.observation_count as u32 * 0x9E37);
-        let noise = perception_noise_raw(profile.coach_seed, player.id, salt);
+        let noise = PerceptionNoise::raw(profile.coach_seed, player.id, salt);
         // Negativity bias skews the *direction* of the random read for
         // pessimistic coaches — they more often land on the lower side
         // of the band. Optimism is already expressed via the youth

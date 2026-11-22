@@ -65,7 +65,7 @@ impl WageCalculator {
 
         let club_factor = 0.70 + (club_reputation_score as f64).clamp(0.0, 1.0) * 0.60;
 
-        let age_factor = age_factor(age);
+        let age_factor = Self::age_factor(age);
 
         let position_factor = if is_forward {
             1.15
@@ -141,45 +141,49 @@ impl WageCalculator {
     }
 }
 
-/// Age curve used by both the buying-club wage estimate and the unified
-/// `ContractValuation`. Peak 25-30, steep fall after 32, discount under 22.
-fn age_factor(age: u8) -> f64 {
-    match age {
-        0..=17 => 0.25,
-        18 => 0.35,
-        19 => 0.45,
-        20 => 0.55,
-        21 => 0.70,
-        22 => 0.80,
-        23 => 0.90,
-        24 => 0.97,
-        25..=28 => 1.00,
-        29 => 0.95,
-        30 => 0.88,
-        31 => 0.80,
-        32 => 0.70,
-        33 => 0.58,
-        34 => 0.45,
-        _ => 0.35,
+impl WageCalculator {
+    /// Age curve used by both the buying-club wage estimate and the unified
+    /// `ContractValuation`. Peak 25-30, steep fall after 32, discount under 22.
+    fn age_factor(age: u8) -> f64 {
+        match age {
+            0..=17 => 0.25,
+            18 => 0.35,
+            19 => 0.45,
+            20 => 0.55,
+            21 => 0.70,
+            22 => 0.80,
+            23 => 0.90,
+            24 => 0.97,
+            25..=28 => 1.00,
+            29 => 0.95,
+            30 => 0.88,
+            31 => 0.80,
+            32 => 0.70,
+            33 => 0.58,
+            34 => 0.45,
+            _ => 0.35,
+        }
     }
 }
 
-/// Squad-status premium applied on top of the open-market wage. Real
-/// clubs pay key players a premium even at the same ability; backups
-/// accept a discount. NotNeeded gets a flat low-end factor — these
-/// players keep their existing deal at most.
-pub fn squad_status_wage_factor(status: &PlayerSquadStatus) -> f32 {
-    match status {
-        PlayerSquadStatus::KeyPlayer => 1.45,
-        PlayerSquadStatus::FirstTeamRegular => 1.15,
-        PlayerSquadStatus::FirstTeamSquadRotation => 0.90,
-        PlayerSquadStatus::MainBackupPlayer => 0.70,
-        PlayerSquadStatus::HotProspectForTheFuture => 0.65,
-        PlayerSquadStatus::DecentYoungster => 0.55,
-        PlayerSquadStatus::NotNeeded => 0.55,
-        PlayerSquadStatus::Invalid
-        | PlayerSquadStatus::NotYetSet
-        | PlayerSquadStatus::SquadStatusCount => 1.00,
+impl PlayerSquadStatus {
+    /// Squad-status premium applied on top of the open-market wage. Real
+    /// clubs pay key players a premium even at the same ability; backups
+    /// accept a discount. NotNeeded gets a flat low-end factor — these
+    /// players keep their existing deal at most.
+    pub fn wage_factor(&self) -> f32 {
+        match self {
+            PlayerSquadStatus::KeyPlayer => 1.45,
+            PlayerSquadStatus::FirstTeamRegular => 1.15,
+            PlayerSquadStatus::FirstTeamSquadRotation => 0.90,
+            PlayerSquadStatus::MainBackupPlayer => 0.70,
+            PlayerSquadStatus::HotProspectForTheFuture => 0.65,
+            PlayerSquadStatus::DecentYoungster => 0.55,
+            PlayerSquadStatus::NotNeeded => 0.55,
+            PlayerSquadStatus::Invalid
+            | PlayerSquadStatus::NotYetSet
+            | PlayerSquadStatus::SquadStatusCount => 1.00,
+        }
     }
 }
 
@@ -254,14 +258,14 @@ impl ContractValuation {
             ctx.league_reputation,
         ) as f32;
 
-        let status_premium = squad_status_wage_factor(&ctx.squad_status);
+        let status_premium = ctx.squad_status.wage_factor();
 
         let agent = PlayerAgent::for_player(player);
         // Greedy agents push the band up by ~10% at the high end; loyal
         // agents accept ~5% lower at the low end.
         let agent_premium = 1.0 + (agent.greed - 0.5) * 0.15 - (agent.loyalty - 0.5) * 0.05;
 
-        let leverage = compute_leverage(player, ctx, &agent);
+        let leverage = Self::compute_leverage(player, ctx, &agent);
 
         let expected = market * status_premium * agent_premium;
         // The acceptable band widens with leverage. A player with no
@@ -292,51 +296,51 @@ impl ContractValuation {
     pub fn happiness_expected(player: &Player, ctx: &ValuationContext) -> u32 {
         Self::evaluate(player, ctx).expected_wage
     }
-}
 
-fn compute_leverage(player: &Player, ctx: &ValuationContext, agent: &PlayerAgent) -> f32 {
-    let mut score = 0.0_f32;
+    fn compute_leverage(player: &Player, ctx: &ValuationContext, agent: &PlayerAgent) -> f32 {
+        let mut score = 0.0_f32;
 
-    // Months remaining — out-of-contract is maximum leverage; >24mo is
-    // almost none.
-    score += if ctx.months_remaining <= 0 {
-        0.55
-    } else if ctx.months_remaining <= 6 {
-        0.45
-    } else if ctx.months_remaining <= 12 {
-        0.30
-    } else if ctx.months_remaining <= 18 {
-        0.15
-    } else {
-        0.05
-    };
+        // Months remaining — out-of-contract is maximum leverage; >24mo is
+        // almost none.
+        score += if ctx.months_remaining <= 0 {
+            0.55
+        } else if ctx.months_remaining <= 6 {
+            0.45
+        } else if ctx.months_remaining <= 12 {
+            0.30
+        } else if ctx.months_remaining <= 18 {
+            0.15
+        } else {
+            0.05
+        };
 
-    if ctx.has_market_interest {
-        score += 0.20;
+        if ctx.has_market_interest {
+            score += 0.20;
+        }
+
+        // Status that can't easily be replaced
+        score += match ctx.squad_status {
+            PlayerSquadStatus::KeyPlayer => 0.20,
+            PlayerSquadStatus::FirstTeamRegular => 0.10,
+            PlayerSquadStatus::HotProspectForTheFuture => 0.10,
+            _ => 0.0,
+        };
+
+        // Reputation premium
+        let rep = player.player_attributes.current_reputation as f32;
+        if rep > 5000.0 {
+            score += 0.15;
+        } else if rep > 2000.0 {
+            score += 0.08;
+        } else if rep > 1000.0 {
+            score += 0.04;
+        }
+
+        // Greedy agent / ambitious player — they think they have leverage
+        score += (agent.greed - 0.5) * 0.10;
+
+        score.clamp(0.0, 1.0)
     }
-
-    // Status that can't easily be replaced
-    score += match ctx.squad_status {
-        PlayerSquadStatus::KeyPlayer => 0.20,
-        PlayerSquadStatus::FirstTeamRegular => 0.10,
-        PlayerSquadStatus::HotProspectForTheFuture => 0.10,
-        _ => 0.0,
-    };
-
-    // Reputation premium
-    let rep = player.player_attributes.current_reputation as f32;
-    if rep > 5000.0 {
-        score += 0.15;
-    } else if rep > 2000.0 {
-        score += 0.08;
-    } else if rep > 1000.0 {
-        score += 0.04;
-    }
-
-    // Greedy agent / ambitious player — they think they have leverage
-    score += (agent.greed - 0.5) * 0.10;
-
-    score.clamp(0.0, 1.0)
 }
 
 #[cfg(test)]

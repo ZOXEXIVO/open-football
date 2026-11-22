@@ -1,14 +1,14 @@
 //! Defenders must react to the carrier while maintaining coordinated marks.
 
 use super::goal_celebration_tests::squad;
-use crate::r#match::common_states::{ClosingPoint, TackleEngagement};
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::DefensiveRecovery;
 use crate::r#match::defenders::states::covering::DefenderCoveringState;
 use crate::r#match::defenders::states::marking::DefenderMarkingState;
 use crate::r#match::defenders::states::pressing::DefenderPressingState;
+use crate::r#match::defenders::states::shared::DefensiveRecovery;
 use crate::r#match::engine::result::Score;
 use crate::r#match::player::state::PlayerState;
+use crate::r#match::shared_states::{ClosingPoint, TackleEngagement};
 use crate::r#match::{
     DefenceRefreshInputs, DefensiveDuty, DefensivePlan, GameTickContext, MatchContext, MatchField,
     MatchPlayerCollection, PlayerSide, StateProcessingContext, StateProcessingHandler,

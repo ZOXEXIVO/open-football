@@ -1,7 +1,7 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::PlayerSide;
 use crate::r#match::events::Event;
-use crate::r#match::goalkeepers::states::common::{
+use crate::r#match::goalkeepers::states::shared::{
     ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision, KeeperRelease,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;

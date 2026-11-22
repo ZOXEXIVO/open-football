@@ -37,9 +37,9 @@ use crate::transfers::gate::{MoveTerms, PursuitAction, TransferMovePlausibility}
 use crate::transfers::loan::interest::InterestDraw;
 use crate::transfers::pipeline::processor::PlayerSummary;
 use crate::transfers::pipeline::{
-    DetailedScoutingReport, FileObservation, FileReading, FileReview, PlayerObservation,
-    ScoutMatchAssignment, ScoutingAssignment, ScoutingRecommendation, TransferNeedPriority,
-    TransferRequest, TransferRequestStatus,
+    ClubTransferPlan, DetailedScoutingReport, FileObservation, FileReading, FileReview,
+    PlayerObservation, ScoutMatchAssignment, ScoutingAssignment, ScoutingRecommendation,
+    TransferNeedPriority, TransferRequest, TransferRequestStatus,
 };
 use crate::transfers::scouting::breakout::LeaguePerformanceLookup;
 use crate::transfers::scouting::config::ScoutingConfig;
@@ -48,7 +48,7 @@ use crate::transfers::view::player::{PlayerSummaryBuilder, SummaryClubContext};
 use crate::utils::IntegerUtils;
 use crate::utils::PerformanceProfiler;
 use crate::{
-    Club, ClubPhilosophy, Country, Person, PlayerFieldPositionGroup, PlayerStatusType,
+    Club, ClubPhilosophy, Country, Person, PlayerFieldPositionGroup, PlayerStatusType, Staff,
     StaffEventType, StaffPosition, TeamType, TransferInterestSource, TransferInterestStage,
 };
 use crate::{Player, Team};
@@ -159,6 +159,15 @@ struct MatchScoutingStaged {
     monitoring_updates: Vec<MonitoringUpdate>,
 }
 
+/// What the scout made of one player at a live match, once the report
+/// threshold was reached.
+struct MatchFinding {
+    assessed_ability: u8,
+    assessed_potential: u8,
+    confidence: f32,
+    recommendation: ScoutingRecommendation,
+}
+
 /// The scouting tick: assignments, observations, match reports and the shadow board.
 pub struct ScoutingPass;
 
@@ -196,45 +205,7 @@ impl ScoutingPass {
                 continue;
             }
 
-            // Only assignments still doing work reserve their request. A
-            // completed one has filed its report and stopped scouting, so
-            // counting it as "covered" is what stranded requests: an
-            // assignment closes after its FIRST report, and if that report
-            // produced no shortlist the request sat in `ScoutingActive`
-            // with a dead assignment attached and no way to earn another —
-            // the club had an open need nobody was looking for.
-            let assigned_request_ids: Vec<u32> = plan
-                .scouting_assignments
-                .iter()
-                .filter(|a| !a.completed)
-                .map(|a| a.transfer_request_id)
-                .collect();
-
-            let shortlisted_request_ids: Vec<u32> = plan
-                .shortlists
-                .iter()
-                .map(|s| s.transfer_request_id)
-                .collect();
-
-            let pending_requests: Vec<&TransferRequest> = plan
-                .transfer_requests
-                .iter()
-                .filter(|r| {
-                    // A request whose scouting round produced nothing is
-                    // re-scouted; one that already has a shortlist to work
-                    // through is not.
-                    matches!(
-                        r.status,
-                        TransferRequestStatus::Pending | TransferRequestStatus::ScoutingActive
-                    ) && !assigned_request_ids.contains(&r.id)
-                        && !shortlisted_request_ids.contains(&r.id)
-                        // Emergency depth requests are free-agent-only:
-                        // zero budget, no scouting intent. Assigning a
-                        // scout would pull them into the paid pipeline.
-                        && !r.is_emergency_free_agent_depth()
-                })
-                .collect();
-
+            let pending_requests = Self::assignable_scout_requests(plan);
             if pending_requests.is_empty() {
                 continue;
             }
@@ -245,16 +216,7 @@ impl ScoutingPass {
             let resolved = club.teams.teams[0].staffs.resolve_for_transfers();
 
             let mut sorted_requests = pending_requests;
-            sorted_requests.sort_by(|a, b| {
-                let priority_order = |p: &TransferNeedPriority| match p {
-                    TransferNeedPriority::Critical => 0,
-                    TransferNeedPriority::Important => 1,
-                    TransferNeedPriority::Optional => 2,
-                };
-                priority_order(&a.priority)
-                    .cmp(&priority_order(&b.priority))
-                    .then_with(|| b.urgency.total_cmp(&a.urgency))
-            });
+            Self::sort_scout_requests(&mut sorted_requests);
 
             let mut scout_idx = 0;
             let next_assign_id = plan.next_assignment_id;
@@ -287,6 +249,73 @@ impl ScoutingPass {
             }
         }
 
+        let seeded_clubs = Self::stage_scout_assignments(country, actions);
+
+        // After fresh assignments exist, seed any matching shadow reports
+        // into the active window — saves clubs from cold-starting each window.
+        Self::seed_shadow_reports(country, world, market_map, date, seeded_clubs);
+    }
+
+    /// The requests still waiting for a scout.
+    ///
+    /// Only assignments still doing work reserve their request. A completed
+    /// one has filed its report and stopped scouting, so counting it as
+    /// "covered" is what stranded requests: an assignment closes after its
+    /// FIRST report, and if that report produced no shortlist the request sat
+    /// in `ScoutingActive` with a dead assignment attached and no way to earn
+    /// another — the club had an open need nobody was looking for.
+    fn assignable_scout_requests(plan: &ClubTransferPlan) -> Vec<&TransferRequest> {
+        let assigned_request_ids: Vec<u32> = plan
+            .scouting_assignments
+            .iter()
+            .filter(|a| !a.completed)
+            .map(|a| a.transfer_request_id)
+            .collect();
+
+        let shortlisted_request_ids: Vec<u32> = plan
+            .shortlists
+            .iter()
+            .map(|s| s.transfer_request_id)
+            .collect();
+
+        plan.transfer_requests
+            .iter()
+            .filter(|r| {
+                // A request whose scouting round produced nothing is
+                // re-scouted; one that already has a shortlist to work
+                // through is not.
+                matches!(
+                    r.status,
+                    TransferRequestStatus::Pending | TransferRequestStatus::ScoutingActive
+                ) && !assigned_request_ids.contains(&r.id)
+                    && !shortlisted_request_ids.contains(&r.id)
+                    // Emergency depth requests are free-agent-only:
+                    // zero budget, no scouting intent. Assigning a
+                    // scout would pull them into the paid pipeline.
+                    && !r.is_emergency_free_agent_depth()
+            })
+            .collect()
+    }
+
+    fn sort_scout_requests(requests: &mut [&TransferRequest]) {
+        requests.sort_by(|a, b| {
+            let priority_order = |p: &TransferNeedPriority| match p {
+                TransferNeedPriority::Critical => 0,
+                TransferNeedPriority::Important => 1,
+                TransferNeedPriority::Optional => 2,
+            };
+            priority_order(&a.priority)
+                .cmp(&priority_order(&b.priority))
+                .then_with(|| b.urgency.total_cmp(&a.urgency))
+        });
+    }
+
+    /// Pass 2 of [`Self::assign_scouts`] — write the staged assignments onto
+    /// each club's plan and return the clubs that received one.
+    fn stage_scout_assignments(
+        country: &mut Country,
+        actions: Vec<ScoutAssignmentAction>,
+    ) -> Vec<u32> {
         let mut seeded_clubs: Vec<u32> = Vec::new();
         for action in actions {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
@@ -307,11 +336,19 @@ impl ScoutingPass {
                 }
             }
         }
+        seeded_clubs
+    }
 
-        // After fresh assignments exist, seed any matching shadow reports
-        // into the active window — saves clubs from cold-starting each window.
-        // A report is read again first: a man who has since moved out of
-        // the club's standing seeds nothing.
+    /// Seed any matching shadow reports into the active window. A report is
+    /// read again first: a man who has since moved out of the club's standing
+    /// seeds nothing.
+    fn seed_shadow_reports(
+        country: &mut Country,
+        world: WorldPool<'_>,
+        market_map: &MarketMap,
+        date: NaiveDate,
+        seeded_clubs: Vec<u32>,
+    ) {
         for club_id in seeded_clubs {
             let Some(index) = country.clubs.iter().position(|c| c.id == club_id) else {
                 continue;
@@ -347,9 +384,19 @@ impl ScoutingPass {
     // ============================================================
 
     pub fn assign_scouts_to_matches(country: &mut Country, current_date: NaiveDate) {
+        let actions = Self::match_assignment_actions(country, current_date);
+        Self::apply_match_assignments(country, actions);
+        debug!("assign_scouts_to_matches: completed scout-to-match assignments");
+    }
+
+    /// Pass 1 — immutable reads: which scouts should watch which youth or
+    /// reserve side.
+    fn match_assignment_actions(
+        country: &Country,
+        current_date: NaiveDate,
+    ) -> Vec<MatchScoutAssignmentAction> {
         let mut actions: Vec<MatchScoutAssignmentAction> = Vec::new();
 
-        // Pass 1: Immutable reads - determine which scouts to assign where
         for club in &country.clubs {
             let plan = &club.transfer_plan;
             if !plan.initialized {
@@ -376,25 +423,8 @@ impl ScoutingPass {
                 continue;
             }
 
-            // Check existing match assignments - don't re-assign scouts already watching a team
-            let already_assigned_scout_ids: Vec<u32> = plan
-                .scout_match_assignments
-                .iter()
-                .filter(|a| {
-                    a.last_attended
-                        .map(|d| (current_date - d).num_days() < 7)
-                        .unwrap_or(false)
-                })
-                .map(|a| a.scout_staff_id)
-                .collect();
-
-            let available_scouts: Vec<u32> = resolved
-                .scouts
-                .iter()
-                .map(|s| s.id)
-                .filter(|id| !already_assigned_scout_ids.contains(id))
-                .collect();
-
+            let available_scouts =
+                Self::available_match_scouts(plan, current_date, &resolved.scouts);
             if available_scouts.is_empty() {
                 continue;
             }
@@ -405,65 +435,8 @@ impl ScoutingPass {
                     .max_match_assignments_per_club,
             );
 
-            // Score each youth/reserve team from other clubs by how many matching players it has
-            let mut team_scores: Vec<(u32, u32, u32, usize)> = Vec::new(); // (team_id, club_id, tiebreak, score)
-
-            for other_club in &country.clubs {
-                if other_club.id == club.id {
-                    continue;
-                }
-
-                for team in &other_club.teams.teams {
-                    // Only consider non-Main teams
-                    if matches!(team.team_type, TeamType::Main) {
-                        continue;
-                    }
-
-                    // Skip teams already being watched (within 7 days)
-                    let already_watching = plan.scout_match_assignments.iter().any(|a| {
-                        a.target_team_id == team.id
-                            && a.last_attended
-                                .map(|d| (current_date - d).num_days() < 7)
-                                .unwrap_or(false)
-                    });
-                    if already_watching {
-                        continue;
-                    }
-
-                    // Score: count how many players match any active scouting assignment criteria
-                    let mut score = 0usize;
-                    for player in &team.players.players {
-                        let player_pos_group = player.position().position_group();
-                        let player_age = player.age(current_date);
-
-                        for assignment in &active_assignments {
-                            let target_group = assignment.target_position.position_group();
-                            if player_pos_group == target_group
-                                && player_age >= assignment.preferred_age_min
-                                && player_age <= assignment.preferred_age_max
-                            {
-                                score += 1;
-                                break;
-                            }
-                        }
-                    }
-
-                    if score > 0 {
-                        team_scores.push((team.id, other_club.id, 0, score));
-                    }
-                }
-            }
-
-            // Sort by score descending. The score is a small integer, so ties
-            // are the common case — and a stable sort resolved every one of
-            // them by club registration order, sending the scouts to the same
-            // fixtures week after week. A per-pass tiebreak, drawn once per row
-            // so the comparator stays a valid total order, rotates which of the
-            // equally-worthwhile matches actually get watched.
-            for row in team_scores.iter_mut() {
-                row.2 = IntegerUtils::random(0, 10_000) as u32;
-            }
-            team_scores.sort_by(|a, b| b.3.cmp(&a.3).then(b.2.cmp(&a.2)));
+            let team_scores =
+                Self::scored_youth_teams(country, club, current_date, &active_assignments);
 
             // Assign scouts to the best-scoring teams
             let assignments_to_make = team_scores.len().min(max_assignments);
@@ -487,7 +460,108 @@ impl ScoutingPass {
             }
         }
 
-        // Pass 2: Apply assignments
+        actions
+    }
+
+    /// Scouts not already watching a match side within the last week.
+    fn available_match_scouts(
+        plan: &ClubTransferPlan,
+        current_date: NaiveDate,
+        scouts: &[&Staff],
+    ) -> Vec<u32> {
+        // Don't re-assign scouts already watching a team
+        let already_assigned_scout_ids: Vec<u32> = plan
+            .scout_match_assignments
+            .iter()
+            .filter(|a| {
+                a.last_attended
+                    .map(|d| (current_date - d).num_days() < 7)
+                    .unwrap_or(false)
+            })
+            .map(|a| a.scout_staff_id)
+            .collect();
+
+        scouts
+            .iter()
+            .map(|s| s.id)
+            .filter(|id| !already_assigned_scout_ids.contains(id))
+            .collect()
+    }
+
+    /// Score each youth/reserve team from other clubs by how many matching
+    /// players it has, and order the worthwhile ones.
+    fn scored_youth_teams(
+        country: &Country,
+        club: &Club,
+        current_date: NaiveDate,
+        active_assignments: &[&ScoutingAssignment],
+    ) -> Vec<(u32, u32, u32, usize)> {
+        let plan = &club.transfer_plan;
+        // (team_id, club_id, tiebreak, score)
+        let mut team_scores: Vec<(u32, u32, u32, usize)> = Vec::new();
+
+        for other_club in &country.clubs {
+            if other_club.id == club.id {
+                continue;
+            }
+
+            for team in &other_club.teams.teams {
+                // Only consider non-Main teams
+                if matches!(team.team_type, TeamType::Main) {
+                    continue;
+                }
+
+                // Skip teams already being watched (within 7 days)
+                let already_watching = plan.scout_match_assignments.iter().any(|a| {
+                    a.target_team_id == team.id
+                        && a.last_attended
+                            .map(|d| (current_date - d).num_days() < 7)
+                            .unwrap_or(false)
+                });
+                if already_watching {
+                    continue;
+                }
+
+                // Score: count how many players match any active scouting assignment criteria
+                let mut score = 0usize;
+                for player in &team.players.players {
+                    let player_pos_group = player.position().position_group();
+                    let player_age = player.age(current_date);
+
+                    for assignment in active_assignments {
+                        let target_group = assignment.target_position.position_group();
+                        if player_pos_group == target_group
+                            && player_age >= assignment.preferred_age_min
+                            && player_age <= assignment.preferred_age_max
+                        {
+                            score += 1;
+                            break;
+                        }
+                    }
+                }
+
+                if score > 0 {
+                    team_scores.push((team.id, other_club.id, 0, score));
+                }
+            }
+        }
+
+        // Sort by score descending. The score is a small integer, so ties
+        // are the common case — and a stable sort resolved every one of
+        // them by club registration order, sending the scouts to the same
+        // fixtures week after week. A per-pass tiebreak, drawn once per row
+        // so the comparator stays a valid total order, rotates which of the
+        // equally-worthwhile matches actually get watched.
+        for row in team_scores.iter_mut() {
+            row.2 = IntegerUtils::random(0, 10_000) as u32;
+        }
+        team_scores.sort_by(|a, b| b.3.cmp(&a.3).then(b.2.cmp(&a.2)));
+        team_scores
+    }
+
+    /// Pass 2 — apply assignments, updating an existing watch of the same
+    /// team rather than duplicating it.
+    fn apply_match_assignments(country: &mut Country, actions: Vec<MatchScoutAssignmentAction>) {
         for action in actions {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
                 // Check if we already have an assignment for this team, update it
@@ -506,8 +580,6 @@ impl ScoutingPass {
                 }
             }
         }
-
-        debug!("assign_scouts_to_matches: completed scout-to-match assignments");
     }
 
     // ============================================================
@@ -712,28 +784,72 @@ impl ScoutingPass {
         staged: &mut MatchScoutingStaged,
     ) {
         let config = ScoutingConfig::default();
-        let match_assignment = watch.assignment;
-        let target_club = watch.target_club;
         let judging_ability = watch.judging_ability;
         let judging_potential = watch.judging_potential;
         let player = seen.player;
         let assignment = seen.assignment;
-
-        let player_age = seen.age;
         let match_rating = seen.match_rating;
-        let observations = &mut staged.observations;
-        let reports = &mut staged.reports;
-        let monitoring_updates = &mut staged.monitoring_updates;
 
-        let existing_obs = assignment
+        let (obs_count, assessed_ability, assessed_potential) =
+            Self::assess_match_player(seen, &config, judging_ability, judging_potential);
+
+        let is_new = !assignment.has_observation_for(player.id);
+
+        staged.observations.push(MatchScoutingObservationResult {
+            club_id: club.id,
+            assignment_id: assignment.id,
+            player_id: player.id,
+            assessed_ability,
+            assessed_potential,
+            match_rating,
+            is_new,
+        });
+
+        let final_obs_count = obs_count + 1;
+        if final_obs_count >= config.assignment.match_report_threshold as u32 {
+            let confidence = config.match_report_confidence(final_obs_count as u8);
+            let recommendation = Self::match_recommendation(
+                &config,
+                assignment,
+                match_rating,
+                assessed_ability,
+                assessed_potential,
+            );
+            Self::file_match_finding(
+                country,
+                club,
+                watch,
+                seen,
+                current_date,
+                MatchFinding {
+                    assessed_ability,
+                    assessed_potential,
+                    confidence,
+                    recommendation,
+                },
+                staged,
+            );
+        }
+    }
+
+    /// The numbers the scout puts on a player from a live viewing, with
+    /// reduced error: he has watched him for 90 minutes rather than read a
+    /// database snapshot.
+    fn assess_match_player(
+        seen: &PlayerSeen<'_>,
+        config: &ScoutingConfig,
+        judging_ability: u8,
+        judging_potential: u8,
+    ) -> (u32, u8, u8) {
+        let player = seen.player;
+        let assignment = seen.assignment;
+        let obs_count = assignment
             .observations
             .iter()
-            .find(|o| o.player_id == player.id);
-        let obs_count = existing_obs.map(|o| o.observation_count).unwrap_or(0);
+            .find(|o| o.player_id == player.id)
+            .map(|o| o.observation_count)
+            .unwrap_or(0);
 
-        // Match-context observations enjoy reduced error (the
-        // scout sees the player live for 90 minutes vs a
-        // snapshot from a database).
         let ability_error = config.effective_error(
             judging_ability,
             obs_count as u8,
@@ -751,7 +867,7 @@ impl ScoutingPass {
         let skill_ability = player
             .skills
             .calculate_ability_for_position(player.position());
-        let match_bonus = config.match_rating_bonus(match_rating);
+        let match_bonus = config.match_rating_bonus(seen.match_rating);
 
         let assessed_ability = (skill_ability as i32
             + match_bonus
@@ -759,7 +875,7 @@ impl ScoutingPass {
         .clamp(1, 200) as u8;
 
         let growth_potential = ScoutJudgement::estimate_growth_potential(
-            player_age,
+            seen.age,
             player.skills.mental.determination,
             player.skills.mental.work_rate,
             player.skills.mental.composure,
@@ -771,126 +887,132 @@ impl ScoutingPass {
             + IntegerUtils::random(-potential_error, potential_error))
         .clamp(1, 200) as u8;
 
-        let is_new = !assignment.has_observation_for(player.id);
+        (obs_count, assessed_ability, assessed_potential)
+    }
 
-        observations.push(MatchScoutingObservationResult {
+    /// Match rating influences recommendation tier: a hot match boosts a
+    /// borderline player into StrongBuy territory, a poor match drops them.
+    fn match_recommendation(
+        config: &ScoutingConfig,
+        assignment: &ScoutingAssignment,
+        match_rating: f32,
+        assessed_ability: u8,
+        assessed_potential: u8,
+    ) -> ScoutingRecommendation {
+        let rec_cfg = &config.recommendation;
+        let rating_boost = match_rating > rec_cfg.match_rating_good;
+        let rating_penalty = match_rating < rec_cfg.match_rating_poor_max;
+
+        if rating_penalty {
+            if assessed_ability >= assignment.min_ability {
+                ScoutingRecommendation::Consider
+            } else {
+                ScoutingRecommendation::Pass
+            }
+        } else if rating_boost
+            && assessed_ability as i16 >= assignment.min_ability as i16 + rec_cfg.stats_tier1_bonus
+            && assessed_potential > assessed_ability
+        {
+            ScoutingRecommendation::StrongBuy
+        } else {
+            // Fall through to the standard recommendation tiers,
+            // bypassing the youth/stats bonuses (they would
+            // double-count the match-rating influence above).
+            config.recommendation_for(
+                assessed_ability as i16,
+                assessed_ability,
+                assessed_potential,
+                assignment.min_ability,
+            )
+        }
+    }
+
+    /// File the monitoring row and — unless the scout passed — the report
+    /// for a live finding. The monitoring update fires regardless of the
+    /// recommendation tier: the scout has formed an opinion either way.
+    fn file_match_finding(
+        country: &Country,
+        club: &Club,
+        watch: &MatchWatch<'_>,
+        seen: &PlayerSeen<'_>,
+        current_date: NaiveDate,
+        finding: MatchFinding,
+        staged: &mut MatchScoutingStaged,
+    ) {
+        let match_assignment = watch.assignment;
+        let target_club = watch.target_club;
+        let player = seen.player;
+        let assignment = seen.assignment;
+
+        let (target_league_rep, target_club_rep) =
+            PlayerValuationCalculator::seller_context(country, target_club);
+        let estimated_value = PlayerValuationCalculator::calculate_value_with_price_level(
+            player,
+            current_date,
+            country.settings.pricing.price_level,
+            target_league_rep,
+            target_club_rep,
+        );
+
+        let player_age = player.age(current_date);
+        let (contract_months, _) = player
+            .contract
+            .as_ref()
+            .map(|c| {
+                let days = (c.expiration - current_date).num_days().max(0);
+                ((days / 30).min(i16::MAX as i64) as i16, c.salary)
+            })
+            .unwrap_or((0, 0));
+        let risk_flags = ScoutJudgement::evaluate_risk_flags(
+            player.player_attributes.is_injured,
+            player.skills.mental.determination,
+            player_age,
+            contract_months,
+            player.player_attributes.world_reputation,
+            ClubView::club_world_reputation(club),
+        );
+        let role_fit = assignment.role_profile.fit(
+            player.skills.technical.average(),
+            player.skills.mental.average(),
+            player.skills.physical.average(),
+        );
+
+        staged.monitoring_updates.push(MonitoringUpdate {
             club_id: club.id,
-            assignment_id: assignment.id,
-            player_id: player.id,
-            assessed_ability,
-            assessed_potential,
-            match_rating,
-            is_new,
+            reading: seen.reading,
+            seen: FileObservation {
+                scout_staff_id: match_assignment.scout_staff_id,
+                player_id: player.id,
+                source: ScoutMonitoringSource::MatchStandout,
+                transfer_request_id: Some(assignment.transfer_request_id),
+                origin_assignment_id: Some(assignment.id),
+                region: None,
+                assessed_ability: finding.assessed_ability,
+                assessed_potential: finding.assessed_potential,
+                confidence: finding.confidence,
+                role_fit,
+                estimated_value: estimated_value.amount,
+                risk_flags: risk_flags.clone(),
+                is_match: true,
+            },
         });
 
-        let final_obs_count = obs_count + 1;
-        if final_obs_count >= config.assignment.match_report_threshold as u32 {
-            let confidence = config.match_report_confidence(final_obs_count as u8);
-
-            // Match rating influences recommendation tier:
-            // a hot match boosts a borderline player into StrongBuy
-            // territory, a poor match drops them.
-            let rec_cfg = &config.recommendation;
-            let rating_boost = match_rating > rec_cfg.match_rating_good;
-            let rating_penalty = match_rating < rec_cfg.match_rating_poor_max;
-
-            let recommendation = if rating_penalty {
-                if assessed_ability >= assignment.min_ability {
-                    ScoutingRecommendation::Consider
-                } else {
-                    ScoutingRecommendation::Pass
-                }
-            } else if rating_boost
-                && assessed_ability as i16
-                    >= assignment.min_ability as i16 + rec_cfg.stats_tier1_bonus
-                && assessed_potential > assessed_ability
-            {
-                ScoutingRecommendation::StrongBuy
-            } else {
-                // Fall through to the standard recommendation tiers,
-                // bypassing the youth/stats bonuses (they would
-                // double-count the match-rating influence above).
-                config.recommendation_for(
-                    assessed_ability as i16,
-                    assessed_ability,
-                    assessed_potential,
-                    assignment.min_ability,
-                )
-            };
-
-            let (target_league_rep, target_club_rep) =
-                PlayerValuationCalculator::seller_context(country, target_club);
-            let estimated_value = PlayerValuationCalculator::calculate_value_with_price_level(
-                player,
-                current_date,
-                country.settings.pricing.price_level,
-                target_league_rep,
-                target_club_rep,
-            );
-
-            let player_age = player.age(current_date);
-            let (contract_months, _) = player
-                .contract
-                .as_ref()
-                .map(|c| {
-                    let days = (c.expiration - current_date).num_days().max(0);
-                    ((days / 30).min(i16::MAX as i64) as i16, c.salary)
-                })
-                .unwrap_or((0, 0));
-            let risk_flags = ScoutJudgement::evaluate_risk_flags(
-                player.player_attributes.is_injured,
-                player.skills.mental.determination,
-                player_age,
-                contract_months,
-                player.player_attributes.world_reputation,
-                ClubView::club_world_reputation(club),
-            );
-            let role_fit = assignment.role_profile.fit(
-                player.skills.technical.average(),
-                player.skills.mental.average(),
-                player.skills.physical.average(),
-            );
-
-            // Match-day monitoring update fires regardless
-            // of the recommendation tier — the scout has
-            // formed an opinion either way.
-            monitoring_updates.push(MonitoringUpdate {
+        if finding.recommendation != ScoutingRecommendation::Pass {
+            staged.reports.push(ScoutingReportResult {
                 club_id: club.id,
-                reading: seen.reading,
-                seen: FileObservation {
-                    scout_staff_id: match_assignment.scout_staff_id,
+                report: DetailedScoutingReport {
                     player_id: player.id,
-                    source: ScoutMonitoringSource::MatchStandout,
-                    transfer_request_id: Some(assignment.transfer_request_id),
-                    origin_assignment_id: Some(assignment.id),
-                    region: None,
-                    assessed_ability,
-                    assessed_potential,
-                    confidence,
-                    role_fit,
-                    estimated_value: estimated_value.amount,
-                    risk_flags: risk_flags.clone(),
-                    is_match: true,
-                },
-            });
-
-            if recommendation != ScoutingRecommendation::Pass {
-                reports.push(ScoutingReportResult {
-                    club_id: club.id,
-                    report: DetailedScoutingReport {
-                        player_id: player.id,
-                        assignment_id: assignment.id,
-                        assessed_ability,
-                        assessed_potential,
-                        confidence,
-                        estimated_value: estimated_value.amount,
-                        recommendation,
-                        role_fit,
-                        risk_flags,
-                    },
                     assignment_id: assignment.id,
-                });
-            }
+                    assessed_ability: finding.assessed_ability,
+                    assessed_potential: finding.assessed_potential,
+                    confidence: finding.confidence,
+                    estimated_value: estimated_value.amount,
+                    recommendation: finding.recommendation,
+                    role_fit,
+                    risk_flags,
+                },
+                assignment_id: assignment.id,
+            });
         }
     }
 
@@ -1251,127 +1373,140 @@ impl ScoutingPass {
             .par_iter_mut()
             .zip(staged_per_club.into_par_iter())
             .for_each(|(club, staged)| {
-                debug_assert!(
-                    staged.observations.iter().all(|o| o.club_id == club.id),
-                    "scouting: staged results must belong to their own club"
-                );
-
-                for obs in staged.observations {
-                    if let Some(assignment) = club
-                        .transfer_plan
-                        .scouting_assignments
-                        .iter_mut()
-                        .find(|a| a.id == obs.assignment_id)
-                    {
-                        if obs.is_new {
-                            assignment.observations.push(PlayerObservation::new(
-                                obs.player_id,
-                                obs.assessed_ability,
-                                obs.assessed_potential,
-                                date,
-                            ));
-                        } else if let Some(existing) =
-                            assignment.find_observation_mut(obs.player_id)
-                        {
-                            existing.add_observation(
-                                obs.assessed_ability,
-                                obs.assessed_potential,
-                                date,
-                            );
-                        }
-                    }
-                }
-
-                for report in staged.reports {
-                    if club.transfer_plan.scouting_reports.iter().any(|r| {
-                        r.player_id == report.report.player_id
-                            && r.assignment_id == report.assignment_id
-                    }) {
-                        continue;
-                    }
-                    club.transfer_plan.scouting_reports.push(report.report);
-                    if let Some(assignment) = club
-                        .transfer_plan
-                        .scouting_assignments
-                        .iter_mut()
-                        .find(|a| a.id == report.assignment_id)
-                    {
-                        assignment.reports_produced += 1;
-                        if assignment.reports_produced >= 1 {
-                            assignment.completed = true;
-                        }
-                    }
-                }
-
-                for update in staged.monitoring_updates {
-                    club.transfer_plan
-                        .keep_file(update.reading, update.seen, date);
-                }
-
-                for (_club_id, staff_id, event_type) in staged.staff_events {
-                    for team in &mut club.teams.teams {
-                        if let Some(staff) = team.staffs.find_mut(staff_id) {
-                            staff.add_event(event_type);
-                            break;
-                        }
-                    }
-                }
-
-                // A day spent watching a foreign player accrues on BOTH
-                // axes: the region the older gates read, and the country,
-                // which is where a scout actually builds knowledge.
-                // Watching Colombians for two seasons makes a man who knows
-                // Colombia, not South America.
-                for (_club_id, staff_id, region, source_country) in staged.familiarity_events {
-                    for team in &mut club.teams.teams {
-                        if let Some(staff) = team.staffs.find_mut(staff_id) {
-                            staff.staff_attributes.knowledge.accrue_region_day(region);
-                            staff
-                                .staff_attributes
-                                .knowledge
-                                .accrue_country_day(source_country);
-                            break;
-                        }
-                    }
-                }
-
-                // Commit rejection memory — a Pass recommendation blocks
-                // re-scouting for the configured window, spanning at least
-                // the current window and (typically) the next one.
-                for (_club_id, player_id) in staged.rejected_events {
-                    club.transfer_plan
-                        .reject_player(player_id, date, rejection_months);
-                }
+                Self::apply_club_scouting(club, staged, date, rejection_months);
             });
 
-        // Newly scouted players: stamp the market badges and let the player
-        // hear about it. `Wnt` (wanted) and `Sct` (being watched) were
-        // formerly anonymous; the ScoutWatched beat goes through the
-        // structured interest funnel, whose surfacing gate keeps everyday
-        // scout attendance out of the feed unless the club gap or an
-        // emotional link (former / favourite / rival club) makes it news.
-        if !signals_by_player.is_empty() {
-            country.clubs.par_iter_mut().for_each(|club| {
-                for team in &mut club.teams.teams {
-                    for player in &mut team.players.players {
-                        let Some(indexes) = signals_by_player.get(&player.id) else {
-                            continue;
-                        };
-                        if !player.statuses.has(PlayerStatusType::Wnt) {
-                            player.statuses.add(date, PlayerStatusType::Wnt);
-                        }
-                        if !player.statuses.has(PlayerStatusType::Sct) {
-                            player.statuses.add(date, PlayerStatusType::Sct);
-                        }
-                        for index in indexes {
-                            if let Some(signal) = wanted_signals[*index].1.as_ref() {
-                                player.on_transfer_interest_signal(signal);
-                            }
-                        }
-                    }
+        Self::stamp_scout_interest(country, &wanted_signals, &signals_by_player, date);
+    }
+
+    /// Commit one club's staged scan onto its own plan and staff.
+    fn apply_club_scouting(
+        club: &mut Club,
+        staged: ClubScoutingStaged,
+        date: NaiveDate,
+        rejection_months: i64,
+    ) {
+        debug_assert!(
+            staged.observations.iter().all(|o| o.club_id == club.id),
+            "scouting: staged results must belong to their own club"
+        );
+
+        for obs in staged.observations {
+            if let Some(assignment) = club
+                .transfer_plan
+                .scouting_assignments
+                .iter_mut()
+                .find(|a| a.id == obs.assignment_id)
+            {
+                if obs.is_new {
+                    assignment.observations.push(PlayerObservation::new(
+                        obs.player_id,
+                        obs.assessed_ability,
+                        obs.assessed_potential,
+                        date,
+                    ));
+                } else if let Some(existing) = assignment.find_observation_mut(obs.player_id) {
+                    existing.add_observation(obs.assessed_ability, obs.assessed_potential, date);
                 }
-            });
+            }
         }
+
+        for report in staged.reports {
+            if club.transfer_plan.scouting_reports.iter().any(|r| {
+                r.player_id == report.report.player_id && r.assignment_id == report.assignment_id
+            }) {
+                continue;
+            }
+            club.transfer_plan.scouting_reports.push(report.report);
+            if let Some(assignment) = club
+                .transfer_plan
+                .scouting_assignments
+                .iter_mut()
+                .find(|a| a.id == report.assignment_id)
+            {
+                assignment.reports_produced += 1;
+                if assignment.reports_produced >= 1 {
+                    assignment.completed = true;
+                }
+            }
+        }
+
+        for update in staged.monitoring_updates {
+            club.transfer_plan
+                .keep_file(update.reading, update.seen, date);
+        }
+
+        for (_club_id, staff_id, event_type) in staged.staff_events {
+            for team in &mut club.teams.teams {
+                if let Some(staff) = team.staffs.find_mut(staff_id) {
+                    staff.add_event(event_type);
+                    break;
+                }
+            }
+        }
+
+        // A day spent watching a foreign player accrues on BOTH
+        // axes: the region the older gates read, and the country,
+        // which is where a scout actually builds knowledge.
+        // Watching Colombians for two seasons makes a man who knows
+        // Colombia, not South America.
+        for (_club_id, staff_id, region, source_country) in staged.familiarity_events {
+            for team in &mut club.teams.teams {
+                if let Some(staff) = team.staffs.find_mut(staff_id) {
+                    staff.staff_attributes.knowledge.accrue_region_day(region);
+                    staff
+                        .staff_attributes
+                        .knowledge
+                        .accrue_country_day(source_country);
+                    break;
+                }
+            }
+        }
+
+        // Commit rejection memory — a Pass recommendation blocks
+        // re-scouting for the configured window, spanning at least
+        // the current window and (typically) the next one.
+        for (_club_id, player_id) in staged.rejected_events {
+            club.transfer_plan
+                .reject_player(player_id, date, rejection_months);
+        }
+    }
+
+    /// Newly scouted players: stamp the market badges and let the player
+    /// hear about it. `Wnt` (wanted) and `Sct` (being watched) were
+    /// formerly anonymous; the ScoutWatched beat goes through the
+    /// structured interest funnel, whose surfacing gate keeps everyday
+    /// scout attendance out of the feed unless the club gap or an
+    /// emotional link (former / favourite / rival club) makes it news.
+    fn stamp_scout_interest(
+        country: &mut Country,
+        wanted_signals: &[(u32, Option<TransferInterestSignal>)],
+        signals_by_player: &FxHashMap<u32, Vec<usize>>,
+        date: NaiveDate,
+    ) {
+        if signals_by_player.is_empty() {
+            return;
+        }
+        country.clubs.par_iter_mut().for_each(|club| {
+            for team in &mut club.teams.teams {
+                for player in &mut team.players.players {
+                    let Some(indexes) = signals_by_player.get(&player.id) else {
+                        continue;
+                    };
+                    if !player.statuses.has(PlayerStatusType::Wnt) {
+                        player.statuses.add(date, PlayerStatusType::Wnt);
+                    }
+                    if !player.statuses.has(PlayerStatusType::Sct) {
+                        player.statuses.add(date, PlayerStatusType::Sct);
+                    }
+                    for index in indexes {
+                        if let Some(signal) = wanted_signals[*index].1.as_ref() {
+                            player.on_transfer_interest_signal(signal);
+                        }
+                    }
+                }
+            }
+        });
     }
 
     /// Pick a player from a list with probability weighted by reputation.

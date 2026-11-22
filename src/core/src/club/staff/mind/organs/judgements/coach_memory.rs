@@ -626,7 +626,8 @@ impl MemoryEngine {
         // What a coach can see of a man's head: where he has been playing,
         // what has gone wrong, how much he goes for.
         if obs.minutes_played > 0 {
-            let weight = (obs.minutes_played as f32 / 90.0).clamp(0.0, 1.0) * OBSERVED_STANDARD_ALPHA;
+            let weight =
+                (obs.minutes_played as f32 / 90.0).clamp(0.0, 1.0) * OBSERVED_STANDARD_ALPHA;
             record.observed_standard = Some(match record.observed_standard {
                 Some(seen) => seen + (obs.standard_of_football - seen) * weight,
                 None => obs.standard_of_football,

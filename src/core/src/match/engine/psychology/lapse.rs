@@ -161,7 +161,11 @@ impl ActionLapse {
 
     /// Chance a drawn family's action of his lapses, before the situation
     /// is applied. None under `OF_MIND_OFF`.
-    pub fn probability(family: LapseFamily, player: &MatchPlayer, state: Option<&PsychState>) -> f32 {
+    pub fn probability(
+        family: LapseFamily,
+        player: &MatchPlayer,
+        state: Option<&PsychState>,
+    ) -> f32 {
         Self::drawn(family.base() * Self::steadiness(player), state)
     }
 
@@ -295,7 +299,10 @@ mod tests {
     fn a_settled_head_leaves_failures_alone() {
         assert_eq!(ActionLapse::multiplier(Some(&state(0.0, 0.0))), 1.0);
         assert_eq!(ActionLapse::multiplier(None), 1.0);
-        assert_eq!(ActionLapse::scaled(LapseFamily::Touch, 0.04, Some(&state(0.0, 0.0))), 0.04);
+        assert_eq!(
+            ActionLapse::scaled(LapseFamily::Touch, 0.04, Some(&state(0.0, 0.0))),
+            0.04
+        );
     }
 
     #[test]
@@ -362,7 +369,10 @@ mod tests {
     fn a_settled_head_leaves_every_family_at_one() {
         let nervous = state(0.0, 0.5);
         for family in LapseFamily::ALL {
-            assert_eq!(ActionLapse::factor(family, Some(&PsychState::default())), 1.0);
+            assert_eq!(
+                ActionLapse::factor(family, Some(&PsychState::default())),
+                1.0
+            );
         }
         assert_eq!(
             ActionLapse::factor(LapseFamily::Pass, Some(&nervous)),
@@ -385,7 +395,12 @@ mod tests {
     #[test]
     fn scaled_families_draw_nothing_of_their_own() {
         let p = player(PlayerPositionType::Striker, 10.0);
-        for f in [LapseFamily::Claim, LapseFamily::Touch, LapseFamily::Challenge, LapseFamily::Finish] {
+        for f in [
+            LapseFamily::Claim,
+            LapseFamily::Touch,
+            LapseFamily::Challenge,
+            LapseFamily::Finish,
+        ] {
             assert_eq!(ActionLapse::probability(f, &p, Some(&state(0.0, 0.8))), 0.0);
         }
     }

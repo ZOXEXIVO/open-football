@@ -1,8 +1,9 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::potential_stars::{PotentialStarsView, StarRating};
-use crate::views::{self, MenuSection, SubTitleFlag};
+use crate::countries::{CountryLookup, CountryMenu};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::potential_stars::{PotentialStarsView, StarRating};
+use crate::views::{MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -68,278 +69,254 @@ pub struct NationalSquadPlayerDto {
     pub reason_key: &'static str,
 }
 
-/// Senior national-team squad — the country's default squad page.
-pub async fn country_squad_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<CountrySquadRequest>,
-) -> ApiResult<impl IntoResponse> {
-    render_country_squad(state, route_params, NationalTeamLevel::Senior).await
+impl NationalSquadPlayerDto {
+    fn condition_percent(player: &core::Player) -> u8 {
+        (100f32 * ((player.player_attributes.condition as f32) / 10000.0)) as u8
+    }
 }
 
-/// U21 national-team squad — reached via the left-menu switch.
-pub async fn country_u21_squad_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<CountrySquadRequest>,
-) -> ApiResult<impl IntoResponse> {
-    render_country_squad(state, route_params, NationalTeamLevel::Under21).await
-}
+pub struct CountrySquadPage;
 
-async fn render_country_squad(
-    state: GameAppData,
-    route_params: CountrySquadRequest,
-    level: NationalTeamLevel,
-) -> ApiResult<impl IntoResponse> {
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let guard = state.data.read().await;
+impl CountrySquadPage {
+    /// Senior national-team squad — the country's default squad page.
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<CountrySquadRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        Self::render(state, route_params, NationalTeamLevel::Senior).await
+    }
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+    /// U21 national-team squad — reached via the left-menu switch.
+    pub async fn u21(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<CountrySquadRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        Self::render(state, route_params, NationalTeamLevel::Under21).await
+    }
 
-    let indexes = simulator_data
-        .indexes
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Indexes not available".to_string()))?;
+    async fn render(
+        state: GameAppData,
+        route_params: CountrySquadRequest,
+        level: NationalTeamLevel,
+    ) -> ApiResult<impl IntoResponse> {
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let guard = state.data.read().await;
 
-    let country_id = indexes
-        .slug_indexes
-        .get_country_by_slug(&route_params.country_slug)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("Country '{}' not found", route_params.country_slug))
-        })?;
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let country: &Country = simulator_data
-        .continents
-        .iter()
-        .flat_map(|c| &c.countries)
-        .find(|country| country.id == country_id)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!(
-                "Country with ID {} not found in continents",
-                country_id
-            ))
-        })?;
+        let (country, continent) =
+            CountryLookup::by_slug(simulator_data, &route_params.country_slug)?;
 
-    let continent = simulator_data
-        .continent(country.continent_id)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!(
-                "Continent with ID {} not found",
-                country.continent_id
-            ))
-        })?;
+        Ok(Self::template(
+            simulator_data,
+            country,
+            continent,
+            i18n,
+            &route_params,
+            level,
+        ))
+    }
 
-    let now = simulator_data.date.date();
+    fn template(
+        data: &core::SimulatorData,
+        country: &Country,
+        continent: &core::continent::Continent,
+        i18n: I18n,
+        route_params: &CountrySquadRequest,
+        level: NationalTeamLevel,
+    ) -> CountrySquadTemplate {
+        let now = data.date.date();
 
-    // Pick the team for the requested level. Each table shows real
-    // call-ups + synthetic depth players (so weak nations don't render
-    // empty); caps/goals columns are level-appropriate.
-    let (team, team_suffix, panel_title_key, caps_key, goals_key) = match level {
-        NationalTeamLevel::Senior => (
-            &country.national_team,
-            "",
-            "squad",
-            "int_apps",
-            "int_goals",
-        ),
-        NationalTeamLevel::Under21 => (
-            &country.u21_national_team,
-            "/u21",
-            "u21_national_team",
-            "u21_caps",
-            "u21_goals",
-        ),
-    };
-    let players = build_squad_dtos(simulator_data, team, now);
+        // Pick the team for the requested level. Each table shows real
+        // call-ups + synthetic depth players (so weak nations don't render
+        // empty); caps/goals columns are level-appropriate.
+        let (team, team_suffix, panel_title_key, caps_key, goals_key) = match level {
+            NationalTeamLevel::Senior => {
+                (&country.national_team, "", "squad", "int_apps", "int_goals")
+            }
+            NationalTeamLevel::Under21 => (
+                &country.u21_national_team,
+                "/u21",
+                "u21_national_team",
+                "u21_caps",
+                "u21_goals",
+            ),
+        };
+        let players = SquadRows::build(data, team, now);
 
-    // Senior lives at the base country URL; U21 hangs off `/u21`. The
-    // menu's active-state checks key off this path.
-    let current_path = match level {
-        NationalTeamLevel::Senior => {
-            format!(
-                "/{}/countries/{}",
+        // Senior lives at the base country URL; U21 hangs off `/u21`. The
+        // menu's active-state checks key off this path.
+        let current_path = match level {
+            NationalTeamLevel::Senior => {
+                format!(
+                    "/{}/countries/{}",
+                    route_params.lang, route_params.country_slug
+                )
+            }
+            NationalTeamLevel::Under21 => format!(
+                "/{}/countries/{}/u21",
                 route_params.lang, route_params.country_slug
-            )
-        }
-        NationalTeamLevel::Under21 => format!(
-            "/{}/countries/{}/u21",
-            route_params.lang, route_params.country_slug
-        ),
-    };
-    let cl: Vec<(&str, &str)> = country
-        .leagues
-        .leagues
-        .iter()
-        .filter(|l| !l.friendly)
-        .map(|l| (l.name.as_str(), l.slug.as_str()))
-        .collect();
+            ),
+        };
 
-    Ok(CountrySquadTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        title: country.name.clone(),
-        sub_title_prefix: String::new(),
-        sub_title_suffix: String::new(),
-        sub_title: continent.name.clone(),
-        sub_title_link: format!("/{}/countries", route_params.lang),
-        sub_title_flag: None,
-        header_color: country.background_color.clone(),
-        foreground_color: country.foreground_color.clone(),
-        menu_sections: {
-            let mp = views::MenuParams {
-                i18n: &i18n,
-                lang: &route_params.lang,
-                current_path: &current_path,
-                country_name: &country.name,
-                country_slug: &route_params.country_slug,
-            };
-            views::country_menu(
-                &mp,
-                &cl,
-                country
-                    .domestic_cup
-                    .as_ref()
-                    .map(|c| (c.league.name.as_str(), c.league.slug.as_str())),
-                &country
-                    .playoffs
-                    .iter()
-                    .map(|p| (p.league.name.as_str(), p.league.slug.as_str()))
-                    .collect::<Vec<_>>(),
-                country.continent_id,
-            )
-        },
-        lang: route_params.lang,
-        i18n,
-        active_tab: "squad",
-        country_slug: route_params.country_slug,
-        team_suffix,
-        players,
-        panel_title_key,
-        caps_key,
-        goals_key,
-    })
+        CountrySquadTemplate {
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
+            cpu_brand: &CPU_BRAND,
+            cores_count: *CPU_CORES,
+            title: country.name.clone(),
+            sub_title_prefix: String::new(),
+            sub_title_suffix: String::new(),
+            sub_title: continent.name.clone(),
+            sub_title_link: format!("/{}/countries", route_params.lang),
+            sub_title_flag: None,
+            header_color: country.background_color.clone(),
+            foreground_color: country.foreground_color.clone(),
+            menu_sections: CountryMenu::sections(
+                country,
+                &i18n,
+                &route_params.lang,
+                &route_params.country_slug,
+                &current_path,
+            ),
+            lang: route_params.lang.clone(),
+            i18n,
+            active_tab: "squad",
+            country_slug: route_params.country_slug.clone(),
+            team_suffix,
+            players,
+            panel_title_key,
+            caps_key,
+            goals_key,
+        }
+    }
 }
 
 /// Build the squad-table DTOs for one national-team level. `squad_picks`
 /// returns real call-ups followed by synthetic depth players in a single
 /// pass. The caps/goals columns are filled from the senior or U21 ledger
 /// depending on `team.level`.
-fn build_squad_dtos(
-    simulator_data: &core::SimulatorData,
-    team: &NationalTeam,
-    now: chrono::NaiveDate,
-) -> Vec<NationalSquadPlayerDto> {
-    let is_u21 = team.level == NationalTeamLevel::Under21;
-    let mut players: Vec<NationalSquadPlayerDto> = team
-        .squad_picks()
-        .into_iter()
-        .filter_map(|pick| match pick {
-            SquadPick::Real(squad_player) => {
-                let player = simulator_data.player(squad_player.player_id)?;
-                let club = simulator_data.club(squad_player.club_id);
-                let club_name = club.map(|c| c.name.clone()).unwrap_or_default();
-                let club_slug = club
-                    .and_then(|c| c.teams.teams.first())
-                    .map(|t| t.slug.clone())
-                    .unwrap_or_default();
+struct SquadRows;
 
-                let position = player.positions.display_positions_compact();
+impl SquadRows {
+    fn build(
+        data: &core::SimulatorData,
+        team: &NationalTeam,
+        now: chrono::NaiveDate,
+    ) -> Vec<NationalSquadPlayerDto> {
+        let is_u21 = team.level == NationalTeamLevel::Under21;
+        let mut players: Vec<NationalSquadPlayerDto> = team
+            .squad_picks()
+            .into_iter()
+            .filter_map(|pick| match pick {
+                SquadPick::Real(squad_player) => Self::real(data, squad_player, now, is_u21),
+                SquadPick::Synthetic(player) => Some(Self::synthetic(player, now, is_u21)),
+            })
+            .collect();
 
-                let club_view = simulator_data
-                    .player_with_team(squad_player.player_id)
-                    .map(|(_, t)| t);
-                let (current, potential) = match club_view {
-                    Some(t) => (
-                        PotentialStarsView::current(player),
-                        PotentialStarsView::potential_by_staff(
-                            player,
-                            t.staffs.head_coach(),
-                            t.team_type == TeamType::Main,
-                            now,
-                        ),
-                    ),
-                    None => (
-                        PotentialStarsView::current(player),
-                        PotentialStarsView::potential_absolute(player, now),
-                    ),
-                };
+        players.sort_by(|a, b| {
+            a.position_sort
+                .partial_cmp(&b.position_sort)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
-                let (apps, goals) = if is_u21 {
-                    (
-                        player.player_attributes.under_21_international_apps,
-                        player.player_attributes.under_21_international_goals,
-                    )
-                } else {
-                    (
-                        player.player_attributes.international_apps,
-                        player.player_attributes.international_goals,
-                    )
-                };
+        players
+    }
 
-                Some(NationalSquadPlayerDto {
-                    slug: player.slug(),
-                    first_name: player.full_name.display_first_name().to_string(),
-                    last_name: player.full_name.display_last_name().to_string(),
-                    position,
-                    position_sort: player.position(),
-                    club_name,
-                    club_slug,
-                    age: DateUtils::age(player.birth_date, now),
-                    current_ability: current,
-                    potential_ability: potential,
-                    conditions: get_conditions(player),
-                    international_apps: apps,
-                    international_goals: goals,
-                    reason_key: squad_player.primary_reason.as_i18n_key(),
-                })
-            }
-            SquadPick::Synthetic(player) => {
-                // Synthetic players don't belong to any club; render
-                // with no club link and a SyntheticDepth reason so the
-                // UI is honest about which slots are stand-ins.
-                let position = player.positions.display_positions_compact();
-                let (apps, goals) = if is_u21 {
-                    (
-                        player.player_attributes.under_21_international_apps,
-                        player.player_attributes.under_21_international_goals,
-                    )
-                } else {
-                    (
-                        player.player_attributes.international_apps,
-                        player.player_attributes.international_goals,
-                    )
-                };
-                Some(NationalSquadPlayerDto {
-                    slug: player.slug(),
-                    first_name: player.full_name.display_first_name().to_string(),
-                    last_name: player.full_name.display_last_name().to_string(),
-                    position,
-                    position_sort: player.position(),
-                    club_name: String::new(),
-                    club_slug: String::new(),
-                    age: DateUtils::age(player.birth_date, now),
-                    current_ability: PotentialStarsView::current(player),
-                    potential_ability: PotentialStarsView::potential_absolute(player, now),
-                    conditions: get_conditions(player),
-                    international_apps: apps,
-                    international_goals: goals,
-                    reason_key: CallUpReason::SyntheticDepth.as_i18n_key(),
-                })
-            }
+    fn real(
+        data: &core::SimulatorData,
+        squad_player: &core::NationalSquadPlayer,
+        now: chrono::NaiveDate,
+        is_u21: bool,
+    ) -> Option<NationalSquadPlayerDto> {
+        let player = data.player(squad_player.player_id)?;
+        let club = data.club(squad_player.club_id);
+        let club_name = club.map(|c| c.name.clone()).unwrap_or_default();
+        let club_slug = club
+            .and_then(|c| c.teams.teams.first())
+            .map(|t| t.slug.clone())
+            .unwrap_or_default();
+
+        let club_view = data
+            .player_with_team(squad_player.player_id)
+            .map(|(_, t)| t);
+        let (current, potential) = match club_view {
+            Some(t) => (
+                PotentialStarsView::current(player),
+                PotentialStarsView::potential_by_staff(
+                    player,
+                    t.staffs.head_coach(),
+                    t.team_type == TeamType::Main,
+                    now,
+                ),
+            ),
+            None => (
+                PotentialStarsView::current(player),
+                PotentialStarsView::potential_absolute(player, now),
+            ),
+        };
+
+        let (apps, goals) = Self::caps_goals(player, is_u21);
+
+        Some(NationalSquadPlayerDto {
+            slug: player.slug(),
+            first_name: player.full_name.display_first_name().to_string(),
+            last_name: player.full_name.display_last_name().to_string(),
+            position: player.positions.display_positions_compact(),
+            position_sort: player.position(),
+            club_name,
+            club_slug,
+            age: DateUtils::age(player.birth_date, now),
+            current_ability: current,
+            potential_ability: potential,
+            conditions: NationalSquadPlayerDto::condition_percent(player),
+            international_apps: apps,
+            international_goals: goals,
+            reason_key: squad_player.primary_reason.as_i18n_key(),
         })
-        .collect();
+    }
 
-    players.sort_by(|a, b| {
-        a.position_sort
-            .partial_cmp(&b.position_sort)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    fn synthetic(
+        player: &core::Player,
+        now: chrono::NaiveDate,
+        is_u21: bool,
+    ) -> NationalSquadPlayerDto {
+        // Synthetic players don't belong to any club; render
+        // with no club link and a SyntheticDepth reason so the
+        // UI is honest about which slots are stand-ins.
+        let (apps, goals) = Self::caps_goals(player, is_u21);
 
-    players
-}
+        NationalSquadPlayerDto {
+            slug: player.slug(),
+            first_name: player.full_name.display_first_name().to_string(),
+            last_name: player.full_name.display_last_name().to_string(),
+            position: player.positions.display_positions_compact(),
+            position_sort: player.position(),
+            club_name: String::new(),
+            club_slug: String::new(),
+            age: DateUtils::age(player.birth_date, now),
+            current_ability: PotentialStarsView::current(player),
+            potential_ability: PotentialStarsView::potential_absolute(player, now),
+            conditions: NationalSquadPlayerDto::condition_percent(player),
+            international_apps: apps,
+            international_goals: goals,
+            reason_key: CallUpReason::SyntheticDepth.as_i18n_key(),
+        }
+    }
 
-fn get_conditions(player: &core::Player) -> u8 {
-    (100f32 * ((player.player_attributes.condition as f32) / 10000.0)) as u8
+    fn caps_goals(player: &core::Player, is_u21: bool) -> (u16, u16) {
+        if is_u21 {
+            (
+                player.player_attributes.under_21_international_apps,
+                player.player_attributes.under_21_international_goals,
+            )
+        } else {
+            (
+                player.player_attributes.international_apps,
+                player.player_attributes.international_goals,
+            )
+        }
+    }
 }

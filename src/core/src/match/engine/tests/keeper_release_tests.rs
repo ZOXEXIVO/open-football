@@ -7,7 +7,7 @@
 use super::substitution_break_tests::kickoff;
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::engine::engine::FootballEngine;
-use crate::r#match::goalkeepers::states::common::KeeperRelease;
+use crate::r#match::goalkeepers::states::shared::KeeperRelease;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::transition::TransitionSource;

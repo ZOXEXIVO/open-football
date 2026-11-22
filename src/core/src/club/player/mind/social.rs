@@ -13,7 +13,7 @@
 
 use super::organs::MindOrgans;
 use super::organs::goals::{GoalDomain, GoalEvidence, GoalKind, GoalOrigin};
-use super::organs::memory::{ActorRef, EpisodeKind, FactClaim, MindEpisode};
+use super::organs::memory::{ActorRef, EpisodeKind, EpochDay, FactClaim, MindEpisode};
 use super::situation::MindSituation;
 use super::submind::{MindOption, MindView, MoodContribution, ReasonSet, SubMind};
 
@@ -113,108 +113,14 @@ impl SubMind for SocialMind {
         let s = view.situation;
         let today = view.today();
 
-        // ── The practical business of settling in ───────────────
-        if s.is_abroad && !s.speaks_local_language {
-            organs.goals.pursue(
-                GoalKind::LearnTheLanguage,
-                GoalOrigin::Survival,
-                GoalEvidence::of(&[GoalEvidence::LANGUAGE_BARRIER]),
-                0.35,
-                today,
-            );
-        } else {
-            organs.goals.advance(GoalKind::LearnTheLanguage, 0.25);
-        }
-
-        if !self.has_mentor() && !s.is_settled() && s.adaptability < 10.0 {
-            organs.goals.pursue(
-                GoalKind::FindAMentor,
-                GoalOrigin::Survival,
-                GoalEvidence::of(&[GoalEvidence::ISOLATED_IN_THE_SQUAD]),
-                0.30,
-                today,
-            );
-        } else if self.has_mentor() {
-            organs.goals.advance(GoalKind::FindAMentor, 1.0);
-        }
-
+        self.pursue_settling(s, organs, today);
         if !s.is_settled() {
             return;
         }
 
-        // ── Adrift ──────────────────────────────────────────────
-        if s.is_culturally_isolated() && self.belonging() < 0.0 {
-            self.isolation_weeks = self.isolation_weeks.saturating_add(1);
-        }
-
-        let mut evidence = GoalEvidence::EMPTY;
-        if s.is_culturally_isolated() {
-            evidence.insert(GoalEvidence::LANGUAGE_BARRIER);
-            evidence.insert(GoalEvidence::ISOLATED_IN_THE_SQUAD);
-        }
-        if organs
-            .memory
-            .believes(FactClaim::IStruggleAbroad, ActorRef::NONE)
-            > 0.3
-        {
-            evidence.insert(GoalEvidence::HOMESICK);
-        }
-
-        if self.isolation_weeks >= Self::ISOLATION_LIMIT {
-            evidence.insert(GoalEvidence::HOMESICK);
-            organs.goals.pursue(
-                GoalKind::GoHome,
-                GoalOrigin::Attachment,
-                evidence,
-                (-self.belonging()).clamp(0.2, 1.0),
-                today,
-            );
-        }
-
-        // The fans have turned. A player will drop a level to get out of
-        // a cauldron, and a thin-skinned one much sooner than a hard one.
-        let here = ActorRef::club(view.tick.club_id);
-        let fans_hostile = organs
-            .memory
-            .believes(FactClaim::FansTurnedOnMe, ActorRef::fans(view.tick.club_id));
-        if fans_hostile > 0.3 {
-            let thin_skinned = ((14.0 - s.pressure) / 14.0).clamp(0.0, 1.0);
-            organs.goals.pursue(
-                GoalKind::EscapeThePressure,
-                GoalOrigin::Grievance,
-                GoalEvidence::of(&[GoalEvidence::FANS_HOSTILE, GoalEvidence::MEDIA_PRESSURE]),
-                fans_hostile * thin_skinned,
-                today,
-            );
-        }
-
-        // ── Home ────────────────────────────────────────────────
-        //
-        // The counterweight. Long service somewhere he is happy, and a
-        // memory that agrees, and he actively wants to stay — which
-        // pushes back on everything the career faculty is forming.
-        let long_service = s.days_at_club >= Self::BELONGS_DAYS;
-        let fondness = organs
-            .memory
-            .club_sentiment(view.tick.club_id, &view.tick.recall());
-        let spiritual_home = organs.memory.believes(FactClaim::SpiritualHome, here);
-
-        if (long_service && self.belonging() > 0.2 && fondness > 0.0) || spiritual_home > 0.4 {
-            // Loyalty is what turns a happy spell into an attachment. A
-            // rootless man can enjoy a club for four years and still
-            // leave without a backward glance; a loyal one is anchored
-            // by the same four years.
-            let attachment = (self.belonging() * 0.5 + fondness * 0.3 + spiritual_home * 0.4)
-                .clamp(0.2, 1.0)
-                * (0.5 + s.loyalty_drive());
-            organs.goals.pursue(
-                GoalKind::StayAtThisClub,
-                GoalOrigin::Attachment,
-                GoalEvidence::of(&[GoalEvidence::LONG_SERVICE, GoalEvidence::HERITAGE_PULL]),
-                attachment.clamp(0.0, 1.0),
-                today,
-            );
-        }
+        self.note_isolation(s);
+        self.pursue_isolation_escape(view, organs, today);
+        self.pursue_home_attachment(view, organs, today);
 
         self.consider_his_standing(view, organs);
         self.consider_the_boy_behind_him(view, organs);
@@ -342,6 +248,127 @@ impl SocialMind {
             // sours over a season, not in an afternoon.
             self.friction = self.friction.saturating_add(1).min(6);
             self.shift(-Self::SHIFT * 0.2);
+        }
+    }
+}
+
+impl SocialMind {
+    /// ── The practical business of settling in ───────────────
+    fn pursue_settling(&mut self, s: &MindSituation, organs: &mut MindOrgans, today: EpochDay) {
+        if s.is_abroad && !s.speaks_local_language {
+            organs.goals.pursue(
+                GoalKind::LearnTheLanguage,
+                GoalOrigin::Survival,
+                GoalEvidence::of(&[GoalEvidence::LANGUAGE_BARRIER]),
+                0.35,
+                today,
+            );
+        } else {
+            organs.goals.advance(GoalKind::LearnTheLanguage, 0.25);
+        }
+
+        if !self.has_mentor() && !s.is_settled() && s.adaptability < 10.0 {
+            organs.goals.pursue(
+                GoalKind::FindAMentor,
+                GoalOrigin::Survival,
+                GoalEvidence::of(&[GoalEvidence::ISOLATED_IN_THE_SQUAD]),
+                0.30,
+                today,
+            );
+        } else if self.has_mentor() {
+            organs.goals.advance(GoalKind::FindAMentor, 1.0);
+        }
+    }
+
+    /// ── Adrift ──────────────────────────────────────────────
+    fn note_isolation(&mut self, s: &MindSituation) {
+        if s.is_culturally_isolated() && self.belonging() < 0.0 {
+            self.isolation_weeks = self.isolation_weeks.saturating_add(1);
+        }
+    }
+
+    fn pursue_isolation_escape(
+        &mut self,
+        view: &MindView<'_>,
+        organs: &mut MindOrgans,
+        today: EpochDay,
+    ) {
+        let s = view.situation;
+        let mut evidence = GoalEvidence::EMPTY;
+        if s.is_culturally_isolated() {
+            evidence.insert(GoalEvidence::LANGUAGE_BARRIER);
+            evidence.insert(GoalEvidence::ISOLATED_IN_THE_SQUAD);
+        }
+        if organs
+            .memory
+            .believes(FactClaim::IStruggleAbroad, ActorRef::NONE)
+            > 0.3
+        {
+            evidence.insert(GoalEvidence::HOMESICK);
+        }
+
+        if self.isolation_weeks >= Self::ISOLATION_LIMIT {
+            evidence.insert(GoalEvidence::HOMESICK);
+            organs.goals.pursue(
+                GoalKind::GoHome,
+                GoalOrigin::Attachment,
+                evidence,
+                (-self.belonging()).clamp(0.2, 1.0),
+                today,
+            );
+        }
+
+        // The fans have turned. A player will drop a level to get out of
+        // a cauldron, and a thin-skinned one much sooner than a hard one.
+        let fans_hostile = organs
+            .memory
+            .believes(FactClaim::FansTurnedOnMe, ActorRef::fans(view.tick.club_id));
+        if fans_hostile > 0.3 {
+            let thin_skinned = ((14.0 - s.pressure) / 14.0).clamp(0.0, 1.0);
+            organs.goals.pursue(
+                GoalKind::EscapeThePressure,
+                GoalOrigin::Grievance,
+                GoalEvidence::of(&[GoalEvidence::FANS_HOSTILE, GoalEvidence::MEDIA_PRESSURE]),
+                fans_hostile * thin_skinned,
+                today,
+            );
+        }
+    }
+
+    /// ── Home ────────────────────────────────────────────────
+    ///
+    /// The counterweight. Long service somewhere he is happy, and a
+    /// memory that agrees, and he actively wants to stay — which
+    /// pushes back on everything the career faculty is forming.
+    fn pursue_home_attachment(
+        &mut self,
+        view: &MindView<'_>,
+        organs: &mut MindOrgans,
+        today: EpochDay,
+    ) {
+        let s = view.situation;
+        let here = ActorRef::club(view.tick.club_id);
+        let long_service = s.days_at_club >= Self::BELONGS_DAYS;
+        let fondness = organs
+            .memory
+            .club_sentiment(view.tick.club_id, &view.tick.recall());
+        let spiritual_home = organs.memory.believes(FactClaim::SpiritualHome, here);
+
+        if (long_service && self.belonging() > 0.2 && fondness > 0.0) || spiritual_home > 0.4 {
+            // Loyalty is what turns a happy spell into an attachment. A
+            // rootless man can enjoy a club for four years and still
+            // leave without a backward glance; a loyal one is anchored
+            // by the same four years.
+            let attachment = (self.belonging() * 0.5 + fondness * 0.3 + spiritual_home * 0.4)
+                .clamp(0.2, 1.0)
+                * (0.5 + s.loyalty_drive());
+            organs.goals.pursue(
+                GoalKind::StayAtThisClub,
+                GoalOrigin::Attachment,
+                GoalEvidence::of(&[GoalEvidence::LONG_SERVICE, GoalEvidence::HERITAGE_PULL]),
+                attachment.clamp(0.0, 1.0),
+                today,
+            );
         }
     }
 }

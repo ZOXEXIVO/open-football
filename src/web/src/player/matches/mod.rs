@@ -1,19 +1,16 @@
 pub mod collector;
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::slug::{PlayerPage, resolve_player_page};
-use crate::common::season_step::SeasonStep;
-use crate::player::events::PlayerEventsCounter;
 use crate::player::matches::collector::PlayerMatchCollector;
-use crate::player::newspaper::PlayerNewsCounter;
-use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
+use crate::player::{PlayerPageChrome, PlayerPageColors};
+use crate::shared::season_step::SeasonStep;
+use crate::shared::slug::{PlayerPage, PlayerSlug};
+use crate::views::{MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use core::league::season::LeagueSeason;
-use core::{PlayerStatusType, SimulatorData};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -80,164 +77,91 @@ pub struct PlayerMatchResult {
     pub away_goals: u8,
 }
 
-pub async fn player_matches_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<PlayerMatchesRequest>,
-    Query(query): Query<PlayerMatchesQuery>,
-) -> ApiResult<Response> {
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let guard = state.data.read().await;
+pub struct PlayerMatchesPage;
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+impl PlayerMatchesPage {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<PlayerMatchesRequest>,
+        Query(query): Query<PlayerMatchesQuery>,
+    ) -> ApiResult<Response> {
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let guard = state.data.read().await;
 
-    let (player, team_opt, canonical) = match resolve_player_page(
-        simulator_data,
-        &route_params.player_slug,
-        &route_params.lang,
-        "/matches",
-    )? {
-        PlayerPage::Found {
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+
+        let (player, team_opt, canonical) = match PlayerSlug::resolve_page(
+            simulator_data,
+            &route_params.player_slug,
+            &route_params.lang,
+            "/matches",
+        )? {
+            PlayerPage::Found {
+                player,
+                team,
+                canonical_slug,
+            } => (player, team, canonical_slug),
+            PlayerPage::Redirect(r) => return Ok(r),
+        };
+
+        // Read off the match histories of the player's teams rather than the
+        // current team's schedule — see `collector` for why.
+        let mut items = PlayerMatchCollector::collect(simulator_data, &i18n, player, team_opt);
+        // Only played matches are listed, so the newest season holding one is
+        // already the season under way — or the one just finished while the new
+        // campaign has yet to kick off.
+        let seasons = SeasonStep::resolve(items.iter().map(|item| item.season), query.season, None);
+        if let Some(step) = &seasons {
+            items.retain(|item| item.season.opening_year == step.selected);
+        }
+
+        let season_base = format!("/{}/players/{}/matches", route_params.lang, canonical);
+        let chrome = PlayerPageChrome::build(
+            simulator_data,
+            i18n,
             player,
-            team,
-            canonical_slug,
-        } => (player, team, canonical_slug),
-        PlayerPage::Redirect(r) => return Ok(r),
-    };
+            team_opt,
+            &route_params.lang,
+            &canonical,
+            "matches",
+            PlayerPageColors::Grey,
+        )?;
 
-    let (neighbor_teams, country_leagues) = if let Some(team) = team_opt {
-        get_neighbor_teams(team.club_id, simulator_data, &i18n)?
-    } else {
-        (Vec::new(), Vec::new())
-    };
-    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-
-    // Read off the match histories of the player's teams rather than the
-    // current team's schedule — see `collector` for why.
-    let mut items = PlayerMatchCollector::collect(simulator_data, &i18n, player, team_opt);
-    // Only played matches are listed, so the newest season holding one is
-    // already the season under way — or the one just finished while the new
-    // campaign has yet to kick off.
-    let seasons = SeasonStep::resolve(items.iter().map(|item| item.season), query.season, None);
-    if let Some(step) = &seasons {
-        items.retain(|item| item.season.opening_year == step.selected);
+        Ok(PlayerMatchesTemplate {
+            css_version: chrome.css_version,
+            computer_name: chrome.computer_name,
+            cpu_brand: chrome.cpu_brand,
+            cores_count: chrome.cores_count,
+            title: chrome.title,
+            sub_title_prefix: chrome.sub_title_prefix,
+            sub_title_suffix: chrome.sub_title_suffix,
+            sub_title: chrome.sub_title,
+            sub_title_link: chrome.sub_title_link,
+            sub_title_flag: chrome.sub_title_flag,
+            header_color: chrome.header_color,
+            foreground_color: chrome.foreground_color,
+            menu_sections: chrome.menu_sections,
+            i18n: chrome.i18n,
+            lang: chrome.lang,
+            active_tab: chrome.active_tab,
+            player_id: chrome.player_id,
+            player_slug: chrome.player_slug,
+            club_id: chrome.club_id,
+            is_on_loan: chrome.is_on_loan,
+            is_injured: chrome.is_injured,
+            is_unhappy: chrome.is_unhappy,
+            is_force_match_selection: chrome.is_force_match_selection,
+            is_on_watchlist: chrome.is_on_watchlist,
+            events_count: chrome.events_count,
+            interested_clubs_count: chrome.interested_clubs_count,
+            awards_count: chrome.awards_count,
+            news_count: chrome.news_count,
+            season_base,
+            seasons,
+            items,
+        }
+        .into_response())
     }
-
-    let season_base = format!("/{}/players/{}/matches", route_params.lang, canonical);
-
-    let title = format!(
-        "{} {}",
-        player.full_name.display_first_name(),
-        player.full_name.display_last_name()
-    );
-
-    Ok(PlayerMatchesTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        title,
-        sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
-        sub_title_suffix: String::new(),
-        sub_title: team_opt.map(|t| t.name.clone()).unwrap_or_else(|| {
-            if player.is_retired() {
-                i18n.t("retired").to_string()
-            } else {
-                i18n.t("free_agent").to_string()
-            }
-        }),
-        sub_title_link: team_opt
-            .map(|t| format!("/{}/teams/{}", route_params.lang, t.slug))
-            .unwrap_or_default(),
-        sub_title_flag: None,
-        header_color: team_opt
-            .and_then(|t| {
-                simulator_data
-                    .club(t.club_id)
-                    .map(|c| c.colors.background.clone())
-            })
-            .unwrap_or_else(|| "#808080".to_string()),
-        foreground_color: team_opt
-            .and_then(|t| {
-                simulator_data
-                    .club(t.club_id)
-                    .map(|c| c.colors.foreground.clone())
-            })
-            .unwrap_or_else(|| "#ffffff".to_string()),
-        menu_sections: if let Some(team) = team_opt {
-            let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-            let current_path = format!("/{}/teams/{}", route_params.lang, team.slug);
-            let mp = views::MenuParams {
-                i18n: &i18n,
-                lang: &route_params.lang,
-                current_path: &current_path,
-                country_name: cn,
-                country_slug: cs,
-            };
-            views::team_menu(&mp, &neighbor_refs, &league_refs)
-        } else {
-            Vec::new()
-        },
-        i18n,
-        lang: route_params.lang.clone(),
-        active_tab: "matches",
-        player_id: player.id,
-        player_slug: canonical,
-        club_id: team_opt.map(|t| t.club_id).unwrap_or(0),
-        is_on_loan: player.is_on_loan(),
-        is_injured: player.player_attributes.is_injured,
-        is_unhappy: player.statuses.get().contains(&PlayerStatusType::Unh),
-        is_force_match_selection: player.is_force_match_selection,
-        is_on_watchlist: simulator_data.watchlist.contains(&player.id),
-        events_count: PlayerEventsCounter::count(player),
-        interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
-        awards_count: player.awards_count.total(),
-        news_count: PlayerNewsCounter::count(simulator_data, player),
-        season_base,
-        seasons,
-        items,
-    }
-    .into_response())
-}
-
-fn get_neighbor_teams(
-    club_id: u32,
-    data: &SimulatorData,
-    i18n: &I18n,
-) -> Result<NeighborMenus, ApiError> {
-    let club = data
-        .club(club_id)
-        .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
-
-    let teams = views::neighbor_teams(club, i18n);
-
-    let mut country_leagues: Vec<(u32, String, String)> = data
-        .country_by_club(club_id)
-        .map(|country| {
-            country
-                .leagues
-                .leagues
-                .iter()
-                .filter(|l| !l.friendly)
-                .map(|l| (l.id, l.name.clone(), l.slug.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
-    country_leagues.sort_by_key(|(id, _, _)| *id);
-
-    Ok((
-        teams,
-        country_leagues
-            .into_iter()
-            .map(|(_, name, slug)| (name, slug))
-            .collect(),
-    ))
 }

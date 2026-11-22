@@ -8,13 +8,13 @@
 #![cfg(test)]
 
 use crate::club::player::builder::PlayerBuilder;
-use crate::club::player::core::player::{
-    ManagerPromise, ManagerPromiseKind, TransferRequestReason,
-};
 use crate::club::player::development::DevelopmentRead;
 use crate::club::player::mind::{
     ActorRef, CareerArc, EpisodeKind, FactClaim, GoalBlocker, GoalBridge, GoalEvidence, GoalKind,
     GoalOrigin, GoalStatus, MindClock, MindSituation, RecallCue, SpellChange,
+};
+use crate::club::player::model::player::{
+    ManagerPromise, ManagerPromiseKind, TransferRequestReason,
 };
 use crate::shared::fullname::FullName;
 use crate::{
@@ -1746,7 +1746,7 @@ fn a_homegrown_boy_with_no_transfer_on_record_can_still_decide_something() {
     // Fourth choice, never picked, and a season of evidence for it.
     p.happiness.starter_ratio = 0.05;
     p.happiness.appearances_tracked = 8;
-    p.squad_standing_view = Some(crate::club::player::core::player::SquadStandingView {
+    p.squad_standing_view = Some(crate::club::player::model::player::SquadStandingView {
         pecking_rank: 4,
         rivals_at_position: 5,
         top_rival_age: 26,
@@ -1780,7 +1780,7 @@ fn a_one_club_man_at_his_own_level_means_to_stay_and_lead() {
     p.attributes.loyalty = 18.0;
     p.happiness.starter_ratio = 0.8;
     p.happiness.appearances_tracked = 30;
-    p.squad_standing_view = Some(crate::club::player::core::player::SquadStandingView {
+    p.squad_standing_view = Some(crate::club::player::model::player::SquadStandingView {
         pecking_rank: 1,
         rivals_at_position: 2,
         observable_level: 125,

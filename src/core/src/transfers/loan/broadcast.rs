@@ -15,7 +15,6 @@
 use crate::club::staff::perception::AbilityEstimator;
 use crate::transfers::loan::LoanPipeline;
 use crate::transfers::loan::agreement::LoanTerms;
-use crate::transfers::loan::legacy::LoanDestinationLevel;
 use crate::transfers::market::window::MarketCadence;
 use crate::transfers::squad::bands::TierBands;
 use crate::transfers::view::club::ClubView;
@@ -627,149 +626,179 @@ impl ListingBroadcast {
         market: &LoanPushMarket<'_>,
         parent: &LoanPushParent<'_>,
     ) -> Vec<(u32, f32)> {
-        let offered_tier = parent.offered_tier;
-        let parent_placements = parent.placements;
-        let mid_season_window = market.mid_season_window;
-        let domestic_region = market.domestic_region;
+        borrowers
+            .iter()
+            .filter_map(|borrower| {
+                Self::loan_destination(country, b, date, borrower, market, parent)
+            })
+            .collect()
+    }
 
-        let mut destinations: Vec<(u32, f32)> = Vec::new();
-        for borrower in borrowers {
-            let club = borrower.club;
-            let team = borrower.team;
-            if club.id == b.parent_club_id || club.is_rival(b.parent_club_id) {
-                continue;
-            }
-            // The push must not commit a borrower its own scans would
-            // gate out: a loan fee the club can't fund (the scan's
-            // 20%-of-balance / 50k affordability bar) — a broke Regional
-            // club was being handed 300k+ fees here.
-            if b.asking * 0.8 > borrower.max_loan_fee {
-                continue;
-            }
-            if market.active_pairs.contains(&(b.player_id, club.id)) {
-                continue;
-            }
-            // A club that has already gone in for this player and got
-            // nowhere is not the place to send him again this month. Same
-            // standoff the borrower's own scans respect, read from the
-            // other side of the deal — without it the push could re-offer
-            // the same name to the same club every Monday, which is the
-            // pairing that made one borrower look welded to one target.
-            if club
-                .transfer_plan
-                .is_loan_approach_barred(b.player_id, date)
-            {
-                continue;
-            }
-
-            // …and the borrower has to actually want him. Reputation is
-            // what makes a club the most attractive name on the parent's
-            // list; it is not consent. Without this the push read a club
-            // whose forward line was thin as an invitation, which is
-            // precisely backwards at a side whose attack is carried by
-            // wide men filed elsewhere.
-            //
-            // The upgrade exception is the other half of that: a club
-            // that "only shops in January" does not turn down a genuine
-            // first-team-level loanee in August, and its refusal was
-            // exactly what walked the boy down to the tier below.
-            let borrower_league_rep = borrower.league_rep;
-            let borrower_best_here = borrower.best_by_group[b.group.index()];
-            let borrower_profile = borrower
-                .profile
-                .map(|p| p.with_best_in_group(borrower_best_here));
-            let borrower_rep = team.reputation.world;
-            let depth = &borrower.depth;
-            let level = LoanDestinationLevel {
-                ability: b.ability,
-                parent_best_in_group: b.parent_best_in_group,
-                parent_rep: b.parent_rep,
-                borrower_rep,
-                parent_league_rep: b.parent_league_rep,
-                borrower_league_rep,
-                is_development: b.is_development,
-            };
-            // What the three sides would agree on, as a factor on how
-            // attractive this destination is — the parent's own
-            // willingness is already banked in the broadcast entry, so
-            // what this prices is the borrower, the player and the
-            // money.
-            let verdict = b
-                .guard
-                .as_ref()
-                .zip(borrower_profile.as_ref())
-                .map(|(g, p)| g.assess(p, b.willingness.score, b.parent_subsidy));
-            let Some(agreement) = LoanAgreement::price(&AgreementInputs {
-                parent: b.willingness,
-                parent_rep: b.parent_rep,
-                parent_league_rep: b.parent_league_rep,
-                parent_best_in_group: b.parent_best_in_group,
-                parent_subsidy: b.parent_subsidy,
-                borrower_tier: team.reputation.level(),
-                borrower_rep,
-                borrower_league_rep,
-                group: b.group,
-                count: depth.headcount(b.group),
-                best_here: borrower_best_here,
-                clearly_better_ahead: depth.clearly_better_ahead(b.group, b.ability),
-                need: Self::borrower_need(club, depth, b).score(),
-                slot_room: market.slot_room(club.id, b.nationality_country_id),
-                mid_season_window,
-                candidate: b.ability,
-                is_development: b.is_development,
-                stage: b.stage,
-                club_band_target: b.band_target,
-                plan: b.plan,
-                below_floor: verdict.map(|v| v.below_floor).unwrap_or(0.0),
-                resignation: b
-                    .guard
-                    .as_ref()
-                    .map(|g| g.listing_resignation())
-                    .unwrap_or(0.0),
-                going_home: false,
-                // A push inside one country: the parent knows where it is
-                // sending him, and he already plays here.
-                placement_trust: 1.0,
-                familiarity: 1.0,
-                weight: verdict.map(|v| v.weight).unwrap_or(0.0),
-                carry: verdict.map(|v| v.carry).unwrap_or(0.0),
-                asking: 0.0,
-                max_loan_fee: f64::MAX,
-            }) else {
-                continue;
-            };
-            destinations.push((
-                club.id,
-                agreement
-                    * Self::cascade_weight(offered_tier, team.reputation.level(), b)
-                    * DestinationAppeal {
-                        borrower_rep,
-                        borrower_league_rep: level.borrower_league_rep,
-                        parent_league_rep: b.parent_league_rep,
-                        minutes_headroom: depth.minutes_headroom(b.group, b.ability),
-                        training_rating: club.facilities.training.to_rating(),
-                        existing_placements: LoanApproachMemory::crowding_at(
-                            parent_placements,
-                            club.id,
-                            date,
-                        ),
-                        is_development: b.is_development,
-                        // Same term the borrower-side scan and the
-                        // appraisal read, so all three agree about an
-                        // Argentine loaned within Brazil (C4).
-                        home_pull: HomeLoanPull::factor(
-                            b.nationality_country_id,
-                            b.nationality_region,
-                            country.id,
-                            domestic_region,
-                            b.return_home_desire,
-                        ),
-                    }
-                    .score(),
-            ));
+    /// One borrower's answer to this broadcast, if it is in the market for
+    /// him at all.
+    fn loan_destination(
+        country: &Country,
+        b: &Broadcastable,
+        date: NaiveDate,
+        borrower: &LoanPushBorrower<'_>,
+        market: &LoanPushMarket<'_>,
+        parent: &LoanPushParent<'_>,
+    ) -> Option<(u32, f32)> {
+        let club = borrower.club;
+        if club.id == b.parent_club_id || club.is_rival(b.parent_club_id) {
+            return None;
+        }
+        // The push must not commit a borrower its own scans would
+        // gate out: a loan fee the club can't fund (the scan's
+        // 20%-of-balance / 50k affordability bar) — a broke Regional
+        // club was being handed 300k+ fees here.
+        if b.asking * 0.8 > borrower.max_loan_fee {
+            return None;
+        }
+        if market.active_pairs.contains(&(b.player_id, club.id)) {
+            return None;
+        }
+        // A club that has already gone in for this player and got
+        // nowhere is not the place to send him again this month. Same
+        // standoff the borrower's own scans respect, read from the
+        // other side of the deal — without it the push could re-offer
+        // the same name to the same club every Monday, which is the
+        // pairing that made one borrower look welded to one target.
+        if club
+            .transfer_plan
+            .is_loan_approach_barred(b.player_id, date)
+        {
+            return None;
         }
 
-        destinations
+        // …and the borrower has to actually want him. Reputation is
+        // what makes a club the most attractive name on the parent's
+        // list; it is not consent. Without this the push read a club
+        // whose forward line was thin as an invitation, which is
+        // precisely backwards at a side whose attack is carried by
+        // wide men filed elsewhere.
+        //
+        // The upgrade exception is the other half of that: a club
+        // that "only shops in January" does not turn down a genuine
+        // first-team-level loanee in August, and its refusal was
+        // exactly what walked the boy down to the tier below.
+        let agreement = Self::destination_agreement(b, borrower, market)?;
+        Some((
+            club.id,
+            Self::destination_appeal(
+                country,
+                b,
+                date,
+                borrower,
+                parent,
+                market.domestic_region,
+                agreement,
+            ),
+        ))
+    }
+
+    /// What the three sides would agree on, as a factor on how attractive
+    /// this destination is — the parent's own willingness is already banked
+    /// in the broadcast entry, so what this prices is the borrower, the
+    /// player and the money.
+    fn destination_agreement(
+        b: &Broadcastable,
+        borrower: &LoanPushBorrower<'_>,
+        market: &LoanPushMarket<'_>,
+    ) -> Option<f32> {
+        let team = borrower.team;
+        let depth = &borrower.depth;
+        let borrower_league_rep = borrower.league_rep;
+        let borrower_best_here = borrower.best_by_group[b.group.index()];
+        let borrower_profile = borrower
+            .profile
+            .map(|p| p.with_best_in_group(borrower_best_here));
+        let borrower_rep = team.reputation.world;
+        let verdict = b
+            .guard
+            .as_ref()
+            .zip(borrower_profile.as_ref())
+            .map(|(g, p)| g.assess(p, b.willingness.score, b.parent_subsidy));
+        LoanAgreement::price(&AgreementInputs {
+            parent: b.willingness,
+            parent_rep: b.parent_rep,
+            parent_league_rep: b.parent_league_rep,
+            parent_best_in_group: b.parent_best_in_group,
+            parent_subsidy: b.parent_subsidy,
+            borrower_tier: team.reputation.level(),
+            borrower_rep,
+            borrower_league_rep,
+            group: b.group,
+            count: depth.headcount(b.group),
+            best_here: borrower_best_here,
+            clearly_better_ahead: depth.clearly_better_ahead(b.group, b.ability),
+            need: Self::borrower_need(borrower.club, depth, b).score(),
+            slot_room: market.slot_room(borrower.club.id, b.nationality_country_id),
+            mid_season_window: market.mid_season_window,
+            candidate: b.ability,
+            is_development: b.is_development,
+            stage: b.stage,
+            club_band_target: b.band_target,
+            plan: b.plan,
+            below_floor: verdict.map(|v| v.below_floor).unwrap_or(0.0),
+            resignation: b
+                .guard
+                .as_ref()
+                .map(|g| g.listing_resignation())
+                .unwrap_or(0.0),
+            going_home: false,
+            // A push inside one country: the parent knows where it is
+            // sending him, and he already plays here.
+            placement_trust: 1.0,
+            familiarity: 1.0,
+            weight: verdict.map(|v| v.weight).unwrap_or(0.0),
+            carry: verdict.map(|v| v.carry).unwrap_or(0.0),
+            asking: 0.0,
+            max_loan_fee: f64::MAX,
+        })
+    }
+
+    /// How much this destination appeals to the parent beyond the agreement
+    /// itself: the cascade's tier, the minutes on offer, the coaching, and
+    /// how crowded the parent has already made the club.
+    fn destination_appeal(
+        country: &Country,
+        b: &Broadcastable,
+        date: NaiveDate,
+        borrower: &LoanPushBorrower<'_>,
+        parent: &LoanPushParent<'_>,
+        domestic_region: ScoutingRegion,
+        agreement: f32,
+    ) -> f32 {
+        let club = borrower.club;
+        let team = borrower.team;
+        let depth = &borrower.depth;
+        agreement
+            * Self::cascade_weight(parent.offered_tier, team.reputation.level(), b)
+            * DestinationAppeal {
+                borrower_rep: team.reputation.world,
+                borrower_league_rep: borrower.league_rep,
+                parent_league_rep: b.parent_league_rep,
+                minutes_headroom: depth.minutes_headroom(b.group, b.ability),
+                training_rating: club.facilities.training.to_rating(),
+                existing_placements: LoanApproachMemory::crowding_at(
+                    parent.placements,
+                    club.id,
+                    date,
+                ),
+                is_development: b.is_development,
+                // Same term the borrower-side scan and the
+                // appraisal read, so all three agree about an
+                // Argentine loaned within Brazil (C4).
+                home_pull: HomeLoanPull::factor(
+                    b.nationality_country_id,
+                    b.nationality_region,
+                    country.id,
+                    domestic_region,
+                    b.return_home_desire,
+                ),
+            }
+            .score()
     }
 
     /// How badly a borrower wants a body in that shirt — the same

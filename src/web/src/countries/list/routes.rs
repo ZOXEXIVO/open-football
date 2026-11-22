@@ -2,8 +2,12 @@ use crate::GameAppData;
 use axum::Router;
 use axum::routing::get;
 
-pub fn routes() -> Router<GameAppData> {
-    Router::new()
-        .route("/{lang}", get(super::country_list_action))
-        .route("/{lang}/countries", get(super::country_list_action))
+pub struct CountryListRoutes;
+
+impl CountryListRoutes {
+    pub fn router() -> Router<GameAppData> {
+        Router::new()
+            .route("/{lang}", get(super::CountryListPage::action))
+            .route("/{lang}/countries", get(super::CountryListPage::action))
+    }
 }

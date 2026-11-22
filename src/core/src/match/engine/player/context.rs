@@ -1,5 +1,4 @@
 use crate::PlayerPositionType;
-use crate::r#match::common_states::ChasePath;
 use crate::r#match::engine::ball::ball::contest::interception::InterceptionContest;
 use crate::r#match::engine::ball::ball::motion::Reception;
 use crate::r#match::engine::ball::ball::{
@@ -13,6 +12,7 @@ use crate::r#match::player::strategies::players::ops::goalkeeper_skill::Goalkeep
 use crate::r#match::player::strategies::players::ops::marker_evasion::MarkerRead;
 use crate::r#match::player::strategies::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::position_players::PlayerFieldData;
+use crate::r#match::shared_states::ChasePath;
 use crate::r#match::{
     MatchField, MatchObjectsPositions, MatchPlayerCollection, MatchPlayerLite, PassOriginRestart,
     PlayerSide, ShotTarget, Space, SpatialGrid,
@@ -857,7 +857,7 @@ pub struct BallMetadata {
     /// **The man taking a kick-off right now**, and the team-mate the
     /// set-up put beside him to receive it.
     ///
-    /// Read by [`KickoffDelivery`](crate::r#match::common_states::KickoffDelivery),
+    /// Read by [`KickoffDelivery`](crate::r#match::shared_states::KickoffDelivery),
     /// the only thing that may move him while they are set: he is not
     /// dribbling, pressing or making a run, he is standing over a dead
     /// ball on the centre mark. See `Ball::kickoff_taker`.

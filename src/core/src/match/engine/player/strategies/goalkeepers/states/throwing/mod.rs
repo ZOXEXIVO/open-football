@@ -1,5 +1,5 @@
 use crate::r#match::events::Event;
-use crate::r#match::goalkeepers::states::common::{
+use crate::r#match::goalkeepers::states::shared::{
     ActivityIntensity, GoalkeeperCondition, KeeperRelease,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;

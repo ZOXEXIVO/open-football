@@ -1,8 +1,8 @@
 use crate::r#match::engine::ball::ball::{ASSIST_WINDOW_TICKS, Ball};
 use crate::r#match::engine::ball::events::BallEvent;
+use crate::r#match::engine::psychology::LapseFamily;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::psychology::lapse::lapse_diag;
-use crate::r#match::engine::psychology::LapseFamily;
 use crate::r#match::events::EventCollection;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::strategies::passing::CrossType;
@@ -19,9 +19,10 @@ use std::collections::VecDeque;
 /// shots are struck by the player who was just passed to, and this is
 /// the counter that says whether the engine feeds its shooters or lets
 /// them scavenge.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum PossessionSource {
     /// No acquisition recorded since the last restart.
+    #[default]
     Unknown,
     /// Received a teammate's pass — the one that should dominate.
     PassReception,

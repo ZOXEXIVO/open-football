@@ -1,8 +1,8 @@
-use crate::r#match::common_states::ShapeTempo;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{
+use crate::r#match::midfielders::states::shared::{
     ActivityIntensity, MidfielderCondition, MidfielderRead,
 };
+use crate::r#match::shared_states::ShapeTempo;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,

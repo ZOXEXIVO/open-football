@@ -12,8 +12,8 @@ use crate::r#match::engine::ball::events::{BallEvent, BallEventDispatcher};
 use crate::r#match::engine::player::events::players::PlayerEventDispatcher;
 use crate::r#match::engine::psychology::{ActionLapse, LapseFamily, PsychState};
 use crate::r#match::engine::result::Score;
-use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::events::EventCollection;
+use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
     MatchContext, MatchField, MatchPlayerCollection, PlayerSide, ResultMatchPositionData,
 };
@@ -245,7 +245,10 @@ fn only_a_miscue_may_go_toward_his_own_goal() {
     let toward_goal = Vector3::new(if left { -1.2 } else { 1.2 }, 0.3, 0.3);
     let backward = |v: Vector3<f32>| if left { v.x < 0.0 } else { v.x > 0.0 };
     let (_, clean) = clear_from_the_box(false, toward_goal);
-    assert!(!backward(clean), "an ordinary clearance is turned away from goal");
+    assert!(
+        !backward(clean),
+        "an ordinary clearance is turned away from goal"
+    );
     let (_, miscued) = clear_from_the_box(true, toward_goal);
     assert!(backward(miscued), "a miscue goes where it was hit");
 }
@@ -262,7 +265,11 @@ fn a_nervous_clearer_miscues_more() {
         p.attributes.consistency = 10.0;
     }
     let clearer = field.get_player(GIVER).unwrap();
-    let settled = ActionLapse::probability(LapseFamily::Clearance, clearer, Some(&PsychState::default()));
+    let settled = ActionLapse::probability(
+        LapseFamily::Clearance,
+        clearer,
+        Some(&PsychState::default()),
+    );
     let nervous = ActionLapse::probability(
         LapseFamily::Clearance,
         clearer,

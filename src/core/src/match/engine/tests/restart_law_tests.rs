@@ -5,7 +5,6 @@
 
 use super::goal_celebration_tests::squad;
 use crate::club::player::traits::PlayerTrait;
-use crate::r#match::common_states::ChallengeKind;
 use crate::r#match::engine::ball::ball::{
     AwaitedRestart, Ball, PassChainEntry, PassOriginRestart, RestartQuiet,
 };
@@ -18,6 +17,7 @@ use crate::r#match::engine::player::events::players::{
 use crate::r#match::engine::result::Score;
 use crate::r#match::engine::result::{DeadTime, OffenceTally, PlayingTime};
 use crate::r#match::events::{EventCollection, EventDispatcher};
+use crate::r#match::shared_states::ChallengeKind;
 use crate::r#match::{
     MatchContext, MatchField, MatchPlayer, MatchPlayerCollection, MatchRng, PlayerSide,
     ResultMatchPositionData,
@@ -328,7 +328,8 @@ fn only_a_side_protecting_slows_its_restarts() {
 #[test]
 fn restarts_slow_as_the_whistle_nears_for_a_side_protecting_a_lead() {
     let outlook = Outlook::default();
-    let level_at_kickoff = Stance::reading(&outlook, &Temperament::neutral(), &Situation::default());
+    let level_at_kickoff =
+        Stance::reading(&outlook, &Temperament::neutral(), &Situation::default());
     let delay = |minute: f32| {
         let reading = Stance::reading(
             &outlook,

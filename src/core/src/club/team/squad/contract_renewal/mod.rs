@@ -139,116 +139,153 @@ impl ContractRenewalManager {
         let mut match_highest_used = false;
 
         for candidate in candidates {
-            let attempts = teams[main_idx]
-                .players
-                .players
-                .iter()
-                .find(|p| p.id == candidate.player_id)
-                .map(|p| {
-                    p.decision_history
-                        .items
-                        .iter()
-                        .filter(|d| {
-                            d.decision == DECISION_LABEL && (date - d.date).num_days() < 365
-                        })
-                        .count()
-                })
-                .unwrap_or(0);
-
-            let over_cap = attempts >= MAX_RENEWAL_ATTEMPTS_PER_YEAR;
-            if over_cap && !candidate.override_attempts_cap {
-                continue;
-            }
-
-            let current_salary = teams[main_idx]
-                .players
-                .players
-                .iter()
-                .find(|p| p.id == candidate.player_id)
-                .and_then(|p| p.contract.as_ref().map(|c| c.salary))
-                .unwrap_or(0);
-
-            let player_ref = match teams[main_idx]
-                .players
-                .players
-                .iter()
-                .find(|p| p.id == candidate.player_id)
-            {
-                Some(p) => p,
-                None => continue,
-            };
-            let built = Self::build_offer(
-                player_ref,
+            let Some(proposal) = Self::candidate_offer(
+                &teams[main_idx],
+                &candidate,
+                date,
                 negotiation_skill,
                 judging_ability,
-                date,
-                attempts,
                 team_rep_factor,
                 league_reputation,
                 wage_budget,
                 &structure,
-                &candidate,
                 match_highest_used,
-            );
-            let mut proposal = match built {
-                Some(p) => p,
-                None => continue,
-            };
-
-            // Beyond the yearly attempts cap the club only comes back when
-            // the offer puts something materially new on the table — the
-            // Bosman / final-panic overrides lift the CAP, not the
-            // obligation to actually improve. Without this the override
-            // re-sent a structurally identical offer every monthly pass of
-            // the final months, collecting the same rejection each time.
-            if over_cap && !Self::offer_materially_improves(player_ref, &proposal) {
+            ) else {
                 continue;
-            }
-
-            // Match-highest-earner is genuinely elite — only one offer per
-            // monthly pass may carry it, and only if the candidate is a
-            // KeyPlayer. Without this guard a wave of "star" candidates
-            // could each receive the clause and ratchet the wage hierarchy
-            // upwards in one go.
-            if proposal.match_highest_earner {
-                if match_highest_used {
-                    proposal.match_highest_earner = false;
-                } else {
-                    match_highest_used = true;
-                }
-            }
-
-            // Reserve the salary delta against the running wage bill so the
-            // next candidate's budget check sees this offer as already
-            // spent, and lift the top-earner anchors so a follow-on
-            // KeyPlayer offer doesn't immediately leapfrog the
-            // just-promised one. Conservative: assume the player accepts.
-            structure.note_offer(candidate.player_id, current_salary, proposal.salary);
-
-            if let Some(player) = teams[main_idx]
-                .players
-                .players
-                .iter_mut()
-                .find(|p| p.id == candidate.player_id)
-            {
-                let movement = format!(
-                    "{}y · ${}/y",
-                    proposal.years,
-                    FormattingUtils::format_money(proposal.salary as f64)
-                );
-                player.decision_history.add(
-                    date,
-                    movement,
-                    DECISION_LABEL.to_string(),
-                    coach_name.clone(),
-                );
-                player.mailbox.push(PlayerMessage {
-                    message_type: PlayerMessageType::ContractProposal(proposal),
-                });
-            }
+            };
+            Self::deliver_renewal_offer(
+                &mut teams[main_idx],
+                &candidate,
+                date,
+                proposal,
+                &mut structure,
+                &mut match_highest_used,
+                &coach_name,
+            );
         }
 
         structure.current_bill
+    }
+
+    fn candidate_offer(
+        team: &Team,
+        candidate: &RenewalCandidate,
+        date: NaiveDate,
+        negotiation_skill: u8,
+        judging_ability: u8,
+        team_rep_factor: f32,
+        league_reputation: u16,
+        wage_budget: Option<u32>,
+        structure: &WageStructureSnapshot,
+        match_highest_used: bool,
+    ) -> Option<PlayerContractProposal> {
+        let attempts = team
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == candidate.player_id)
+            .map(|p| {
+                p.decision_history
+                    .items
+                    .iter()
+                    .filter(|d| d.decision == DECISION_LABEL && (date - d.date).num_days() < 365)
+                    .count()
+            })
+            .unwrap_or(0);
+
+        let over_cap = attempts >= MAX_RENEWAL_ATTEMPTS_PER_YEAR;
+        if over_cap && !candidate.override_attempts_cap {
+            return None;
+        }
+
+        let player_ref = team
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == candidate.player_id)?;
+        let proposal = Self::build_offer(
+            player_ref,
+            negotiation_skill,
+            judging_ability,
+            date,
+            attempts,
+            team_rep_factor,
+            league_reputation,
+            wage_budget,
+            structure,
+            candidate,
+            match_highest_used,
+        )?;
+
+        // Beyond the yearly attempts cap the club only comes back when the
+        // offer puts something materially new on the table — the Bosman /
+        // final-panic overrides lift the CAP, not the obligation to actually
+        // improve. Without this the override re-sent a structurally identical
+        // offer every monthly pass of the final months, collecting the same
+        // rejection each time.
+        if over_cap && !Self::offer_materially_improves(player_ref, &proposal) {
+            return None;
+        }
+        Some(proposal)
+    }
+
+    fn deliver_renewal_offer(
+        team: &mut Team,
+        candidate: &RenewalCandidate,
+        date: NaiveDate,
+        mut proposal: PlayerContractProposal,
+        structure: &mut WageStructureSnapshot,
+        match_highest_used: &mut bool,
+        coach_name: &str,
+    ) {
+        // Match-highest-earner is genuinely elite — only one offer per monthly
+        // pass may carry it, and only if the candidate is a KeyPlayer. Without
+        // this guard a wave of "star" candidates could each receive the clause
+        // and ratchet the wage hierarchy upwards in one go.
+        if proposal.match_highest_earner {
+            if *match_highest_used {
+                proposal.match_highest_earner = false;
+            } else {
+                *match_highest_used = true;
+            }
+        }
+
+        let current_salary = team
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == candidate.player_id)
+            .and_then(|p| p.contract.as_ref().map(|c| c.salary))
+            .unwrap_or(0);
+
+        // Reserve the salary delta against the running wage bill so the next
+        // candidate's budget check sees this offer as already spent, and lift
+        // the top-earner anchors so a follow-on KeyPlayer offer doesn't
+        // immediately leapfrog the just-promised one. Conservative: assume the
+        // player accepts.
+        structure.note_offer(candidate.player_id, current_salary, proposal.salary);
+
+        if let Some(player) = team
+            .players
+            .players
+            .iter_mut()
+            .find(|p| p.id == candidate.player_id)
+        {
+            let movement = format!(
+                "{}y · ${}/y",
+                proposal.years,
+                FormattingUtils::format_money(proposal.salary as f64)
+            );
+            player.decision_history.add(
+                date,
+                movement,
+                DECISION_LABEL.to_string(),
+                coach_name.to_string(),
+            );
+            player.mailbox.push(PlayerMessage {
+                message_type: PlayerMessageType::ContractProposal(proposal),
+            });
+        }
     }
 
     /// Apply the clause helpers that need team-level context once per
@@ -755,7 +792,6 @@ impl ContractRenewalManager {
         match_highest_already_used: bool,
     ) -> Option<PlayerContractProposal> {
         let contract = player.contract.as_ref()?;
-
         let ability = player.player_attributes.current_ability;
         let age = DateUtils::age(player.birth_date, date);
 
@@ -769,6 +805,76 @@ impl ContractRenewalManager {
             has_market_interest: candidate.has_market_interest,
         };
         let valuation = ContractValuation::evaluate(player, &ctx);
+
+        let (offered, budget_pressure) = Self::negotiated_salary(
+            player,
+            candidate,
+            previous_attempts,
+            judging_ability,
+            &valuation,
+            structure,
+            wage_budget,
+        )?;
+
+        let years = Self::proactive_contract_years(
+            age,
+            ability,
+            &candidate.effective_status,
+            negotiation_skill,
+            player,
+            date,
+        );
+
+        let profile =
+            PlayerProfile::classify(player, age, ability, &candidate.effective_status, date);
+
+        let mut proposal =
+            PlayerContractProposal::basic(offered, years, negotiation_skill, 0, 0, None);
+
+        // Profile-driven package decoration. The `urgency` knob blends
+        // attempts, market interest, and final-panic into one budget for
+        // sweeteners.
+        let urgency = previous_attempts
+            + if candidate.bosman_pressure { 1 } else { 0 }
+            + if candidate.final_panic { 2 } else { 0 }
+            + if candidate.has_market_interest { 1 } else { 0 };
+
+        Self::decorate_proposal(
+            &mut proposal,
+            player,
+            age,
+            ability,
+            &profile,
+            &candidate.effective_status,
+            urgency,
+            budget_pressure,
+            structure,
+            match_highest_already_used,
+        );
+
+        // Stamp the offer-time valuation context onto the proposal so
+        // acceptance evaluates against the SAME elite-club / mid-tier
+        // expectations this offer was tuned for.
+        proposal.valuation_club_reputation = Some(team_rep_factor);
+        proposal.valuation_league_reputation = Some(league_reputation);
+        proposal.valuation_expected_wage = Some(valuation.expected_wage);
+        proposal.valuation_min_acceptable = Some(valuation.min_acceptable);
+
+        Self::honour_demanded_terms(&mut proposal, player, &contract.squad_status);
+
+        Some(proposal)
+    }
+
+    fn negotiated_salary(
+        player: &Player,
+        candidate: &RenewalCandidate,
+        previous_attempts: usize,
+        judging_ability: u8,
+        valuation: &ContractValuation,
+        structure: &WageStructureSnapshot,
+        wage_budget: Option<u32>,
+    ) -> Option<(u32, f32)> {
+        let contract = player.contract.as_ref()?;
 
         // Coach judging-ability variance — within ±15% of the unified target.
         let accuracy = 0.85 + (judging_ability as f32 / 20.0) * 0.30;
@@ -800,31 +906,31 @@ impl ContractRenewalManager {
             offered = (offered + ask.desired_salary) / 2;
         }
 
-        // The club's own sanity ceiling: escalation and ask-convergence
-        // never push the offer past what the club believes the player could
-        // possibly be worth. An already-overpaid player still gets the
-        // token anchor bump rather than a forced cut — the club just stops
-        // chasing the agent's ratchet beyond that.
+        // The club's own sanity ceiling: escalation and ask-convergence never
+        // push the offer past what the club believes the player could
+        // possibly be worth. An already-overpaid player still gets the token
+        // anchor bump rather than a forced cut — the club just stops chasing
+        // the agent's ratchet beyond that.
         let token_raise = (contract.salary + contract.salary / 20).max(contract.salary + 1);
         offered = offered.min(valuation.max_acceptable.max(token_raise));
 
-        // Wage structure protection: only KeyPlayer can break the
-        // top-earner ceiling, and only by a small margin. FirstTeamRegular
-        // can approach but not exceed; everyone else is capped under it.
-        // Floored at the token raise: a renewal the club CHOOSES to offer a
-        // player it wants to keep is never a pay cut — before this floor,
-        // the structural cap could clamp the club's best-paid non-KeyPlayer
-        // below his own salary, and every offer he ever saw was a cut he
-        // rejected until he walked on a Bosman.
+        // Wage structure protection: only KeyPlayer can break the top-earner
+        // ceiling, and only by a small margin. FirstTeamRegular can approach
+        // but not exceed; everyone else is capped under it. Floored at the
+        // token raise: a renewal the club CHOOSES to offer a player it wants
+        // to keep is never a pay cut — before this floor, the structural cap
+        // could clamp the club's best-paid non-KeyPlayer below his own
+        // salary, and every offer he ever saw was a cut he rejected until he
+        // walked on a Bosman.
         offered = structure
             .cap_for_status(offered, &candidate.effective_status, candidate.player_id)
             .max(token_raise);
 
         // FFP / wage-budget gate: never bust it. If the available budget
-        // can't even cover the player's acceptance floor, return None —
-        // the chairman defers the offer rather than papering over the
-        // shortfall with `min_acceptable / 2` (which would generate a
-        // proposal the player rejects on sight, wasting an attempt).
+        // can't even cover the player's acceptance floor, return None — the
+        // chairman defers the offer rather than papering over the shortfall
+        // with `min_acceptable / 2` (which would generate a proposal the
+        // player rejects on sight, wasting an attempt).
         if let Some(budget) = wage_budget {
             let salary_delta = offered.saturating_sub(contract.salary);
             if structure.current_bill + salary_delta > budget {
@@ -841,17 +947,6 @@ impl ContractRenewalManager {
             }
         }
 
-        let years = proactive_contract_years(
-            age,
-            ability,
-            &candidate.effective_status,
-            negotiation_skill,
-            player,
-            date,
-        );
-
-        let profile =
-            PlayerProfile::classify(player, age, ability, &candidate.effective_status, date);
         let budget_pressure = wage_budget
             .map(|b| {
                 let target_delta = offered.saturating_sub(contract.salary);
@@ -866,45 +961,21 @@ impl ContractRenewalManager {
             })
             .unwrap_or(0.0);
 
-        // Apply budget pressure to base wage: trim it back, compensate
-        // with bonuses + clauses below.
+        // Apply budget pressure to base wage: trim it back, compensate with
+        // bonuses + clauses below.
         if budget_pressure > 0.5 {
             offered = ((offered as f32) * (1.0 - 0.05 * budget_pressure)) as u32;
             offered = offered.max(contract.salary + 1);
         }
 
-        let mut proposal =
-            PlayerContractProposal::basic(offered, years, negotiation_skill, 0, 0, None);
+        Some((offered, budget_pressure))
+    }
 
-        // Profile-driven package decoration. The `urgency` knob blends
-        // attempts, market interest, and final-panic into one budget for
-        // sweeteners.
-        let urgency = previous_attempts
-            + if candidate.bosman_pressure { 1 } else { 0 }
-            + if candidate.final_panic { 2 } else { 0 }
-            + if candidate.has_market_interest { 1 } else { 0 };
-
-        decorate_proposal(
-            &mut proposal,
-            player,
-            age,
-            ability,
-            &profile,
-            &candidate.effective_status,
-            urgency,
-            budget_pressure,
-            structure,
-            match_highest_already_used,
-        );
-
-        // Stamp the offer-time valuation context onto the proposal so
-        // acceptance evaluates against the SAME elite-club / mid-tier
-        // expectations this offer was tuned for.
-        proposal.valuation_club_reputation = Some(team_rep_factor);
-        proposal.valuation_league_reputation = Some(league_reputation);
-        proposal.valuation_expected_wage = Some(valuation.expected_wage);
-        proposal.valuation_min_acceptable = Some(valuation.min_acceptable);
-
+    fn honour_demanded_terms(
+        proposal: &mut PlayerContractProposal,
+        player: &Player,
+        current_status: &PlayerSquadStatus,
+    ) {
         // Honor demanded clauses from the previous rejection.
         if let Some(ask) = &player.pending_contract_ask {
             if ask.demanded_release_clause.is_some() && proposal.release_clause.is_none() {
@@ -912,7 +983,7 @@ impl ContractRenewalManager {
             }
             if let Some(status) = &ask.demanded_status
                 && proposal.squad_status_promise.is_none()
-                && status.seniority_rank() > contract.squad_status.seniority_rank()
+                && status.seniority_rank() > current_status.seniority_rank()
             {
                 proposal.squad_status_promise = Some(status.clone());
             }
@@ -925,8 +996,6 @@ impl ContractRenewalManager {
                 proposal.years = proposal.years.max(ask.desired_years);
             }
         }
-
-        Some(proposal)
     }
 
     /// Build a renewal proposal for a player whose permanent contract is
@@ -1396,106 +1465,108 @@ struct RenewalCandidate {
     months_remaining: i32,
 }
 
-fn proactive_contract_years(
-    age: u8,
-    ability: u8,
-    squad_status: &PlayerSquadStatus,
-    negotiation_skill: u8,
-    player: &Player,
-    date: NaiveDate,
-) -> u8 {
-    let mut years: f32 = match squad_status {
-        PlayerSquadStatus::KeyPlayer => 4.0,
-        PlayerSquadStatus::FirstTeamRegular => 3.5,
-        PlayerSquadStatus::HotProspectForTheFuture => 4.0,
-        PlayerSquadStatus::FirstTeamSquadRotation => 3.0,
-        _ => 2.0,
-    };
+impl ContractRenewalManager {
+    fn proactive_contract_years(
+        age: u8,
+        ability: u8,
+        squad_status: &PlayerSquadStatus,
+        negotiation_skill: u8,
+        player: &Player,
+        date: NaiveDate,
+    ) -> u8 {
+        let mut years: f32 = match squad_status {
+            PlayerSquadStatus::KeyPlayer => 4.0,
+            PlayerSquadStatus::FirstTeamRegular => 3.5,
+            PlayerSquadStatus::HotProspectForTheFuture => 4.0,
+            PlayerSquadStatus::FirstTeamSquadRotation => 3.0,
+            _ => 2.0,
+        };
 
-    if age >= 34 {
-        years = years.min(1.5);
-    } else if age >= 32 {
-        years = years.min(2.0);
-    } else if age >= 30 {
-        years = years.min(3.0);
-    }
-
-    if age < 22 && ability > 80 {
-        years += 1.0;
-    }
-
-    if negotiation_skill >= 15 {
-        years -= 0.5;
-    }
-
-    let min_accept = ProcessContractHandler::player_minimum_years(player, date) as f32;
-    let raised = years.max(min_accept);
-
-    (raised.round() as u8).clamp(1, 5)
-}
-
-fn decorate_proposal(
-    proposal: &mut PlayerContractProposal,
-    player: &Player,
-    age: u8,
-    ability: u8,
-    profile: &PlayerProfile,
-    status: &PlayerSquadStatus,
-    urgency: usize,
-    budget_pressure: f32,
-    structure: &WageStructureSnapshot,
-    match_highest_already_used: bool,
-) {
-    let salary = proposal.salary;
-
-    // Promise the role unless we're keeping the same. KeyPlayer/FirstTeam
-    // promises are leverage in negotiation; backup roles aren't promised
-    // because the player would consider that a downgrade in writing.
-    if matches!(
-        status,
-        PlayerSquadStatus::KeyPlayer
-            | PlayerSquadStatus::FirstTeamRegular
-            | PlayerSquadStatus::HotProspectForTheFuture
-    ) {
-        proposal.squad_status_promise = Some(status.clone());
-    }
-
-    let greedy_agent = player.attributes.ambition + player.attributes.controversy > 24.0;
-    let loyal_agent = player.attributes.loyalty > 14.0;
-
-    // Base sweeteners — same logic as before but applied uniformly.
-    if urgency >= 2 || greedy_agent {
-        // Signing bonus 20-60% of annual wage, scaled with urgency.
-        let scale = 0.20 + (urgency.min(5) as f32) * 0.08;
-        proposal.signing_bonus = ((salary as f32) * scale) as u32;
-    }
-    if urgency >= 2 || loyal_agent || age >= 30 {
-        let scale = 0.10 + (urgency.min(4) as f32) * 0.04;
-        proposal.loyalty_bonus = ((salary as f32) * scale) as u32;
-    }
-
-    // Profile-driven extras.
-    match profile {
-        PlayerProfile::YoungProspect => {
-            // Long progression — yearly rise, optional extension, appearance step.
-            proposal.yearly_wage_rise_pct = Some(8);
-            proposal.optional_extension_years = Some(1);
-            proposal.wage_after_apps = Some((50, 25));
-            // Ambitious prospects insist on a release clause when the
-            // club is below their ceiling.
-            if player.attributes.ambition >= 13.0 {
-                proposal.release_clause = Some(release_clause_value(player, ability, 1.0));
-            }
-            // Caps milestone if they're already pushing toward the senior team.
-            if player.player_attributes.international_apps >= 3 {
-                proposal.wage_after_caps = Some((20, 15));
-            }
+        if age >= 34 {
+            years = years.min(1.5);
+        } else if age >= 32 {
+            years = years.min(2.0);
+        } else if age >= 30 {
+            years = years.min(3.0);
         }
-        PlayerProfile::Star => {
-            // Match highest earner only for true elites (status == KeyPlayer),
-            // and never if another candidate this monthly pass already
-            // claimed the privilege — otherwise the wage hierarchy collapses.
-            if matches!(status, PlayerSquadStatus::KeyPlayer)
+
+        if age < 22 && ability > 80 {
+            years += 1.0;
+        }
+
+        if negotiation_skill >= 15 {
+            years -= 0.5;
+        }
+
+        let min_accept = ProcessContractHandler::player_minimum_years(player, date) as f32;
+        let raised = years.max(min_accept);
+
+        (raised.round() as u8).clamp(1, 5)
+    }
+
+    fn decorate_proposal(
+        proposal: &mut PlayerContractProposal,
+        player: &Player,
+        age: u8,
+        ability: u8,
+        profile: &PlayerProfile,
+        status: &PlayerSquadStatus,
+        urgency: usize,
+        budget_pressure: f32,
+        structure: &WageStructureSnapshot,
+        match_highest_already_used: bool,
+    ) {
+        let salary = proposal.salary;
+
+        // Promise the role unless we're keeping the same. KeyPlayer/FirstTeam
+        // promises are leverage in negotiation; backup roles aren't promised
+        // because the player would consider that a downgrade in writing.
+        if matches!(
+            status,
+            PlayerSquadStatus::KeyPlayer
+                | PlayerSquadStatus::FirstTeamRegular
+                | PlayerSquadStatus::HotProspectForTheFuture
+        ) {
+            proposal.squad_status_promise = Some(status.clone());
+        }
+
+        let greedy_agent = player.attributes.ambition + player.attributes.controversy > 24.0;
+        let loyal_agent = player.attributes.loyalty > 14.0;
+
+        // Base sweeteners — same logic as before but applied uniformly.
+        if urgency >= 2 || greedy_agent {
+            // Signing bonus 20-60% of annual wage, scaled with urgency.
+            let scale = 0.20 + (urgency.min(5) as f32) * 0.08;
+            proposal.signing_bonus = ((salary as f32) * scale) as u32;
+        }
+        if urgency >= 2 || loyal_agent || age >= 30 {
+            let scale = 0.10 + (urgency.min(4) as f32) * 0.04;
+            proposal.loyalty_bonus = ((salary as f32) * scale) as u32;
+        }
+
+        // Profile-driven extras.
+        match profile {
+            PlayerProfile::YoungProspect => {
+                // Long progression — yearly rise, optional extension, appearance step.
+                proposal.yearly_wage_rise_pct = Some(8);
+                proposal.optional_extension_years = Some(1);
+                proposal.wage_after_apps = Some((50, 25));
+                // Ambitious prospects insist on a release clause when the
+                // club is below their ceiling.
+                if player.attributes.ambition >= 13.0 {
+                    proposal.release_clause =
+                        Some(Self::release_clause_value(player, ability, 1.0));
+                }
+                // Caps milestone if they're already pushing toward the senior team.
+                if player.player_attributes.international_apps >= 3 {
+                    proposal.wage_after_caps = Some((20, 15));
+                }
+            }
+            PlayerProfile::Star => {
+                // Match highest earner only for true elites (status == KeyPlayer),
+                // and never if another candidate this monthly pass already
+                // claimed the privilege — otherwise the wage hierarchy collapses.
+                if matches!(status, PlayerSquadStatus::KeyPlayer)
                 && structure.top_earner > 0
                 // Widened to u64 before the multiply: annual wages are held
                 // in whole units, so a top earner past ~47.7M overflowed the
@@ -1506,74 +1577,77 @@ fn decorate_proposal(
                 // violation a couple of simulated days in.
                 && salary as u64 >= (structure.top_earner as u64 * 90 / 100)
                 && !match_highest_already_used
-            {
-                proposal.match_highest_earner = true;
+                {
+                    proposal.match_highest_earner = true;
+                }
+                if proposal.signing_bonus == 0 {
+                    proposal.signing_bonus = ((salary as f32) * 0.30) as u32;
+                }
+                if proposal.loyalty_bonus == 0 {
+                    proposal.loyalty_bonus = ((salary as f32) * 0.15) as u32;
+                }
+                // Stars only sign a clause when they have leverage — market
+                // interest or two failed offers.
+                if urgency >= 2 {
+                    proposal.release_clause =
+                        Some(Self::release_clause_value(player, ability, 1.4));
+                }
+                // Star strikers/midfielders → goal bonus; defenders/keepers → clean sheet.
+                Self::attach_position_bonus(proposal, player, salary, 1.0);
+                proposal.appearance_fee = Some(((salary as f32) * 0.01) as u32);
             }
-            if proposal.signing_bonus == 0 {
-                proposal.signing_bonus = ((salary as f32) * 0.30) as u32;
+            PlayerProfile::Veteran => {
+                // Shorter deal, appearance fee, optional extension after league apps.
+                proposal.appearance_fee = Some(((salary as f32) * 0.02) as u32);
+                proposal.appearance_extension_threshold = Some(20);
+                // Loyalty bonus already handled above.
             }
-            if proposal.loyalty_bonus == 0 {
-                proposal.loyalty_bonus = ((salary as f32) * 0.15) as u32;
+            PlayerProfile::Backup => {
+                // Lower base, more on appearances + unused-sub fee.
+                proposal.appearance_fee = Some(((salary as f32) * 0.04) as u32);
+                proposal.unused_sub_fee = Some(((salary as f32) * 0.005) as u32);
             }
-            // Stars only sign a clause when they have leverage — market
-            // interest or two failed offers.
-            if urgency >= 2 {
-                proposal.release_clause = Some(release_clause_value(player, ability, 1.4));
+            PlayerProfile::Standard => {
+                Self::attach_position_bonus(proposal, player, salary, 0.6);
+                if urgency >= 2 {
+                    proposal.release_clause =
+                        Some(Self::release_clause_value(player, ability, 1.0));
+                }
             }
-            // Star strikers/midfielders → goal bonus; defenders/keepers → clean sheet.
-            attach_position_bonus(proposal, player, salary, 1.0);
-            proposal.appearance_fee = Some(((salary as f32) * 0.01) as u32);
         }
-        PlayerProfile::Veteran => {
-            // Shorter deal, appearance fee, optional extension after league apps.
-            proposal.appearance_fee = Some(((salary as f32) * 0.02) as u32);
-            proposal.appearance_extension_threshold = Some(20);
-            // Loyalty bonus already handled above.
-        }
-        PlayerProfile::Backup => {
-            // Lower base, more on appearances + unused-sub fee.
-            proposal.appearance_fee = Some(((salary as f32) * 0.04) as u32);
-            proposal.unused_sub_fee = Some(((salary as f32) * 0.005) as u32);
-        }
-        PlayerProfile::Standard => {
-            attach_position_bonus(proposal, player, salary, 0.6);
-            if urgency >= 2 {
-                proposal.release_clause = Some(release_clause_value(player, ability, 1.0));
-            }
+
+        // Budget pressure: substitute base-wage shortfall with bigger appearance fee
+        // and signing bonus when we had to trim the base.
+        if budget_pressure >= 0.5 {
+            let extra_signing = ((salary as f32) * 0.10 * budget_pressure) as u32;
+            proposal.signing_bonus = proposal.signing_bonus.saturating_add(extra_signing);
+            let extra_app = proposal
+                .appearance_fee
+                .map(|f| f.saturating_add(((salary as f32) * 0.005) as u32))
+                .unwrap_or(((salary as f32) * 0.005) as u32);
+            proposal.appearance_fee = Some(extra_app);
         }
     }
 
-    // Budget pressure: substitute base-wage shortfall with bigger appearance fee
-    // and signing bonus when we had to trim the base.
-    if budget_pressure >= 0.5 {
-        let extra_signing = ((salary as f32) * 0.10 * budget_pressure) as u32;
-        proposal.signing_bonus = proposal.signing_bonus.saturating_add(extra_signing);
-        let extra_app = proposal
-            .appearance_fee
-            .map(|f| f.saturating_add(((salary as f32) * 0.005) as u32))
-            .unwrap_or(((salary as f32) * 0.005) as u32);
-        proposal.appearance_fee = Some(extra_app);
+    fn release_clause_value(player: &Player, ability: u8, scale: f32) -> u32 {
+        let rep = player.player_attributes.current_reputation as u32;
+        let base = (ability as u32) * (ability as u32) * 4_000;
+        let rep_boost = rep * 8_000;
+        ((base + rep_boost) as f32 * scale) as u32
     }
-}
 
-fn release_clause_value(player: &Player, ability: u8, scale: f32) -> u32 {
-    let rep = player.player_attributes.current_reputation as u32;
-    let base = (ability as u32) * (ability as u32) * 4_000;
-    let rep_boost = rep * 8_000;
-    ((base + rep_boost) as f32 * scale) as u32
-}
-
-fn attach_position_bonus(
-    proposal: &mut PlayerContractProposal,
-    player: &Player,
-    salary: u32,
-    scale: f32,
-) {
-    let pos = player.position();
-    if pos.is_forward() || pos.is_midfielder() {
-        proposal.goal_bonus = Some(((salary as f32) * 0.012 * scale) as u32);
-    } else if pos.is_goalkeeper() || pos.is_defender() {
-        proposal.clean_sheet_bonus = Some(((salary as f32) * 0.012 * scale) as u32);
+    fn attach_position_bonus(
+        proposal: &mut PlayerContractProposal,
+        player: &Player,
+        salary: u32,
+        scale: f32,
+    ) {
+        let pos = player.position();
+        if pos.is_forward() || pos.is_midfielder() {
+            proposal.goal_bonus = Some(((salary as f32) * 0.012 * scale) as u32);
+        } else if pos.is_goalkeeper() || pos.is_defender() {
+            proposal.clean_sheet_bonus = Some(((salary as f32) * 0.012 * scale) as u32);
+        }
     }
 }
 
@@ -1815,7 +1889,11 @@ mod loanee_evaluate_tests {
 
         let entry = *team.staffs.head_coach().squad_plan.entry(5).unwrap();
         assert_eq!(entry.place, 0, "nobody else plays right-back");
-        assert!(entry.role.is_at_least(PlannedRole::Starter), "{:?}", entry.role);
+        assert!(
+            entry.role.is_at_least(PlannedRole::Starter),
+            "{:?}",
+            entry.role
+        );
         assert!(
             ContractRenewalManager::collect_candidates(&team, today)
                 .iter()

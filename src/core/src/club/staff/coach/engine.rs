@@ -153,8 +153,7 @@ impl<'a> CoachDecisionEngine<'a> {
             reasons.push(CoachDecisionReason::RoleMismatch);
         }
 
-        let development_priority =
-            AssessmentMath::development_priority(player, ctx, self.profile);
+        let development_priority = AssessmentMath::development_priority(player, ctx, self.profile);
         if development_priority >= 0.6 {
             reasons.push(CoachDecisionReason::DevelopmentPathway);
         }

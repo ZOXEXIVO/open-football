@@ -1,4 +1,4 @@
-use crate::r#match::goalkeepers::states::common::{
+use crate::r#match::goalkeepers::states::shared::{
     ActivityIntensity, GoalkeeperCondition, KeeperOneOnOne, KeeperRead, ReadLevel,
 };
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;

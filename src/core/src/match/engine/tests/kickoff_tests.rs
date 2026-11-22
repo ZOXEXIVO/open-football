@@ -12,7 +12,7 @@
 //! allowed to change.
 //!
 //! [`KickoffShape`]: crate::r#match::engine::kickoff_shape::KickoffShape
-//! [`KickoffDelivery`]: crate::r#match::common_states::KickoffDelivery
+//! [`KickoffDelivery`]: crate::r#match::shared_states::KickoffDelivery
 
 #![cfg(test)]
 
@@ -20,7 +20,6 @@ use super::recording_globals::RecordingGlobals;
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::{PlayerPosition, PlayerPositions};
 use crate::club::team::tactics::MatchTacticType;
-use crate::r#match::common_states::KickoffDelivery;
 use crate::r#match::engine::context::MatchEngineConfig;
 use crate::r#match::engine::engine::FootballEngine;
 use crate::r#match::engine::goal::assign_kickoff;
@@ -30,6 +29,7 @@ use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::engine::teamplay::tactical::TeamSkillAggregates;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::shared_states::KickoffDelivery;
 use crate::r#match::squad::squad::MatchSquad;
 use crate::r#match::{
     GameTickContext, MatchContext, MatchField, MatchPlayerCollection, PlayerSide,

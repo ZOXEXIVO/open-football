@@ -2,11 +2,11 @@
 //! teammates, without making a live ball at his feet unchallengeable.
 
 use super::goal_celebration_tests::squad;
-use crate::r#match::common_states::KeeperReleaseSpace;
 use crate::r#match::engine::result::Score;
 use crate::r#match::engine::teamplay::possession::TeamPossession;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::transition::TransitionSource;
+use crate::r#match::shared_states::KeeperReleaseSpace;
 use crate::r#match::{
     GameTickContext, MatchContext, MatchField, MatchPlayerCollection, PassOriginRestart,
     PlayerSide, StateProcessingContext, StateProcessingHandler, StateProcessor,

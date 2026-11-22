@@ -9,14 +9,16 @@ use crate::r#match::engine::ball::ball::frame::GoalFrame;
 use crate::r#match::engine::ball::ball::knock_diag::{KnockEnd, KnockSource};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::strike_diag::{GrantPath, StrikeCensus};
-use crate::r#match::engine::ball::ball::{AerialReach, Ball, BallRoll, GRAVITY_PER_TICK};
+use crate::r#match::engine::ball::ball::{
+    AerialReach, Ball, BallRoll, GRAVITY_PER_TICK, ShotTarget,
+};
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH, GoalPosition};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::player::events::players::save_accounting_stats;
-use crate::r#match::events::EventCollection;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
-use crate::r#match::goalkeepers::states::common::{KeeperAppetite, KeeperShotReaction};
+use crate::r#match::events::EventCollection;
+use crate::r#match::goalkeepers::states::shared::{KeeperAppetite, KeeperShotReaction};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::keeper_census::{KeeperCensus, SaveSettlement};
@@ -1075,6 +1077,116 @@ impl SaveModel {
     const HEIGHT_PENALTY: f32 = 0.10;
 }
 
+/// The shot, its keeper and the plane the save resolves on — read once,
+/// carried through every phase of the adjudication.
+struct ShotSave<'a> {
+    target: ShotTarget,
+    keeper: &'a MatchPlayer,
+    goal_x: f32,
+    goal_y: f32,
+    #[cfg(feature = "match-logs")]
+    frame_y: f32,
+    frame_z: f32,
+    on_frame: bool,
+}
+
+/// The keeper's fatigue-adjusted attributes, scaled to 0..1 where a term
+/// reads them as shares rather than raw ratings.
+struct SaveSkills {
+    scaled_handling: f32,
+    scaled_reflexes: f32,
+    scaled_agility: f32,
+    scaled_concentration: f32,
+    scaled_punching: f32,
+    scaled_strength: f32,
+}
+
+impl SaveSkills {
+    fn read(keeper: &MatchPlayer, minute: u32) -> Self {
+        // Route through `effective_skill` so a tired keeper has worse
+        // reach / handling / reflexes than a fresh one. Routing minute
+        // is taken from `MatchContext::total_match_time`.
+        let tech_ctx = EffSkillCtx::technical(minute);
+        let mental_ctx = EffSkillCtx::mental(minute);
+        let expl_ctx = EffSkillCtx::explosive(minute);
+        let handling = effective_skill(keeper, keeper.skills.goalkeeping.handling, tech_ctx);
+        let reflexes = effective_skill(keeper, keeper.skills.goalkeeping.reflexes, tech_ctx);
+        let agility = effective_skill(keeper, keeper.skills.physical.agility, expl_ctx);
+        // Concentration acts on the catch / parry split — focused
+        // keepers catch cleaner, distracted ones parry into danger.
+        let concentration = effective_skill(keeper, keeper.skills.mental.concentration, mental_ctx);
+        // …and the two that decide what an UNHELD ball does. `punching` had
+        // no path to the save outcome at all — it reached only
+        // `GoalkeeperSkillProfile::parry_control` and the punch decision in
+        // `GoalkeeperPunchingState`, neither of which runs on an ordinary
+        // shot — so the attribute a keeper is bought for when he cannot
+        // hold anything did nothing on the shots he could not hold.
+        let punching = effective_skill(keeper, keeper.skills.goalkeeping.punching, tech_ctx);
+        let strength = effective_skill(keeper, keeper.skills.physical.strength, expl_ctx);
+        Self {
+            scaled_handling: ((handling - 1.0) / 19.0).clamp(0.0, 1.0),
+            scaled_reflexes: ((reflexes - 1.0) / 19.0).clamp(0.0, 1.0),
+            scaled_agility: ((agility - 1.0) / 19.0).clamp(0.0, 1.0),
+            scaled_concentration: ((concentration - 1.0) / 19.0).clamp(0.0, 1.0),
+            scaled_punching: ((punching - 1.0) / 19.0).clamp(0.0, 1.0),
+            scaled_strength: ((strength - 1.0) / 19.0).clamp(0.0, 1.0),
+        }
+    }
+}
+
+/// How far off the ball is from what he can reach, and the scaled skills
+/// the roll and the handling split read.
+struct SaveReach {
+    minute: u32,
+    scaled_handling: f32,
+    scaled_reflexes: f32,
+    scaled_punching: f32,
+    scaled_strength: f32,
+    scaled_concentration: f32,
+    reach: f32,
+    gap: f32,
+    #[cfg(feature = "match-logs")]
+    base_reach: f32,
+    #[cfg(feature = "match-logs")]
+    lateral_error: f32,
+    #[cfg(feature = "match-logs")]
+    extended: bool,
+    #[cfg(feature = "match-logs")]
+    late: f32,
+    #[cfg(feature = "match-logs")]
+    depth_band: Option<usize>,
+}
+
+/// Where the ball met him: the height it must leave from, and — under the
+/// diagnostic build — the gap the contact census reads.
+struct SaveContact {
+    z: f32,
+    #[cfg(feature = "match-logs")]
+    gap: f32,
+    #[cfg(feature = "match-logs")]
+    height: f32,
+    #[cfg(feature = "match-logs")]
+    along: f32,
+    #[cfg(feature = "match-logs")]
+    across: f32,
+}
+
+/// The handling split: what he holds, what he pushes safe, and the roll
+/// that decides between them.
+struct SavePlan {
+    contact: SaveContact,
+    #[cfg(feature = "match-logs")]
+    ball_speed: f32,
+    #[cfg(feature = "match-logs")]
+    scaled_handling: f32,
+    #[cfg(feature = "match-logs")]
+    hold_difficulty: f32,
+    lapsed: bool,
+    outcome_roll: f32,
+    p_catch: f32,
+    p_safe: f32,
+}
+
 impl Ball {
     /// How far in front of him a fumbled save comes to rest.
     const FUMBLE_REACH_MIN: f32 = 16.0;
@@ -1211,12 +1323,51 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
-        let shot_target = match self.cached_shot_target {
-            Some(t) => t,
-            None => return,
-        };
-        if self.current_owner.is_some() || self.flags.in_flight_state == 0 {
+        let Some(save) = self.shot_save_window(context, players) else {
             return;
+        };
+        let Some(reach) = self.shot_save_reach(context, &save) else {
+            return;
+        };
+        let Some(ball_speed) = self.roll_save(context, &save, &reach) else {
+            return;
+        };
+        let Some(plan) = self.save_handling_plan(context, &save, &reach, ball_speed, events) else {
+            return;
+        };
+        let tick = self.stage_save_credit(&save);
+        if plan.outcome_roll < plan.p_catch {
+            self.save_hold(&save, &plan, tick, events);
+            return;
+        }
+        if plan.outcome_roll < plan.p_safe {
+            self.save_parry(context, players, &save, &plan, tick);
+            return;
+        }
+        self.save_spill(context, players, &save, &plan, tick, events);
+    }
+
+    /// The shot, the keeper and the plane the save resolves on — everything
+    /// the reach roll needs before it can price anything.
+    fn shot_save_window<'p>(
+        &mut self,
+        context: &MatchContext,
+        players: &'p [MatchPlayer],
+    ) -> Option<ShotSave<'p>> {
+        let (target, keeper, goal_x, goal_y) = self.shot_save_target(context, players)?;
+        self.shot_save_plane(target, keeper, goal_x)?;
+        self.shot_save_frame(target, keeper, goal_x, goal_y)
+    }
+
+    /// The cached shot, the defending keeper, and which goal he defends.
+    fn shot_save_target<'p>(
+        &mut self,
+        context: &MatchContext,
+        players: &'p [MatchPlayer],
+    ) -> Option<(ShotTarget, &'p MatchPlayer, f32, f32)> {
+        let shot_target = self.cached_shot_target?;
+        if self.current_owner.is_some() || self.flags.in_flight_state == 0 {
+            return None;
         }
 
         let (goal_x, goal_y) = match shot_target.defending_side {
@@ -1238,11 +1389,7 @@ impl Ball {
                     == PlayerFieldPositionGroup::Goalkeeper
                 && !p.off_pitch
                 && p.state != PlayerState::Injured
-        });
-        let keeper = match keeper {
-            Some(k) => k,
-            None => return,
-        };
+        })?;
 
         // Reject balls that have already crossed the goal line. Using
         // `.abs()` below meant a shot 2u behind the goal at goal_y+15
@@ -1259,54 +1406,60 @@ impl Ball {
             #[cfg(feature = "match-logs")]
             save_accounting_stats::SAVE_TICKS_PAST_GOAL_LINE.fetch_add(1, Ordering::Relaxed);
             self.cached_shot_target = None;
-            return;
+            return None;
         }
+        Some((shot_target, keeper, goal_x, goal_y))
+    }
 
-        // **The save resolves where the KEEPER is, not where the goal is.**
-        //
-        // This window used to be measured against the goal line, and that
-        // is the wrong plane for every keeper who is not standing on it.
-        // The reach model (`SaveModel::wedge`) correctly prices a keeper
-        // off his line as covering a WEDGE — he is between the ball and the
-        // goal, so the same dive covers more of the mouth — but the
-        // resolution then waited for the ball to reach the LINE, several
-        // ticks after it had already gone past him. Measured over 40
-        // matches (`SaveContactDiag`), the point the ball turned at sat a
-        // mean **3.5 m from the man credited with turning it, 2.2 m of it
-        // along the goal-to-goal axis**, and **half of all shot
-        // resolutions had nobody within 2.5 m at all**. On screen that is a
-        // ball bouncing off empty space on the goal line and flying back
-        // out to a follow-up shot, which is exactly how it was reported.
-        //
-        // The plane is his, clamped so it is never behind the goal line.
-        let keeper_plane = match shot_target.defending_side {
+    /// **The save resolves where the KEEPER is, not where the goal is.**
+    ///
+    /// This window used to be measured against the goal line, and that is
+    /// the wrong plane for every keeper who is not standing on it. The reach
+    /// model (`SaveModel::wedge`) correctly prices a keeper off his line as
+    /// covering a WEDGE — he is between the ball and the goal, so the same
+    /// dive covers more of the mouth — but the resolution then waited for
+    /// the ball to reach the LINE, several ticks after it had already gone
+    /// past him. Measured over 40 matches (`SaveContactDiag`), the point the
+    /// ball turned at sat a mean **3.5 m from the man credited with turning
+    /// it, 2.2 m of it along the goal-to-goal axis**, and **half of all shot
+    /// resolutions had nobody within 2.5 m at all**. On screen that is a ball
+    /// bouncing off empty space on the goal line and flying back out to a
+    /// follow-up shot, which is exactly how it was reported.
+    ///
+    /// The plane is his, clamped so it is never behind the goal line.
+    ///
+    /// **And it STAYS his once the ball is past him.** It used to fall back
+    /// to the goal LINE for a keeper the ball had already gone by, on the
+    /// reading that the line is his last chance. It is not a chance at all —
+    /// he is behind the ball — and what the fallback actually bought was a
+    /// second adjudication metres up the pitch from him. The reach test
+    /// below returns WITHOUT latching `save_rolled` (deliberately: it is a
+    /// positioning outcome, not a roll), so a shot that beat him at his own
+    /// plane had the window re-open at the goal line and got rolled again,
+    /// this time with his position — which has moved since — feeding
+    /// `wedge`. When that second roll came off, the catch branch wrote the
+    /// ball onto his coordinate, and a ball a metre from crossing the line
+    /// teleported four and a half metres BACKWARDS into his gloves. That is
+    /// the reported bug, verbatim: *"it flies through his hands and into the
+    /// goal, and then instantly flips back into the goalkeeper's hands."*
+    /// Measured off recorded matches: 114 of them in 3 000 goal clips, up to
+    /// 4.7 m of pull-back, 27 of them beyond 3 m.
+    ///
+    /// Measuring against his own plane bounds it without a tolerance
+    /// constant. The arrival window below is ±2.5 ticks of flight wide and
+    /// centred on HIM, so the ball can be at most a couple of ticks past him
+    /// when the roll fires — a trailing hand, which is real — and once it is
+    /// beyond that the window closes and stays closed.
+    fn shot_save_plane(
+        &self,
+        target: ShotTarget,
+        keeper: &MatchPlayer,
+        goal_x: f32,
+    ) -> Option<f32> {
+        let keeper_plane = match target.defending_side {
             PlayerSide::Left => keeper.position.x.max(goal_x),
             PlayerSide::Right => keeper.position.x.min(goal_x),
         };
-        // **And it STAYS his once the ball is past him.**
-        //
-        // It used to fall back to the goal LINE for a keeper the ball had
-        // already gone by, on the reading that the line is his last chance.
-        // It is not a chance at all — he is behind the ball — and what the
-        // fallback actually bought was a second adjudication metres up the
-        // pitch from him. The reach test below returns WITHOUT latching
-        // `save_rolled` (deliberately: it is a positioning outcome, not a
-        // roll), so a shot that beat him at his own plane had the window
-        // re-open at the goal line and got rolled again, this time with his
-        // position — which has moved since — feeding `wedge`. When that
-        // second roll came off, the catch branch wrote the ball onto his
-        // coordinate, and a ball a metre from crossing the line teleported
-        // four and a half metres BACKWARDS into his gloves. That is the
-        // reported bug, verbatim: *"it flies through his hands and into the
-        // goal, and then instantly flips back into the goalkeeper's
-        // hands."* Measured off recorded matches: 114 of them in 3 000 goal
-        // clips, up to 4.7 m of pull-back, 27 of them beyond 3 m.
-        //
-        // Measuring against his own plane bounds it without a tolerance
-        // constant. The arrival window below is ±2.5 ticks of flight wide
-        // and centred on HIM, so the ball can be at most a couple of ticks
-        // past him when the roll fires — a trailing hand, which is real —
-        // and once it is beyond that the window closes and stays closed.
         let beaten = (keeper_plane - self.position.x) * (goal_x - self.position.x).signum() <= 0.0;
         let save_plane_x = if Self::save_at_line() || (beaten && Self::save_when_beaten()) {
             goal_x
@@ -1319,43 +1472,51 @@ impl Ball {
         if dist_to_plane > ball_vx * 2.5 {
             #[cfg(feature = "match-logs")]
             save_accounting_stats::SAVE_TICKS_OUT_OF_REACH.fetch_add(1, Ordering::Relaxed);
-            return;
+            return None;
         }
-        // The ball has reached him. Anything off the frame is a MISS, and
-        // the shot is over — retire it.
-        //
-        // Retiring matters as much as not saving it. `cached_shot_target`
-        // is what `gk_clearing_shot` reads to decide that a keeper who
-        // has just gathered the ball made a save, and it credits the
-        // shooter an on-target shot at the same time. Leaving the cache
-        // armed on a miss meant every skied or wide shot the keeper
-        // subsequently collected — which is most of them, since the
-        // restart is his goal kick — was booked as a save on target.
-        //
-        // That is why the on-target rate would not respond to the aim
-        // model: forcing 8 percentage points more shots off the frame
-        // moved the measured rate by ~2, because the misses were being
-        // credited anyway. The over-the-bar test in particular used to
-        // sit ABOVE the arrival-window check and return without
-        // clearing, so it fired mid-flight on any shot whose apex
-        // cleared 2.8 m and left the cache armed for the rest of the
-        // flight.
-        //
-        // Measured at the projected CROSSING rather than at the ball's
-        // current position. The two are the same thing when the keeper is
-        // on his line — which is the case the whole save model was
-        // calibrated on, so this is bit-identical there — and they part
-        // company by exactly the distance the window above now opens
-        // early. Reading the ball's live position instead would let a shot
-        // that is on-frame two metres out but climbing over the bar reach
-        // the save roll, which is not a change to when a save happens but
-        // a change to what counts as a shot on target.
+        Some(save_plane_x)
+    }
+
+    /// The ball has reached him. Anything off the frame is a MISS, and the
+    /// shot is over — retire it.
+    ///
+    /// Retiring matters as much as not saving it. `cached_shot_target` is
+    /// what `gk_clearing_shot` reads to decide that a keeper who has just
+    /// gathered the ball made a save, and it credits the shooter an on-target
+    /// shot at the same time. Leaving the cache armed on a miss meant every
+    /// skied or wide shot the keeper subsequently collected — which is most
+    /// of them, since the restart is his goal kick — was booked as a save on
+    /// target.
+    ///
+    /// That is why the on-target rate would not respond to the aim model:
+    /// forcing 8 percentage points more shots off the frame moved the
+    /// measured rate by ~2, because the misses were being credited anyway.
+    /// The over-the-bar test in particular used to sit ABOVE the
+    /// arrival-window check and return without clearing, so it fired
+    /// mid-flight on any shot whose apex cleared 2.8 m and left the cache
+    /// armed for the rest of the flight.
+    ///
+    /// Measured at the projected CROSSING rather than at the ball's current
+    /// position. The two are the same thing when the keeper is on his line —
+    /// which is the case the whole save model was calibrated on, so this is
+    /// bit-identical there — and they part company by exactly the distance
+    /// the window above now opens early. Reading the ball's live position
+    /// instead would let a shot that is on-frame two metres out but climbing
+    /// over the bar reach the save roll, which is not a change to when a
+    /// save happens but a change to what counts as a shot on target.
+    fn shot_save_frame<'p>(
+        &mut self,
+        target: ShotTarget,
+        keeper: &'p MatchPlayer,
+        goal_x: f32,
+        goal_y: f32,
+    ) -> Option<ShotSave<'p>> {
         let (frame_y, frame_z) = self.projected_crossing(goal_x);
         // Does the keeper's own idea of the arrival height — the strike-time
         // arc every one of his height decisions reads — agree with the ball?
         // See `ShotHeightDiag`.
         #[cfg(feature = "match-logs")]
-        crate::mid_run_diag::ShotHeightDiag::note(shot_target.goal_line_z, frame_z, GOAL_HEIGHT);
+        crate::mid_run_diag::ShotHeightDiag::note(target.goal_line_z, frame_z, GOAL_HEIGHT);
         let off_frame_high = frame_z > 2.8;
         let off_frame_wide = (frame_y - goal_y).abs() > GOAL_WIDTH + 1.0;
         if off_frame_high || off_frame_wide {
@@ -1374,60 +1535,186 @@ impl Ball {
                 ));
             }
             self.cached_shot_target = None;
-            return;
+            return None;
         }
         // Inside that envelope he still goes for it, but only a ball that
         // would have gone in is a shot on target and a save.
         let on_frame = GoalFrame::holds(frame_y - goal_y, frame_z);
 
         // One shot, one roll — see `ShotTarget::save_rolled`.
-        if shot_target.save_rolled {
-            return;
+        if target.save_rolled {
+            return None;
         }
         #[cfg(feature = "match-logs")]
         save_accounting_stats::SAVE_TICKS_REACHED.fetch_add(1, Ordering::Relaxed);
 
         // Ball must still be traveling toward that goal line.
-        let moving_toward_goal = match shot_target.defending_side {
+        let moving_toward_goal = match target.defending_side {
             PlayerSide::Left => self.velocity.x < -0.2,
             PlayerSide::Right => self.velocity.x > 0.2,
         };
         if !moving_toward_goal {
-            return;
+            return None;
         }
 
         // Frame test already applied above, where a miss also retires
         // the shot. The keeper was resolved at the top, because the
         // arrival window is measured against him.
+        Some(ShotSave {
+            target,
+            keeper,
+            goal_x,
+            goal_y,
+            #[cfg(feature = "match-logs")]
+            frame_y,
+            frame_z,
+            on_frame,
+        })
+    }
 
-        // Route through `effective_skill` so a tired keeper has worse
-        // reach / handling / reflexes than a fresh one. Routing minute
-        // is taken from `MatchContext::total_match_time`.
-        let minute_for_effective = sc::minute_from_ms(context.total_match_time);
-        let tech_ctx = EffSkillCtx::technical(minute_for_effective);
-        let mental_ctx = EffSkillCtx::mental(minute_for_effective);
-        let expl_ctx = EffSkillCtx::explosive(minute_for_effective);
-        let handling = effective_skill(keeper, keeper.skills.goalkeeping.handling, tech_ctx);
-        let reflexes = effective_skill(keeper, keeper.skills.goalkeeping.reflexes, tech_ctx);
-        let agility = effective_skill(keeper, keeper.skills.physical.agility, expl_ctx);
-        // Concentration acts on the catch / parry split — focused
-        // keepers catch cleaner, distracted ones parry into danger.
-        let concentration = effective_skill(keeper, keeper.skills.mental.concentration, mental_ctx);
-        let scaled_handling = ((handling - 1.0) / 19.0).clamp(0.0, 1.0);
-        let scaled_reflexes = ((reflexes - 1.0) / 19.0).clamp(0.0, 1.0);
-        let scaled_agility = ((agility - 1.0) / 19.0).clamp(0.0, 1.0);
-        let scaled_concentration = ((concentration - 1.0) / 19.0).clamp(0.0, 1.0);
-        // …and the two that decide what an UNHELD ball does. `punching` had
-        // no path to the save outcome at all — it reached only
-        // `GoalkeeperSkillProfile::parry_control` and the punch decision in
-        // `GoalkeeperPunchingState`, neither of which runs on an ordinary
-        // shot — so the attribute a keeper is bought for when he cannot
-        // hold anything did nothing on the shots he could not hold.
-        let punching = effective_skill(keeper, keeper.skills.goalkeeping.punching, tech_ctx);
-        let strength = effective_skill(keeper, keeper.skills.physical.strength, expl_ctx);
-        let scaled_punching = ((punching - 1.0) / 19.0).clamp(0.0, 1.0);
-        let scaled_strength = ((strength - 1.0) / 19.0).clamp(0.0, 1.0);
+    /// What the keeper can physically reach, and how far off it the ball is
+    /// when it gets to him.
+    fn shot_save_reach(
+        &mut self,
+        context: &MatchContext,
+        save: &ShotSave<'_>,
+    ) -> Option<SaveReach> {
+        let minute = sc::minute_from_ms(context.total_match_time);
+        let skills = SaveSkills::read(save.keeper, minute);
+        let base_reach = Self::save_base_reach(&skills);
 
+        // His posture at contact. A keeper committed to a guessed dive is
+        // already flying along his line; one on the floor has no dive left
+        // in him at all, and nothing higher than a man lying down can get a
+        // glove to. Either way he has his spread and no more.
+        let grounded = save.keeper.state == PlayerState::Goalkeeper(GoalkeeperState::GettingUp);
+        let extended = save.keeper.dive_aim.is_some() || grounded;
+        let profile = GoalkeeperSkillProfile::from_player(
+            save.keeper,
+            &GoalkeeperSkillInputs {
+                minute,
+                condition_pct: (save.keeper.player_attributes.condition as f32 / 10_000.0)
+                    .clamp(0.0, 1.0),
+            },
+        );
+        // Still moving as it was struck: the reaction he gave away is time
+        // he does not have to stretch.
+        let late = KeeperShotReaction::reaction_ticks(&profile)
+            * KeeperShotReaction::moving_penalty(save.keeper);
+        let (lateral_error, reach) = SaveModel::contact(
+            save.target.seen_from,
+            self.velocity.norm(),
+            save.keeper.position,
+            base_reach,
+            self.position.y,
+            extended,
+            late,
+        );
+        let reach = if grounded && self.position.z > KeeperBody::HANDS_LYING {
+            0.0
+        } else {
+            reach
+        };
+        // …and how high it is: a ball above his hands or below his shins
+        // costs gap as well as its width, priced as the dive decision prices
+        // it (`SaveModel::climb_gap`) but read off where the ball is as it
+        // reaches him. On the floor the cap above is the whole of it.
+        let climb = if grounded {
+            0.0
+        } else {
+            SaveModel::climb_gap(self.position.z, SaveModel::set_ceiling(&profile))
+        };
+        let gap = lateral_error.hypot(climb);
+        let reach = SaveReach {
+            minute,
+            scaled_handling: skills.scaled_handling,
+            scaled_reflexes: skills.scaled_reflexes,
+            scaled_punching: skills.scaled_punching,
+            scaled_strength: skills.scaled_strength,
+            scaled_concentration: skills.scaled_concentration,
+            reach,
+            gap,
+            #[cfg(feature = "match-logs")]
+            base_reach,
+            #[cfg(feature = "match-logs")]
+            lateral_error,
+            #[cfg(feature = "match-logs")]
+            extended,
+            #[cfg(feature = "match-logs")]
+            late,
+            #[cfg(feature = "match-logs")]
+            depth_band: None,
+        };
+        #[cfg(feature = "match-logs")]
+        let reach = SaveReach {
+            depth_band: self.note_save_contact_census(save, &reach),
+            ..reach
+        };
+        if gap > reach.reach {
+            // He was not there to be beaten. Counted separately from the
+            // saves he loses on the roll — this is a POSITIONING outcome,
+            // and lumping the two together is what let the keeper's
+            // whereabouts during the build-up go unmeasured. See
+            // `KeeperGuardDiag`.
+            #[cfg(feature = "match-logs")]
+            {
+                crate::mid_run_diag::KeeperGuardDiag::note(10);
+                crate::mid_run_diag::KeeperGuardDiag::add(11, (lateral_error * 100.0) as u64);
+                KeeperCensus::note_beyond_reach();
+            }
+            return None;
+        }
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::KeeperGuardDiag::note(12);
+        Some(reach)
+    }
+
+    /// **How much of the GOAL his reach is worth.** See `SaveModel::wedge`:
+    /// measuring the gap flat at the goal line charged him for every metre he
+    /// came to narrow the angle. Identical to the old test for a keeper on
+    /// his line.
+    ///
+    /// # Scored against the ball, not against his read
+    ///
+    /// This used to pass `shot_target.goal_line_y`, and that number is the
+    /// keeper's BELIEF: it carries `KEEPER_PLACEMENT_READ`'s jitter, the 35%
+    /// of the curl he does not read, and — on a deflection — the whole
+    /// pre-deflection line. All three exist so that placement, curl and
+    /// deflection beat a keeper, and all three are supposed to beat him by
+    /// putting his BODY in the wrong place. Feeding the same number to the
+    /// adjudication made them beat him by decree instead, and the two are not
+    /// the same thing.
+    ///
+    /// Measured over 250 matches before this changed: the number the save was
+    /// scored against sat a mean **1.94 m** from the ball's real crossing;
+    /// **37.7%** of on-frame arrivals were declared beyond his reach against
+    /// **20.0%** on the truth, so **19.6% of every shot on target was a shot
+    /// he was physically in range of that got no save roll at all**; and of
+    /// the **half** of all arrivals that passed within a metre of him,
+    /// **15.4%** were adjudicated as having beaten him. On screen that is a
+    /// ball going straight past a keeper who does not react — reported as "he
+    /// dives the wrong way" and "he doesn't save long shots", and invisible
+    /// to every save counter in the harness because the keeper's steering and
+    /// the scorer shared the mistake.
+    ///
+    /// The ball's own position is what it is priced against, through
+    /// [`SaveModel::contact`] rather than `wedge`: the same test for a
+    /// straight ball — the projection divides out of the ratio — and the
+    /// honest one for a bending shot, which by the time this runs has already
+    /// passed him. See its note.
+    ///
+    /// The off-frame test two blocks up reads the same live ballistics
+    /// (`projected_crossing`), so a shot can no longer be "on frame" by one
+    /// number and adjudicated by another two metres away.
+    ///
+    /// ⚠ The DECISION sites stay on the belief, deliberately:
+    /// `KeeperShotDive::should_launch`, `KeeperShotReaction::crossing_y` and
+    /// `crossing_at` all read `goal_line_y`, because a keeper commits on what
+    /// he has read. Only the question "was he in the way" reads the ball.
+    ///
+    /// The population save rate this moved was re-derived into `base_reach`
+    /// and the close-range band — see their notes.
+    fn save_base_reach(skills: &SaveSkills) -> f32 {
         // Diving reach in game units. Field is 840u = 105m, so 1u = 0.126m
         // (half-goal 29u = 3.66m matches real 3.66m). Every keeper, even a
         // youth-level one, can physically dive across most of the goal
@@ -1442,9 +1729,9 @@ impl Ball {
         // Intercept 20 → 23 on 2026-08-20, half of the re-derivation the
         // removal of the beaten-keeper adjudication forced. The other half
         // was the close-range band, now [`KeeperSpread::SPREAD`]. The
-        // SLOPE is untouched: the
-        // spread between the worst keeper alive and the best is still 12u,
-        // so nothing about the keeper-quality axis moves.
+        // SLOPE is untouched: the spread between the worst keeper alive and
+        // the best is still 12u, so nothing about the keeper-quality axis
+        // moves.
         //
         // ── …AND THE REACH IS MEASURED AGAINST THIS MATCH ──────────────
         //
@@ -1471,269 +1758,40 @@ impl Ball {
         // Intercept 23 → 20 on 2026-08-24, half of the re-derivation the
         // move onto the ball's real crossing forced. The other half is
         // the close-range band, now [`KeeperSpread::SPREAD`]. The SLOPE
-        // is untouched again: the spread
-        // between the worst keeper alive and the best is still 12 u, so
-        // nothing about the keeper-quality axis moves.
-        let base_reach = 20.0 + scaled_agility * 8.0 + scaled_reflexes * 4.0;
-        // …and how much of the GOAL that reach is worth from where he is
-        // standing. See `SaveModel::wedge`: measuring the gap flat at the
-        // goal line charged him for every metre he came to narrow the
-        // angle. Identical to the old test for a keeper on his line.
-        //
-        // ── SCORED AGAINST THE BALL, NOT AGAINST HIS READ ──────────────
-        //
-        // This used to pass `shot_target.goal_line_y`, and that number is
-        // the keeper's BELIEF: it carries `KEEPER_PLACEMENT_READ`'s jitter,
-        // the 35% of the curl he does not read, and — on a deflection — the
-        // whole pre-deflection line. All three exist so that placement,
-        // curl and deflection beat a keeper, and all three are supposed to
-        // beat him by putting his BODY in the wrong place. Feeding the same
-        // number to the adjudication made them beat him by decree instead,
-        // and the two are not the same thing.
-        //
-        // Measured over 250 matches before this changed: the number the
-        // save was scored against sat a mean **1.94 m** from the ball's
-        // real crossing; **37.7%** of on-frame arrivals were declared
-        // beyond his reach against **20.0%** on the truth, so **19.6% of
-        // every shot on target was a shot he was physically in range of
-        // that got no save roll at all**; and of the **half** of all
-        // arrivals that passed within a metre of him, **15.4%** were
-        // adjudicated as having beaten him. On screen that is a ball going
-        // straight past a keeper who does not react — reported as "he
-        // dives the wrong way" and "he doesn't save long shots", and
-        // invisible to every save counter in the harness because the
-        // keeper's steering and the scorer shared the mistake.
-        //
-        // The ball's own position is what it is priced against, through
-        // [`SaveModel::contact`] rather than `wedge`: the same test for a
-        // straight ball — the projection divides out of the ratio — and the
-        // honest one for a bending shot, which by the time this runs has
-        // already passed him. See its note.
-        //
-        // The off-frame test two blocks up reads the same live ballistics
-        // (`projected_crossing`), so a shot can no longer be "on frame" by
-        // one number and adjudicated by another two metres away.
-        //
-        // ⚠ The DECISION sites stay on the belief, deliberately:
-        // `KeeperShotDive::should_launch`, `KeeperShotReaction::crossing_y`
-        // and `crossing_at` all read `goal_line_y`, because a keeper
-        // commits on what he has read. Only the question "was he in the
-        // way" reads the ball.
-        //
-        // The population save rate this moved was re-derived into
-        // `base_reach` and the close-range band — see their notes.
-        //
-        // His posture at contact. A keeper committed to a guessed dive is
-        // already flying along his line; one on the floor has no dive left
-        // in him at all, and nothing higher than a man lying down can get a
-        // glove to. Either way he has his spread and no more.
-        let grounded = keeper.state == PlayerState::Goalkeeper(GoalkeeperState::GettingUp);
-        let extended = keeper.dive_aim.is_some() || grounded;
-        let profile = GoalkeeperSkillProfile::from_player(
-            keeper,
-            &GoalkeeperSkillInputs {
-                minute: minute_for_effective,
-                condition_pct: (keeper.player_attributes.condition as f32 / 10_000.0)
-                    .clamp(0.0, 1.0),
-            },
-        );
-        // Still moving as it was struck: the reaction he gave away is time
-        // he does not have to stretch.
-        let late = KeeperShotReaction::reaction_ticks(&profile)
-            * KeeperShotReaction::moving_penalty(keeper);
-        let (lateral_error, reach) = SaveModel::contact(
-            shot_target.seen_from,
-            self.velocity.norm(),
-            keeper.position,
-            base_reach,
-            self.position.y,
-            extended,
-            late,
-        );
-        let reach = if grounded && self.position.z > KeeperBody::HANDS_LYING {
-            0.0
-        } else {
-            reach
-        };
-        // …and how high it is: a ball above his hands or below his shins
-        // costs gap as well as its width, priced as the dive decision prices
-        // it (`SaveModel::climb_gap`) but read off where the ball is as it
-        // reaches him. On the floor the cap above is the whole of it.
-        let climb = if grounded {
-            0.0
-        } else {
-            SaveModel::climb_gap(self.position.z, SaveModel::set_ceiling(&profile))
-        };
-        let gap = lateral_error.hypot(climb);
-        // How well his positioning served him on THIS shot, split by how
-        // good a reader of the game he is. Recorded before the reach test
-        // so both outcomes are in the same denominator.
-        #[cfg(feature = "match-logs")]
-        {
-            // …and the same reach scored against what he BELIEVED, which is
-            // what this used to be adjudicated on. Kept as the standing
-            // regression guard: the two columns it prints must stay apart
-            // (his read really is wrong, on purpose) while the "within a
-            // metre of him and called beyond his reach" row stays near
-            // zero. The belief is brought into the keeper's own plane the
-            // same way `KeeperShotDive::crossing_at` does, so the two
-            // columns are the same measurement of two different balls.
-            // See `KeeperCommitDiag`.
-            {
-                let span = shot_target.struck_from.x - goal_x;
-                let travelled = if span.abs() < 1.0 {
-                    1.0
-                } else {
-                    ((shot_target.struck_from.x - keeper.position.x) / span).clamp(0.0, 1.0)
-                };
-                let believed_y = shot_target.struck_from.y
-                    + (shot_target.goal_line_y - shot_target.struck_from.y) * travelled;
-                let (read_error, _) = SaveModel::contact(
-                    shot_target.struck_from,
-                    self.velocity.norm(),
-                    keeper.position,
-                    base_reach,
-                    believed_y,
-                    extended,
-                    late,
-                );
-                crate::mid_run_diag::KeeperCommitDiag::note_physical(
-                    self.position.y - keeper.position.y,
-                    gap > reach,
-                );
-                crate::mid_run_diag::KeeperCommitDiag::note_arrival(
-                    believed_y - self.position.y,
-                    read_error,
-                    lateral_error,
-                    reach,
-                );
-            }
-            let m = &keeper.skills.mental;
-            let read = (m.positioning + m.anticipation + m.decisions + m.concentration) / 80.0;
-            let (n_slot, sum_slot) = if read >= 0.60 {
-                (17, 18)
-            } else if read <= 0.45 {
-                (19, 20)
-            } else {
-                (usize::MAX, usize::MAX)
-            };
-            crate::mid_run_diag::KeeperGuardDiag::note(n_slot);
-            crate::mid_run_diag::KeeperGuardDiag::add(sum_slot, (lateral_error * 100.0) as u64);
-            // …and the same split by whether he had already left his feet
-            // for it. See `KeeperShotDive`: a keeper who dives during the
-            // flight ought to be NEARER the crossing point than one still
-            // shuffling toward it, and if he is not the dive is aimed at
-            // the wrong place.
-            let diving = keeper.state == PlayerState::Goalkeeper(GoalkeeperState::Diving);
-            let (arrivals, error) = if diving { (22, 23) } else { (24, 25) };
-            crate::mid_run_diag::KeeperGuardDiag::note(arrivals);
-            crate::mid_run_diag::KeeperGuardDiag::add(error, (lateral_error * 100.0) as u64);
-            // …and the same arrival split by the KEEPER, so quality is
-            // visible in whether he goes for it as well as in whether he
-            // stops it. See `KeeperQualityDiag`; needs `SQUAD_SPREAD` set or
-            // every keeper in the run is the same player.
-            {
-                use crate::mid_run_diag::KeeperQualityDiag as Q;
-                let skill = sc::gk_shot_stopping(keeper, minute_for_effective);
-                let band = Q::band(skill);
-                Q::note(band, 0);
-                if gap > reach {
-                    Q::note(band, 1);
-                }
-                if diving {
-                    Q::note(band, 2);
-                }
-                Q::add(band, 4, (skill * 1000.0).max(0.0) as u64);
-            }
-            // …and the same arrival split by HOW FAR IT WAS STRUCK FROM.
-            // "Beyond his reach" means one thing at six yards and the
-            // opposite at twenty-five. See `KeeperRangeDiag`.
-            {
-                use crate::mid_run_diag::KeeperRangeDiag as R;
-                let strike = (shot_target.struck_from
-                    - Vector3::new(goal_x, goal_y, shot_target.struck_from.z))
-                .magnitude();
-                let band = R::band(strike);
-                R::note(band, 0);
-                if gap > reach {
-                    R::note(band, 1);
-                }
-                R::add(band, 2, (lateral_error * 100.0).max(0.0) as u64);
-                R::add(band, 3, (reach * 100.0).max(0.0) as u64);
-                if diving {
-                    R::note(band, 6);
-                }
-                R::add(
-                    band,
-                    7,
-                    ((shot_target.struck_from - self.position).magnitude()
-                        / self.velocity.norm().max(0.05)
-                        * 10.0)
-                        .max(0.0) as u64,
-                );
-            }
-        }
-        // …and the same arrival split by HIS OWN DEPTH, scored a second
-        // time against the crossing at the goal line. "Beyond his reach"
-        // means one thing for a keeper on his line and the opposite for one
-        // who has come out to meet it — see `KeeperDepthDiag`, which is
-        // what `SaveModel::FULL_STRETCH_TICKS` is derived against.
-        #[cfg(feature = "match-logs")]
-        let depth_band = {
-            use crate::mid_run_diag::KeeperDepthDiag as D;
-            let depth = (keeper.position.x - goal_x).abs();
-            let band = D::band(depth);
-            let err_at_line = (keeper.position.y - frame_y).abs();
-            D::note(band, 0);
-            D::add(band, 2, (lateral_error * 100.0).max(0.0) as u64);
-            D::add(band, 3, (reach * 100.0).max(0.0) as u64);
-            D::add(band, 4, (err_at_line * 100.0) as u64);
-            D::add(band, 6, (depth * 100.0) as u64);
-            if gap > reach {
-                D::note(band, 1);
-                if err_at_line <= reach {
-                    D::note(band, 7);
-                }
-            }
-            band
-        };
-        if gap > reach {
-            // He was not there to be beaten. Counted separately from the
-            // saves he loses on the roll — this is a POSITIONING outcome,
-            // and lumping the two together is what let the keeper's
-            // whereabouts during the build-up go unmeasured. See
-            // `KeeperGuardDiag`.
-            #[cfg(feature = "match-logs")]
-            {
-                crate::mid_run_diag::KeeperGuardDiag::note(10);
-                crate::mid_run_diag::KeeperGuardDiag::add(11, (lateral_error * 100.0) as u64);
-                KeeperCensus::note_beyond_reach();
-            }
-            return;
-        }
-        #[cfg(feature = "match-logs")]
-        crate::mid_run_diag::KeeperGuardDiag::note(12);
+        // is untouched again: the spread between the worst keeper alive
+        // and the best is still 12 u, so nothing about the keeper-quality
+        // axis moves.
+        20.0 + skills.scaled_agility * 8.0 + skills.scaled_reflexes * 4.0
+    }
 
+    /// One roll for the shot: the only save adjudication, latched before it
+    /// is taken.
+    fn roll_save(
+        &mut self,
+        context: &MatchContext,
+        save: &ShotSave<'_>,
+        reach: &SaveReach,
+    ) -> Option<f32> {
         // **No hands outside his area.** A catch, a parry and a tip are all
         // made with the hands; out there he can put only his body in the
         // way, and that contact is `KeeperBody`'s, not a save. The Laws test
         // the ball; this tests him, and the two differ only for a keeper
         // standing on the edge of his area with the ball inside it.
-        let area = context.penalty_area(keeper.side == Some(PlayerSide::Left));
-        if !((area.min.x..=area.max.x).contains(&keeper.position.x)
-            && (area.min.y..=area.max.y).contains(&keeper.position.y))
+        let area = context.penalty_area(save.keeper.side == Some(PlayerSide::Left));
+        if !((area.min.x..=area.max.x).contains(&save.keeper.position.x)
+            && (area.min.y..=area.max.y).contains(&save.keeper.position.y))
         {
             if let Some(t) = self.cached_shot_target.as_mut() {
                 t.save_rolled = true;
             }
             #[cfg(feature = "match-logs")]
             KeeperCensus::note_physics(SaveSettlement::Beaten);
-            return;
+            return None;
         }
 
         // Base save chance: 1.12 for a ball at him, 0.70 at full stretch
         // (`SaveModel::geometric_base`), before pace and skill take their share.
-        let reach_ratio = (gap / reach).clamp(0.0, 1.0);
+        let reach_ratio = (reach.gap / reach.reach).clamp(0.0, 1.0);
 
         // Shot-speed penalty — elite shots beat keepers more often. Shared
         // with the post-shot expectation so the two cannot drift apart;
@@ -1745,13 +1803,13 @@ impl Ball {
             crate::mid_run_diag::KeeperActionDiag::note(9);
             crate::mid_run_diag::KeeperActionDiag::add(10, (ball_speed * 100.0).max(0.0) as u64);
         }
-        let speed_penalty = SaveModel::speed_penalty(ball_speed, scaled_reflexes);
+        let speed_penalty = SaveModel::speed_penalty(ball_speed, reach.scaled_reflexes);
 
         // Keeper quality. The composite blend (`gk_shot_stopping`) feeds
         // reflexes, handling, agility, positioning, concentration,
         // anticipation and one_on_ones through `effective_skill`, so a
         // tired keeper late in the match plays worse.
-        let skill = sc::gk_shot_stopping(keeper, minute_for_effective);
+        let skill = sc::gk_shot_stopping(save.keeper, reach.minute);
         // Per-SHOT save probability (single roll — see `save_rolled`).
         // The curve lives on `SaveModel` so it can be pinned by test.
         //
@@ -1784,12 +1842,12 @@ impl Ball {
             // at a full stretch and cannot tell an 11 m strike from a
             // 30 m one; see [`SaveModel::settle`].
             SaveModel::settle_from_strike(
-                shot_target.seen_from,
+                save.target.seen_from,
                 ball_speed,
-                Vector3::new(goal_x, goal_y, 0.0),
+                Vector3::new(save.goal_x, save.goal_y, 0.0),
             ),
             skill,
-            shot_target.shooter_threat,
+            save.target.shooter_threat,
             env_handling_delta,
         );
 
@@ -1807,28 +1865,78 @@ impl Ball {
             // Beaten — but a ball he was in range of may still take a touch
             // off him on its way past.
             if context.rng.unit_f32() < SaveModel::DEFLECT_SHARE * (1.0 - reach_ratio) {
-                self.deflect_off(keeper, goal_x, goal_y, on_frame, context);
-                return;
+                self.deflect_off(
+                    save.keeper,
+                    save.goal_x,
+                    save.goal_y,
+                    save.on_frame,
+                    context,
+                );
+                return None;
             }
             #[cfg(feature = "match-logs")]
             KeeperCensus::note_physics(SaveSettlement::Beaten);
-            return; // Keeper beaten — shot goes on.
+            return None; // Keeper beaten — shot goes on.
         }
         #[cfg(feature = "match-logs")]
         save_accounting_stats::SAVE_PHYSICS_PASSED.fetch_add(1, Ordering::Relaxed);
         #[cfg(feature = "match-logs")]
         {
             use crate::mid_run_diag::{KeeperQualityDiag as Q, KeeperRangeDiag as R};
-            let strike = (shot_target.struck_from
-                - Vector3::new(goal_x, goal_y, shot_target.struck_from.z))
+            let strike = (save.target.struck_from
+                - Vector3::new(save.goal_x, save.goal_y, save.target.struck_from.z))
             .magnitude();
             R::note(R::band(strike), 4);
             Q::note(Q::band(skill), 3);
-            crate::mid_run_diag::KeeperDepthDiag::note(depth_band, 5);
+            crate::mid_run_diag::KeeperDepthDiag::note(reach.depth_band.unwrap_or(usize::MAX), 5);
         }
+        Some(ball_speed)
+    }
 
+    /// **What he DOES with the save, and HANDLING is what decides it.**
+    ///
+    /// Held, tipped round the post, or spilled back into the six-yard box:
+    /// three endings a viewer can tell apart, and the only three that say
+    /// whether the man in goal has a pair of hands. This used to be two
+    /// additive sums with clamps —
+    ///
+    ///   catch  = (0.12 + handling·0.26 + positioning·0.10 + …
+    ///             − power·0.18 − stretch·0.18).clamp(0.04, 0.62)
+    ///   safe   = (0.20 + reflexes·0.10 + handling·0.07 + …).clamp(0.12, 0.52)
+    ///
+    /// — and both halves of that were wrong in the same way.
+    ///
+    /// **The clamp-floor ratchet.** An additive skill term inside a floored
+    /// expression is RECTIFIED: on a hard shot taken at full stretch the sum
+    /// went negative and every keeper alive landed on the 0.04 floor
+    /// together, so exactly where handling should matter most it did not
+    /// enter at all. The project rule is that a skill term into a floored
+    /// expression must be multiplicative; see the corner `att_win` note in
+    /// the skill audit.
+    ///
+    /// **And the population was wrong.** Measured over 300 matches at
+    /// `SQUAD_SPREAD=3`: the WORST handler in the game held 22% of his saves
+    /// and spilled 45% of them back into danger, the best held 36% and
+    /// spilled 27%. Real keepers hold the majority of what they save and put
+    /// almost none of it back into the six-yard box.
+    ///
+    /// Rebuilt as a difficulty and a multiplier, the shape the rest of this
+    /// file uses. `hold_difficulty` is the pace on it and how far out on the
+    /// edge of his reach he took it — both already signed against an
+    /// ordinary strike. `hands` is CENTRED on the measured population mean of
+    /// the same scaled value the term reads, so a median keeper multiplies by
+    /// exactly 1.0 and the calibrated split is untouched while the band opens
+    /// around it.
+    fn save_handling_plan(
+        &mut self,
+        context: &MatchContext,
+        save: &ShotSave<'_>,
+        reach: &SaveReach,
+        ball_speed: f32,
+        events: &mut EventCollection,
+    ) -> Option<SavePlan> {
         let shot_power_norm = SaveModel::strike_power(ball_speed);
-        let reach_stretch = reach_ratio;
+        let reach_stretch = (reach.gap / reach.reach).clamp(0.0, 1.0);
         // **What he DOES with the save, and HANDLING is what decides it.**
         //
         // Held, tipped round the post, or spilled back into the six-yard
@@ -1865,11 +1973,11 @@ impl Ball {
         // is untouched while the band opens around it.
         let hold_difficulty = (shot_power_norm * 0.55 + reach_stretch * 0.45).clamp(0.0, 1.0);
         let hands = (1.0
-            + (scaled_handling - SaveModel::POPULATION_HANDLING) * SaveModel::HANDS_SPREAD
-            + (scaled_concentration - 0.5) * 0.24)
+            + (reach.scaled_handling - SaveModel::POPULATION_HANDLING) * SaveModel::HANDS_SPREAD
+            + (reach.scaled_concentration - 0.5) * 0.24)
             .max(0.0);
         // A long shot skidding off a wet surface is the one he spills.
-        let skid = if (shot_target.struck_from - Vector3::new(goal_x, goal_y, 0.0)).norm()
+        let skid = if (save.target.struck_from - Vector3::new(save.goal_x, save.goal_y, 0.0)).norm()
             > SaveModel::LONG_RANGE
         {
             1.0 - context.conditions.long_shot_rebound_chance
@@ -1879,25 +1987,25 @@ impl Ball {
         // His head: how much he dares hold, and whether this one slips.
         // The lapse draw is taken whatever the switch says, so the seeded
         // stream stays aligned between the A/B arms.
-        let psych = context.psychology.get(keeper.id);
+        let psych = context.psychology.get(save.keeper.id);
         let appetite = psych.map_or(0.0, Psychology::keeper_appetite);
-        let lapsed =
-            context.rng.unit_f32() < ActionLapse::probability(LapseFamily::Save, keeper, psych);
+        let lapsed = context.rng.unit_f32()
+            < ActionLapse::probability(LapseFamily::Save, save.keeper, psych);
         let howled = context.rng.unit_f32() < ActionLapse::HOWLER_SHARE;
         // The one he should have saved and did not: the shot goes on,
         // through him, and the error is his.
         if lapsed && howled {
             #[cfg(feature = "match-logs")]
             KeeperCensus::note_physics(SaveSettlement::Howler);
-            events.add_player_event(PlayerEvent::Howler(keeper.id));
-            return;
+            events.add_player_event(PlayerEvent::Howler(save.keeper.id));
+            return None;
         }
         let catch_prob = (SaveModel::HOLD_BASE
             * (1.0 - hold_difficulty * SaveModel::HOLD_DIFFICULTY)
             * hands
             * skid
             * KeeperAppetite::hold_share(appetite))
-            .clamp(0.05, 0.95);
+        .clamp(0.05, 0.95);
         // Of the ones he cannot hold, the share he still puts somewhere
         // safe — round the post, or wide of it — rather than back off his
         // palms into the danger area. Expressed as a SHARE of the ones he
@@ -1911,17 +2019,12 @@ impl Ball {
         // Multiplicative and centred, for the same reason `hands` is.
         let safe_share = (SaveModel::SAFE_SHARE
             * (1.0
-                + (scaled_punching - SaveModel::POPULATION_HANDLING) * 0.55
-                + (scaled_handling - SaveModel::POPULATION_HANDLING) * 0.35
-                + (scaled_strength - 0.5) * 0.20
-                + (scaled_reflexes - 0.5) * 0.20))
+                + (reach.scaled_punching - SaveModel::POPULATION_HANDLING) * 0.55
+                + (reach.scaled_handling - SaveModel::POPULATION_HANDLING) * 0.35
+                + (reach.scaled_strength - 0.5) * 0.20
+                + (reach.scaled_reflexes - 0.5) * 0.20))
             .clamp(0.15, 0.95);
         let safe_parry_prob = (1.0 - catch_prob) * safe_share;
-
-        let keeper_id = keeper.id;
-        let keeper_pos = keeper.position;
-        let keeper_team = keeper.team_id;
-        let keeper_side = keeper.side;
 
         let outcome_roll = context.rng.unit_f32();
         // A lapse is the save he should have held or pushed clear and
@@ -1935,38 +2038,53 @@ impl Ball {
         // How far the point the ball is about to turn at is from the only
         // man who could have turned it. See `SaveContactDiag`.
         #[cfg(feature = "match-logs")]
-        let (contact_gap, contact_along, contact_across) = {
-            let d = self.position - keeper_pos;
+        let d = self.position - save.keeper.position;
+        let contact = SaveContact {
+            // The height the contact happened at, kept. This used to be
+            // `self.position.z = 0.0` for every outcome, which put a shot
+            // saved at head height on the grass on the frame it was saved —
+            // the ball dropped a metre and a half in one tick with nothing
+            // to explain it. A keeper's hands are where the ball is, and
+            // where the ball goes next is decided per outcome below.
+            z: self.position.z,
             // 8 units to the metre — the vertical axis is metric, the two
             // horizontal ones are the 0.125 m grid.
-            (
-                (d.x * d.x + d.y * d.y + (d.z * 8.0) * (d.z * 8.0)).sqrt(),
-                d.x,
-                d.y,
-            )
+            #[cfg(feature = "match-logs")]
+            gap: (d.x * d.x + d.y * d.y + (d.z * 8.0) * (d.z * 8.0)).sqrt(),
+            #[cfg(feature = "match-logs")]
+            height: self.position.z,
+            #[cfg(feature = "match-logs")]
+            along: d.x,
+            #[cfg(feature = "match-logs")]
+            across: d.y,
         };
-        #[cfg(feature = "match-logs")]
-        let contact_height = self.position.z;
+        Some(SavePlan {
+            contact,
+            #[cfg(feature = "match-logs")]
+            ball_speed,
+            #[cfg(feature = "match-logs")]
+            scaled_handling: reach.scaled_handling,
+            #[cfg(feature = "match-logs")]
+            hold_difficulty,
+            lapsed,
+            outcome_roll,
+            p_catch,
+            p_safe,
+        })
+    }
 
-        // The height the contact happened at, kept. This used to be
-        // `self.position.z = 0.0` for every outcome, which put a shot saved
-        // at head height on the grass on the frame it was saved — the ball
-        // dropped a metre and a half in one tick with nothing to explain
-        // it. A keeper's hands are where the ball is, and where the ball
-        // goes next is decided per outcome below.
-        let contact_z = self.position.z;
+    /// Stage the save credit before clearing the shot target. This marker is
+    /// consumed by the event-dispatch step so the GK earns a save in the stats
+    /// sheet and the shooter's on-target count increments. Without this, the
+    /// physics save changes ball state (catch/parry) but bypasses the
+    /// state-machine save events that were the only path crediting saves —
+    /// leaving ~90% of resolved shots stat-less.
+    fn stage_save_credit(&mut self, save: &ShotSave<'_>) -> u64 {
         self.previous_owner = self.current_owner.or(self.previous_owner);
         self.pass_target_player_id = None;
-        // Stage the save credit before clearing the shot target. This
-        // marker is consumed by the event-dispatch step so the GK earns
-        // a save in the stats sheet and the shooter's on-target count
-        // increments. Without this, the physics save changes ball state
-        // (catch/parry) but bypasses the state-machine save events that
-        // were the only path crediting saves — leaving ~90% of resolved
-        // shots stat-less.
         if let Some(shooter_id) = self.previous_owner {
-            self.pending_save_credit = Some((keeper_id, shooter_id));
-            self.pending_save_on_frame = on_frame;
+            self.pending_save_credit = Some((save.keeper.id, shooter_id));
+            self.pending_save_on_frame = save.on_frame;
             self.pending_save_spot_kick = self
                 .phase_origin
                 .as_ref()
@@ -1980,298 +2098,353 @@ impl Ball {
         self.cached_shot_target = None;
         let tick = self.current_tick_cached;
         self.pass_origin_restart = PassOriginRestart::OpenPlay;
+        tick
+    }
 
-        if outcome_roll < p_catch {
-            #[cfg(feature = "match-logs")]
-            {
-                KeeperCensus::note_physics(SaveSettlement::Held);
-                crate::mid_run_diag::SaveContactDiag::note(
-                    0,
-                    contact_gap,
-                    contact_height,
-                    contact_along,
-                    contact_across,
-                );
-                crate::mid_run_diag::KeeperGatherDiag::note_physics(contact_gap);
-                crate::mid_run_diag::KeeperHandlingDiag::note(
-                    keeper.skills.goalkeeping.handling,
-                    0,
-                    ball_speed,
-                    scaled_handling,
-                    hold_difficulty,
-                );
-            }
-            // **Clean catch — and a catch means the ball is IN HIS GLOVES.**
-            //
-            // This used to set `current_owner` and nothing else, on the
-            // belief that the `Claimed` event below routed through
-            // `secure_ball_for`. It does not: `Claimed` becomes a
-            // `ClaimBall` player event, and that handler's first branch is
-            // "already owns the ball — return". So the one gather a keeper
-            // makes most often, the save he catches, never raised
-            // `held_in_hands`, and every consequence of the flag was lost
-            // with it:
-            //
-            //   * `carry_height` is 0 without it, so the replay drew these
-            //     possessions with the ball lying on the grass by his boots
-            //     — "the goalkeeper holds it at his feet";
-            //   * `carrier_id` reports him as a CARRIER, so the opposition
-            //     press a man holding the ball;
-            //   * `check_ball_ownership` treats it as a ball at his feet
-            //     and hands it to the best tackler within 5u the moment
-            //     `claim_cooldown` lapses — and the worst tackler on the
-            //     pitch is the goalkeeper.
-            //
-            // Measured over 12 matches before the fix: 84% of the keeper's
-            // possession WAS in his gloves, but the remaining 16% — 382
-            // ticks a match — was spent standing on the ball, 40% of that in
-            // `HoldingBall`, the state whose entire meaning is that the ball
-            // is in his hands. He was robbed 1.5 times a match off his feet
-            // and never once out of his gloves, which is the two reported
-            // symptoms in one number. See `reception_diag::KEEPER_BALL`.
-            //
-            // Handling still has to be LEGAL. A shot is never a back-pass
-            // and never his own second touch, so the area is the only test
-            // that can fail — a sweeper-keeper who heads a shot clear from
-            // outside his box keeps his feet.
-            self.pending_save_site = 1; // catch
-            // **His hands are where the BALL is — so leave it there.**
-            //
-            // This used to write his own coordinate into the ball, which is
-            // the same defect the parry branches had before `contact_z` was
-            // kept, on the other two axes. A save resolves anywhere inside
-            // the reach `wedge` prices — up to `base_reach`, 2.5 to 4 m —
-            // so on every caught save the ball jumped that far in a single
-            // 10 ms tick, onto his chest, and then a second time up to
-            // `carry_height`. Measured across 4 000 recorded goal clips:
-            // 2 706 gathers, a median jump of 0.39 m, 306 of them over a
-            // metre and 27 over three.
-            //
-            // Stopping it where it was caught and letting the ordinary
-            // owner-tracking draw it in is both continuous and true to what
-            // happened: he takes it at full stretch and brings it into his
-            // body over the next tenth of a second (`Ball::move_to`'s glove
-            // rate and `CARRY_RATE`). Nobody can take it off
-            // him meanwhile — `held_in_hands` is raised below and
-            // `check_ball_ownership` returns on it — and `move_to` will not
-            // disown it for the distance either, for the same reason.
-            #[cfg(feature = "match-logs")]
-            {
-                StrikeCensus::note_grant(GrantPath::CONTEST, self.position.z);
-                self.open_arrival(GrantPath::CONTEST, keeper.position);
-            }
-            self.velocity = Vector3::zeros();
-            self.spin = Vector3::zeros();
-            self.current_owner = Some(keeper_id);
-            self.flags.in_flight_state = 0;
-            self.claim_cooldown = 200;
-            // In his area by the test above the roll, so in his gloves.
-            self.gather_in_hands(keeper_id, keeper_team, tick);
-            events.add_ball_event(BallEvent::Claimed(keeper_id));
-            return;
-        }
-
-        if outcome_roll < p_safe {
-            self.pending_save_site = 0; // parry — over the bar, round the post, or wide of it
-            #[cfg(feature = "match-logs")]
-            {
-                crate::mid_run_diag::SAVE_PARRY_FIRED.fetch_add(1, Ordering::Relaxed);
-                crate::mid_run_diag::KeeperHandlingDiag::note(
-                    keeper.skills.goalkeeping.handling,
-                    1,
-                    ball_speed,
-                    scaled_handling,
-                    hold_difficulty,
-                );
-                crate::mid_run_diag::SaveContactDiag::note(
-                    1,
-                    contact_gap,
-                    contact_height,
-                    contact_along,
-                    contact_across,
-                );
-            }
-            // Parried OUT for a corner — and it TRAVELS there.
-            //
-            // This used to resolve POSITIONALLY: the ball was written just
-            // past the byline, wide of the post, on the tick of the save.
-            // That is a mean 6.5 m teleport (`flight_diag`'s `save_shot`
-            // stage: 1.8 a match, worst 12.6 m), and on screen it is a shot
-            // vanishing from in front of the keeper and reappearing beside
-            // the corner flag — the same class of artefact as the catch
-            // teleport above, and the reason it looked like the ball "flies
-            // off to nowhere" around the goal.
-            //
-            // It was written that way because the first attempt gave the
-            // ball a DIRECTION and let it run: the keeper is near his line,
-            // so a ball merely pushed outward had only reached the post by
-            // the time it crossed the byline and about half of them fell
-            // inside for a goal kick. The fix for that is not to stop the
-            // ball travelling, it is to aim it at the point it has to leave
-            // the pitch through. Aimed at `(goal line, outside the post)`,
-            // a straight run crosses the byline exactly there whatever the
-            // keeper's own position, so the endline resolver awards the
-            // corner as reliably as the teleport did — and the ball gets
-            // there in about a fifth of a second, which is what a tip round
-            // the post looks like.
-            let goal_y_for_side = match keeper_side {
-                Some(PlayerSide::Left) => context.goal_positions.left.y,
-                Some(PlayerSide::Right) => context.goal_positions.right.y,
-                None => self.position.y,
-            };
-            let to_top = self.position.y < goal_y_for_side;
-            let exit_x = match keeper_side {
-                Some(PlayerSide::Left) => context.goal_positions.left.x,
-                Some(PlayerSide::Right) => context.goal_positions.right.x,
-                None => self.position.x,
-            };
-
-            // **Over the bar.** A ball he has reached UP for is turned
-            // upward — see the note at `SaveModel::TIP_OVER_HEIGHT`. It
-            // crosses the line between the posts above the crossbar, and
-            // `check_over_goal` gives the corner off his touch exactly as
-            // the endline resolver does for the ball round the post below.
-            // Everything else about the ending is the same: loose, his
-            // last touch, uncontestable for the run to the line, no
-            // `Intercepted`.
-            //
-            // The spray comes off the outcome roll already drawn rather
-            // than a fresh one, so the A/B arms consume the same RNG
-            // stream and can be compared match for match.
-            let share = ((outcome_roll - p_catch) / (p_safe - p_catch).max(1e-3)).clamp(0.0, 1.0);
-            if SaveModel::tip_over_armed() && SaveModel::tips_over(contact_z, frame_z) {
-                #[cfg(feature = "match-logs")]
-                {
-                    crate::mid_run_diag::KeeperActionDiag::note(17);
-                    KeeperCensus::note_physics(SaveSettlement::Tipped);
-                }
-                let spray = (share - 0.5) * 2.0 * SaveModel::TIP_SPRAY;
-                self.velocity = SaveModel::tip_over_velocity(self.position, exit_x, spray);
-                self.position.z = contact_z;
-                self.current_owner = None;
-                let ticks = (exit_x - self.position.x).abs() / self.velocity.x.abs().max(1e-3);
-                self.flags.in_flight_state = ticks.ceil() as usize + 12;
-                self.claim_cooldown = 30;
-                self.record_touch(keeper_id, keeper_team, tick, false);
-                #[cfg(feature = "match-logs")]
-                self.close_keeper_knock(KnockEnd::Cleared);
-                return;
-            }
-
-            // **Round the post, or wide of it and kept in play.** Near the
-            // post the push takes it round for a corner; from the middle of
-            // his goal the same push puts it on the grass wide of him, at
-            // rest 5-15 m away, where it is anybody's. How near the post it
-            // was decides how often it goes round.
-            let off_centre = self.position.y - goal_y_for_side;
-            if share >= (off_centre.abs() / GOAL_WIDTH).clamp(0.0, 1.0) {
-                #[cfg(feature = "match-logs")]
-                KeeperCensus::note_physics(SaveSettlement::Parried);
-                let wide = if off_centre.abs() < 1.0 {
-                    if context.rng.unit_f32() < 0.5 {
-                        -1.0
-                    } else {
-                        1.0
-                    }
-                } else {
-                    off_centre.signum()
-                };
-                let into_pitch = match keeper_side {
-                    Some(PlayerSide::Left) => 1.0,
-                    Some(PlayerSide::Right) => -1.0,
-                    None => 0.0,
-                };
-                let rest = SaveModel::PARRY_REST.0
-                    + context.rng.unit_f32() * (SaveModel::PARRY_REST.1 - SaveModel::PARRY_REST.0);
-                let way = Vector3::new(into_pitch * SaveModel::PARRY_OUT, wide, 0.0).normalize();
-                let target = Vector3::new(
-                    (self.position.x + way.x * rest).clamp(3.0, self.field_width - 3.0),
-                    (self.position.y + way.y * rest).clamp(3.0, self.field_height - 3.0),
-                    0.0,
-                );
-                let to = Vector3::new(target.x - self.position.x, target.y - self.position.y, 0.0);
-                let dist = to.norm().max(1.0);
-                let speed = BallRoll::speed_to_rest_at_from(dist, contact_z, 0.0);
-                self.velocity = Vector3::new(to.x / dist * speed, to.y / dist * speed, 0.0);
-                self.position.z = contact_z;
-                self.current_owner = None;
-                self.previous_owner = Some(keeper_id);
-                self.last_rebound_tick = tick;
-                self.flags.in_flight_state = 10;
-                self.claim_cooldown = 0;
-                self.record_touch(keeper_id, keeper_team, tick, false);
-                #[cfg(feature = "match-logs")]
-                self.note_keeper_knock(keeper, KnockSource::Other, players);
-                return;
-            }
-            #[cfg(feature = "match-logs")]
-            KeeperCensus::note_physics(SaveSettlement::Tipped);
-
-            let exit_y = if to_top {
-                (goal_y_for_side - GOAL_WIDTH - 10.0).max(3.0)
-            } else {
-                (goal_y_for_side + GOAL_WIDTH + 10.0).min(self.field_height - 3.0)
-            };
-            /// Ticks the tipped ball takes to reach the byline. 18 is
-            /// 0.18 s — the ball comes off his fingertips still carrying
-            /// most of the pace it arrived with.
-            const PARRY_OUT_TICKS: f32 = 18.0;
-            let dx = exit_x - self.position.x;
-            let dy = exit_y - self.position.y;
-            let dist = (dx * dx + dy * dy).sqrt().max(1.0);
-            let out_speed = (dist / PARRY_OUT_TICKS).clamp(0.8, 3.0);
-            self.velocity.x = (dx / dist) * out_speed;
-            self.velocity.y = (dy / dist) * out_speed;
-            self.velocity.z = 0.0;
-            // Off his hands at the height his hands were — same rule as the
-            // spilled parry below.
-            self.position.z = contact_z;
-            self.current_owner = None;
-            // Nobody gets a touch on a ball that has been tipped round the
-            // post: the window covers the whole run to the byline, so the
-            // corner cannot be cancelled by a follow-up claim on the way.
-            self.flags.in_flight_state = PARRY_OUT_TICKS as usize + 12;
-            self.claim_cooldown = 30;
-            self.record_touch(keeper_id, keeper_team, tick, false);
-            // A tip round the post IS a save, and the ball is meant to go
-            // out. Closed here rather than left to the generic out-of-play
-            // ending, which would otherwise book a completed save as a
-            // keeper putting the ball out under his own touch — see
-            // [`knock_diag`](crate::r#match::engine::ball::ball::knock_diag).
-            #[cfg(feature = "match-logs")]
-            self.close_keeper_knock(KnockEnd::Cleared);
-            // NB: do NOT emit Intercepted here — its ClaimBall follow-up
-            // forces ownership onto the keeper, which CANCELS the corner
-            // (the ball must stay loose and cross out). The save is already
-            // booked via `pending_save_credit`, and `record_touch` marks the
-            // keeper as last toucher so the endline resolver awards the
-            // corner to the attackers.
-            return;
-        }
-
-        // Dangerous parry — ball spills off the keeper's hands. Arms the
-        // rebound window so the attacking team's follow-up shot isn't
-        // killed by the team shot-spacing gate.
+    /// **Clean catch — and a catch means the ball is IN HIS GLOVES.**
+    ///
+    /// This used to set `current_owner` and nothing else, on the belief that
+    /// the `Claimed` event below routed through `secure_ball_for`. It does
+    /// not: `Claimed` becomes a `ClaimBall` player event, and that handler's
+    /// first branch is "already owns the ball — return". So the one gather a
+    /// keeper makes most often, the save he catches, never raised
+    /// `held_in_hands`, and every consequence of the flag was lost with it:
+    ///
+    ///   * `carry_height` is 0 without it, so the replay drew these
+    ///     possessions with the ball lying on the grass by his boots
+    ///     — "the goalkeeper holds it at his feet";
+    ///   * `carrier_id` reports him as a CARRIER, so the opposition
+    ///     press a man holding the ball;
+    ///   * `check_ball_ownership` treats it as a ball at his feet
+    ///     and hands it to the best tackler within 5u the moment
+    ///     `claim_cooldown` lapses — and the worst tackler on the
+    ///     pitch is the goalkeeper.
+    ///
+    /// Measured over 12 matches before the fix: 84% of the keeper's
+    /// possession WAS in his gloves, but the remaining 16% — 382 ticks a
+    /// match — was spent standing on the ball, 40% of that in
+    /// `HoldingBall`, the state whose entire meaning is that the ball is in
+    /// his hands. He was robbed 1.5 times a match off his feet and never
+    /// once out of his gloves, which is the two reported symptoms in one
+    /// number. See `reception_diag::KEEPER_BALL`.
+    ///
+    /// Handling still has to be LEGAL. A shot is never a back-pass and never
+    /// his own second touch, so the area is the only test that can fail — a
+    /// sweeper-keeper who heads a shot clear from outside his box keeps his
+    /// feet.
+    ///
+    /// **His hands are where the BALL is — so leave it there.** This used to
+    /// write his own coordinate into the ball, which is the same defect the
+    /// parry branches had before `contact_z` was kept, on the other two axes.
+    /// A save resolves anywhere inside the reach `wedge` prices — up to
+    /// `base_reach`, 2.5 to 4 m — so on every caught save the ball jumped
+    /// that far in a single 10 ms tick, onto his chest, and then a second
+    /// time up to `carry_height`. Measured across 4 000 recorded goal clips:
+    /// 2 706 gathers, a median jump of 0.39 m, 306 of them over a metre and
+    /// 27 over three.
+    ///
+    /// Stopping it where it was caught and letting the ordinary
+    /// owner-tracking draw it in is both continuous and true to what
+    /// happened: he takes it at full stretch and brings it into his body
+    /// over the next tenth of a second (`Ball::move_to`'s glove rate and
+    /// `CARRY_RATE`). Nobody can take it off him meanwhile — `held_in_hands`
+    /// is raised below and `check_ball_ownership` returns on it — and
+    /// `move_to` will not disown it for the distance either, for the same
+    /// reason.
+    fn save_hold(
+        &mut self,
+        save: &ShotSave<'_>,
+        plan: &SavePlan,
+        tick: u64,
+        events: &mut EventCollection,
+    ) {
+        #[cfg(not(feature = "match-logs"))]
+        let _ = plan;
         #[cfg(feature = "match-logs")]
         {
-            KeeperCensus::note_physics(if lapsed {
+            KeeperCensus::note_physics(SaveSettlement::Held);
+            crate::mid_run_diag::SaveContactDiag::note(
+                0,
+                plan.contact.gap,
+                plan.contact.height,
+                plan.contact.along,
+                plan.contact.across,
+            );
+            crate::mid_run_diag::KeeperGatherDiag::note_physics(plan.contact.gap);
+            crate::mid_run_diag::KeeperHandlingDiag::note(
+                save.keeper.skills.goalkeeping.handling,
+                0,
+                plan.ball_speed,
+                plan.scaled_handling,
+                plan.hold_difficulty,
+            );
+        }
+        self.pending_save_site = 1; // catch
+        #[cfg(feature = "match-logs")]
+        {
+            StrikeCensus::note_grant(GrantPath::CONTEST, self.position.z);
+            self.open_arrival(GrantPath::CONTEST, save.keeper.position);
+        }
+        self.velocity = Vector3::zeros();
+        self.spin = Vector3::zeros();
+        self.current_owner = Some(save.keeper.id);
+        self.flags.in_flight_state = 0;
+        self.claim_cooldown = 200;
+        // In his area by the test above the roll, so in his gloves.
+        self.gather_in_hands(save.keeper.id, save.keeper.team_id, tick);
+        events.add_ball_event(BallEvent::Claimed(save.keeper.id));
+    }
+
+    /// Parried OUT for a corner, round the post, or spilled. The outcome
+    /// roll already decided which; this routes it.
+    fn save_parry(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        save: &ShotSave<'_>,
+        plan: &SavePlan,
+        tick: u64,
+    ) {
+        self.pending_save_site = 0; // parry — over the bar, round the post, or wide of it
+        #[cfg(feature = "match-logs")]
+        {
+            crate::mid_run_diag::SAVE_PARRY_FIRED.fetch_add(1, Ordering::Relaxed);
+            crate::mid_run_diag::KeeperHandlingDiag::note(
+                save.keeper.skills.goalkeeping.handling,
+                1,
+                plan.ball_speed,
+                plan.scaled_handling,
+                plan.hold_difficulty,
+            );
+            crate::mid_run_diag::SaveContactDiag::note(
+                1,
+                plan.contact.gap,
+                plan.contact.height,
+                plan.contact.along,
+                plan.contact.across,
+            );
+        }
+        let goal_y_for_side = match save.keeper.side {
+            Some(PlayerSide::Left) => context.goal_positions.left.y,
+            Some(PlayerSide::Right) => context.goal_positions.right.y,
+            None => self.position.y,
+        };
+        let to_top = self.position.y < goal_y_for_side;
+        let exit_x = match save.keeper.side {
+            Some(PlayerSide::Left) => context.goal_positions.left.x,
+            Some(PlayerSide::Right) => context.goal_positions.right.x,
+            None => self.position.x,
+        };
+        let share = ((plan.outcome_roll - plan.p_catch) / (plan.p_safe - plan.p_catch).max(1e-3))
+            .clamp(0.0, 1.0);
+
+        if SaveModel::tip_over_armed() && SaveModel::tips_over(plan.contact.z, save.frame_z) {
+            self.save_tip_over(save, plan, exit_x, share);
+            return;
+        }
+
+        let off_centre = self.position.y - goal_y_for_side;
+        if share >= (off_centre.abs() / GOAL_WIDTH).clamp(0.0, 1.0) {
+            self.save_parry_kept_in_play(context, players, save, plan, tick, off_centre);
+            return;
+        }
+        #[cfg(feature = "match-logs")]
+        KeeperCensus::note_physics(SaveSettlement::Tipped);
+
+        self.save_parry_out(save, plan, tick, to_top, goal_y_for_side, exit_x);
+    }
+
+    /// **Over the bar.** A ball he has reached UP for is turned upward — see
+    /// the note at `SaveModel::TIP_OVER_HEIGHT`. It crosses the line between
+    /// the posts above the crossbar, and `check_over_goal` gives the corner
+    /// off his touch exactly as the endline resolver does for the ball round
+    /// the post below. Everything else about the ending is the same: loose,
+    /// his last touch, uncontestable for the run to the line, no
+    /// `Intercepted`.
+    ///
+    /// The spray comes off the outcome roll already drawn rather than a
+    /// fresh one, so the A/B arms consume the same RNG stream and can be
+    /// compared match for match.
+    fn save_tip_over(&mut self, save: &ShotSave<'_>, plan: &SavePlan, exit_x: f32, share: f32) {
+        #[cfg(feature = "match-logs")]
+        {
+            crate::mid_run_diag::KeeperActionDiag::note(17);
+            KeeperCensus::note_physics(SaveSettlement::Tipped);
+        }
+        let spray = (share - 0.5) * 2.0 * SaveModel::TIP_SPRAY;
+        self.velocity = SaveModel::tip_over_velocity(self.position, exit_x, spray);
+        self.position.z = plan.contact.z;
+        self.current_owner = None;
+        let ticks = (exit_x - self.position.x).abs() / self.velocity.x.abs().max(1e-3);
+        self.flags.in_flight_state = ticks.ceil() as usize + 12;
+        self.claim_cooldown = 30;
+        self.record_touch(
+            save.keeper.id,
+            save.keeper.team_id,
+            self.current_tick_cached,
+            false,
+        );
+        #[cfg(feature = "match-logs")]
+        self.close_keeper_knock(KnockEnd::Cleared);
+    }
+
+    /// **Round the post, or wide of it and kept in play.** Near the post the
+    /// push takes it round for a corner; from the middle of his goal the same
+    /// push puts it on the grass wide of him, at rest 5-15 m away, where it
+    /// is anybody's. How near the post it was decides how often it goes
+    /// round.
+    fn save_parry_kept_in_play(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        save: &ShotSave<'_>,
+        plan: &SavePlan,
+        tick: u64,
+        off_centre: f32,
+    ) {
+        #[cfg(feature = "match-logs")]
+        KeeperCensus::note_physics(SaveSettlement::Parried);
+        let wide = if off_centre.abs() < 1.0 {
+            if context.rng.unit_f32() < 0.5 {
+                -1.0
+            } else {
+                1.0
+            }
+        } else {
+            off_centre.signum()
+        };
+        let into_pitch = match save.keeper.side {
+            Some(PlayerSide::Left) => 1.0,
+            Some(PlayerSide::Right) => -1.0,
+            None => 0.0,
+        };
+        let rest = SaveModel::PARRY_REST.0
+            + context.rng.unit_f32() * (SaveModel::PARRY_REST.1 - SaveModel::PARRY_REST.0);
+        let way = Vector3::new(into_pitch * SaveModel::PARRY_OUT, wide, 0.0).normalize();
+        let target = Vector3::new(
+            (self.position.x + way.x * rest).clamp(3.0, self.field_width - 3.0),
+            (self.position.y + way.y * rest).clamp(3.0, self.field_height - 3.0),
+            0.0,
+        );
+        let to = Vector3::new(target.x - self.position.x, target.y - self.position.y, 0.0);
+        let dist = to.norm().max(1.0);
+        let speed = BallRoll::speed_to_rest_at_from(dist, plan.contact.z, 0.0);
+        self.velocity = Vector3::new(to.x / dist * speed, to.y / dist * speed, 0.0);
+        self.position.z = plan.contact.z;
+        self.current_owner = None;
+        self.previous_owner = Some(save.keeper.id);
+        self.last_rebound_tick = tick;
+        self.flags.in_flight_state = 10;
+        self.claim_cooldown = 0;
+        self.record_touch(save.keeper.id, save.keeper.team_id, tick, false);
+        #[cfg(feature = "match-logs")]
+        self.note_keeper_knock(save.keeper, KnockSource::Other, players);
+        #[cfg(not(feature = "match-logs"))]
+        let _ = players;
+    }
+
+    /// Parried OUT for a corner — and it TRAVELS there. This used to resolve
+    /// POSITIONALLY: the ball was written just past the byline, wide of the
+    /// post, on the tick of the save. That is a mean 6.5 m teleport
+    /// (`flight_diag`'s `save_shot` stage: 1.8 a match, worst 12.6 m), and on
+    /// screen it is a shot vanishing from in front of the keeper and
+    /// reappearing beside the corner flag — the same class of artefact as the
+    /// catch teleport above, and the reason it looked like the ball "flies
+    /// off to nowhere" around the goal.
+    ///
+    /// It was written that way because the first attempt gave the ball a
+    /// DIRECTION and let it run: the keeper is near his line, so a ball
+    /// merely pushed outward had only reached the post by the time it crossed
+    /// the byline and about half of them fell inside for a goal kick. The fix
+    /// for that is not to stop the ball travelling, it is to aim it at the
+    /// point it has to leave the pitch through. Aimed at `(goal line,
+    /// outside the post)`, a straight run crosses the byline exactly there
+    /// whatever the keeper's own position, so the endline resolver awards the
+    /// corner as reliably as the teleport did — and the ball gets there in
+    /// about a fifth of a second, which is what a tip round the post looks
+    /// like.
+    fn save_parry_out(
+        &mut self,
+        save: &ShotSave<'_>,
+        plan: &SavePlan,
+        tick: u64,
+        to_top: bool,
+        goal_y_for_side: f32,
+        exit_x: f32,
+    ) {
+        let exit_y = if to_top {
+            (goal_y_for_side - GOAL_WIDTH - 10.0).max(3.0)
+        } else {
+            (goal_y_for_side + GOAL_WIDTH + 10.0).min(self.field_height - 3.0)
+        };
+        /// Ticks the tipped ball takes to reach the byline. 18 is
+        /// 0.18 s — the ball comes off his fingertips still carrying
+        /// most of the pace it arrived with.
+        const PARRY_OUT_TICKS: f32 = 18.0;
+        let dx = exit_x - self.position.x;
+        let dy = exit_y - self.position.y;
+        let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+        let out_speed = (dist / PARRY_OUT_TICKS).clamp(0.8, 3.0);
+        self.velocity.x = (dx / dist) * out_speed;
+        self.velocity.y = (dy / dist) * out_speed;
+        self.velocity.z = 0.0;
+        // Off his hands at the height his hands were — same rule as the
+        // spilled parry below.
+        self.position.z = plan.contact.z;
+        self.current_owner = None;
+        // Nobody gets a touch on a ball that has been tipped round the
+        // post: the window covers the whole run to the byline, so the
+        // corner cannot be cancelled by a follow-up claim on the way.
+        self.flags.in_flight_state = PARRY_OUT_TICKS as usize + 12;
+        self.claim_cooldown = 30;
+        self.record_touch(save.keeper.id, save.keeper.team_id, tick, false);
+        // A tip round the post IS a save, and the ball is meant to go
+        // out. Closed here rather than left to the generic out-of-play
+        // ending, which would otherwise book a completed save as a
+        // keeper putting the ball out under his own touch — see
+        // [`knock_diag`](crate::r#match::engine::ball::ball::knock_diag).
+        #[cfg(feature = "match-logs")]
+        self.close_keeper_knock(KnockEnd::Cleared);
+        // NB: do NOT emit Intercepted here — its ClaimBall follow-up
+        // forces ownership onto the keeper, which CANCELS the corner
+        // (the ball must stay loose and cross out). The save is already
+        // booked via `pending_save_credit`, and `record_touch` marks the
+        // keeper as last toucher so the endline resolver awards the
+        // corner to the attackers.
+    }
+
+    /// Dangerous parry — ball spills off the keeper's hands. Arms the
+    /// rebound window so the attacking team's follow-up shot isn't
+    /// killed by the team shot-spacing gate.
+    fn save_spill(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        save: &ShotSave<'_>,
+        plan: &SavePlan,
+        tick: u64,
+        events: &mut EventCollection,
+    ) {
+        #[cfg(feature = "match-logs")]
+        {
+            KeeperCensus::note_physics(if plan.lapsed {
                 SaveSettlement::Fumbled
             } else {
                 SaveSettlement::Spilled
             });
             crate::mid_run_diag::SaveContactDiag::note(
                 2,
-                contact_gap,
-                contact_height,
-                contact_along,
-                contact_across,
+                plan.contact.gap,
+                plan.contact.height,
+                plan.contact.along,
+                plan.contact.across,
             );
             crate::mid_run_diag::KeeperHandlingDiag::note(
-                keeper.skills.goalkeeping.handling,
+                save.keeper.skills.goalkeeping.handling,
                 2,
-                ball_speed,
-                scaled_handling,
-                hold_difficulty,
+                plan.ball_speed,
+                plan.scaled_handling,
+                plan.hold_difficulty,
             );
         }
         self.pending_save_site = 0; // parry — spilled
@@ -2281,18 +2454,86 @@ impl Ball {
         // where the attacking team gets a free tap-in. The previous
         // ±15u y-spread around the ball position landed ~50% of parries
         // in the six-yard tap-in lane.
-        // A lapse is the ball he should have held squirming loose and dying
-        // a couple of metres in front of him, where the loose-ball contest
-        // decides whether he or the man following in gets there first.
+        let (drop_x, drop_y) = self.spill_point(context, save.keeper, plan.lapsed);
+        let dx = drop_x - self.position.x;
+        let dy = drop_y - self.position.y;
+        let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+        // Spill speed: the pace that leaves it at rest on the drop point,
+        // where the box contest happens. Read as a fraction of the shot's
+        // pace it left at 0.6-1.3 u/tick, which a ball on the grass rolls
+        // 40-90 m on (`BallRoll::range`).
+        let parry_speed = BallRoll::speed_to_rest_at_from(dist, plan.contact.z, 0.0);
+        self.velocity.x = (dx / dist) * parry_speed;
+        self.velocity.y = (dy / dist) * parry_speed;
+        // **A spill comes off his hands at the height his hands were, and
+        // then it falls.** Every save used to slam the ball to `z = 0` on
+        // the tick it resolved, so a shot pushed away at chest height
+        // dropped a metre and a half in one frame with nothing to explain
+        // it — the same class of artefact as the deflection happening away
+        // from the keeper, on the other axis. Left at the contact height
+        // with no upward push, the ordinary integrator drops it: 1.2 m
+        // takes about half a second, which is the whole of the drop zone
+        // the direction model above already aims for.
+        self.position.z = plan.contact.z;
+        self.velocity.z = 0.0;
+        self.current_owner = None;
+        // Flight window 30 → 10 ticks: the genuine time a spilled ball
+        // is ungatherable. At 30 the entire rebound lived inside the
+        // claims-locked window — and because `previous_owner` stayed the
+        // SHOOTER, try_intercept treated the spill as an attacker pass,
+        // making DEFENDERS the only players able to win it. Setting the
+        // keeper as previous owner (he is physically the last player the
+        // ball came off) flips the intercept population to its realistic
+        // one — attackers pouncing on the spill — through the untouched
+        // existing gate, and the keeper's own bounce-back reclaim still
+        // lets him smother a ball that dies at his feet.
+        self.previous_owner = Some(save.keeper.id);
+        self.flags.in_flight_state = 10;
+        self.claim_cooldown = 0;
+        self.record_touch(save.keeper.id, save.keeper.team_id, tick, false);
+        if plan.lapsed {
+            self.stamp_giveaway(
+                save.keeper.id,
+                save.keeper.team_id,
+                tick,
+                true,
+                LapseFamily::Save,
+            );
+        }
+        // The spill is the classic first link of a knock-chain: it comes
+        // off his gloves at a metre a second and lands in his own six-yard
+        // box. See [`knock_diag`](crate::r#match::engine::ball::ball::knock_diag).
+        #[cfg(feature = "match-logs")]
+        self.note_keeper_knock(save.keeper, KnockSource::Spill, players);
+        #[cfg(not(feature = "match-logs"))]
+        let _ = players;
+        events.add_ball_event(BallEvent::Intercepted(
+            save.keeper.id,
+            self.previous_owner,
+            false,
+        ));
+    }
+
+    /// Where a spilled ball comes to rest. A lapse is the ball he should
+    /// have held squirming loose and dying a couple of metres in front of
+    /// him, where the loose-ball contest decides whether he or the man
+    /// following in gets there first.
+    fn spill_point(
+        &self,
+        context: &MatchContext,
+        keeper: &MatchPlayer,
+        lapsed: bool,
+    ) -> (f32, f32) {
+        let keeper_side = keeper.side;
         let drop_distance = if lapsed {
             Self::FUMBLE_REACH_MIN + context.rng.unit_f32() * Self::FUMBLE_REACH_SPAN
         } else {
             12.0 + context.rng.unit_f32() * 18.0
         };
         let drop_x = match keeper_side {
-            Some(PlayerSide::Left) => keeper_pos.x + drop_distance,
-            Some(PlayerSide::Right) => keeper_pos.x - drop_distance,
-            None => keeper_pos.x,
+            Some(PlayerSide::Left) => keeper.position.x + drop_distance,
+            Some(PlayerSide::Right) => keeper.position.x - drop_distance,
+            None => keeper.position.x,
         };
         // Outward y-bias: push the ball *away* from the goal centre. If
         // the ball was already lateral, push further laterally; for
@@ -2319,60 +2560,162 @@ impl Ball {
             (14.0 + context.rng.unit_f32() * 16.0) * outward_sign
         };
         let drop_y = self.position.y + outward_offset + (context.rng.unit_f32() - 0.5) * 10.0;
-        let drop_y = drop_y.clamp(0.0, self.field_height);
-        let drop_x = drop_x.clamp(0.0, self.field_width);
-        let dx = drop_x - self.position.x;
-        let dy = drop_y - self.position.y;
-        let dist = (dx * dx + dy * dy).sqrt().max(1.0);
-        // Spill speed: the pace that leaves it at rest on the drop point,
-        // where the box contest happens. Read as a fraction of the shot's
-        // pace it left at 0.6-1.3 u/tick, which a ball on the grass rolls
-        // 40-90 m on (`BallRoll::range`).
-        let parry_speed = BallRoll::speed_to_rest_at_from(dist, contact_z, 0.0);
-        self.velocity.x = (dx / dist) * parry_speed;
-        self.velocity.y = (dy / dist) * parry_speed;
-        // **A spill comes off his hands at the height his hands were, and
-        // then it falls.** Every save used to slam the ball to `z = 0` on
-        // the tick it resolved, so a shot pushed away at chest height
-        // dropped a metre and a half in one frame with nothing to explain
-        // it — the same class of artefact as the deflection happening away
-        // from the keeper, on the other axis. Left at the contact height
-        // with no upward push, the ordinary integrator drops it: 1.2 m
-        // takes about half a second, which is the whole of the drop zone
-        // the direction model above already aims for.
-        self.position.z = contact_z;
-        self.velocity.z = 0.0;
-        self.current_owner = None;
-        // Flight window 30 → 10 ticks: the genuine time a spilled ball
-        // is ungatherable. At 30 the entire rebound lived inside the
-        // claims-locked window — and because `previous_owner` stayed the
-        // SHOOTER, try_intercept treated the spill as an attacker pass,
-        // making DEFENDERS the only players able to win it. Setting the
-        // keeper as previous owner (he is physically the last player the
-        // ball came off) flips the intercept population to its realistic
-        // one — attackers pouncing on the spill — through the untouched
-        // existing gate, and the keeper's own bounce-back reclaim still
-        // lets him smother a ball that dies at his feet.
-        self.previous_owner = Some(keeper_id);
-        self.flags.in_flight_state = 10;
-        self.claim_cooldown = 0;
-        self.record_touch(keeper_id, keeper_team, tick, false);
-        if lapsed {
-            self.stamp_giveaway(keeper_id, keeper_team, tick, true, LapseFamily::Save);
+        (
+            drop_x.clamp(0.0, self.field_width),
+            drop_y.clamp(0.0, self.field_height),
+        )
+    }
+    /// How well his positioning served him on THIS shot, split by every
+    /// question the keeper census asks. Recorded before the reach test so
+    /// both outcomes are in the same denominator.
+    #[cfg(feature = "match-logs")]
+    fn note_save_contact_census(&self, save: &ShotSave<'_>, reach: &SaveReach) -> Option<usize> {
+        self.note_keeper_commit_census(save, reach);
+        self.note_keeper_guard_census(save.keeper, reach);
+        self.note_keeper_quality_census(save.keeper, reach);
+        self.note_keeper_range_census(save, reach);
+        self.note_keeper_depth_census(save, reach)
+    }
+
+    /// …and the same reach scored against what he BELIEVED, which is what
+    /// this used to be adjudicated on. Kept as the standing regression
+    /// guard: the two columns it prints must stay apart (his read really is
+    /// wrong, on purpose) while the "within a metre of him and called beyond
+    /// his reach" row stays near zero. The belief is brought into the
+    /// keeper's own plane the same way `KeeperShotDive::crossing_at` does, so
+    /// the two columns are the same measurement of two different balls. See
+    /// `KeeperCommitDiag`.
+    #[cfg(feature = "match-logs")]
+    fn note_keeper_commit_census(&self, save: &ShotSave<'_>, reach: &SaveReach) {
+        let keeper = save.keeper;
+        let target = save.target;
+        let span = target.struck_from.x - save.goal_x;
+        let travelled = if span.abs() < 1.0 {
+            1.0
+        } else {
+            ((target.struck_from.x - keeper.position.x) / span).clamp(0.0, 1.0)
+        };
+        let believed_y =
+            target.struck_from.y + (target.goal_line_y - target.struck_from.y) * travelled;
+        let (read_error, _) = SaveModel::contact(
+            target.struck_from,
+            self.velocity.norm(),
+            keeper.position,
+            reach.base_reach,
+            believed_y,
+            reach.extended,
+            reach.late,
+        );
+        crate::mid_run_diag::KeeperCommitDiag::note_physical(
+            self.position.y - keeper.position.y,
+            reach.gap > reach.reach,
+        );
+        crate::mid_run_diag::KeeperCommitDiag::note_arrival(
+            believed_y - self.position.y,
+            read_error,
+            reach.lateral_error,
+            reach.reach,
+        );
+    }
+
+    #[cfg(feature = "match-logs")]
+    fn note_keeper_guard_census(&self, keeper: &MatchPlayer, reach: &SaveReach) {
+        let m = &keeper.skills.mental;
+        let read = (m.positioning + m.anticipation + m.decisions + m.concentration) / 80.0;
+        let (n_slot, sum_slot) = if read >= 0.60 {
+            (17, 18)
+        } else if read <= 0.45 {
+            (19, 20)
+        } else {
+            (usize::MAX, usize::MAX)
+        };
+        crate::mid_run_diag::KeeperGuardDiag::note(n_slot);
+        crate::mid_run_diag::KeeperGuardDiag::add(sum_slot, (reach.lateral_error * 100.0) as u64);
+        // …and the same split by whether he had already left his feet
+        // for it. See `KeeperShotDive`: a keeper who dives during the
+        // flight ought to be NEARER the crossing point than one still
+        // shuffling toward it, and if he is not the dive is aimed at
+        // the wrong place.
+        let diving = keeper.state == PlayerState::Goalkeeper(GoalkeeperState::Diving);
+        let (arrivals, error) = if diving { (22, 23) } else { (24, 25) };
+        crate::mid_run_diag::KeeperGuardDiag::note(arrivals);
+        crate::mid_run_diag::KeeperGuardDiag::add(error, (reach.lateral_error * 100.0) as u64);
+    }
+
+    #[cfg(feature = "match-logs")]
+    fn note_keeper_quality_census(&self, keeper: &MatchPlayer, reach: &SaveReach) {
+        // …and the same arrival split by the KEEPER, so quality is visible in
+        // whether he goes for it as well as in whether he stops it. See
+        // `KeeperQualityDiag`; needs `SQUAD_SPREAD` set or every keeper in
+        // the run is the same player.
+        use crate::mid_run_diag::KeeperQualityDiag as Q;
+        let skill = sc::gk_shot_stopping(keeper, reach.minute);
+        let band = Q::band(skill);
+        Q::note(band, 0);
+        if reach.gap > reach.reach {
+            Q::note(band, 1);
         }
-        // The spill is the classic first link of a knock-chain: it comes
-        // off his gloves at a metre a second and lands in his own six-yard
-        // box. See [`knock_diag`](crate::r#match::engine::ball::ball::knock_diag).
-        #[cfg(feature = "match-logs")]
-        self.note_keeper_knock(keeper, KnockSource::Spill, players);
-        events.add_ball_event(BallEvent::Intercepted(
-            keeper_id,
-            self.previous_owner,
-            false,
-        ));
+        let diving = keeper.state == PlayerState::Goalkeeper(GoalkeeperState::Diving);
+        if diving {
+            Q::note(band, 2);
+        }
+        Q::add(band, 4, (skill * 1000.0).max(0.0) as u64);
+    }
+
+    #[cfg(feature = "match-logs")]
+    fn note_keeper_range_census(&self, save: &ShotSave<'_>, reach: &SaveReach) {
+        // …and the same arrival split by HOW FAR IT WAS STRUCK FROM.
+        // "Beyond his reach" means one thing at six yards and the
+        // opposite at twenty-five. See `KeeperRangeDiag`.
+        use crate::mid_run_diag::KeeperRangeDiag as R;
+        let strike = (save.target.struck_from
+            - Vector3::new(save.goal_x, save.goal_y, save.target.struck_from.z))
+        .magnitude();
+        let band = R::band(strike);
+        R::note(band, 0);
+        if reach.gap > reach.reach {
+            R::note(band, 1);
+        }
+        R::add(band, 2, (reach.lateral_error * 100.0).max(0.0) as u64);
+        R::add(band, 3, (reach.reach * 100.0).max(0.0) as u64);
+        let diving = save.keeper.state == PlayerState::Goalkeeper(GoalkeeperState::Diving);
+        if diving {
+            R::note(band, 6);
+        }
+        R::add(
+            band,
+            7,
+            ((save.target.struck_from - self.position).magnitude() / self.velocity.norm().max(0.05)
+                * 10.0)
+                .max(0.0) as u64,
+        );
+    }
+
+    /// …and the same arrival split by HIS OWN DEPTH, scored a second time
+    /// against the crossing at the goal line. "Beyond his reach" means one
+    /// thing for a keeper on his line and the opposite for one who has come
+    /// out to meet it — see `KeeperDepthDiag`, which is what
+    /// `SaveModel::FULL_STRETCH_TICKS` is derived against.
+    #[cfg(feature = "match-logs")]
+    fn note_keeper_depth_census(&self, save: &ShotSave<'_>, reach: &SaveReach) -> Option<usize> {
+        use crate::mid_run_diag::KeeperDepthDiag as D;
+        let depth = (save.keeper.position.x - save.goal_x).abs();
+        let band = D::band(depth);
+        let err_at_line = (save.keeper.position.y - save.frame_y).abs();
+        D::note(band, 0);
+        D::add(band, 2, (reach.lateral_error * 100.0).max(0.0) as u64);
+        D::add(band, 3, (reach.reach * 100.0).max(0.0) as u64);
+        D::add(band, 4, (err_at_line * 100.0) as u64);
+        D::add(band, 6, (depth * 100.0) as u64);
+        if reach.gap > reach.reach {
+            D::note(band, 1);
+            if err_at_line <= reach.reach {
+                D::note(band, 7);
+            }
+        }
+        Some(band)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::{KeeperSpread, SaveModel};
@@ -2464,11 +2807,7 @@ mod tests {
                 // Through the same entry point the live roll uses, so
                 // that billing the flight to the keeper instead of the
                 // goal — which reverses this whole property — fails here.
-                SaveModel::settle_from_strike(
-                    struck_from,
-                    2.76,
-                    Vector3::new(0.0, goal_y, 0.0),
-                ),
+                SaveModel::settle_from_strike(struck_from, 2.76, Vector3::new(0.0, goal_y, 0.0)),
                 0.5,
                 SaveModel::NEUTRAL_THREAT,
                 0.0,

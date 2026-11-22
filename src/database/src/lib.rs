@@ -128,7 +128,7 @@ impl DatabaseLoader {
             clubs: tree.clubs,
             national_competitions: NationalCompetitionLoader::load(),
             names_by_country: tree.names_by_country,
-            history_club_names: loaders::history_club_names(),
+            history_club_names: loaders::CompiledDatabase::get().history_club_names(),
             players_odb,
             index: OnceLock::new(),
             role_ages: OnceLock::new(),

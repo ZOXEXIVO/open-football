@@ -21,10 +21,10 @@
 //! that no tie-break can hide.
 
 use crate::club::PlayerPositionType;
-use crate::club::staff::{CoachSquadPlan, PlannedRole};
 use crate::club::staff::perception::{
     AbilityEstimator, CoachProfile, DevelopmentFormEvidence, PotentialEstimator,
 };
+use crate::club::staff::{CoachSquadPlan, PlannedRole};
 use crate::r#match::player::MatchPlayer;
 use crate::utils::DateUtils;
 use crate::{Player, PlayerStatusType, Tactics, TeamType};
@@ -33,8 +33,8 @@ use rustc_hash::FxHashMap;
 use std::cmp::Ordering;
 
 use super::helpers;
-use super::helpers::SlotFit;
 use super::helpers::KeeperAvailability;
+use super::helpers::SlotFit;
 
 /// Development-fixture selector. Built once per side per matchday by the
 /// public rotation API in `mod.rs`; owns the whole XI + bench pick.
@@ -105,7 +105,29 @@ impl DevelopmentSelection<'_> {
         let mut squad: Vec<MatchPlayer> = Vec::with_capacity(helpers::DEFAULT_SQUAD_SIZE);
         let mut used_ids: Vec<u32> = Vec::new();
 
-        if let Some(gk) = KeeperRotationPlan::pick(self, available, &used_ids) {
+        self.select_goalkeeper(available, &mut squad, &mut used_ids);
+
+        let outfield: Vec<&Player> = available
+            .iter()
+            .filter(|p| !p.positions.is_goalkeeper())
+            .copied()
+            .collect();
+        let plan = DevelopmentPlan::build(self, &outfield, helpers::DEFAULT_SQUAD_SIZE - 1);
+
+        self.fill_tactical_slots(&outfield, &plan, &mut squad, &mut used_ids);
+        self.fill_leftovers(&outfield, &plan, &mut squad, &mut used_ids);
+        self.fill_last_resort(available, &mut squad, &mut used_ids);
+
+        squad
+    }
+
+    fn select_goalkeeper(
+        &self,
+        available: &[&Player],
+        squad: &mut Vec<MatchPlayer>,
+        used_ids: &mut Vec<u32>,
+    ) {
+        if let Some(gk) = KeeperRotationPlan::pick(self, available, used_ids) {
             squad.push(MatchPlayer::from_player(
                 self.team_id,
                 gk,
@@ -114,7 +136,7 @@ impl DevelopmentSelection<'_> {
                 Some(self.date),
             ));
             used_ids.push(gk.id);
-        } else if let Some(any) = SlotFit::pick_best_unused(available, &used_ids) {
+        } else if let Some(any) = SlotFit::pick_best_unused(available, used_ids) {
             // No real keeper on the roster at all — same emergency
             // outfielder-in-goal fallback as the competitive path.
             squad.push(MatchPlayer::from_player(
@@ -126,14 +148,15 @@ impl DevelopmentSelection<'_> {
             ));
             used_ids.push(any.id);
         }
+    }
 
-        let outfield: Vec<&Player> = available
-            .iter()
-            .filter(|p| !p.positions.is_goalkeeper())
-            .copied()
-            .collect();
-        let plan = DevelopmentPlan::build(self, &outfield, helpers::DEFAULT_SQUAD_SIZE - 1);
-
+    fn fill_tactical_slots(
+        &self,
+        outfield: &[&Player],
+        plan: &DevelopmentPlan,
+        squad: &mut Vec<MatchPlayer>,
+        used_ids: &mut Vec<u32>,
+    ) {
         for &pos in self.tactics.positions().iter() {
             if pos == PlayerPositionType::Goalkeeper {
                 continue;
@@ -143,8 +166,8 @@ impl DevelopmentSelection<'_> {
                 .iter()
                 .filter(|p| !used_ids.contains(&p.id))
                 .max_by(|a, b| {
-                    let sa = self.slot_score(&plan, a, pos);
-                    let sb = self.slot_score(&plan, b, pos);
+                    let sa = self.slot_score(plan, a, pos);
+                    let sb = self.slot_score(plan, b, pos);
                     sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
                 })
                 .copied();
@@ -160,7 +183,15 @@ impl DevelopmentSelection<'_> {
                 used_ids.push(player.id);
             }
         }
+    }
 
+    fn fill_leftovers(
+        &self,
+        outfield: &[&Player],
+        plan: &DevelopmentPlan,
+        squad: &mut Vec<MatchPlayer>,
+        used_ids: &mut Vec<u32>,
+    ) {
         // Fill any leftover slots with the most underplayed remaining
         // outfielders.
         while squad.len() < helpers::DEFAULT_SQUAD_SIZE {
@@ -168,8 +199,8 @@ impl DevelopmentSelection<'_> {
                 .iter()
                 .filter(|p| !used_ids.contains(&p.id))
                 .max_by(|a, b| {
-                    let sa = self.overall_score(&plan, a);
-                    let sb = self.overall_score(&plan, b);
+                    let sa = self.overall_score(plan, a);
+                    let sb = self.overall_score(plan, b);
                     sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
                 })
                 .copied();
@@ -189,7 +220,14 @@ impl DevelopmentSelection<'_> {
                 None => break,
             }
         }
+    }
 
+    fn fill_last_resort(
+        &self,
+        available: &[&Player],
+        squad: &mut Vec<MatchPlayer>,
+        used_ids: &mut Vec<u32>,
+    ) {
         // Last resort — any player, most rested first.
         while squad.len() < helpers::DEFAULT_SQUAD_SIZE {
             let best = available
@@ -217,8 +255,6 @@ impl DevelopmentSelection<'_> {
                 None => break,
             }
         }
-
-        squad
     }
 
     /// Bench: next keeper by the same rotation plan, then the most

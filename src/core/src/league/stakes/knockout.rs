@@ -85,7 +85,10 @@ mod tests {
     #[test]
     fn stakes_rise_with_every_round() {
         let rounds: Vec<f32> = (1..=6).map(|round| tie(round, 6, 1.0)).collect();
-        assert!(rounds.windows(2).all(|pair| pair[1] > pair[0]), "{rounds:?}");
+        assert!(
+            rounds.windows(2).all(|pair| pair[1] > pair[0]),
+            "{rounds:?}"
+        );
     }
 
     #[test]
@@ -99,7 +102,10 @@ mod tests {
             last = now;
         }
         assert!(tie(1, 6, 0.4) < 0.35, "a giant in an early round has room");
-        assert!(tie(1, 6, 2.5) > 0.9, "a minnow drawn against a giant has none");
+        assert!(
+            tie(1, 6, 2.5) > 0.9,
+            "a minnow drawn against a giant has none"
+        );
     }
 
     #[test]
@@ -112,8 +118,16 @@ mod tests {
     fn a_second_leg_reads_the_aggregate() {
         assert_eq!(second_leg(0), 1.0, "level on aggregate");
         assert!(second_leg(1) > 0.75);
-        assert!(second_leg(4) < 0.5, "four ahead is settled: {}", second_leg(4));
-        assert_eq!(second_leg(-3), second_leg(3), "settled is settled for both sides");
+        assert!(
+            second_leg(4) < 0.5,
+            "four ahead is settled: {}",
+            second_leg(4)
+        );
+        assert_eq!(
+            second_leg(-3),
+            second_leg(3),
+            "settled is settled for both sides"
+        );
         assert!(second_leg(1) > second_leg(2) && second_leg(2) > second_leg(3));
     }
 }

@@ -17,14 +17,14 @@
 
 use chrono::NaiveDate;
 
+use crate::Staff;
 use crate::club::staff::mind::organs::judgements::CoachMemory;
 use crate::club::staff::perception::{
-    AbilityEstimator, DevelopmentFormEvidence, MindsetEstimate, MindsetEstimator,
-    PotentialEstimator, date_to_week,
+    AbilityEstimator, DevelopmentFormEvidence, MindsetEstimate, MindsetEstimator, PerceptionNoise,
+    PotentialEstimator,
 };
-use crate::r#match::engine::teamplay::standard::MatchStandard;
-use crate::Staff;
 use crate::club::team::TeamType;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::utils::DateUtils;
 use crate::{Player, PlayerSquadStatus};
 
@@ -222,7 +222,7 @@ impl KeeperRoom {
         today: NaiveDate,
     ) {
         self.first_team_standard = Some(first_team_standard);
-        let week = date_to_week(today);
+        let week = PerceptionNoise::week(today);
         for k in &mut self.keepers {
             let (team_standard, memory) = seen(k.team_id, k.player_id);
             k.mindset = MindsetEstimator::estimate(lead, memory, team_standard, k.player_id, week);

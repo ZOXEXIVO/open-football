@@ -118,6 +118,22 @@ pub(in crate::r#match::engine::teamplay::plans) struct ShapeBuilder<'a> {
     pub(in crate::r#match::engine::teamplay::plans) max_step: f32,
 }
 
+/// The formation's own kickoff extent along the attack axis and across it.
+struct FormationBounds {
+    min_depth: f32,
+    max_depth: f32,
+    min_lat: f32,
+    max_lat: f32,
+}
+
+/// The block rectangle a refresh settles on.
+struct BlockGeometry {
+    rear: f32,
+    length: f32,
+    width: f32,
+    centre_y: f32,
+}
+
 impl ShapeBuilder<'_> {
     /// Walk `previous` toward `target` by at most `max_step`, snapping
     /// outright when the gap is a restart rather than movement. `None`
@@ -148,6 +164,32 @@ impl ShapeBuilder<'_> {
             return;
         };
 
+        let Some(bounds) = self.formation_bounds(side, field_width) else {
+            shape.active = false;
+            return;
+        };
+
+        let geometry = self.block_geometry(shape, side, field_width, field_height);
+        let len = self.project_anchors(shape, side, field_width, field_height, &bounds, &geometry);
+        self.note_shape_census(shape, side, len);
+
+        // A move further than a refresh allows is a restart, not movement.
+        let moved = ((geometry.rear - shape.rear_progress) * field_width)
+            .hypot(geometry.centre_y - shape.centre_y);
+        shape.pace = if shape.active && moved <= self.max_step {
+            moved * BLOCK_SPEED / self.max_step
+        } else {
+            0.0
+        };
+        shape.len = len;
+        shape.rear_progress = geometry.rear;
+        shape.length = geometry.length;
+        shape.centre_y = geometry.centre_y;
+        shape.width = geometry.width;
+        shape.active = len > 0;
+    }
+
+    fn formation_bounds(&self, side: PlayerSide, field_width: f32) -> Option<FormationBounds> {
         // ── The formation's own bounding box ─────────────────────────
         // The kickoff dots are a PATTERN, not a set of destinations. Read
         // their extent once so each player can be described as a fraction
@@ -167,16 +209,42 @@ impl ShapeBuilder<'_> {
             max_lat = max_lat.max(p.start_position.y);
         }
         if min_depth > max_depth {
-            shape.active = false;
-            return;
+            return None;
         }
-        let depth_span = (max_depth - min_depth).max(0.01);
-        let lat_span = (max_lat - min_lat).max(1.0);
+        Some(FormationBounds {
+            min_depth,
+            max_depth,
+            min_lat,
+            max_lat,
+        })
+    }
 
-        // ── Where the block is ───────────────────────────────────────
+    fn block_geometry(
+        &self,
+        shape: &TeamShape,
+        side: PlayerSide,
+        field_width: f32,
+        field_height: f32,
+    ) -> BlockGeometry {
         let ball = self.field.ball.position;
         let ball_progress = side.attacking_progress_x(ball.x, field_width);
+        let (rear, length) = self.rear_and_length(shape, side, ball_progress, field_width);
+        let (centre_y, width) = self.lateral_geometry(shape, ball.y, field_height);
+        BlockGeometry {
+            rear,
+            length,
+            width,
+            centre_y,
+        }
+    }
 
+    fn rear_and_length(
+        &self,
+        shape: &TeamShape,
+        side: PlayerSide,
+        ball_progress: f32,
+        field_width: f32,
+    ) -> (f32, f32) {
         // The deepest line sits goal-side of the ball by a standoff that
         // shrinks as the side presses harder, then is capped by the
         // phase's line height — so a high-pressing side still cannot hold
@@ -256,6 +324,10 @@ impl ShapeBuilder<'_> {
         let room = (1.0 - rear) * field_width - PITCH_MARGIN;
         let length = length.min(room.max(LENGTH_COMPACT * 0.5));
 
+        (rear, length)
+    }
+
+    fn lateral_geometry(&self, shape: &TeamShape, ball_y: f32, field_height: f32) -> (f32, f32) {
         let width = WIDTH_NARROW
             + (WIDTH_WIDE - WIDTH_NARROW) * self.tactical.team_width_target.clamp(0.0, 1.0);
 
@@ -268,7 +340,7 @@ impl ShapeBuilder<'_> {
             SLIDE_DEFENDING
         };
         let pitch_centre_y = field_height / 2.0;
-        let centre_target = pitch_centre_y + (ball.y - pitch_centre_y) * slide;
+        let centre_target = pitch_centre_y + (ball_y - pitch_centre_y) * slide;
         // **The block SQUEEZES to stay on the pitch; it does not slide
         // back to the middle to do it.**
         //
@@ -319,7 +391,7 @@ impl ShapeBuilder<'_> {
         // the wrong direction on a number that was already short.
         // Clamping the two edges independently and reading the centre
         // back off them keeps every metre the pitch actually has.
-        let (centre_y, width) = if MatchContext::block_rigid() {
+        if MatchContext::block_rigid() {
             (centre_y, width)
         } else {
             let lo = (centre_y - width * 0.5).max(PITCH_MARGIN);
@@ -330,7 +402,22 @@ impl ShapeBuilder<'_> {
             // strip, which is the failure the centre clamp guarded
             // against.
             ((lo + hi) * 0.5, (hi - lo).max(WIDTH_NARROW * 0.5))
-        };
+        }
+    }
+
+    fn project_anchors(
+        &self,
+        shape: &mut TeamShape,
+        side: PlayerSide,
+        field_width: f32,
+        field_height: f32,
+        bounds: &FormationBounds,
+        geometry: &BlockGeometry,
+    ) -> usize {
+        let pitch_centre_y = field_height / 2.0;
+        let depth_span = (bounds.max_depth - bounds.min_depth).max(0.01);
+        let lat_span = (bounds.max_lat - bounds.min_lat).max(1.0);
+        let ball = self.field.ball.position;
 
         // ── Project every player into it ─────────────────────────────
         let mut len = 0usize;
@@ -339,81 +426,70 @@ impl ShapeBuilder<'_> {
                 continue;
             }
             let anchor = if p.tactical_position.current_position.is_goalkeeper() {
-                self.keeper_anchor(side, field_width, pitch_centre_y, ball, rear)
+                self.keeper_anchor(side, field_width, pitch_centre_y, ball, geometry.rear)
             } else {
                 let depth_frac = (side.attacking_progress_x(p.start_position.x, field_width)
-                    - min_depth)
+                    - bounds.min_depth)
                     / depth_span;
-                let lat_frac = (p.start_position.y - min_lat) / lat_span;
-                let progress = rear + depth_frac * (length / field_width);
+                let lat_frac = (p.start_position.y - bounds.min_lat) / lat_span;
+                let progress = geometry.rear + depth_frac * (geometry.length / field_width);
                 let x = side
                     .x_at_progress(progress, field_width)
                     .clamp(PITCH_MARGIN, field_width - PITCH_MARGIN);
-                let y = (centre_y + (lat_frac - 0.5) * width)
+                let y = (geometry.centre_y + (lat_frac - 0.5) * geometry.width)
                     .clamp(PITCH_MARGIN, field_height - PITCH_MARGIN);
                 Vector3::new(x, y, 0.0)
             };
             shape.anchors[len] = (p.id, anchor);
             len += 1;
         }
+        len
+    }
 
+    #[cfg(feature = "match-logs")]
+    fn note_shape_census(&self, shape: &TeamShape, side: PlayerSide, len: usize) {
         // Is the plan too spread out, or does nobody go to it? The two
         // have opposite fixes and the aggregate block length cannot tell
         // them apart.
-        #[cfg(feature = "match-logs")]
-        {
-            let (mut a_min, mut a_max) = (f32::MAX, f32::MIN);
-            let (mut p_min, mut p_max) = (f32::MAX, f32::MIN);
-            let mut worst = 0.0f32;
-            for p in self.outfielders() {
-                let Some((_, anchor)) = shape.anchors[..len].iter().find(|(id, _)| *id == p.id)
-                else {
-                    continue;
-                };
-                a_min = a_min.min(anchor.x);
-                a_max = a_max.max(anchor.x);
-                p_min = p_min.min(p.position.x);
-                p_max = p_max.max(p.position.x);
-                worst = worst.max((p.position - anchor).magnitude());
+        let (mut a_min, mut a_max) = (f32::MAX, f32::MIN);
+        let (mut p_min, mut p_max) = (f32::MAX, f32::MIN);
+        let mut worst = 0.0f32;
+        for p in self.outfielders() {
+            let Some((_, anchor)) = shape.anchors[..len].iter().find(|(id, _)| *id == p.id) else {
+                continue;
+            };
+            a_min = a_min.min(anchor.x);
+            a_max = a_max.max(anchor.x);
+            p_min = p_min.min(p.position.x);
+            p_max = p_max.max(p.position.x);
+            worst = worst.max((p.position - anchor).magnitude());
 
-                let pos = p.tactical_position.current_position;
-                let role = if pos.is_forward() {
-                    3
-                } else if pos.is_midfielder() {
-                    2
-                } else {
-                    1
-                };
-                ShapeCensus::note_axis_lag(role, side.forward_delta(anchor.x, p.position.x));
-            }
-            if a_min <= a_max && p_min <= p_max {
-                // Split by phase: the defending block has a 35-45 m real
-                // target, the attacking one 50-60 m, so the all-phase mean
-                // answers neither question on its own.
-                let defending = self
-                    .field
-                    .ball
-                    .current_owner
-                    .and_then(|id| self.field.players.iter().find(|p| p.id == id))
-                    .is_some_and(|p| p.team_id != self.team_id);
-                ShapeCensus::note_span(a_max - a_min, p_max - p_min, worst, defending);
-            }
+            let pos = p.tactical_position.current_position;
+            let role = if pos.is_forward() {
+                3
+            } else if pos.is_midfielder() {
+                2
+            } else {
+                1
+            };
+            ShapeCensus::note_axis_lag(role, side.forward_delta(anchor.x, p.position.x));
         }
-
-        // A move further than a refresh allows is a restart, not movement.
-        let moved = ((rear - shape.rear_progress) * field_width).hypot(centre_y - shape.centre_y);
-        shape.pace = if shape.active && moved <= self.max_step {
-            moved * BLOCK_SPEED / self.max_step
-        } else {
-            0.0
-        };
-        shape.len = len;
-        shape.rear_progress = rear;
-        shape.length = length;
-        shape.centre_y = centre_y;
-        shape.width = width;
-        shape.active = len > 0;
+        if a_min <= a_max && p_min <= p_max {
+            // Split by phase: the defending block has a 35-45 m real
+            // target, the attacking one 50-60 m, so the all-phase mean
+            // answers neither question on its own.
+            let defending = self
+                .field
+                .ball
+                .current_owner
+                .and_then(|id| self.field.players.iter().find(|p| p.id == id))
+                .is_some_and(|p| p.team_id != self.team_id);
+            ShapeCensus::note_span(a_max - a_min, p_max - p_min, worst, defending);
+        }
     }
+
+    #[cfg(not(feature = "match-logs"))]
+    fn note_shape_census(&self, _shape: &TeamShape, _side: PlayerSide, _len: usize) {}
 
     /// The keeper's anchor. He is not part of the block — he holds his
     /// line and steps out as it rises, which is what makes a high line

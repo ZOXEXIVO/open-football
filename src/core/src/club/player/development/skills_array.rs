@@ -198,136 +198,143 @@ pub enum SkillCategory {
     Goalkeeping,
 }
 
-pub(super) fn skill_category(idx: usize) -> SkillCategory {
-    match idx {
-        SK_ACCELERATION | SK_AGILITY | SK_BALANCE | SK_JUMPING | SK_NATURAL_FITNESS | SK_PACE
-        | SK_STAMINA | SK_STRENGTH | SK_MATCH_READINESS => SkillCategory::Physical,
-        SK_AGGRESSION | SK_ANTICIPATION | SK_BRAVERY | SK_COMPOSURE | SK_CONCENTRATION
-        | SK_DECISIONS | SK_DETERMINATION | SK_FLAIR | SK_LEADERSHIP | SK_OFF_THE_BALL
-        | SK_POSITIONING | SK_TEAMWORK | SK_VISION | SK_WORK_RATE => SkillCategory::Mental,
-        SK_GK_AERIAL_REACH..=SK_GK_THROWING => SkillCategory::Goalkeeping,
-        _ => SkillCategory::Technical,
+impl SkillCategory {
+    pub(super) fn of(idx: usize) -> SkillCategory {
+        match idx {
+            SK_ACCELERATION | SK_AGILITY | SK_BALANCE | SK_JUMPING | SK_NATURAL_FITNESS
+            | SK_PACE | SK_STAMINA | SK_STRENGTH | SK_MATCH_READINESS => SkillCategory::Physical,
+            SK_AGGRESSION | SK_ANTICIPATION | SK_BRAVERY | SK_COMPOSURE | SK_CONCENTRATION
+            | SK_DECISIONS | SK_DETERMINATION | SK_FLAIR | SK_LEADERSHIP | SK_OFF_THE_BALL
+            | SK_POSITIONING | SK_TEAMWORK | SK_VISION | SK_WORK_RATE => SkillCategory::Mental,
+            SK_GK_AERIAL_REACH..=SK_GK_THROWING => SkillCategory::Goalkeeping,
+            _ => SkillCategory::Technical,
+        }
     }
 }
 
-pub(super) fn skills_to_array(player: &Player) -> [f32; SKILL_COUNT] {
-    let t = &player.skills.technical;
-    let m = &player.skills.mental;
-    let p = &player.skills.physical;
-    let g = &player.skills.goalkeeping;
-    [
-        t.corners,
-        t.crossing,
-        t.dribbling,
-        t.finishing,
-        t.first_touch,
-        t.free_kicks,
-        t.heading,
-        t.long_shots,
-        t.long_throws,
-        t.marking,
-        t.passing,
-        t.penalty_taking,
-        t.tackling,
-        t.technique,
-        m.aggression,
-        m.anticipation,
-        m.bravery,
-        m.composure,
-        m.concentration,
-        m.decisions,
-        m.determination,
-        m.flair,
-        m.leadership,
-        m.off_the_ball,
-        m.positioning,
-        m.teamwork,
-        m.vision,
-        m.work_rate,
-        p.acceleration,
-        p.agility,
-        p.balance,
-        p.jumping,
-        p.natural_fitness,
-        p.pace,
-        p.stamina,
-        p.strength,
-        p.match_readiness,
-        g.aerial_reach,
-        g.command_of_area,
-        g.communication,
-        g.eccentricity,
-        g.first_touch,
-        g.handling,
-        g.kicking,
-        g.one_on_ones,
-        g.passing,
-        g.punching,
-        g.reflexes,
-        g.rushing_out,
-        g.throwing,
-    ]
+impl Player {
+    pub(super) fn skills_to_array(&self) -> [f32; SKILL_COUNT] {
+        let t = &self.skills.technical;
+        let m = &self.skills.mental;
+        let p = &self.skills.physical;
+        let g = &self.skills.goalkeeping;
+        [
+            t.corners,
+            t.crossing,
+            t.dribbling,
+            t.finishing,
+            t.first_touch,
+            t.free_kicks,
+            t.heading,
+            t.long_shots,
+            t.long_throws,
+            t.marking,
+            t.passing,
+            t.penalty_taking,
+            t.tackling,
+            t.technique,
+            m.aggression,
+            m.anticipation,
+            m.bravery,
+            m.composure,
+            m.concentration,
+            m.decisions,
+            m.determination,
+            m.flair,
+            m.leadership,
+            m.off_the_ball,
+            m.positioning,
+            m.teamwork,
+            m.vision,
+            m.work_rate,
+            p.acceleration,
+            p.agility,
+            p.balance,
+            p.jumping,
+            p.natural_fitness,
+            p.pace,
+            p.stamina,
+            p.strength,
+            p.match_readiness,
+            g.aerial_reach,
+            g.command_of_area,
+            g.communication,
+            g.eccentricity,
+            g.first_touch,
+            g.handling,
+            g.kicking,
+            g.one_on_ones,
+            g.passing,
+            g.punching,
+            g.reflexes,
+            g.rushing_out,
+            g.throwing,
+        ]
+    }
 }
 
-/// Write the flat array into a standalone `PlayerSkills` — used by the
-/// CA-budget pass to probe "what would CA be if these values landed"
-/// without mutating the player.
-pub(super) fn write_array_into(skills: &mut crate::PlayerSkills, arr: &[f32; SKILL_COUNT]) {
-    let t = &mut skills.technical;
-    t.corners = arr[SK_CORNERS];
-    t.crossing = arr[SK_CROSSING];
-    t.dribbling = arr[SK_DRIBBLING];
-    t.finishing = arr[SK_FINISHING];
-    t.first_touch = arr[SK_FIRST_TOUCH];
-    t.free_kicks = arr[SK_FREE_KICKS];
-    t.heading = arr[SK_HEADING];
-    t.long_shots = arr[SK_LONG_SHOTS];
-    t.long_throws = arr[SK_LONG_THROWS];
-    t.marking = arr[SK_MARKING];
-    t.passing = arr[SK_PASSING];
-    t.penalty_taking = arr[SK_PENALTY_TAKING];
-    t.tackling = arr[SK_TACKLING];
-    t.technique = arr[SK_TECHNIQUE];
+impl crate::PlayerSkills {
+    /// Write the flat array into standalone skills — used by the CA-budget
+    /// pass to probe "what would CA be if these values landed" without
+    /// mutating the player.
+    pub(super) fn write_from_array(&mut self, arr: &[f32; SKILL_COUNT]) {
+        let skills = self;
+        let t = &mut skills.technical;
+        t.corners = arr[SK_CORNERS];
+        t.crossing = arr[SK_CROSSING];
+        t.dribbling = arr[SK_DRIBBLING];
+        t.finishing = arr[SK_FINISHING];
+        t.first_touch = arr[SK_FIRST_TOUCH];
+        t.free_kicks = arr[SK_FREE_KICKS];
+        t.heading = arr[SK_HEADING];
+        t.long_shots = arr[SK_LONG_SHOTS];
+        t.long_throws = arr[SK_LONG_THROWS];
+        t.marking = arr[SK_MARKING];
+        t.passing = arr[SK_PASSING];
+        t.penalty_taking = arr[SK_PENALTY_TAKING];
+        t.tackling = arr[SK_TACKLING];
+        t.technique = arr[SK_TECHNIQUE];
 
-    let m = &mut skills.mental;
-    m.aggression = arr[SK_AGGRESSION];
-    m.anticipation = arr[SK_ANTICIPATION];
-    m.bravery = arr[SK_BRAVERY];
-    m.composure = arr[SK_COMPOSURE];
-    m.concentration = arr[SK_CONCENTRATION];
-    m.decisions = arr[SK_DECISIONS];
-    m.determination = arr[SK_DETERMINATION];
-    m.flair = arr[SK_FLAIR];
-    m.leadership = arr[SK_LEADERSHIP];
-    m.off_the_ball = arr[SK_OFF_THE_BALL];
-    m.positioning = arr[SK_POSITIONING];
-    m.teamwork = arr[SK_TEAMWORK];
-    m.vision = arr[SK_VISION];
-    m.work_rate = arr[SK_WORK_RATE];
+        let m = &mut skills.mental;
+        m.aggression = arr[SK_AGGRESSION];
+        m.anticipation = arr[SK_ANTICIPATION];
+        m.bravery = arr[SK_BRAVERY];
+        m.composure = arr[SK_COMPOSURE];
+        m.concentration = arr[SK_CONCENTRATION];
+        m.decisions = arr[SK_DECISIONS];
+        m.determination = arr[SK_DETERMINATION];
+        m.flair = arr[SK_FLAIR];
+        m.leadership = arr[SK_LEADERSHIP];
+        m.off_the_ball = arr[SK_OFF_THE_BALL];
+        m.positioning = arr[SK_POSITIONING];
+        m.teamwork = arr[SK_TEAMWORK];
+        m.vision = arr[SK_VISION];
+        m.work_rate = arr[SK_WORK_RATE];
 
-    let p = &mut skills.physical;
-    p.acceleration = arr[SK_ACCELERATION];
-    p.agility = arr[SK_AGILITY];
-    p.balance = arr[SK_BALANCE];
-    p.jumping = arr[SK_JUMPING];
-    p.natural_fitness = arr[SK_NATURAL_FITNESS];
-    p.pace = arr[SK_PACE];
-    p.stamina = arr[SK_STAMINA];
-    p.strength = arr[SK_STRENGTH];
-    p.match_readiness = arr[SK_MATCH_READINESS];
+        let p = &mut skills.physical;
+        p.acceleration = arr[SK_ACCELERATION];
+        p.agility = arr[SK_AGILITY];
+        p.balance = arr[SK_BALANCE];
+        p.jumping = arr[SK_JUMPING];
+        p.natural_fitness = arr[SK_NATURAL_FITNESS];
+        p.pace = arr[SK_PACE];
+        p.stamina = arr[SK_STAMINA];
+        p.strength = arr[SK_STRENGTH];
+        p.match_readiness = arr[SK_MATCH_READINESS];
 
-    let g = &mut skills.goalkeeping;
-    g.aerial_reach = arr[SK_GK_AERIAL_REACH];
-    g.command_of_area = arr[SK_GK_COMMAND_OF_AREA];
-    g.communication = arr[SK_GK_COMMUNICATION];
-    g.eccentricity = arr[SK_GK_ECCENTRICITY];
-    g.first_touch = arr[SK_GK_FIRST_TOUCH];
-    g.handling = arr[SK_GK_HANDLING];
-    g.kicking = arr[SK_GK_KICKING];
-    g.one_on_ones = arr[SK_GK_ONE_ON_ONES];
-    g.passing = arr[SK_GK_PASSING];
-    g.punching = arr[SK_GK_PUNCHING];
-    g.reflexes = arr[SK_GK_REFLEXES];
-    g.rushing_out = arr[SK_GK_RUSHING_OUT];
-    g.throwing = arr[SK_GK_THROWING];
+        let g = &mut skills.goalkeeping;
+        g.aerial_reach = arr[SK_GK_AERIAL_REACH];
+        g.command_of_area = arr[SK_GK_COMMAND_OF_AREA];
+        g.communication = arr[SK_GK_COMMUNICATION];
+        g.eccentricity = arr[SK_GK_ECCENTRICITY];
+        g.first_touch = arr[SK_GK_FIRST_TOUCH];
+        g.handling = arr[SK_GK_HANDLING];
+        g.kicking = arr[SK_GK_KICKING];
+        g.one_on_ones = arr[SK_GK_ONE_ON_ONES];
+        g.passing = arr[SK_GK_PASSING];
+        g.punching = arr[SK_GK_PUNCHING];
+        g.reflexes = arr[SK_GK_REFLEXES];
+        g.rushing_out = arr[SK_GK_RUSHING_OUT];
+        g.throwing = arr[SK_GK_THROWING];
+    }
 }

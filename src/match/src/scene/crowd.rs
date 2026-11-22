@@ -855,7 +855,6 @@ impl Crowd {
         // Which parts of this bank the gate fills, which is not all of it
         // evenly: an occupancy is an average over the concrete rather than a
         // description of any one step of it.
-        let gathering = Gathering::over(stand, stature.occupancy(), seed, terrace.rows, slots);
         let allegiance = stature.allegiance(stand);
         let afoot = stature.on_their_feet(stand);
         // Whose colours this bank wears at all. An end belongs to one support
@@ -865,6 +864,43 @@ impl Crowd {
             _ => CrowdPalette::colours as fn(&CrowdPalette, u32) -> Vec2,
         };
 
+        let gathering = Gathering::over(stand, stature.occupancy(), seed, terrace.rows, slots);
+        let (seated, standing) = Self::census(seed, &gathering, afoot, terrace.rows, slots);
+        let mut figures = Figures::exactly(seated, standing, throng);
+
+        for row in 0..terrace.rows {
+            let step = terrace.step(row);
+            for slot in 0..slots {
+                Self::fill_figure(
+                    &mut figures,
+                    terrace,
+                    throng,
+                    palette,
+                    seed,
+                    &gathering,
+                    afoot,
+                    wearing,
+                    allegiance,
+                    stand,
+                    run,
+                    spacing,
+                    row,
+                    slot,
+                    step,
+                );
+            }
+        }
+
+        figures.into_mesh()
+    }
+
+    fn census(
+        seed: u32,
+        gathering: &Gathering,
+        afoot: f32,
+        rows: usize,
+        slots: usize,
+    ) -> (usize, usize) {
         // **A census before a stitch.** The buffers below come to tens of
         // megabytes on a full bank and a `Vec` that outgrows its reservation
         // doubles, so the reservation is counted off the same hashes the
@@ -876,9 +912,9 @@ impl Crowd {
         // some five thousand of them on the largest bank in the game, against
         // the ten thousand figures the pass below then turns.
         let (mut seated, mut standing) = (0usize, 0usize);
-        for row in 0..terrace.rows {
+        for row in 0..rows {
             for slot in 0..slots {
-                if Self::taken(seed, &gathering, row, slot).is_none() {
+                if Self::taken(seed, gathering, row, slot).is_none() {
                     continue;
                 }
                 seated += 1;
@@ -888,146 +924,153 @@ impl Crowd {
                 }
             }
         }
-        let mut figures = Figures::exactly(seated, standing, throng);
+        (seated, standing)
+    }
 
-        for row in 0..terrace.rows {
-            let step = terrace.step(row);
-            for slot in 0..slots {
-                // Whether anybody is here at all, against the density of THIS
-                // corner of the bank rather than the ground's average — see
-                // [`Gathering`] and [`Self::CLUMPING`].
-                let Some(roll) = Self::taken(seed, &gathering, row, slot) else {
-                    continue;
-                };
+    #[allow(clippy::too_many_arguments)]
+    fn fill_figure(
+        figures: &mut Figures,
+        terrace: &Terrace,
+        throng: Throng,
+        palette: &CrowdPalette,
+        seed: u32,
+        gathering: &Gathering,
+        afoot: f32,
+        wearing: fn(&CrowdPalette, u32) -> Vec2,
+        allegiance: f32,
+        stand: Stand,
+        run: f32,
+        spacing: f32,
+        row: usize,
+        slot: usize,
+        step: Vec2,
+    ) {
+        let Some(roll) = Self::taken(seed, gathering, row, slot) else {
+            return;
+        };
+        let stagger = (Self::unit(roll >> 8) - 0.5) * 2.0 * Self::STAGGER * spacing;
+        let x = run * -0.5 + spacing * (slot as f32 + 0.5) + stagger;
+        let size = 1.0 + (Self::unit(roll >> 16) - 0.5) * 2.0 * Self::SPREAD;
+        let head = Self::hash(seed ^ Self::COMPLEXION, row as u32, slot as u32);
+        let dress = Self::hash(seed ^ Self::TROUSERS, row as u32, slot as u32);
 
-                let stagger = (Self::unit(roll >> 8) - 0.5) * 2.0 * Self::STAGGER * spacing;
-                let x = run * -0.5 + spacing * (slot as f32 + 0.5) + stagger;
-                let size = 1.0 + (Self::unit(roll >> 16) - 0.5) * 2.0 * Self::SPREAD;
-                let head = Self::hash(seed ^ Self::COMPLEXION, row as u32, slot as u32);
-                let dress = Self::hash(seed ^ Self::TROUSERS, row as u32, slot as u32);
+        // What he is doing with himself, which is what decides where
+        // every ring of him goes.
+        let posture = Posture::of(Self::unit(head >> 16), afoot);
+        let hips = posture.hips();
+        let seat = Seat {
+            pivot: Vec3::new(
+                x,
+                step.y + hips * size,
+                step.x + terrace.tread * posture.stands_at(),
+            ),
+            hips,
+            size,
+            turn: Quat::from_rotation_y((Self::unit(head >> 24) - 0.5) * 2.0 * Self::SQUARE)
+                * Quat::from_rotation_x(-posture.lean()),
+        };
 
-                // What he is doing with himself, which is what decides where
-                // every ring of him goes.
-                let posture = Posture::of(Self::unit(head >> 16), afoot);
-                let hips = posture.hips();
-                let seat = Seat {
-                    pivot: Vec3::new(
-                        x,
-                        step.y + hips * size,
-                        step.x + terrace.tread * posture.stands_at(),
-                    ),
-                    hips,
-                    size,
-                    turn: Quat::from_rotation_y(
-                        (Self::unit(head >> 24) - 0.5) * 2.0 * Self::SQUARE,
-                    ) * Quat::from_rotation_x(-posture.lean()),
-                };
+        // What he came in. Whether he is wearing anybody's colours at
+        // all is a draw off the SALTED hash, because it has to be
+        // independent of the tile he then picks — cut from
+        // neighbouring bits of one draw, everybody in colours would
+        // end up in the same shade of it.
+        //
+        // …and how likely that is depends on WHERE he is sitting. An
+        // end's support is massed behind the goal and thins through
+        // the corners; a touchline carries its scattering evenly.
+        let dressed = match stand {
+            Stand::Side => allegiance,
+            _ => allegiance * Stature::behind_goal(x / (run * 0.5)),
+        };
+        let clothing = if Self::unit(head >> 8) < dressed {
+            wearing(palette, roll >> 24)
+        } else {
+            palette.coat(roll >> 24)
+        };
+        let skin = palette.head(head);
 
-                // What he came in. Whether he is wearing anybody's colours at
-                // all is a draw off the SALTED hash, because it has to be
-                // independent of the tile he then picks — cut from
-                // neighbouring bits of one draw, everybody in colours would
-                // end up in the same shade of it.
-                //
-                // …and how likely that is depends on WHERE he is sitting. An
-                // end's support is massed behind the goal and thins through
-                // the corners; a touchline carries its scattering evenly.
-                let dressed = match stand {
-                    Stand::Side => allegiance,
-                    _ => allegiance * Stature::behind_goal(x / (run * 0.5)),
-                };
-                let clothing = if Self::unit(head >> 8) < dressed {
-                    wearing(palette, roll >> 24)
-                } else {
-                    palette.coat(roll >> 24)
-                };
-                let skin = palette.head(head);
+        // The body, from the hem of his coat to his collar.
+        let body: [Ring; Self::BODY.len()] = std::array::from_fn(|course| {
+            let (up, wide, deep) = Self::BODY[course];
+            // The bottom ring is the hem, and where it hangs depends
+            // on whether he is sitting on it — see [`Posture::hem`].
+            let up = if course == 0 { up - posture.hem() } else { up };
+            seat.upright(
+                hips + Self::TORSO * up,
+                Self::SHOULDERS * 0.5 * wide,
+                Self::CHEST * 0.5 * deep,
+            )
+        });
+        figures.tube(&body, throng.body_sides, throng.ring_step, false, |_, _| {
+            clothing
+        });
 
-                // The body, from the hem of his coat to his collar.
-                let body: [Ring; Self::BODY.len()] = std::array::from_fn(|course| {
-                    let (up, wide, deep) = Self::BODY[course];
-                    // The bottom ring is the hem, and where it hangs depends
-                    // on whether he is sitting on it — see [`Posture::hem`].
-                    let up = if course == 0 { up - posture.hem() } else { up };
-                    seat.upright(
-                        hips + Self::TORSO * up,
-                        Self::SHOULDERS * 0.5 * wide,
-                        Self::CHEST * 0.5 * deep,
-                    )
-                });
-                figures.tube(&body, throng.body_sides, throng.ring_step, false, |_, _| {
-                    clothing
-                });
+        // The head on top of it, turned on [`Self::SKULL`] and skinned
+        // with his own tile the whole way round — hair at the back, an
+        // ear either side, his face at the front. The `turn` of each
+        // point is what the tile is laid on, so the drawing follows
+        // the geometry as the head narrows under it.
+        let neck = hips + Self::TORSO * 0.99;
+        let skull = Self::SKULL.map(|(up, wide, deep, _)| {
+            seat.upright(
+                neck + Self::HEAD.y * up,
+                Self::HEAD.x * 0.5 * wide,
+                Self::HEAD.z * 0.5 * deep,
+            )
+        });
+        figures.tube(
+            &skull,
+            throng.skull_sides,
+            throng.ring_step,
+            true,
+            |turn, course| palette.head_uv(head, turn, Self::SKULL[course].3),
+        );
+        figures.cap(skull[Self::SKULL.len() - 1], throng.skull_sides, |turn| {
+            palette.head_uv(head, turn, 0.0)
+        });
 
-                // The head on top of it, turned on [`Self::SKULL`] and skinned
-                // with his own tile the whole way round — hair at the back, an
-                // ear either side, his face at the front. The `turn` of each
-                // point is what the tile is laid on, so the drawing follows
-                // the geometry as the head narrows under it.
-                let neck = hips + Self::TORSO * 0.99;
-                let skull = Self::SKULL.map(|(up, wide, deep, _)| {
-                    seat.upright(
-                        neck + Self::HEAD.y * up,
-                        Self::HEAD.x * 0.5 * wide,
-                        Self::HEAD.z * 0.5 * deep,
-                    )
-                });
-                figures.tube(
-                    &skull,
-                    throng.skull_sides,
-                    throng.ring_step,
-                    true,
-                    |turn, course| palette.head_uv(head, turn, Self::SKULL[course].3),
-                );
-                figures.cap(skull[Self::SKULL.len() - 1], throng.skull_sides, |turn| {
-                    palette.head_uv(head, turn, 0.0)
-                });
-
-                // Two arms, which are most of what says "person" at the
-                // distance a lens actually gets to. Mirrored rather than given
-                // their own table: nobody has one arm longer than the other,
-                // and a second set of joints is a second set of numbers
-                // waiting to drift.
-                let joints = posture.arm(hips);
-                for hand in [-1.0f32, 1.0] {
-                    let [top, elbow, wrist] =
-                        joints.map(|joint| Vec3::new(joint.x * hand, joint.y, joint.z));
-                    let limb = [
-                        // Thickest at the top, where it is a shoulder and has to
-                        // MERGE with the one it hangs off: an even tube pinned
-                        // to the side of a coat is a scarecrow.
-                        seat.limb(top, elbow - top, Self::ARM * 1.34),
-                        seat.limb(elbow, wrist - top, Self::ARM),
-                        seat.limb(wrist, wrist - elbow, Self::ARM * 0.78),
-                    ];
-                    figures.tube(&limb, throng.limb_sides, 1, false, |_, _| clothing);
-                    // The back of his hand, which is the one end of an arm
-                    // that is out in the open air.
-                    figures.cap(limb[2], throng.limb_sides, |_| skin);
-                }
-
-                // …and two legs, but only for the men on their feet. A seated
-                // pair of knees is inside the tread of his own step with the
-                // nose of the step in front drawn across it, and any lens high
-                // enough to see over that nose is looking down at the top of
-                // his head. On a man standing up they are half of him.
-                if let Some(joints) = posture.leg() {
-                    let trousers = palette.coat(dress);
-                    for foot in [-1.0f32, 1.0] {
-                        let [top, knee, ankle] =
-                            joints.map(|joint| Vec3::new(joint.x * foot, joint.y, joint.z));
-                        let limb = [
-                            seat.limb(top, knee - top, Self::LEG),
-                            seat.limb(knee, ankle - top, Self::LEG * 0.86),
-                            seat.limb(ankle, ankle - knee, Self::LEG * 0.74),
-                        ];
-                        figures.tube(&limb, throng.limb_sides, 1, false, |_, _| trousers);
-                    }
-                }
-            }
+        // Two arms, which are most of what says "person" at the
+        // distance a lens actually gets to. Mirrored rather than given
+        // their own table: nobody has one arm longer than the other,
+        // and a second set of joints is a second set of numbers
+        // waiting to drift.
+        let joints = posture.arm(hips);
+        for hand in [-1.0f32, 1.0] {
+            let [top, elbow, wrist] =
+                joints.map(|joint| Vec3::new(joint.x * hand, joint.y, joint.z));
+            let limb = [
+                // Thickest at the top, where it is a shoulder and has to
+                // MERGE with the one it hangs off: an even tube pinned
+                // to the side of a coat is a scarecrow.
+                seat.limb(top, elbow - top, Self::ARM * 1.34),
+                seat.limb(elbow, wrist - top, Self::ARM),
+                seat.limb(wrist, wrist - elbow, Self::ARM * 0.78),
+            ];
+            figures.tube(&limb, throng.limb_sides, 1, false, |_, _| clothing);
+            // The back of his hand, which is the one end of an arm
+            // that is out in the open air.
+            figures.cap(limb[2], throng.limb_sides, |_| skin);
         }
 
-        figures.into_mesh()
+        // …and two legs, but only for the men on their feet. A seated
+        // pair of knees is inside the tread of his own step with the
+        // nose of the step in front drawn across it, and any lens high
+        // enough to see over that nose is looking down at the top of
+        // his head. On a man standing up they are half of him.
+        if let Some(joints) = posture.leg() {
+            let trousers = palette.coat(dress);
+            for foot in [-1.0f32, 1.0] {
+                let [top, knee, ankle] =
+                    joints.map(|joint| Vec3::new(joint.x * foot, joint.y, joint.z));
+                let limb = [
+                    seat.limb(top, knee - top, Self::LEG),
+                    seat.limb(knee, ankle - top, Self::LEG * 0.86),
+                    seat.limb(ankle, ankle - knee, Self::LEG * 0.74),
+                ];
+                figures.tube(&limb, throng.limb_sides, 1, false, |_, _| trousers);
+            }
+        }
     }
 
     /// **Whether anybody is in this place at all**, and the draw that decides

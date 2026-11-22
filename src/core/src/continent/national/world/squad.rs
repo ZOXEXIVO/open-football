@@ -15,7 +15,7 @@ use log::warn;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::lookups::{country_lookup, country_lookup_mut};
+use super::lookups::WorldCountryLookup;
 use crate::continent::Continent;
 use crate::r#match::{CompetitionKind, FixtureContext, MatchSquad, SquadFixture};
 use crate::{
@@ -177,7 +177,7 @@ impl NationalSquadBuilder {
         country_id: u32,
         level: NationalTeamLevel,
     ) -> bool {
-        country_lookup(continents, country_id).is_some_and(|c| {
+        WorldCountryLookup::find(continents, country_id).is_some_and(|c| {
             let team = Self::team_for_level(c, level);
             team.squad.is_empty() && team.generated_squad.is_empty()
         })
@@ -209,7 +209,7 @@ impl NationalSquadBuilder {
         level: NationalTeamLevel,
         importance: NationalMatchImportance,
     ) -> Option<MatchSquad> {
-        let country = country_lookup(continents, country_id)?;
+        let country = WorldCountryLookup::find(continents, country_id)?;
         Some(
             Self::team_for_level(country, level)
                 .build_match_squad_from_refs_with_importance(all_clubs, date, importance),
@@ -237,7 +237,7 @@ impl NationalSquadBuilder {
     ) {
         EmergencyCallupMetrics::record();
 
-        let country_name = country_lookup(continents, country_id)
+        let country_name = WorldCountryLookup::find(continents, country_id)
             .map(|c| c.name.clone())
             .unwrap_or_default();
 
@@ -273,7 +273,7 @@ impl NationalSquadBuilder {
             candidates.retain(|c| !senior_selected.contains(&c.player_id));
         }
 
-        if let Some(country) = country_lookup_mut(continents, country_id) {
+        if let Some(country) = WorldCountryLookup::find_mut(continents, country_id) {
             let name = country.name.clone();
             let rep = country.reputation;
             let cid = country.id;

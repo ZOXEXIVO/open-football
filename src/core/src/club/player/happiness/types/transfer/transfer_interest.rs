@@ -1,3 +1,4 @@
+use crate::HappinessEventCause;
 use crate::club::player::contract::PlayerSquadStatus;
 
 /// Stage in the transfer-interest funnel — where the rumour or approach
@@ -119,6 +120,27 @@ pub enum TransferInterestKind {
 }
 
 impl TransferInterestKind {
+    /// Top-level cause label for the interest event this kind produces.
+    pub fn happiness_cause(self) -> HappinessEventCause {
+        match self {
+            TransferInterestKind::FavoriteClubInterest
+            | TransferInterestKind::Homecoming
+            | TransferInterestKind::FormerClubReturn => HappinessEventCause::AdaptationIsolation,
+            TransferInterestKind::RivalMove => HappinessEventCause::ReputationTension,
+            TransferInterestKind::StepUp | TransferInterestKind::BigLeagueOpportunity => {
+                HappinessEventCause::ReputationAdmiration
+            }
+            TransferInterestKind::EuropeanCompetitionOpportunity
+            | TransferInterestKind::CopaLibertadoresOpportunity => {
+                HappinessEventCause::ReputationAdmiration
+            }
+            TransferInterestKind::EscapeRoute | TransferInterestKind::StepDownWithMinutes => {
+                HappinessEventCause::PoorFormPressure
+            }
+            _ => HappinessEventCause::MediaPressure,
+        }
+    }
+
     pub fn as_i18n_key(&self) -> &'static str {
         match self {
             TransferInterestKind::StepUp => "transfer_interest_kind_step_up",

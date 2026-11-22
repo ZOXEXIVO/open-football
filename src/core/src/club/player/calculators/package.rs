@@ -9,13 +9,15 @@
 //! face, the AI might count it amortised, and acceptance might ignore
 //! it entirely. This module fixes the drift.
 //!
-//! The two entry points are deliberately narrow:
-//!   - [`package_inputs_from_proposal`] — un-signed package being
+//! The two constructors are deliberately narrow:
+//!   - [`PackageInputs::from_proposal`] — un-signed package being
 //!     evaluated for acceptance / renewal scoring.
-//!   - [`package_inputs_from_contract`] — installed contract being
+//!   - [`PackageInputs::from_contract`] — installed contract being
 //!     evaluated by happiness or wage-envy passes.
 //!
-//! Both build a [`PackageInputs`] which feeds [`expected_annual_value`].
+//! Both build a [`PackageInputs`] whose
+//! [`expected_annual_value`](PackageInputs::expected_annual_value) gives the
+//! comparable annual figure.
 
 use crate::PlayerSquadStatus;
 use crate::club::player::contract::contract::{ContractBonusType, PlayerClubContract};
@@ -112,154 +114,150 @@ impl PackageInputs {
     }
 }
 
-/// Build inputs from a fresh proposal — un-installed package, signing
-/// bonus has NOT been paid yet, so it's amortised over the contract
-/// length. `player` supplies position + ambition for the goal/clause
-/// weighting.
-pub fn package_inputs_from_proposal(
-    proposal: &PlayerContractProposal,
-    player: &Player,
-) -> PackageInputs {
-    let pos = player.position();
-    let ambition = player.attributes.ambition;
-    PackageInputs {
-        base_salary: proposal.salary,
-        years: proposal.years.max(1),
-        signing_bonus: proposal.signing_bonus,
-        signing_bonus_already_paid: false,
-        loyalty_bonus: proposal.loyalty_bonus,
-        appearance_fee: proposal.appearance_fee.unwrap_or(0),
-        unused_sub_fee: proposal.unused_sub_fee.unwrap_or(0),
-        goal_bonus: proposal.goal_bonus.unwrap_or(0),
-        clean_sheet_bonus: proposal.clean_sheet_bonus.unwrap_or(0),
-        promotion_bonus: proposal.promotion_bonus.unwrap_or(0),
-        avoid_relegation_bonus: proposal.avoid_relegation_bonus.unwrap_or(0),
-        international_cap_bonus: proposal.international_cap_bonus.unwrap_or(0),
-        release_clause: proposal.release_clause.unwrap_or(0),
-        release_clause_attractive: ambition >= 13.0,
-        squad_status: proposal.squad_status_promise.clone().unwrap_or_else(|| {
-            player
-                .contract
-                .as_ref()
-                .map(|c| c.squad_status.clone())
-                .unwrap_or(PlayerSquadStatus::FirstTeamRegular)
-        }),
-        is_forward: pos.is_forward(),
-        is_midfielder: pos.is_midfielder(),
-        is_defender: pos.is_defender(),
-        is_goalkeeper: pos.is_goalkeeper(),
-    }
-}
-
-/// Build inputs from an installed contract — signing bonus is treated as
-/// paid (happiness shouldn't keep counting a one-shot payment that
-/// already hit the bank).
-pub fn package_inputs_from_contract(
-    contract: &PlayerClubContract,
-    player: &Player,
-) -> PackageInputs {
-    let pos = player.position();
-    let ambition = player.attributes.ambition;
-    let mut inputs = PackageInputs::empty(contract.salary, 1);
-    inputs.squad_status = contract.squad_status.clone();
-    inputs.signing_bonus_already_paid = contract.signing_bonus_paid;
-    inputs.is_forward = pos.is_forward();
-    inputs.is_midfielder = pos.is_midfielder();
-    inputs.is_defender = pos.is_defender();
-    inputs.is_goalkeeper = pos.is_goalkeeper();
-    inputs.release_clause_attractive = ambition >= 13.0;
-    for bonus in &contract.bonuses {
-        let v = bonus.value.max(0) as u32;
-        match bonus.bonus_type {
-            ContractBonusType::SigningBonus => inputs.signing_bonus = v,
-            ContractBonusType::LoyaltyBonus => inputs.loyalty_bonus = v,
-            ContractBonusType::AppearanceFee => inputs.appearance_fee = v,
-            ContractBonusType::UnusedSubstitutionFee => inputs.unused_sub_fee = v,
-            ContractBonusType::GoalFee => inputs.goal_bonus = v,
-            ContractBonusType::CleanSheetFee => inputs.clean_sheet_bonus = v,
-            ContractBonusType::PromotionFee => inputs.promotion_bonus = v,
-            ContractBonusType::AvoidRelegationFee => inputs.avoid_relegation_bonus = v,
-            ContractBonusType::InternationalCapFee => inputs.international_cap_bonus = v,
-            // Inert bonus types — neither happiness nor acceptance should
-            // value them until they have lifecycle effects.
-            ContractBonusType::TeamOfTheYear | ContractBonusType::TopGoalscorer => {}
+impl PackageInputs {
+    /// Build inputs from a fresh proposal — un-installed package, signing
+    /// bonus has NOT been paid yet, so it's amortised over the contract
+    /// length. `player` supplies position + ambition for the goal/clause
+    /// weighting.
+    pub fn from_proposal(proposal: &PlayerContractProposal, player: &Player) -> PackageInputs {
+        let pos = player.position();
+        let ambition = player.attributes.ambition;
+        PackageInputs {
+            base_salary: proposal.salary,
+            years: proposal.years.max(1),
+            signing_bonus: proposal.signing_bonus,
+            signing_bonus_already_paid: false,
+            loyalty_bonus: proposal.loyalty_bonus,
+            appearance_fee: proposal.appearance_fee.unwrap_or(0),
+            unused_sub_fee: proposal.unused_sub_fee.unwrap_or(0),
+            goal_bonus: proposal.goal_bonus.unwrap_or(0),
+            clean_sheet_bonus: proposal.clean_sheet_bonus.unwrap_or(0),
+            promotion_bonus: proposal.promotion_bonus.unwrap_or(0),
+            avoid_relegation_bonus: proposal.avoid_relegation_bonus.unwrap_or(0),
+            international_cap_bonus: proposal.international_cap_bonus.unwrap_or(0),
+            release_clause: proposal.release_clause.unwrap_or(0),
+            release_clause_attractive: ambition >= 13.0,
+            squad_status: proposal.squad_status_promise.clone().unwrap_or_else(|| {
+                player
+                    .contract
+                    .as_ref()
+                    .map(|c| c.squad_status.clone())
+                    .unwrap_or(PlayerSquadStatus::FirstTeamRegular)
+            }),
+            is_forward: pos.is_forward(),
+            is_midfielder: pos.is_midfielder(),
+            is_defender: pos.is_defender(),
+            is_goalkeeper: pos.is_goalkeeper(),
         }
     }
-    inputs
-}
 
-/// Total expected annual value of the package — base salary plus the
-/// probability/frequency-weighted value of every bonus, plus a small
-/// option-style value for an attractive release clause.
-pub fn expected_annual_value(p: &PackageInputs) -> u32 {
-    let years = p.years.max(1) as u32;
-    let signing_amortised = if p.signing_bonus_already_paid {
-        0
-    } else {
-        p.signing_bonus / years
-    };
-
-    let apps_per_season = match p.squad_status {
-        PlayerSquadStatus::KeyPlayer => weights::APPS_PER_SEASON_KEY_PLAYER,
-        PlayerSquadStatus::FirstTeamRegular => weights::APPS_PER_SEASON_REGULAR,
-        PlayerSquadStatus::FirstTeamSquadRotation | PlayerSquadStatus::HotProspectForTheFuture => {
-            weights::APPS_PER_SEASON_ROTATION
+    /// Build inputs from an installed contract — signing bonus is treated as
+    /// paid (happiness shouldn't keep counting a one-shot payment that
+    /// already hit the bank).
+    pub fn from_contract(contract: &PlayerClubContract, player: &Player) -> PackageInputs {
+        let pos = player.position();
+        let ambition = player.attributes.ambition;
+        let mut inputs = PackageInputs::empty(contract.salary, 1);
+        inputs.squad_status = contract.squad_status.clone();
+        inputs.signing_bonus_already_paid = contract.signing_bonus_paid;
+        inputs.is_forward = pos.is_forward();
+        inputs.is_midfielder = pos.is_midfielder();
+        inputs.is_defender = pos.is_defender();
+        inputs.is_goalkeeper = pos.is_goalkeeper();
+        inputs.release_clause_attractive = ambition >= 13.0;
+        for bonus in &contract.bonuses {
+            let v = bonus.value.max(0) as u32;
+            match bonus.bonus_type {
+                ContractBonusType::SigningBonus => inputs.signing_bonus = v,
+                ContractBonusType::LoyaltyBonus => inputs.loyalty_bonus = v,
+                ContractBonusType::AppearanceFee => inputs.appearance_fee = v,
+                ContractBonusType::UnusedSubstitutionFee => inputs.unused_sub_fee = v,
+                ContractBonusType::GoalFee => inputs.goal_bonus = v,
+                ContractBonusType::CleanSheetFee => inputs.clean_sheet_bonus = v,
+                ContractBonusType::PromotionFee => inputs.promotion_bonus = v,
+                ContractBonusType::AvoidRelegationFee => inputs.avoid_relegation_bonus = v,
+                ContractBonusType::InternationalCapFee => inputs.international_cap_bonus = v,
+                // Inert bonus types — neither happiness nor acceptance should
+                // value them until they have lifecycle effects.
+                ContractBonusType::TeamOfTheYear | ContractBonusType::TopGoalscorer => {}
+            }
         }
-        PlayerSquadStatus::MainBackupPlayer | PlayerSquadStatus::DecentYoungster => {
-            weights::APPS_PER_SEASON_BACKUP
-        }
-        _ => weights::APPS_PER_SEASON_BACKUP,
-    };
+        inputs
+    }
 
-    let appearance_value = (p.appearance_fee as u64 * apps_per_season as u64) as u32;
-    let unused_sub_value =
-        (p.unused_sub_fee as u64 * weights::UNUSED_SUB_APPEARANCES as u64) as u32;
+    /// Total expected annual value of the package — base salary plus the
+    /// probability/frequency-weighted value of every bonus, plus a small
+    /// option-style value for an attractive release clause.
+    pub fn expected_annual_value(&self) -> u32 {
+        let p = self;
+        let years = p.years.max(1) as u32;
+        let signing_amortised = if p.signing_bonus_already_paid {
+            0
+        } else {
+            p.signing_bonus / years
+        };
 
-    let expected_goals = if p.is_forward {
-        weights::GOALS_FORWARD
-    } else if p.is_midfielder {
-        weights::GOALS_MIDFIELDER
-    } else if p.is_defender {
-        weights::GOALS_DEFENDER
-    } else {
-        0
-    };
-    let goal_value = (p.goal_bonus as u64 * expected_goals as u64) as u32;
+        let apps_per_season = match p.squad_status {
+            PlayerSquadStatus::KeyPlayer => weights::APPS_PER_SEASON_KEY_PLAYER,
+            PlayerSquadStatus::FirstTeamRegular => weights::APPS_PER_SEASON_REGULAR,
+            PlayerSquadStatus::FirstTeamSquadRotation
+            | PlayerSquadStatus::HotProspectForTheFuture => weights::APPS_PER_SEASON_ROTATION,
+            PlayerSquadStatus::MainBackupPlayer | PlayerSquadStatus::DecentYoungster => {
+                weights::APPS_PER_SEASON_BACKUP
+            }
+            _ => weights::APPS_PER_SEASON_BACKUP,
+        };
 
-    let expected_cs = if p.is_goalkeeper {
-        weights::CLEAN_SHEETS_GK
-    } else if p.is_defender {
-        weights::CLEAN_SHEETS_DEFENDER
-    } else {
-        0
-    };
-    let clean_sheet_value = (p.clean_sheet_bonus as u64 * expected_cs as u64) as u32;
+        let appearance_value = (p.appearance_fee as u64 * apps_per_season as u64) as u32;
+        let unused_sub_value =
+            (p.unused_sub_fee as u64 * weights::UNUSED_SUB_APPEARANCES as u64) as u32;
 
-    // Probability-weighted seasonal bonuses.
-    let promotion_value = ((p.promotion_bonus as f32) * weights::PROMOTION_PROBABILITY) as u32;
-    let avoid_rel_value =
-        ((p.avoid_relegation_bonus as f32) * weights::AVOID_RELEGATION_PROBABILITY) as u32;
-    let intl_value =
-        (p.international_cap_bonus as u64 * weights::INTL_CAPS_PER_SEASON as u64) as u32;
+        let expected_goals = if p.is_forward {
+            weights::GOALS_FORWARD
+        } else if p.is_midfielder {
+            weights::GOALS_MIDFIELDER
+        } else if p.is_defender {
+            weights::GOALS_DEFENDER
+        } else {
+            0
+        };
+        let goal_value = (p.goal_bonus as u64 * expected_goals as u64) as u32;
 
-    // Release-clause "option value" — only counted for ambitious /
-    // high-leverage players, capped at 5% of the clause threshold (this
-    // is an annualised willingness-to-pay, not a real cash payout).
-    let release_value = if p.release_clause_attractive {
-        ((p.release_clause as f32) * 0.05) as u32
-    } else {
-        0
-    };
+        let expected_cs = if p.is_goalkeeper {
+            weights::CLEAN_SHEETS_GK
+        } else if p.is_defender {
+            weights::CLEAN_SHEETS_DEFENDER
+        } else {
+            0
+        };
+        let clean_sheet_value = (p.clean_sheet_bonus as u64 * expected_cs as u64) as u32;
 
-    p.base_salary
-        .saturating_add(p.loyalty_bonus)
-        .saturating_add(signing_amortised)
-        .saturating_add(appearance_value)
-        .saturating_add(unused_sub_value)
-        .saturating_add(goal_value)
-        .saturating_add(clean_sheet_value)
-        .saturating_add(promotion_value)
-        .saturating_add(avoid_rel_value)
-        .saturating_add(intl_value)
-        .saturating_add(release_value)
+        // Probability-weighted seasonal bonuses.
+        let promotion_value = ((p.promotion_bonus as f32) * weights::PROMOTION_PROBABILITY) as u32;
+        let avoid_rel_value =
+            ((p.avoid_relegation_bonus as f32) * weights::AVOID_RELEGATION_PROBABILITY) as u32;
+        let intl_value =
+            (p.international_cap_bonus as u64 * weights::INTL_CAPS_PER_SEASON as u64) as u32;
+
+        // Release-clause "option value" — only counted for ambitious /
+        // high-leverage players, capped at 5% of the clause threshold (this
+        // is an annualised willingness-to-pay, not a real cash payout).
+        let release_value = if p.release_clause_attractive {
+            ((p.release_clause as f32) * 0.05) as u32
+        } else {
+            0
+        };
+
+        p.base_salary
+            .saturating_add(p.loyalty_bonus)
+            .saturating_add(signing_amortised)
+            .saturating_add(appearance_value)
+            .saturating_add(unused_sub_value)
+            .saturating_add(goal_value)
+            .saturating_add(clean_sheet_value)
+            .saturating_add(promotion_value)
+            .saturating_add(avoid_rel_value)
+            .saturating_add(intl_value)
+            .saturating_add(release_value)
+    }
 }

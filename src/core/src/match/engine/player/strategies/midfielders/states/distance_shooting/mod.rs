@@ -1,10 +1,10 @@
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{
+use crate::r#match::midfielders::states::shared::{
     ActivityIntensity, MidfielderCondition, MidfielderRead, Opportunity, U_PER_M,
 };
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
-use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
+use crate::r#match::player::strategies::shared::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler,

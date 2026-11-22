@@ -29,6 +29,7 @@ use std::cmp::Ordering;
 use super::{
     BuyerContext, BuyerNeedPicture, ListedTargetScreen, ListedTargetVerdict, ListedTargetView,
 };
+use crate::club::staff::Staff;
 use crate::club::staff::recruitment::ResolvedStaff;
 use crate::transfers::MarketMap;
 use crate::transfers::TransferWindowManager;
@@ -53,7 +54,7 @@ use crate::transfers::view::world::WorldPool;
 use crate::utils::IntegerUtils;
 use crate::utils::PerformanceProfiler;
 use crate::{
-    Club, Country, Person, PlayerFieldPositionGroup, PlayerPositionType, PlayerStatusType,
+    Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerStatusType,
     PositionCoverage, ReputationLevel, Team,
 };
 
@@ -142,6 +143,18 @@ struct RecommendationAction {
     recommendation: StaffRecommendation,
 }
 
+/// The club-level facts every player snapshot in one club shares. Resolved
+/// once per club rather than once per player.
+struct ClubSnapshotContext {
+    club_id: u32,
+    club_in_debt: bool,
+    parent_club_reputation: ReputationLevel,
+    parent_club_score: f32,
+    parent_league_reputation: u16,
+    seller_league_rep: u16,
+    seller_club_rep: u16,
+}
+
 /// Every sellable player in the country, as the recommendation pass reads him.
 /// Built once and shared by all six sources below, so a target's valuation and
 /// breakout score are computed once per week rather than once per interested club.
@@ -166,117 +179,14 @@ impl SnapshotPass {
                 .clubs
                 .par_iter()
                 .map(|club| {
-                    let mut all_snapshots: Vec<PlayerSnapshot> = Vec::new();
-                    let club_in_debt = club.finance.balance.balance < 0;
-                    let main_team_ref = club.teams.main();
-                    let rep_level = main_team_ref
-                        .map(|t| t.reputation.level())
-                        .unwrap_or(ReputationLevel::Amateur);
-                    let parent_club_score = main_team_ref
-                        .map(|t| t.reputation.overall_score())
-                        .unwrap_or(0.0);
-                    let parent_league_reputation = main_team_ref
-                        .and_then(|t| t.league_id)
-                        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-                        .map(|l| l.reputation)
-                        .unwrap_or(0);
-
-                    // Pull the seller's full market context once per club —
-                    // every player's snapshot value should reflect the league
-                    // and club they're actually playing for, not a flat 0/0.
-                    let (seller_league_rep, seller_club_rep) =
-                        PlayerValuationCalculator::seller_context(country, club);
-
-                    for team in &club.teams.teams {
-                        for player in &team.players.players {
-                            if player.is_on_loan() {
-                                continue;
-                            }
-                            let value = PlayerValuationCalculator::calculate_value_with_price_level(
-                                player,
-                                date,
-                                price_level,
-                                seller_league_rep,
-                                seller_club_rep,
-                            );
-                            let contract_months = player
-                                .contract
-                                .as_ref()
-                                .map(|c| {
-                                    let days = (c.expiration - date).num_days().max(0) as u32;
-                                    days / 30
-                                })
-                                .unwrap_or(0);
-
-                            let skill_ability = PlayerView::position_evaluation_ability(player);
-                            let player_age = player.age(date);
-                            let estimated_potential = skill_ability
-                                + ScoutJudgement::estimate_growth_potential(
-                                    player_age,
-                                    player.skills.mental.determination,
-                                    player.skills.mental.work_rate,
-                                    player.skills.mental.composure,
-                                    player.skills.mental.anticipation,
-                                    skill_ability,
-                                );
-
-                            let appearances = player.statistics.total_games();
-                            let average_rating = player
-                                .statistics
-                                .average_rating_realistic(player.position().position_group());
-                            // Form-discovery signal — built once per player from the
-                            // observable output / rating / scoring-chart / award data.
-                            let breakout_score = performance_lookup
-                                .breakout_for_player(
-                                    player,
-                                    appearances,
-                                    average_rating,
-                                    player_age,
-                                    parent_league_reputation,
-                                )
-                                .score;
-
-                            all_snapshots.push(PlayerSnapshot {
-                                id: player.id,
-                                club_id: club.id,
-                                country_id: player.country_id,
-                                position: player.position(),
-                                position_group: player.position().position_group(),
-                                coverage: PositionCoverage::of(&player.positions),
-                                ability: skill_ability,
-                                estimated_potential,
-                                age: player_age,
-                                estimated_value: value.amount,
-                                contract_months_remaining: contract_months,
-                                club_in_debt,
-                                parent_club_reputation: rep_level,
-                                parent_club_score,
-                                parent_league_reputation,
-                                is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
-                                is_listed: player.statuses.has(PlayerStatusType::Lst),
-                                is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
-                                is_unhappy: player.statuses.has(PlayerStatusType::Unh),
-                                ambition: player.attributes.ambition,
-                                world_reputation: player.player_attributes.world_reputation,
-                                // Recommendation feature row: regressed value.
-                                average_rating,
-                                appearances,
-                                is_transfer_protected: player
-                                    .is_transfer_protected(date, current_window),
-                                days_available: player.days_available(date),
-                                recent_interest_count: player
-                                    .availability_market_state()
-                                    .map(|s| s.recent_interest(date))
-                                    .unwrap_or(0),
-                                failed_scans: player
-                                    .availability_market_state()
-                                    .map(|s| s.failed_scans)
-                                    .unwrap_or(0),
-                                breakout_score,
-                            });
-                        }
-                    }
-                    all_snapshots
+                    Self::club_snapshots(
+                        country,
+                        club,
+                        date,
+                        price_level,
+                        current_window,
+                        performance_lookup,
+                    )
                 })
                 .collect::<Vec<Vec<PlayerSnapshot>>>()
                 .into_iter()
@@ -285,6 +195,170 @@ impl SnapshotPass {
         };
         drop(snapshot_stage);
         all_snapshots
+    }
+
+    /// Every sellable player at one club, with the club-level market context
+    /// resolved once.
+    fn club_snapshots(
+        country: &Country,
+        club: &Club,
+        date: NaiveDate,
+        price_level: f32,
+        current_window: Option<(NaiveDate, NaiveDate)>,
+        performance_lookup: &LeaguePerformanceLookup,
+    ) -> Vec<PlayerSnapshot> {
+        let club_in_debt = club.finance.balance.balance < 0;
+        let main_team_ref = club.teams.main();
+        let parent_club_reputation = main_team_ref
+            .map(|t| t.reputation.level())
+            .unwrap_or(ReputationLevel::Amateur);
+        let parent_club_score = main_team_ref
+            .map(|t| t.reputation.overall_score())
+            .unwrap_or(0.0);
+        let parent_league_reputation = main_team_ref
+            .and_then(|t| t.league_id)
+            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+            .map(|l| l.reputation)
+            .unwrap_or(0);
+
+        // Pull the seller's full market context once per club —
+        // every player's snapshot value should reflect the league
+        // and club they're actually playing for, not a flat 0/0.
+        let (seller_league_rep, seller_club_rep) =
+            PlayerValuationCalculator::seller_context(country, club);
+        let context = ClubSnapshotContext {
+            club_id: club.id,
+            club_in_debt,
+            parent_club_reputation,
+            parent_club_score,
+            parent_league_reputation,
+            seller_league_rep,
+            seller_club_rep,
+        };
+
+        let mut snapshots: Vec<PlayerSnapshot> = Vec::new();
+        for team in &club.teams.teams {
+            for player in &team.players.players {
+                if player.is_on_loan() {
+                    continue;
+                }
+                snapshots.push(Self::player_snapshot(
+                    player,
+                    &context,
+                    date,
+                    price_level,
+                    current_window,
+                    performance_lookup,
+                ));
+            }
+        }
+        snapshots
+    }
+
+    /// One player's observable numbers, as the recommendation sources read
+    /// them.
+    fn player_snapshot(
+        player: &Player,
+        club: &ClubSnapshotContext,
+        date: NaiveDate,
+        price_level: f32,
+        current_window: Option<(NaiveDate, NaiveDate)>,
+        performance_lookup: &LeaguePerformanceLookup,
+    ) -> PlayerSnapshot {
+        let value = PlayerValuationCalculator::calculate_value_with_price_level(
+            player,
+            date,
+            price_level,
+            club.seller_league_rep,
+            club.seller_club_rep,
+        );
+        let contract_months = Self::contract_months(player, date);
+        let skill_ability = PlayerView::position_evaluation_ability(player);
+        let player_age = player.age(date);
+        let estimated_potential = Self::estimated_potential(player, player_age, skill_ability);
+        let appearances = player.statistics.total_games();
+        let average_rating = player
+            .statistics
+            .average_rating_realistic(player.position().position_group());
+        // Form-discovery signal — built once per player from the
+        // observable output / rating / scoring-chart / award data.
+        let breakout_score = performance_lookup
+            .breakout_for_player(
+                player,
+                appearances,
+                average_rating,
+                player_age,
+                club.parent_league_reputation,
+            )
+            .score;
+        let (recent_interest_count, failed_scans) = Self::market_state(player, date);
+
+        PlayerSnapshot {
+            id: player.id,
+            club_id: club.club_id,
+            country_id: player.country_id,
+            position: player.position(),
+            position_group: player.position().position_group(),
+            coverage: PositionCoverage::of(&player.positions),
+            ability: skill_ability,
+            estimated_potential,
+            age: player_age,
+            estimated_value: value.amount,
+            contract_months_remaining: contract_months,
+            club_in_debt: club.club_in_debt,
+            parent_club_reputation: club.parent_club_reputation,
+            parent_club_score: club.parent_club_score,
+            parent_league_reputation: club.parent_league_reputation,
+            is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
+            is_listed: player.statuses.has(PlayerStatusType::Lst),
+            is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
+            is_unhappy: player.statuses.has(PlayerStatusType::Unh),
+            ambition: player.attributes.ambition,
+            world_reputation: player.player_attributes.world_reputation,
+            // Recommendation feature row: regressed value.
+            average_rating,
+            appearances,
+            is_transfer_protected: player.is_transfer_protected(date, current_window),
+            days_available: player.days_available(date),
+            recent_interest_count,
+            failed_scans,
+            breakout_score,
+        }
+    }
+
+    /// Whole months left on the contract, floored at zero.
+    fn contract_months(player: &Player, date: NaiveDate) -> u32 {
+        player
+            .contract
+            .as_ref()
+            .map(|c| {
+                let days = (c.expiration - date).num_days().max(0) as u32;
+                days / 30
+            })
+            .unwrap_or(0)
+    }
+
+    /// The observable growth estimate added to current ability.
+    fn estimated_potential(player: &Player, player_age: u8, skill_ability: u8) -> u8 {
+        skill_ability
+            + ScoutJudgement::estimate_growth_potential(
+                player_age,
+                player.skills.mental.determination,
+                player.skills.mental.work_rate,
+                player.skills.mental.composure,
+                player.skills.mental.anticipation,
+                skill_ability,
+            )
+    }
+
+    /// The player's durable market-availability state, as two numbers the
+    /// listed-star sweep reads.
+    fn market_state(player: &Player, date: NaiveDate) -> (u8, u16) {
+        let state = player.availability_market_state();
+        (
+            state.map(|s| s.recent_interest(date)).unwrap_or(0),
+            state.map(|s| s.failed_scans).unwrap_or(0),
+        )
     }
 }
 
@@ -576,20 +650,12 @@ impl<'a> ClubAdviceScan<'a> {
     /// them to be — so a sharp scout converges on the genuine best target and
     /// a weaker one legitimately disagrees.
     fn scout_network(&self, actions: &mut Vec<RecommendationAction>) {
-        let club = self.club;
-        let resolved = &self.resolved;
-        let date = self.date;
+        let club_rep = self.club_rep;
         let is_january = self.is_january;
         let avg_ability = self.avg_ability;
-        let club_rep = self.club_rep;
-        let club_rep_score = self.club_rep_score;
-        let already_recommended = &self.already_recommended;
-        let max_recommend_value = self.max_recommend_value;
-        let all_snapshots = self.snapshots;
-        let plausibility_rejects = |player_id: u32, is_loan: bool| self.rejects(player_id, is_loan);
 
         // ── Scout network recommendations ──
-        for scout in &resolved.scouts {
+        for scout in &self.resolved.scouts {
             let judging = scout.staff_attributes.knowledge.judging_player_ability;
             let judging_pot = scout.staff_attributes.knowledge.judging_player_potential;
 
@@ -599,32 +665,7 @@ impl<'a> ClubAdviceScan<'a> {
                 continue;
             }
 
-            // Filter candidates from other clubs.
-            // Upper bound is tier-aware: an Elite-club scout can tag
-            // genuine world-class targets; a small-club scout stays
-            // disciplined. The previous `avg + judging/2` cap silently
-            // hid elite players from elite clubs whenever the squad
-            // average lagged the tier baseline (youth/reserves dragging
-            // the mean down).
-            let candidates: Vec<&PlayerSnapshot> = all_snapshots
-                .iter()
-                .filter(|p| {
-                    let ceiling =
-                        TierBands::tier_target_ceiling_score(club_rep_score, p.position_group);
-                    p.club_id != club.id
-                        && !club.is_rival(p.club_id)
-                        && !p.is_transfer_protected
-                        && p.ability >= avg_ability.saturating_sub(10)
-                        && p.ability <= ceiling
-                        && (max_recommend_value <= 0.0 || p.estimated_value <= max_recommend_value)
-                        && !already_recommended.contains(&p.id)
-                        && !actions
-                            .iter()
-                            .any(|a| a.club_id == club.id && a.recommendation.player_id == p.id)
-                        && !plausibility_rejects(p.id, false)
-                })
-                .collect();
-
+            let candidates = self.scout_candidates(actions);
             if candidates.is_empty() {
                 continue;
             }
@@ -639,129 +680,219 @@ impl<'a> ClubAdviceScan<'a> {
             let ability_error = (20i16 - judging as i16).max(1) as i32;
             let potential_error = (20i16 - judging_pot as i16).max(1) as i32;
 
-            // Score candidates by the scout's PERCEIVED quality, not their
-            // true numbers.
-            let mut best_score = 0.0f32;
-            let mut best_candidate: Option<&PlayerSnapshot> = None;
+            let Some(cand) = Self::best_scout_candidate(
+                &candidates,
+                club_rep,
+                is_january,
+                avg_ability,
+                ability_error,
+                potential_error,
+            ) else {
+                continue;
+            };
 
-            for cand in &candidates {
-                let perceived_ability = (cand.ability as i32
-                    + IntegerUtils::random(-ability_error, ability_error))
-                .clamp(1, 200) as u8;
-                let perceived_potential = (cand.estimated_potential as i32
-                    + IntegerUtils::random(-potential_error, potential_error))
-                .clamp(1, 200) as u8;
+            Self::stage_scout_discovery(self, scout, cand, ability_error, potential_error, actions);
+        }
+    }
 
-                let mut score: f32 = 0.0;
+    /// The country's players this club could discover: not its own, not a
+    /// rival's, inside its tier ceiling and budget, and already judged
+    /// plausible.
+    fn scout_candidates(&self, actions: &[RecommendationAction]) -> Vec<&PlayerSnapshot> {
+        let club = self.club;
+        let club_rep_score = self.club_rep_score;
+        let avg_ability = self.avg_ability;
+        let already_recommended = &self.already_recommended;
+        let max_recommend_value = self.max_recommend_value;
 
-                // Expiring contract
-                if cand.contract_months_remaining <= 6 {
-                    score += 3.0;
-                } else if cand.contract_months_remaining <= 12 {
-                    score += 1.5;
-                }
+        // Filter candidates from other clubs.
+        // Upper bound is tier-aware: an Elite-club scout can tag
+        // genuine world-class targets; a small-club scout stays
+        // disciplined. The previous `avg + judging/2` cap silently
+        // hid elite players from elite clubs whenever the squad
+        // average lagged the tier baseline (youth/reserves dragging
+        // the mean down).
+        self.snapshots
+            .iter()
+            .filter(|p| {
+                let ceiling =
+                    TierBands::tier_target_ceiling_score(club_rep_score, p.position_group);
+                p.club_id != club.id
+                    && !club.is_rival(p.club_id)
+                    && !p.is_transfer_protected
+                    && p.ability >= avg_ability.saturating_sub(10)
+                    && p.ability <= ceiling
+                    && (max_recommend_value <= 0.0 || p.estimated_value <= max_recommend_value)
+                    && !already_recommended.contains(&p.id)
+                    && !actions
+                        .iter()
+                        .any(|a| a.club_id == club.id && a.recommendation.player_id == p.id)
+                    && !self.rejects(p.id, false)
+            })
+            .collect()
+    }
 
-                // Club in debt
-                if cand.club_in_debt {
-                    score += 2.0;
-                }
+    /// Rank the candidates by the scout's PERCEIVED quality, not their true
+    /// numbers.
+    fn best_scout_candidate<'p>(
+        candidates: &[&'p PlayerSnapshot],
+        club_rep: ReputationLevel,
+        is_january: bool,
+        avg_ability: u8,
+        ability_error: i32,
+        potential_error: i32,
+    ) -> Option<&'p PlayerSnapshot> {
+        let mut best_score = 0.0f32;
+        let mut best_candidate: Option<&PlayerSnapshot> = None;
 
-                // High potential gap (as the scout reads it)
-                if perceived_potential > perceived_ability + 15 {
-                    score += 2.5;
-                } else if perceived_potential > perceived_ability + 8 {
-                    score += 1.5;
-                }
-
-                // Lower-rep club
-                if TierBands::rep_level_value(&cand.parent_club_reputation)
-                    < TierBands::rep_level_value(&club_rep)
-                {
-                    score += 1.0;
-                }
-
-                // Loan-listed
-                if cand.is_loan_listed {
-                    score += if is_january { 2.0 } else { 1.0 };
-                }
-
-                // Performance breakout — a player whose *results* are
-                // outrunning his current level (league-rep discounted)
-                // is exactly who a scout network should flag.
-                score += (cand.breakout_score / 100.0) * 4.0;
-
-                // Ability fit (as the scout reads it)
-                if perceived_ability >= avg_ability.saturating_sub(5) {
-                    score += 1.0;
-                }
-
-                // Split genuine near-ties so they don't always resolve to
-                // the same iteration-order winner. Bounded well under the
-                // scoring steps above (never leapfrogs a clearly-preferred
-                // target) and shrinks toward zero as judging improves.
-                score += IntegerUtils::random(0, ability_error.min(10)) as f32 * 0.05;
-
-                if score > best_score {
-                    best_score = score;
-                    best_candidate = Some(cand);
-                }
-            }
-
-            if let Some(cand) = best_candidate {
-                // Report figure: an independent roll on the same judging
-                // error hoisted above, so what the board sees isn't pinned
-                // to the draw that won selection.
-                let assessed_ability = (cand.ability as i32
-                    + IntegerUtils::random(-ability_error, ability_error))
-                .clamp(1, 200) as u8;
-                let assessed_potential = (cand.estimated_potential as i32
-                    + IntegerUtils::random(-potential_error, potential_error))
-                .clamp(1, 200) as u8;
-
-                let confidence = (0.3 + (judging as f32 * 0.035)).min(0.95);
-
-                let rec_type = if cand.contract_months_remaining <= 6 {
-                    RecommendationType::ExpiringContract
-                } else if cand.club_in_debt {
-                    RecommendationType::FinancialDistress
-                } else if cand.estimated_potential > cand.ability + 15 && cand.age <= 22 {
-                    RecommendationType::HiddenGem
-                } else if cand.is_loan_listed {
-                    RecommendationType::LoanOpportunity
-                } else {
-                    RecommendationType::ReadyForStepUp
-                };
-
-                actions.push(RecommendationAction {
-                    club_id: club.id,
-                    recommendation: StaffRecommendation {
-                        player_id: cand.id,
-                        recommender_staff_id: scout.id,
-                        source: RecommendationSource::ScoutNetwork,
-                        recommendation_type: rec_type,
-                        assessed_ability,
-                        assessed_potential,
-                        confidence,
-                        estimated_fee: cand.estimated_value,
-                        date_recommended: date,
-                    },
-                });
+        for cand in candidates {
+            let score = Self::scout_candidate_score(
+                cand,
+                club_rep,
+                is_january,
+                avg_ability,
+                ability_error,
+                potential_error,
+            );
+            if score > best_score {
+                best_score = score;
+                best_candidate = Some(cand);
             }
         }
+
+        best_candidate
+    }
+
+    /// One candidate's perceived score: contract urgency, distress, upside,
+    /// division, loan availability, breakout form and fit, plus a bounded
+    /// near-tie jitter that shrinks as judging improves.
+    fn scout_candidate_score(
+        cand: &PlayerSnapshot,
+        club_rep: ReputationLevel,
+        is_january: bool,
+        avg_ability: u8,
+        ability_error: i32,
+        potential_error: i32,
+    ) -> f32 {
+        let perceived_ability = (cand.ability as i32
+            + IntegerUtils::random(-ability_error, ability_error))
+        .clamp(1, 200) as u8;
+        let perceived_potential = (cand.estimated_potential as i32
+            + IntegerUtils::random(-potential_error, potential_error))
+        .clamp(1, 200) as u8;
+
+        let mut score: f32 = 0.0;
+
+        // Expiring contract
+        if cand.contract_months_remaining <= 6 {
+            score += 3.0;
+        } else if cand.contract_months_remaining <= 12 {
+            score += 1.5;
+        }
+
+        // Club in debt
+        if cand.club_in_debt {
+            score += 2.0;
+        }
+
+        // High potential gap (as the scout reads it)
+        if perceived_potential > perceived_ability + 15 {
+            score += 2.5;
+        } else if perceived_potential > perceived_ability + 8 {
+            score += 1.5;
+        }
+
+        // Lower-rep club
+        if TierBands::rep_level_value(&cand.parent_club_reputation)
+            < TierBands::rep_level_value(&club_rep)
+        {
+            score += 1.0;
+        }
+
+        // Loan-listed
+        if cand.is_loan_listed {
+            score += if is_january { 2.0 } else { 1.0 };
+        }
+
+        // Performance breakout — a player whose *results* are
+        // outrunning his current level (league-rep discounted)
+        // is exactly who a scout network should flag.
+        score += (cand.breakout_score / 100.0) * 4.0;
+
+        // Ability fit (as the scout reads it)
+        if perceived_ability >= avg_ability.saturating_sub(5) {
+            score += 1.0;
+        }
+
+        // Split genuine near-ties so they don't always resolve to
+        // the same iteration-order winner. Bounded well under the
+        // scoring steps above (never leapfrogs a clearly-preferred
+        // target) and shrinks toward zero as judging improves.
+        score += IntegerUtils::random(0, ability_error.min(10)) as f32 * 0.05;
+
+        score
+    }
+
+    /// File the scout's pick, with an independent report roll on the same
+    /// judging error so the board's numbers are not pinned to the draw that
+    /// won selection.
+    fn stage_scout_discovery(
+        &self,
+        scout: &Staff,
+        cand: &PlayerSnapshot,
+        ability_error: i32,
+        potential_error: i32,
+        actions: &mut Vec<RecommendationAction>,
+    ) {
+        let date = self.date;
+        let judging = scout.staff_attributes.knowledge.judging_player_ability;
+        let assessed_ability = (cand.ability as i32
+            + IntegerUtils::random(-ability_error, ability_error))
+        .clamp(1, 200) as u8;
+        let assessed_potential = (cand.estimated_potential as i32
+            + IntegerUtils::random(-potential_error, potential_error))
+        .clamp(1, 200) as u8;
+
+        let confidence = (0.3 + (judging as f32 * 0.035)).min(0.95);
+
+        let rec_type = if cand.contract_months_remaining <= 6 {
+            RecommendationType::ExpiringContract
+        } else if cand.club_in_debt {
+            RecommendationType::FinancialDistress
+        } else if cand.estimated_potential > cand.ability + 15 && cand.age <= 22 {
+            RecommendationType::HiddenGem
+        } else if cand.is_loan_listed {
+            RecommendationType::LoanOpportunity
+        } else {
+            RecommendationType::ReadyForStepUp
+        };
+
+        actions.push(RecommendationAction {
+            club_id: self.club.id,
+            recommendation: StaffRecommendation {
+                player_id: cand.id,
+                recommender_staff_id: scout.id,
+                source: RecommendationSource::ScoutNetwork,
+                recommendation_type: rec_type,
+                assessed_ability,
+                assessed_potential,
+                confidence,
+                estimated_fee: cand.estimated_value,
+                date_recommended: date,
+            },
+        });
     }
 
     /// Players who have advertised themselves as available — Lst, Req or Unh —
     /// surfacing to the clubs whose tier window matches their quality.
     fn listed_stars(&self, actions: &mut Vec<RecommendationAction>) {
-        let club = self.club;
-        let plan = self.plan;
-        let team = self.team;
-        let date = self.date;
-        let club_rep_score = self.club_rep_score;
-        let already_recommended = &self.already_recommended;
-        let all_snapshots = self.snapshots;
         let listed_recommender_id = self.listed_recommender_id();
-        let plausibility_rejects = |player_id: u32, is_loan: bool| self.rejects(player_id, is_loan);
+
+        // Per-group squad-fit projection and best-in-group bar, walked once
+        // per club rather than once per candidate.
+        let buyer_fit_by_group = self.buyer_fit_by_group();
+        let buyer_best_in_group = self.buyer_best_in_group();
+        let need_picture = self.need_picture(&buyer_best_in_group);
 
         // ── Listed-star sweep ──
         // Players who have advertised themselves as available — Lst
@@ -800,138 +931,147 @@ impl<'a> ClubAdviceScan<'a> {
         // Same mechanism for every status, group, and tier — no
         // hardcoded club or player exceptions. Confidence and
         // recommender are filled in once a target is selected.
-
-        // Per-group squad-fit projection and best-in-group bar, walked once
-        // per club rather than once per candidate.
-        let buyer_fit_by_group = self.buyer_fit_by_group();
-        let buyer_best_in_group = self.buyer_best_in_group();
-        // Aging starter per group: any player at-tier in this group
-        // who's 30+ — succession candidate that opens up a slot.
-        let buyer_has_aging_starter = |group: PlayerFieldPositionGroup| -> bool {
-            let baseline = TierBands::tier_starter_ca_score(club_rep_score, group);
-            team.players.players.iter().any(|p| {
-                p.position().position_group() == group
-                    && p.age(date) >= 30
-                    && p.player_attributes.current_ability + 5 >= baseline
+        let mut ranked: Vec<(&PlayerSnapshot, f32)> = self
+            .snapshots
+            .iter()
+            .filter_map(|p| {
+                self.listed_target_score(
+                    p,
+                    actions,
+                    &need_picture,
+                    &buyer_fit_by_group,
+                    &buyer_best_in_group,
+                )
+                .map(|score| (p, score))
             })
-        };
-        // Open request matching this group — explicit demand-side
-        // signal that raises the priority of any matching listed
-        // candidate.
-        let buyer_open_request_for = |group: PlayerFieldPositionGroup| -> bool {
-            plan.transfer_requests.iter().any(|r| {
+            .collect();
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+        self.stage_listed_stars(ranked, listed_recommender_id, actions);
+    }
+
+    /// The squad-need picture the listed-star screen judges each candidate
+    /// against, built once per club.
+    fn need_picture(
+        &self,
+        buyer_best_in_group: &FxHashMap<PlayerFieldPositionGroup, u8>,
+    ) -> BuyerNeedPicture {
+        BuyerNeedPicture {
+            open_request: PlayerFieldPositionGroup::ALL.map(|g| self.open_request_bar(g).is_some()),
+            aging_starter: PlayerFieldPositionGroup::ALL.map(|g| self.has_aging_starter(g)),
+            best_in_group: PlayerFieldPositionGroup::ALL
+                .map(|g| buyer_best_in_group.get(&g).copied().unwrap_or(0)),
+        }
+    }
+
+    /// Aging starter per group: any player at-tier in this group
+    /// who's 30+ — succession candidate that opens up a slot.
+    fn has_aging_starter(&self, group: PlayerFieldPositionGroup) -> bool {
+        let baseline = TierBands::tier_starter_ca_score(self.club_rep_score, group);
+        let date = self.date;
+        self.team.players.players.iter().any(|p| {
+            p.position().position_group() == group
+                && p.age(date) >= 30
+                && p.player_attributes.current_ability + 5 >= baseline
+        })
+    }
+
+    /// The lowest ability bar among open requests for this group. A request
+    /// is an ask for a LEVEL, not for a body in the group: the improvement
+    /// gate waives "must be an upgrade" for a candidate the club has an open
+    /// request for, and that waiver must only ever reach the players the
+    /// request actually describes.
+    fn open_request_bar(&self, group: PlayerFieldPositionGroup) -> Option<u8> {
+        self.plan
+            .transfer_requests
+            .iter()
+            .filter(|r| {
                 r.position.position_group() == group
                     && r.status != TransferRequestStatus::Fulfilled
                     && r.status != TransferRequestStatus::Abandoned
             })
-        };
-        // The lowest bar among those requests. A request is an
-        // ask for a LEVEL, not for a body in the group: the
-        // improvement gate below waives "must be an upgrade"
-        // for a candidate the club has an open request for,
-        // and that waiver must only ever reach the players the
-        // request actually describes.
-        let open_request_bar = |group: PlayerFieldPositionGroup| -> Option<u8> {
-            plan.transfer_requests
+            .map(|r| r.min_ability)
+            .min()
+    }
+
+    /// Judge one candidate in the shirt this club actually wants filled, and
+    /// score him if he survives the hard filters.
+    fn listed_target_score(
+        &self,
+        p: &PlayerSnapshot,
+        actions: &[RecommendationAction],
+        need_picture: &BuyerNeedPicture,
+        buyer_fit_by_group: &FxHashMap<PlayerFieldPositionGroup, SquadFitSnapshot>,
+        buyer_best_in_group: &FxHashMap<PlayerFieldPositionGroup, u8>,
+    ) -> Option<f32> {
+        let club = self.club;
+        let plan = self.plan;
+
+        // Identity gates handled here — they refer to the
+        // live `PlayerSnapshot` / `actions` Vec and don't
+        // belong in the pure recruitment evaluator.
+        if p.club_id == club.id || club.is_rival(p.club_id) || p.is_transfer_protected {
+            return None;
+        }
+        if self.already_recommended.contains(&p.id)
+            || actions
                 .iter()
-                .filter(|r| {
-                    r.position.position_group() == group
-                        && r.status != TransferRequestStatus::Fulfilled
-                        && r.status != TransferRequestStatus::Abandoned
-                })
-                .map(|r| r.min_ability)
-                .min()
+                .any(|a| a.club_id == club.id && a.recommendation.player_id == p.id)
+        {
+            return None;
+        }
+        if self.rejects(p.id, false) {
+            return None;
+        }
+
+        // Judge him in the shirt this club actually wants
+        // filled, which need not be the one his primary
+        // label falls in.
+        let judged_group = need_picture.role_for(p.coverage, p.position_group);
+
+        let view = ListedTargetView {
+            ability: p.ability,
+            nationality_country_id: p.country_id,
+            estimated_potential: p.estimated_potential,
+            age: p.age,
+            estimated_value: p.estimated_value,
+            position_group: judged_group,
+            is_listed: p.is_listed,
+            is_transfer_requested: p.is_transfer_requested,
+            is_unhappy: p.is_unhappy,
+            is_loan_listed: p.is_loan_listed,
+            breakout_score: p.breakout_score,
+            world_reputation: p.world_reputation,
+            ambition: p.ambition,
+            parent_club_score: p.parent_club_score,
+            parent_club_in_debt: p.club_in_debt,
+            days_available: p.days_available,
+            contract_months_remaining: p.contract_months_remaining.min(i16::MAX as u32) as i16,
+            low_usage: p.appearances < 8,
+            recent_interest_count: p.recent_interest_count,
+            failed_scans: p.failed_scans,
         };
-
-        // Built ONCE per club: `buyer_has_aging_starter` walks the
-        // whole squad, so resolving a candidate's judged role must
-        // not re-derive the picture per candidate.
-        let need_picture = BuyerNeedPicture {
-            open_request: PlayerFieldPositionGroup::ALL.map(buyer_open_request_for),
-            aging_starter: PlayerFieldPositionGroup::ALL.map(buyer_has_aging_starter),
-            best_in_group: PlayerFieldPositionGroup::ALL
-                .map(|g| buyer_best_in_group.get(&g).copied().unwrap_or(0)),
+        let ctx = BuyerContext {
+            buyer_rep_score: self.club_rep_score,
+            plan_total_budget: plan.total_budget,
+            buyer_best_in_group: buyer_best_in_group.get(&judged_group).copied().unwrap_or(0),
+            has_open_request: self.open_request_bar(judged_group).is_some_and(|bar| {
+                p.ability
+                    .saturating_add(BuyerNeedPicture::STAFF_TIP_ABILITY_TOLERANCE)
+                    >= bar
+            }),
+            has_aging_starter: self.has_aging_starter(judged_group),
+            // In-window listed-star sweep: only publicly
+            // available players (Lst/Req/Unh, or Loa+breakout).
+            form_discovery_mode: false,
+            fit: buyer_fit_by_group
+                .get(&judged_group)
+                .copied()
+                .unwrap_or_else(SquadFitSnapshot::disabled),
         };
-
-        let scored_targets: Vec<(&PlayerSnapshot, f32)> = all_snapshots
-            .iter()
-            .filter_map(|p| {
-                // Identity gates handled here — they refer to the
-                // live `PlayerSnapshot` / `actions` Vec and don't
-                // belong in the pure recruitment evaluator.
-                if p.club_id == club.id || club.is_rival(p.club_id) || p.is_transfer_protected {
-                    return None;
-                }
-                if already_recommended.contains(&p.id)
-                    || actions
-                        .iter()
-                        .any(|a| a.club_id == club.id && a.recommendation.player_id == p.id)
-                {
-                    return None;
-                }
-                if plausibility_rejects(p.id, false) {
-                    return None;
-                }
-
-                // Judge him in the shirt this club actually wants
-                // filled, which need not be the one his primary
-                // label falls in.
-                let judged_group = need_picture.role_for(p.coverage, p.position_group);
-
-                let view = ListedTargetView {
-                    ability: p.ability,
-                    nationality_country_id: p.country_id,
-                    estimated_potential: p.estimated_potential,
-                    age: p.age,
-                    estimated_value: p.estimated_value,
-                    position_group: judged_group,
-                    is_listed: p.is_listed,
-                    is_transfer_requested: p.is_transfer_requested,
-                    is_unhappy: p.is_unhappy,
-                    is_loan_listed: p.is_loan_listed,
-                    breakout_score: p.breakout_score,
-                    world_reputation: p.world_reputation,
-                    ambition: p.ambition,
-                    parent_club_score: p.parent_club_score,
-                    parent_club_in_debt: p.club_in_debt,
-                    days_available: p.days_available,
-                    contract_months_remaining: p.contract_months_remaining.min(i16::MAX as u32)
-                        as i16,
-                    low_usage: p.appearances < 8,
-                    recent_interest_count: p.recent_interest_count,
-                    failed_scans: p.failed_scans,
-                };
-                let ctx = BuyerContext {
-                    buyer_rep_score: club_rep_score,
-                    plan_total_budget: plan.total_budget,
-                    buyer_best_in_group: buyer_best_in_group
-                        .get(&judged_group)
-                        .copied()
-                        .unwrap_or(0),
-                    has_open_request: open_request_bar(judged_group).is_some_and(|bar| {
-                        p.ability
-                            .saturating_add(BuyerNeedPicture::STAFF_TIP_ABILITY_TOLERANCE)
-                            >= bar
-                    }),
-                    has_aging_starter: buyer_has_aging_starter(judged_group),
-                    // In-window listed-star sweep: only publicly
-                    // available players (Lst/Req/Unh, or Loa+breakout).
-                    form_discovery_mode: false,
-                    fit: buyer_fit_by_group
-                        .get(&judged_group)
-                        .copied()
-                        .unwrap_or_else(SquadFitSnapshot::disabled),
-                };
-                match ListedTargetScreen::evaluate(&view, &ctx) {
-                    ListedTargetVerdict::Accept(score) => Some((p, score)),
-                    ListedTargetVerdict::Reject(_) => None,
-                }
-            })
-            .collect();
-
-        let mut ranked = scored_targets;
-        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
-        self.stage_listed_stars(ranked, listed_recommender_id, actions);
+        match ListedTargetScreen::evaluate(&view, &ctx) {
+            ListedTargetVerdict::Accept(score) => Some(score),
+            ListedTargetVerdict::Reject(_) => None,
+        }
     }
 
     /// Per-group squad-fit projection at the buying club. Cached because the
@@ -1039,15 +1179,11 @@ impl<'a> ClubAdviceScan<'a> {
         let plan = self.plan;
         let team = self.team;
         let date = self.date;
-        let avg_ability = self.avg_ability;
         let club_rep = self.club_rep;
         let club_total_wages = self.club_total_wages;
         let club_wage_budget = self.club_wage_budget;
-        let already_recommended = &self.already_recommended;
-        let all_snapshots = self.snapshots;
         let listed_recommender_id = self.listed_recommender_id();
         let listed_recommender_judging = self.listed_recommender_judging();
-        let plausibility_rejects = |player_id: u32, is_loan: bool| self.rejects(player_id, is_loan);
 
         // ── Opportunistic free-agent / soon-free recommendations ──
         // Quality players whose contracts are running down get
@@ -1063,110 +1199,149 @@ impl<'a> ClubAdviceScan<'a> {
         // soon-free domestic players that matcher can't see until they
         // are actually released. Deduped + capped through the same
         // pipeline as every other recommendation.
-        {
-            let opportunistic_cap = match club_rep {
-                ReputationLevel::Regional | ReputationLevel::Local | ReputationLevel::Amateur => 10,
-                ReputationLevel::National => 8,
-                _ => 6,
-            };
-            let current_recs = plan.staff_recommendations.len()
-                + actions.iter().filter(|a| a.club_id == club.id).count();
-            if current_recs < opportunistic_cap {
-                let max_squad = club
-                    .board
-                    .season_targets
-                    .as_ref()
-                    .map(|t| t.max_squad_size as usize)
-                    .unwrap_or(50);
-                let squad_room = team.players.players.len() < max_squad;
-                let wage_headroom = club_wage_budget as i64 - club_total_wages as i64;
-
-                // Per-group body count on the main team — drives the
-                // "thin at this position" depth signal.
-                let mut group_counts: FxHashMap<PlayerFieldPositionGroup, usize> =
-                    FxHashMap::default();
-                for p in team.players.players.iter() {
-                    *group_counts
-                        .entry(p.position().position_group())
-                        .or_insert(0) += 1;
-                }
-                let group_thin = |group: PlayerFieldPositionGroup| -> bool {
-                    let count = group_counts.get(&group).copied().unwrap_or(0);
-                    let target = group.ideal_squad_depth();
-                    count < target
-                };
-
-                let mut fa_targets: Vec<&PlayerSnapshot> = all_snapshots
-                    .iter()
-                    .filter(|p| {
-                        if p.club_id == club.id
-                            || club.is_rival(p.club_id)
-                            || p.is_transfer_protected
-                            || p.contract_months_remaining > 6
-                            || already_recommended.contains(&p.id)
-                            || actions
-                                .iter()
-                                .any(|a| a.club_id == club.id && a.recommendation.player_id == p.id)
-                        {
-                            return false;
-                        }
-                        let signals = FreeAgentRecommendationSignals {
-                            current_ability: p.ability,
-                            estimated_potential: p.estimated_potential,
-                            age: p.age,
-                            contract_months_remaining: p.contract_months_remaining,
-                            // Still under contract — no free-agent
-                            // career pressure has accrued yet.
-                            career_pressure: 0.0,
-                        };
-                        let buyer = FreeAgentBuyerContext {
-                            buyer_avg_ability: avg_ability,
-                            buyer_squad_room: squad_room,
-                            buyer_wage_headroom: wage_headroom,
-                            group_below_depth: group_thin(p.position_group),
-                        };
-                        OpportunisticFreeAgentScout::should_recommend(&signals, &buyer)
-                            && !plausibility_rejects(p.id, false)
-                    })
-                    .collect();
-                // Rank on what this club's recruitment department
-                // BELIEVES, not on true ability — the same
-                // correction the DoF bargain hunt above already
-                // carries. A true-ability sort made every club with
-                // an opportunistic slot free recommend the same
-                // name, then dressed the report up with a noise
-                // term that changed nothing about the choice.
-                fa_targets.sort_by(|a, b| {
-                    ClubOpinion::of(club.id, b.id, listed_recommender_judging)
-                        .believed_ability(b.ability)
-                        .partial_cmp(
-                            &ClubOpinion::of(club.id, a.id, listed_recommender_judging)
-                                .believed_ability(a.ability),
-                        )
-                        .unwrap_or(Ordering::Equal)
-                });
-
-                let remaining = opportunistic_cap - current_recs;
-                for target in fa_targets.iter().take(remaining.min(2)) {
-                    actions.push(RecommendationAction {
-                        club_id: club.id,
-                        recommendation: StaffRecommendation {
-                            player_id: target.id,
-                            recommender_staff_id: listed_recommender_id,
-                            source: RecommendationSource::DirectorOfFootball,
-                            recommendation_type: RecommendationType::FreeAgentBargain,
-                            assessed_ability: target.ability,
-                            assessed_potential: target.estimated_potential,
-                            // Public soon-free status → high baseline
-                            // confidence; no observation noise.
-                            confidence: 0.6,
-                            estimated_fee: 0.0,
-                            date_recommended: date,
-                        },
-                    });
-                }
-            }
+        let opportunistic_cap = Self::opportunistic_cap(club_rep);
+        let current_recs = plan.staff_recommendations.len()
+            + actions.iter().filter(|a| a.club_id == club.id).count();
+        if current_recs >= opportunistic_cap {
+            return;
         }
+
+        let max_squad = club
+            .board
+            .season_targets
+            .as_ref()
+            .map(|t| t.max_squad_size as usize)
+            .unwrap_or(50);
+        let squad_room = team.players.players.len() < max_squad;
+        let wage_headroom = club_wage_budget as i64 - club_total_wages as i64;
+        let group_counts = self.group_counts();
+
+        let mut fa_targets: Vec<&PlayerSnapshot> = self
+            .snapshots
+            .iter()
+            .filter(|p| {
+                self.opportunistic_candidate(p, actions, squad_room, wage_headroom, &group_counts)
+            })
+            .collect();
+        // Rank on what this club's recruitment department
+        // BELIEVES, not on true ability — the same
+        // correction the DoF bargain hunt above already
+        // carries. A true-ability sort made every club with
+        // an opportunistic slot free recommend the same
+        // name, then dressed the report up with a noise
+        // term that changed nothing about the choice.
+        fa_targets.sort_by(|a, b| {
+            ClubOpinion::of(club.id, b.id, listed_recommender_judging)
+                .believed_ability(b.ability)
+                .partial_cmp(
+                    &ClubOpinion::of(club.id, a.id, listed_recommender_judging)
+                        .believed_ability(a.ability),
+                )
+                .unwrap_or(Ordering::Equal)
+        });
+
+        let remaining = opportunistic_cap - current_recs;
+        for target in fa_targets.iter().take(remaining.min(2)) {
+            self.stage_free_agent(target, listed_recommender_id, date, actions);
+        }
+    }
+
+    /// How many recommendations a club of this standing may hold once the
+    /// soon-free sweep is included.
+    fn opportunistic_cap(club_rep: ReputationLevel) -> usize {
+        match club_rep {
+            ReputationLevel::Regional | ReputationLevel::Local | ReputationLevel::Amateur => 10,
+            ReputationLevel::National => 8,
+            _ => 6,
+        }
+    }
+
+    /// Per-group body count on the main team — drives the "thin at this
+    /// position" depth signal.
+    fn group_counts(&self) -> FxHashMap<PlayerFieldPositionGroup, usize> {
+        let mut group_counts: FxHashMap<PlayerFieldPositionGroup, usize> = FxHashMap::default();
+        for p in self.team.players.players.iter() {
+            *group_counts
+                .entry(p.position().position_group())
+                .or_insert(0) += 1;
+        }
+        group_counts
+    }
+
+    /// Whether this group is below the depth a squad of this shape wants.
+    fn is_group_thin(
+        group_counts: &FxHashMap<PlayerFieldPositionGroup, usize>,
+        group: PlayerFieldPositionGroup,
+    ) -> bool {
+        let count = group_counts.get(&group).copied().unwrap_or(0);
+        count < group.ideal_squad_depth()
+    }
+
+    /// A soon-free player this club could actually use and fund.
+    fn opportunistic_candidate(
+        &self,
+        p: &PlayerSnapshot,
+        actions: &[RecommendationAction],
+        squad_room: bool,
+        wage_headroom: i64,
+        group_counts: &FxHashMap<PlayerFieldPositionGroup, usize>,
+    ) -> bool {
+        let club = self.club;
+        if p.club_id == club.id
+            || club.is_rival(p.club_id)
+            || p.is_transfer_protected
+            || p.contract_months_remaining > 6
+            || self.already_recommended.contains(&p.id)
+            || actions
+                .iter()
+                .any(|a| a.club_id == club.id && a.recommendation.player_id == p.id)
+        {
+            return false;
+        }
+        let signals = FreeAgentRecommendationSignals {
+            current_ability: p.ability,
+            estimated_potential: p.estimated_potential,
+            age: p.age,
+            contract_months_remaining: p.contract_months_remaining,
+            // Still under contract — no free-agent
+            // career pressure has accrued yet.
+            career_pressure: 0.0,
+        };
+        let buyer = FreeAgentBuyerContext {
+            buyer_avg_ability: self.avg_ability,
+            buyer_squad_room: squad_room,
+            buyer_wage_headroom: wage_headroom,
+            group_below_depth: Self::is_group_thin(group_counts, p.position_group),
+        };
+        OpportunisticFreeAgentScout::should_recommend(&signals, &buyer)
+            && !self.rejects(p.id, false)
+    }
+
+    /// File one soon-free recommendation, with the department's public-status
+    /// baseline confidence.
+    fn stage_free_agent(
+        &self,
+        target: &PlayerSnapshot,
+        recommender_id: u32,
+        date: NaiveDate,
+        actions: &mut Vec<RecommendationAction>,
+    ) {
+        actions.push(RecommendationAction {
+            club_id: self.club.id,
+            recommendation: StaffRecommendation {
+                player_id: target.id,
+                recommender_staff_id: recommender_id,
+                source: RecommendationSource::DirectorOfFootball,
+                recommendation_type: RecommendationType::FreeAgentBargain,
+                assessed_ability: target.ability,
+                assessed_potential: target.estimated_potential,
+                // Public soon-free status → high baseline
+                // confidence; no observation noise.
+                confidence: 0.6,
+                estimated_fee: 0.0,
+                date_recommended: date,
+            },
+        });
     }
 
     /// The director of football's own eye — a second, independent roll that

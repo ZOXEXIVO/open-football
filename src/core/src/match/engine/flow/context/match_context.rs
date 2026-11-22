@@ -7,22 +7,21 @@ use super::config::MatchEngineConfig;
 use super::substitution_record::{SubstitutionRecord, SubstitutionWindows};
 use crate::FormationFamiliarity;
 use crate::MatchTacticType;
+use crate::r#match::CompetitionKind;
 use crate::r#match::engine::chemistry::{ChemistryMap, TacticalFamiliarity};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::engine::BoxEpisode;
 use crate::r#match::engine::environment::{EnvModifiers, MatchEnvironment};
 use crate::r#match::engine::flow::rng::MatchRng;
 use crate::r#match::engine::flow::touchline::SubstitutionBreak;
-use crate::r#match::engine::player::events::players::{FoulSeverity, FoulSource};
-use nalgebra::Vector3;
-use crate::r#match::engine::psychology::{PressureMoment, Psychology, PsychologyState};
 use crate::r#match::engine::officiating::management::{
     TimeWasting, TimeWastingLedger, TimeWastingRestart,
 };
+use crate::r#match::engine::player::events::players::{FoulSeverity, FoulSource};
+use crate::r#match::engine::psychology::{PressureMoment, Psychology, PsychologyState};
 use crate::r#match::engine::referee::RefereeProfile;
 use crate::r#match::engine::result::{
-    ChanceDetail, MatchTally, PenaltyShootoutKick, PlayerMatchEndStats,
-    PlayerMatchPhysicalSnapshot,
+    ChanceDetail, MatchTally, PenaltyShootoutKick, PlayerMatchEndStats, PlayerMatchPhysicalSnapshot,
 };
 use crate::r#match::engine::set_pieces::SetPieceHistory;
 #[cfg(feature = "match-logs")]
@@ -38,13 +37,13 @@ use crate::r#match::player::diagnostics::keeper_census::KeeperCensus;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::midfielder_census::MidfielderCensus;
 use crate::r#match::rules::MatchRules;
-use crate::r#match::CompetitionKind;
 use crate::r#match::{
     AttackPlan, DefensivePlan, GameState, GoalCelebration, GoalDetail, GoalPosition, MatchCoach,
     MatchField, MatchFieldSize, MatchPlayer, MatchPlayerCollection, MatchTime, Score, TeamShape,
     TeamSkillAggregates, TeamTacticalState, TeamsTactics,
 };
 use chrono::{NaiveDate, Utc};
+use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::cell::RefCell;
 
@@ -367,7 +366,8 @@ impl MatchContext {
         if let Some(reading) = self.standard {
             let occasion = Psychology::occasion(&self.environment, self.is_knockout);
             let tick = self.current_tick();
-            self.psychology.seed(player, reading.outfield, occasion, tick);
+            self.psychology
+                .seed(player, reading.outfield, occasion, tick);
         }
     }
 
@@ -605,7 +605,8 @@ impl MatchContext {
     /// The interval: each coach gives his talk, and his whole matchday
     /// squad hears it — the bench as well — unless `OF_TEAM_TALK=off`.
     pub fn give_half_time_talks(&mut self, field: &MatchField) {
-        let big_match = Psychology::occasion(&self.environment, self.is_knockout) >= Self::BIG_MATCH;
+        let big_match =
+            Psychology::occasion(&self.environment, self.is_knockout) >= Self::BIG_MATCH;
         for team_id in [self.field_home_team_id, self.field_away_team_id] {
             let coach = self.coach_for_team_mut(team_id);
             let tone = coach.on_half_time();

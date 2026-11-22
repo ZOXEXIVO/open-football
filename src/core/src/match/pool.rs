@@ -88,7 +88,10 @@ impl MatchPlayEnginePool {
             |(_, _, _, fixture)| fixture.expected_length(),
             |(idx, home, away, fixture)| {
                 let config = MatchEngineConfig::for_fixture(&fixture, recordings);
-                (idx, FootballEngine::<840, 545>::play_with_config(home, away, config))
+                (
+                    idx,
+                    FootballEngine::<840, 545>::play_with_config(home, away, config),
+                )
             },
         )
     }

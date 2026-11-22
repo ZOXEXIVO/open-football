@@ -66,105 +66,109 @@ pub enum MatchPhase {
 ///   * Lets determination/professionalism convert criticism into motivation
 ///     for thick-skinned pros, while soft-temperament players take a
 ///     50%-larger hit.
-pub fn apply_team_talk<'a, I>(
-    players: I,
-    manager: Option<&Staff>,
-    tone: TeamTalkTone,
-    ctx: TeamTalkContext,
-) where
-    I: IntoIterator<Item = &'a mut Player>,
-{
-    apply_team_talk_dated(players, manager, tone, ctx, None);
-}
+pub struct TeamTalkApplier;
 
-/// Variant that takes the simulation date so rapport updates and "repeated
-/// tone" detection can be honest. Falls back to the original behaviour when
-/// `now` is `None` — keeps the old call site happy without forcing a
-/// signature change everywhere.
-pub fn apply_team_talk_dated<'a, I>(
-    players: I,
-    manager: Option<&Staff>,
-    tone: TeamTalkTone,
-    ctx: TeamTalkContext,
-    now: Option<NaiveDate>,
-) where
-    I: IntoIterator<Item = &'a mut Player>,
-{
-    if matches!(tone, TeamTalkTone::TacticalSilent) {
-        return;
+impl TeamTalkApplier {
+    pub fn apply<'a, I>(
+        players: I,
+        manager: Option<&Staff>,
+        tone: TeamTalkTone,
+        ctx: TeamTalkContext,
+    ) where
+        I: IntoIterator<Item = &'a mut Player>,
+    {
+        Self::apply_dated(players, manager, tone, ctx, None);
     }
 
-    let man_mgmt = manager
-        .map(|m| m.staff_attributes.mental.man_management as f32 / 20.0)
-        .unwrap_or(0.5);
-    let motivating = manager
-        .map(|m| m.staff_attributes.mental.motivating as f32 / 20.0)
-        .unwrap_or(0.5);
-    let effectiveness = TeamTalkReception::effectiveness(man_mgmt, motivating);
-    let coach_id = manager.map(|m| m.id);
-
-    for player in players {
-        let raw_signal = TeamTalkReception::signal(
-            tone,
-            &player.attributes,
-            player.skills.mental.determination,
-            ctx.big_match,
-        );
-
-        // Phase weighting — half-time talks matter more when losing,
-        // full-time praise matters more when winning.
-        let phase_mod: f32 = match (ctx.phase, ctx.score_delta) {
-            (MatchPhase::HalfTime, d) if d < 0 => 1.3,
-            (MatchPhase::FullTime, d) if d > 0 => 1.2,
-            (MatchPhase::FullTime, d) if d < 0 => 0.8,
-            _ => 1.0,
-        };
-
-        // Rapport multiplier — trusted coaches land praise harder; from an
-        // untrusted coach, criticism becomes inflammatory.
-        let positive_tone = raw_signal >= 0.0;
-        let rapport_mul = if let Some(cid) = coach_id {
-            player.rapport.talk_reception_multiplier(cid, positive_tone)
-        } else {
-            1.0
-        };
-
-        // Repeated-same-tone decay — speeches lose impact if the manager
-        // delivered the same tone in the last 14 days.
-        let repetition_mul = if recently_repeated_tone(player, tone, 14) {
-            0.65
-        } else {
-            1.0
-        };
-
-        let magnitude = raw_signal * effectiveness * phase_mod * rapport_mul * repetition_mul;
-        let repetition_dampened = repetition_mul < 1.0;
-
-        if magnitude.abs() >= 0.3 {
-            let event_ctx = DressingRoomSpeechContextBuilder::build(
-                player,
-                manager,
-                tone,
-                ctx,
-                magnitude,
-                repetition_dampened,
-            );
-            player.happiness.add_event_with_context(
-                HappinessEventType::DressingRoomSpeech,
-                magnitude,
-                None,
-                event_ctx,
-            );
+    /// Variant that takes the simulation date so rapport updates and "repeated
+    /// tone" detection can be honest. Falls back to the original behaviour when
+    /// `now` is `None` — keeps the old call site happy without forcing a
+    /// signature change everywhere.
+    pub fn apply_dated<'a, I>(
+        players: I,
+        manager: Option<&Staff>,
+        tone: TeamTalkTone,
+        ctx: TeamTalkContext,
+        now: Option<NaiveDate>,
+    ) where
+        I: IntoIterator<Item = &'a mut Player>,
+    {
+        if matches!(tone, TeamTalkTone::TacticalSilent) {
+            return;
         }
 
-        // Rapport feedback — positive talk that landed lifts rapport;
-        // criticism that backfired (negative magnitude on a low-rapport
-        // coach) hurts it. Skip if we don't know the coach id yet.
-        if let (Some(cid), Some(today)) = (coach_id, now) {
-            if positive_tone && magnitude >= 1.0 {
-                player.rapport.on_positive(cid, today, 1);
-            } else if !positive_tone && magnitude <= -1.0 {
-                player.rapport.on_negative(cid, today, 2);
+        let man_mgmt = manager
+            .map(|m| m.staff_attributes.mental.man_management as f32 / 20.0)
+            .unwrap_or(0.5);
+        let motivating = manager
+            .map(|m| m.staff_attributes.mental.motivating as f32 / 20.0)
+            .unwrap_or(0.5);
+        let effectiveness = TeamTalkReception::effectiveness(man_mgmt, motivating);
+        let coach_id = manager.map(|m| m.id);
+
+        for player in players {
+            let raw_signal = TeamTalkReception::signal(
+                tone,
+                &player.attributes,
+                player.skills.mental.determination,
+                ctx.big_match,
+            );
+
+            // Phase weighting — half-time talks matter more when losing,
+            // full-time praise matters more when winning.
+            let phase_mod: f32 = match (ctx.phase, ctx.score_delta) {
+                (MatchPhase::HalfTime, d) if d < 0 => 1.3,
+                (MatchPhase::FullTime, d) if d > 0 => 1.2,
+                (MatchPhase::FullTime, d) if d < 0 => 0.8,
+                _ => 1.0,
+            };
+
+            // Rapport multiplier — trusted coaches land praise harder; from an
+            // untrusted coach, criticism becomes inflammatory.
+            let positive_tone = raw_signal >= 0.0;
+            let rapport_mul = if let Some(cid) = coach_id {
+                player.rapport.talk_reception_multiplier(cid, positive_tone)
+            } else {
+                1.0
+            };
+
+            // Repeated-same-tone decay — speeches lose impact if the manager
+            // delivered the same tone in the last 14 days.
+            let repetition_mul = if player.repeated_team_talk_tone(tone, 14) {
+                0.65
+            } else {
+                1.0
+            };
+
+            let magnitude = raw_signal * effectiveness * phase_mod * rapport_mul * repetition_mul;
+            let repetition_dampened = repetition_mul < 1.0;
+
+            if magnitude.abs() >= 0.3 {
+                let event_ctx = DressingRoomSpeechContextBuilder::build(
+                    player,
+                    manager,
+                    tone,
+                    ctx,
+                    magnitude,
+                    repetition_dampened,
+                );
+                player.happiness.add_event_with_context(
+                    HappinessEventType::DressingRoomSpeech,
+                    magnitude,
+                    None,
+                    event_ctx,
+                );
+            }
+
+            // Rapport feedback — positive talk that landed lifts rapport;
+            // criticism that backfired (negative magnitude on a low-rapport
+            // coach) hurts it. Skip if we don't know the coach id yet.
+            if let (Some(cid), Some(today)) = (coach_id, now) {
+                if positive_tone && magnitude >= 1.0 {
+                    player.rapport.on_positive(cid, today, 1);
+                } else if !positive_tone && magnitude <= -1.0 {
+                    player.rapport.on_negative(cid, today, 2);
+                }
             }
         }
     }
@@ -394,21 +398,23 @@ impl TeamTalkMoments {
     }
 }
 
-/// True if the player received a `DressingRoomSpeech` of approximately the
-/// same tone within `window_days`. We can't see the original tone in the
-/// stored event, so we approximate with magnitude sign — the +/- band is
-/// what the dressing room actually tunes out.
-fn recently_repeated_tone(player: &Player, tone: TeamTalkTone, window_days: u16) -> bool {
-    let want_positive = matches!(
-        tone,
-        TeamTalkTone::Praise | TeamTalkTone::Encourage | TeamTalkTone::Passionate
-    );
-    player.happiness.recent_events.iter().any(|e| {
-        e.event_type == HappinessEventType::DressingRoomSpeech
-            && e.days_ago <= window_days
-            && (e.magnitude > 0.5) == want_positive
-            && e.magnitude.abs() >= 0.5
-    })
+impl Player {
+    /// True if the player received a `DressingRoomSpeech` of approximately
+    /// the same tone within `window_days`. We can't see the original tone in
+    /// the stored event, so we approximate with magnitude sign — the +/- band
+    /// is what the dressing room actually tunes out.
+    fn repeated_team_talk_tone(&self, tone: TeamTalkTone, window_days: u16) -> bool {
+        let want_positive = matches!(
+            tone,
+            TeamTalkTone::Praise | TeamTalkTone::Encourage | TeamTalkTone::Passionate
+        );
+        self.happiness.recent_events.iter().any(|e| {
+            e.event_type == HappinessEventType::DressingRoomSpeech
+                && e.days_ago <= window_days
+                && (e.magnitude > 0.5) == want_positive
+                && e.magnitude.abs() >= 0.5
+        })
+    }
 }
 
 #[cfg(test)]

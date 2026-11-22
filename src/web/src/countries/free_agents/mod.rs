@@ -1,8 +1,9 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::potential_stars::{PotentialStarsView, StarRating};
-use crate::views::{self, MenuSection, SubTitleFlag};
+use crate::countries::{CountryLookup, CountryMenu};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::potential_stars::{PotentialStarsView, StarRating};
+use crate::views::{MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -58,138 +59,108 @@ pub struct FreeAgentPlayerDto {
     pub status_message: String,
 }
 
-pub async fn country_free_agents_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<CountryFreeAgentsRequest>,
-) -> ApiResult<impl IntoResponse> {
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let guard = state.data.read().await;
+impl FreeAgentPlayerDto {
+    fn of(player: &core::Player, now: chrono::NaiveDate) -> Self {
+        // Cheap, state-only "why is he still free?" explanation —
+        // no world scan, so it's safe to compute per row in a list.
+        let status_message = player
+            .market_explanation(now)
+            .map(|e| e.message)
+            .unwrap_or_default();
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+        Self {
+            slug: player.slug(),
+            first_name: player.full_name.display_first_name().to_string(),
+            last_name: player.full_name.display_last_name().to_string(),
+            position: player.positions.display_positions_compact(),
+            age: DateUtils::age(player.birth_date, now),
+            current_ability: PotentialStarsView::current(player),
+            potential_ability: PotentialStarsView::potential_absolute(player, now),
+            position_sort: player.position(),
+            status_message,
+        }
+    }
+}
 
-    let indexes = simulator_data
-        .indexes
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Indexes not available".to_string()))?;
+pub struct CountryFreeAgentsPage;
 
-    let country_id = indexes
-        .slug_indexes
-        .get_country_by_slug(&route_params.country_slug)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("Country '{}' not found", route_params.country_slug))
-        })?;
+impl CountryFreeAgentsPage {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<CountryFreeAgentsRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let guard = state.data.read().await;
 
-    let country: &core::Country = simulator_data
-        .continents
-        .iter()
-        .flat_map(|c| &c.countries)
-        .find(|country| country.id == country_id)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!(
-                "Country with ID {} not found in continents",
-                country_id
-            ))
-        })?;
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let continent = simulator_data
-        .continent(country.continent_id)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!(
-                "Continent with ID {} not found",
-                country.continent_id
-            ))
-        })?;
+        let (country, continent) =
+            CountryLookup::by_slug(simulator_data, &route_params.country_slug)?;
 
-    let now = simulator_data.date.date();
+        Ok(Self::template(
+            simulator_data,
+            country,
+            continent,
+            i18n,
+            &route_params,
+        ))
+    }
 
-    let mut players: Vec<FreeAgentPlayerDto> = simulator_data
-        .free_agents
-        .iter()
-        .filter(|player| player.country_id == country.id)
-        .map(|player| {
-            let position = player.positions.display_positions_compact();
-            // Cheap, state-only "why is he still free?" explanation —
-            // no world scan, so it's safe to compute per row in a list.
-            let status_message = player
-                .market_explanation(now)
-                .map(|e| e.message)
-                .unwrap_or_default();
-            FreeAgentPlayerDto {
-                slug: player.slug(),
-                first_name: player.full_name.display_first_name().to_string(),
-                last_name: player.full_name.display_last_name().to_string(),
-                position,
-                age: DateUtils::age(player.birth_date, now),
-                current_ability: PotentialStarsView::current(player),
-                potential_ability: PotentialStarsView::potential_absolute(player, now),
-                position_sort: player.position(),
-                status_message,
-            }
-        })
-        .collect();
+    fn template(
+        data: &core::SimulatorData,
+        country: &core::Country,
+        continent: &core::continent::Continent,
+        i18n: I18n,
+        route_params: &CountryFreeAgentsRequest,
+    ) -> CountryFreeAgentsTemplate {
+        let now = data.date.date();
+        let mut players: Vec<FreeAgentPlayerDto> = data
+            .free_agents
+            .iter()
+            .filter(|player| player.country_id == country.id)
+            .map(|player| FreeAgentPlayerDto::of(player, now))
+            .collect();
 
-    players.sort_by(|a, b| {
-        a.position_sort
-            .partial_cmp(&b.position_sort)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.current_ability.cmp(&a.current_ability))
-    });
+        players.sort_by(|a, b| {
+            a.position_sort
+                .partial_cmp(&b.position_sort)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.current_ability.cmp(&a.current_ability))
+        });
 
-    let current_path = format!(
-        "/{}/countries/{}/free-agents",
-        route_params.lang, route_params.country_slug
-    );
-    let cl: Vec<(&str, &str)> = country
-        .leagues
-        .leagues
-        .iter()
-        .filter(|l| !l.friendly)
-        .map(|l| (l.name.as_str(), l.slug.as_str()))
-        .collect();
+        let current_path = format!(
+            "/{}/countries/{}/free-agents",
+            route_params.lang, route_params.country_slug
+        );
 
-    Ok(CountryFreeAgentsTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        title: country.name.clone(),
-        sub_title_prefix: String::new(),
-        sub_title_suffix: String::new(),
-        sub_title: continent.name.clone(),
-        sub_title_link: format!("/{}/countries", route_params.lang),
-        sub_title_flag: None,
-        header_color: country.background_color.clone(),
-        foreground_color: country.foreground_color.clone(),
-        menu_sections: {
-            let mp = views::MenuParams {
-                i18n: &i18n,
-                lang: &route_params.lang,
-                current_path: &current_path,
-                country_name: &country.name,
-                country_slug: &route_params.country_slug,
-            };
-            views::country_menu(
-                &mp,
-                &cl,
-                country
-                    .domestic_cup
-                    .as_ref()
-                    .map(|c| (c.league.name.as_str(), c.league.slug.as_str())),
-                &country
-                    .playoffs
-                    .iter()
-                    .map(|p| (p.league.name.as_str(), p.league.slug.as_str()))
-                    .collect::<Vec<_>>(),
-                country.continent_id,
-            )
-        },
-        lang: route_params.lang,
-        i18n,
-        active_tab: "free_agents",
-        country_slug: route_params.country_slug,
-        team_suffix: "",
-        players,
-    })
+        CountryFreeAgentsTemplate {
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
+            cpu_brand: &CPU_BRAND,
+            cores_count: *CPU_CORES,
+            title: country.name.clone(),
+            sub_title_prefix: String::new(),
+            sub_title_suffix: String::new(),
+            sub_title: continent.name.clone(),
+            sub_title_link: format!("/{}/countries", route_params.lang),
+            sub_title_flag: None,
+            header_color: country.background_color.clone(),
+            foreground_color: country.foreground_color.clone(),
+            menu_sections: CountryMenu::sections(
+                country,
+                &i18n,
+                &route_params.lang,
+                &route_params.country_slug,
+                &current_path,
+            ),
+            lang: route_params.lang.clone(),
+            i18n,
+            active_tab: "free_agents",
+            country_slug: route_params.country_slug.clone(),
+            team_suffix: "",
+            players,
+        }
+    }
 }

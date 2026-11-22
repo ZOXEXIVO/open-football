@@ -10,10 +10,10 @@
 use chrono::NaiveDate;
 use log::info;
 
-use super::lookups::world_country_name;
+use super::lookups::WorldCountryLookup;
 use super::stats::{
-    InternationalMatchContext, apply_world_elo, apply_world_international_stats,
-    collect_international_appearances, record_world_country_schedule,
+    InternationalAppearances, InternationalMatchContext, WorldCountrySchedule, WorldElo,
+    WorldInternationalStats,
 };
 use crate::NationalTeamLevel;
 use crate::competitions::global::GlobalCompetitionFixture;
@@ -25,80 +25,84 @@ use crate::r#match::{MatchResult, MatchResultRaw};
 /// pushing the returned [`MatchResult`] into the global match store —
 /// this helper is concerned only with the *player-facing* side
 /// effects that should be identical across competition tiers.
-pub fn apply_global_tournament_result(
-    continents: &mut [Continent],
-    fixture: &GlobalCompetitionFixture,
-    raw: &MatchResultRaw,
-    date: NaiveDate,
-    competition_label: &str,
-    competition_full_name: &str,
-) -> MatchResult {
-    let score = raw.score.as_ref().expect("match should have score").clone();
-    let home_score = score.home_team.get();
-    let away_score = score.away_team.get();
-    let home_country_id = fixture.home_country_id;
-    let away_country_id = fixture.away_country_id;
+pub struct GlobalTournamentMatch;
 
-    let match_id = format!(
-        "int-{}-{}-{}",
-        date.format("%Y%m%d"),
-        home_country_id,
-        away_country_id
-    );
+impl GlobalTournamentMatch {
+    pub fn apply(
+        continents: &mut [Continent],
+        fixture: &GlobalCompetitionFixture,
+        raw: &MatchResultRaw,
+        date: NaiveDate,
+        competition_label: &str,
+        competition_full_name: &str,
+    ) -> MatchResult {
+        let score = raw.score.as_ref().expect("match should have score").clone();
+        let home_score = score.home_team.get();
+        let away_score = score.away_team.get();
+        let home_country_id = fixture.home_country_id;
+        let away_country_id = fixture.away_country_id;
 
-    let appearances = collect_international_appearances(
-        raw,
-        home_country_id,
-        away_country_id,
-        home_score,
-        away_score,
-    );
+        let match_id = format!(
+            "int-{}-{}-{}",
+            date.format("%Y%m%d"),
+            home_country_id,
+            away_country_id
+        );
 
-    apply_world_international_stats(
-        continents,
-        home_country_id,
-        away_country_id,
-        &appearances,
-        &InternationalMatchContext::new(date, NationalTeamLevel::Senior, competition_full_name),
-    );
-    apply_world_elo(
-        continents,
-        home_country_id,
-        away_country_id,
-        home_score,
-        away_score,
-    );
+        let appearances = InternationalAppearances::collect(
+            raw,
+            home_country_id,
+            away_country_id,
+            home_score,
+            away_score,
+        );
 
-    let home_name = world_country_name(continents, home_country_id);
-    let away_name = world_country_name(continents, away_country_id);
+        WorldInternationalStats::apply(
+            continents,
+            home_country_id,
+            away_country_id,
+            &appearances,
+            &InternationalMatchContext::new(date, NationalTeamLevel::Senior, competition_full_name),
+        );
+        WorldElo::apply(
+            continents,
+            home_country_id,
+            away_country_id,
+            home_score,
+            away_score,
+        );
 
-    record_world_country_schedule(
-        continents,
-        date,
-        home_country_id,
-        away_country_id,
-        &home_name,
-        &away_name,
-        home_score,
-        away_score,
-        competition_full_name,
-        &match_id,
-        NationalTeamLevel::Senior,
-    );
+        let home_name = WorldCountryLookup::name(continents, home_country_id);
+        let away_name = WorldCountryLookup::name(continents, away_country_id);
 
-    info!(
-        "Global competition ({}): {} {} - {} {}",
-        competition_label, home_name, home_score, away_score, away_name
-    );
+        WorldCountrySchedule::record(
+            continents,
+            date,
+            home_country_id,
+            away_country_id,
+            &home_name,
+            &away_name,
+            home_score,
+            away_score,
+            competition_full_name,
+            &match_id,
+            NationalTeamLevel::Senior,
+        );
 
-    MatchResult {
-        id: match_id,
-        league_id: 0,
-        league_slug: "international".to_string(),
-        home_team_id: home_country_id,
-        away_team_id: away_country_id,
-        score,
-        details: Some(raw.copy_without_data_positions()),
-        friendly: false,
+        info!(
+            "Global competition ({}): {} {} - {} {}",
+            competition_label, home_name, home_score, away_score, away_name
+        );
+
+        MatchResult {
+            id: match_id,
+            league_id: 0,
+            league_slug: "international".to_string(),
+            home_team_id: home_country_id,
+            away_team_id: away_country_id,
+            score,
+            details: Some(raw.copy_without_data_positions()),
+            friendly: false,
+        }
     }
 }

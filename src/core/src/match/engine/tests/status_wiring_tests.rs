@@ -8,13 +8,13 @@ use super::goal_celebration_tests::{squad, squad_in};
 use crate::MatchTacticType;
 use crate::PlayerPositionType;
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::DefenderRead;
+use crate::r#match::defenders::states::shared::DefenderRead;
 use crate::r#match::engine::engine::FootballEngine;
 use crate::r#match::engine::result::Score;
 use crate::r#match::engine::teamplay::possession::TeamPossession;
 use crate::r#match::engine::wide::Flank;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::MidfielderRead;
+use crate::r#match::midfielders::states::shared::MidfielderRead;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::squad::squad::MatchSquad;
 use crate::r#match::{

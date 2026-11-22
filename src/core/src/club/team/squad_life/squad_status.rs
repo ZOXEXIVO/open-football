@@ -23,7 +23,7 @@ use crate::club::team::Team;
 use crate::league::Season;
 use crate::utils::DateUtils;
 use crate::{
-    ClubLevelAnchor, HappinessEventType, MatchExperienceBackground, Player,
+    ClubLevelAnchor, HappinessEventType, MatchExperienceBackground, Player, PlayerClubContract,
     PlayerFieldPositionGroup, PlayerSquadStatus,
 };
 use chrono::{Duration, NaiveDate};
@@ -212,163 +212,211 @@ impl SquadStatusUpdater {
             .map(|s| s.staff_attributes.mental.man_management >= Self::MAN_MANAGEMENT_TO_EXPLAIN)
             .unwrap_or(false);
         let team_reputation = team.reputation.world;
-        // What this club expects of a starter: the rank inside the group
-        // hands out the labels, the club's level caps them.
+        // What this club expects of a starter: the rank inside the group hands
+        // out the labels, the club's level caps them.
         let club_level = ladder.level();
         let recent = RecentInvolvementSample::of_team(team, date);
 
         for player in team.players.iter_mut() {
-            let group = player.position().position_group();
-            let ca = player.player_attributes.current_ability;
-            let age = DateUtils::age(player.birth_date, date);
+            let outcome =
+                player.recompute_squad_status(&ladder, date, &recent, team_reputation, club_level);
+            player.apply_squad_status_outcome(outcome, explains_role_changes);
+        }
+    }
+}
 
-            // Honesty ceiling from actual involvement, computed before the
-            // mutable contract borrow (it reads the whole player).
-            let involvement_ceiling = Self::involvement_status_ceiling(player, date, &recent);
-            // The returnee verdict: a fresh returnee whose loan record
-            // holds up at this club's level gets his label graduated.
-            let record_floor = Self::returnee_record_floor(player, team_reputation, date);
+struct SquadStatusOutcome {
+    transition: Option<(u8, u8)>,
+    backed_after_loan: bool,
+}
 
-            let mut transition: Option<(u8, u8)> = None;
-            let mut backed_after_loan = false;
-            if let Some(ref mut contract) = player.contract {
-                let old_rank = Self::senior_rank(&contract.squad_status);
-                let mut new_status = ladder.member_status(ca, age, group);
-                // Don't let a CA-strong label over-promise a role the player
-                // isn't actually getting: a keeper stuck behind the number
-                // one, or an out-of-favour senior, reads as a backup rather
-                // than a first-team regular. Only demotes senior labels, and
-                // only with enough match evidence.
-                if let (Some(ca_rank), Some(ceiling)) =
-                    (Self::senior_rank(&new_status), involvement_ceiling.as_ref())
-                    && Self::senior_rank(ceiling).unwrap_or(u8::MAX) < ca_rank
-                {
-                    new_status = ceiling.clone();
-                }
-                // Bidirectional: a player whose actual minutes still justify
-                // his role isn't demoted just because a pricier signing now
-                // outranks him on CA — a regular still starting every week is
-                // not relabelled a backup (which also suppresses the unearned
-                // demotion morale event). Never floats him above his prior
-                // standing, so it only ever cancels an unjust demotion.
-                if let Some(ceiling) = involvement_ceiling.as_ref() {
-                    let ceil_rank = Self::senior_rank(ceiling).unwrap_or(0);
-                    let floor_rank = ceil_rank.min(old_rank.unwrap_or(0));
-                    if Self::senior_rank(&new_status).unwrap_or(0) < floor_rank {
-                        new_status = if old_rank.unwrap_or(0) <= ceil_rank {
-                            contract.squad_status.clone()
-                        } else {
-                            ceiling.clone()
-                        };
-                    }
-                }
-                // The club's own level caps whatever rank and minutes
-                // agreed on: a man far below what this club recruits at is
-                // rotation depth or a backup even while he starts every
-                // week, because he starts for want of anyone better. The
-                // returnee verdict and a signing promise below still floor
-                // it — the record was already read at this club's level,
-                // and a promise is a promise.
-                new_status =
-                    PlayerSquadStatus::cap_at_level(new_status, ca, age, group, Some(club_level));
-                // The returnee verdict: the loan record is admissible
-                // evidence. A young returnee otherwise stays a "prospect"
-                // by age and a fringe senior stays a backup by CA rank —
-                // while every club-side system (selection, depth, renewal,
-                // asset class) reads the stale label. The record floor
-                // graduates the label, and the commitment is bound as a
-                // role promise so next month's CA-rank recompute can't
-                // silently walk the plan back while he settles in; from
-                // there the ordinary promise/breach machinery owns it.
-                if let Some(floor) = record_floor.as_ref() {
-                    let floor_rank = Self::senior_rank(floor).unwrap_or(0);
-                    if Self::senior_rank(&new_status).unwrap_or(0) < floor_rank {
-                        new_status = floor.clone();
-                        backed_after_loan = true;
-                        let commit_until = date + Duration::days(150);
-                        let keep_existing = contract
-                            .promised_squad_status
-                            .as_ref()
-                            .map(|(promised, _)| {
-                                Self::senior_rank(promised).unwrap_or(0) >= floor_rank
-                            })
-                            .unwrap_or(false);
-                        if !keep_existing {
-                            contract.promised_squad_status = Some((floor.clone(), commit_until));
-                        }
-                    }
-                }
-                // Honor an unexpired role promise as a floor: the club
-                // committed to it at signing, so never recompute below it —
-                // otherwise the promise the buyer paid for is wiped within a
-                // month and the breach is hidden (expected_start_share reads
-                // this same field). Past its expiry the promise stops binding.
-                if let Some((promised, until)) = contract.promised_squad_status.clone() {
-                    if date <= until {
-                        if Self::senior_rank(&promised).unwrap_or(0)
-                            > Self::senior_rank(&new_status).unwrap_or(0)
-                        {
-                            new_status = promised;
-                        }
+impl Player {
+    fn recompute_squad_status(
+        &mut self,
+        ladder: &SquadLadder,
+        date: NaiveDate,
+        recent: &RecentInvolvementSample,
+        team_reputation: u16,
+        club_level: ClubLevelAnchor,
+    ) -> SquadStatusOutcome {
+        let group = self.position().position_group();
+        let ca = self.player_attributes.current_ability;
+        let age = DateUtils::age(self.birth_date, date);
+
+        // Honesty ceiling from actual involvement, computed before the mutable
+        // contract borrow (it reads the whole player).
+        let involvement_ceiling =
+            SquadStatusUpdater::involvement_status_ceiling(self, date, recent);
+        // The returnee verdict: a fresh returnee whose loan record holds up at
+        // this club's level gets his label graduated.
+        let record_floor = SquadStatusUpdater::returnee_record_floor(self, team_reputation, date);
+
+        let mut transition: Option<(u8, u8)> = None;
+        let mut backed_after_loan = false;
+        if let Some(ref mut contract) = self.contract {
+            let old_rank = SquadStatusUpdater::senior_rank(&contract.squad_status);
+            let mut new_status = ladder.member_status(ca, age, group);
+            // Don't let a CA-strong label over-promise a role the player isn't
+            // actually getting: a keeper stuck behind the number one, or an
+            // out-of-favour senior, reads as a backup rather than a
+            // first-team regular. Only demotes senior labels, and only with
+            // enough match evidence.
+            if let (Some(ca_rank), Some(ceiling)) = (
+                SquadStatusUpdater::senior_rank(&new_status),
+                involvement_ceiling.as_ref(),
+            ) && SquadStatusUpdater::senior_rank(ceiling).unwrap_or(u8::MAX) < ca_rank
+            {
+                new_status = ceiling.clone();
+            }
+            // Bidirectional: a player whose actual minutes still justify his
+            // role isn't demoted just because a pricier signing now outranks
+            // him on CA — a regular still starting every week is not
+            // relabelled a backup (which also suppresses the unearned
+            // demotion morale event). Never floats him above his prior
+            // standing, so it only ever cancels an unjust demotion.
+            if let Some(ceiling) = involvement_ceiling.as_ref() {
+                let ceil_rank = SquadStatusUpdater::senior_rank(ceiling).unwrap_or(0);
+                let floor_rank = ceil_rank.min(old_rank.unwrap_or(0));
+                if SquadStatusUpdater::senior_rank(&new_status).unwrap_or(0) < floor_rank {
+                    new_status = if old_rank.unwrap_or(0) <= ceil_rank {
+                        contract.squad_status.clone()
                     } else {
-                        contract.promised_squad_status = None;
-                    }
-                }
-                contract.squad_status = new_status;
-                let new_rank = Self::senior_rank(&contract.squad_status);
-                if let (Some(old), Some(new)) = (old_rank, new_rank)
-                    && old != new
-                {
-                    transition = Some((old, new));
+                        ceiling.clone()
+                    };
                 }
             }
+            // The club's own level caps whatever rank and minutes agreed on:
+            // a man far below what this club recruits at is rotation depth or
+            // a backup even while he starts every week, because he starts for
+            // want of anyone better. The returnee verdict and a signing
+            // promise below still floor it — the record was already read at
+            // this club's level, and a promise is a promise.
+            new_status =
+                PlayerSquadStatus::cap_at_level(new_status, ca, age, group, Some(club_level));
 
-            if backed_after_loan {
-                // The verdict said out loud — the specific beat replaces
-                // the generic status-change note (a prospect→senior move
-                // has no senior-ladder transition anyway).
-                let magnitude = HappinessConfig::default().catalog.backed_after_loan_return;
-                player.happiness.add_event_with_cooldown(
-                    HappinessEventType::BackedAfterLoanReturn,
-                    magnitude,
-                    300,
-                );
-                continue;
+            let (status, backed) =
+                Self::apply_squad_status_floors(contract, new_status, record_floor.as_ref(), date);
+            new_status = status;
+            backed_after_loan = backed;
+            contract.squad_status = new_status;
+            let new_rank = SquadStatusUpdater::senior_rank(&contract.squad_status);
+            if let (Some(old), Some(new)) = (old_rank, new_rank)
+                && old != new
+            {
+                transition = Some((old, new));
             }
-            if let Some((old, new)) = transition {
-                let steps = new as f32 - old as f32;
-                let mut magnitude = Self::MAGNITUDE_PER_STEP * steps;
-                if steps < 0.0 {
-                    // Demoted while performing reads as an injustice;
-                    // ambition amplifies the wound, professionalism
-                    // absorbs some of it, and a coach who actually
-                    // explains the decision takes most of the edge off.
-                    let pos_group = player.position().position_group();
-                    let form = player.statistics.average_rating_realistic(pos_group);
-                    let apps = player.statistics.played + player.statistics.played_subs;
-                    if apps >= 3 && form >= 7.0 {
-                        magnitude *= 1.5;
-                    }
-                    let ambition = (player.attributes.ambition / 20.0).clamp(0.0, 1.0);
-                    let professionalism =
-                        (player.attributes.professionalism / 20.0).clamp(0.0, 1.0);
-                    magnitude *= 1.0 + ambition * 0.3 - professionalism * 0.25;
-                    if explains_role_changes {
-                        magnitude *= 0.6;
-                    }
-                } else {
-                    // Promotions land softer than demotions sting.
-                    magnitude *= 0.7;
-                }
-                player.happiness.add_event_with_cooldown(
-                    HappinessEventType::SquadStatusChange,
-                    magnitude.clamp(-6.0, 5.0),
-                    Self::EVENT_COOLDOWN_DAYS,
-                );
-            }
+        }
+
+        SquadStatusOutcome {
+            transition,
+            backed_after_loan,
         }
     }
 
+    fn apply_squad_status_floors(
+        contract: &mut PlayerClubContract,
+        mut new_status: PlayerSquadStatus,
+        record_floor: Option<&PlayerSquadStatus>,
+        date: NaiveDate,
+    ) -> (PlayerSquadStatus, bool) {
+        let mut backed_after_loan = false;
+        // The returnee verdict: the loan record is admissible evidence. A
+        // young returnee otherwise stays a "prospect" by age and a fringe
+        // senior stays a backup by CA rank — while every club-side system
+        // (selection, depth, renewal, asset class) reads the stale label. The
+        // record floor graduates the label, and the commitment is bound as a
+        // role promise so next month's CA-rank recompute can't silently walk
+        // the plan back while he settles in; from there the ordinary
+        // promise/breach machinery owns it.
+        if let Some(floor) = record_floor {
+            let floor_rank = SquadStatusUpdater::senior_rank(floor).unwrap_or(0);
+            if SquadStatusUpdater::senior_rank(&new_status).unwrap_or(0) < floor_rank {
+                new_status = floor.clone();
+                backed_after_loan = true;
+                let commit_until = date + Duration::days(150);
+                let keep_existing = contract
+                    .promised_squad_status
+                    .as_ref()
+                    .map(|(promised, _)| {
+                        SquadStatusUpdater::senior_rank(promised).unwrap_or(0) >= floor_rank
+                    })
+                    .unwrap_or(false);
+                if !keep_existing {
+                    contract.promised_squad_status = Some((floor.clone(), commit_until));
+                }
+            }
+        }
+        // Honor an unexpired role promise as a floor: the club committed to it
+        // at signing, so never recompute below it — otherwise the promise the
+        // buyer paid for is wiped within a month and the breach is hidden
+        // (expected_start_share reads this same field). Past its expiry the
+        // promise stops binding.
+        if let Some((promised, until)) = contract.promised_squad_status.clone() {
+            if date <= until {
+                if SquadStatusUpdater::senior_rank(&promised).unwrap_or(0)
+                    > SquadStatusUpdater::senior_rank(&new_status).unwrap_or(0)
+                {
+                    new_status = promised;
+                }
+            } else {
+                contract.promised_squad_status = None;
+            }
+        }
+        (new_status, backed_after_loan)
+    }
+
+    fn apply_squad_status_outcome(
+        &mut self,
+        outcome: SquadStatusOutcome,
+        explains_role_changes: bool,
+    ) {
+        if outcome.backed_after_loan {
+            // The verdict said out loud — the specific beat replaces the
+            // generic status-change note (a prospect→senior move has no
+            // senior-ladder transition anyway).
+            let magnitude = HappinessConfig::default().catalog.backed_after_loan_return;
+            self.happiness.add_event_with_cooldown(
+                HappinessEventType::BackedAfterLoanReturn,
+                magnitude,
+                300,
+            );
+            return;
+        }
+        let Some((old, new)) = outcome.transition else {
+            return;
+        };
+        let steps = new as f32 - old as f32;
+        let mut magnitude = SquadStatusUpdater::MAGNITUDE_PER_STEP * steps;
+        if steps < 0.0 {
+            // Demoted while performing reads as an injustice; ambition
+            // amplifies the wound, professionalism absorbs some of it, and a
+            // coach who actually explains the decision takes most of the edge
+            // off.
+            let pos_group = self.position().position_group();
+            let form = self.statistics.average_rating_realistic(pos_group);
+            let apps = self.statistics.played + self.statistics.played_subs;
+            if apps >= 3 && form >= 7.0 {
+                magnitude *= 1.5;
+            }
+            let ambition = (self.attributes.ambition / 20.0).clamp(0.0, 1.0);
+            let professionalism = (self.attributes.professionalism / 20.0).clamp(0.0, 1.0);
+            magnitude *= 1.0 + ambition * 0.3 - professionalism * 0.25;
+            if explains_role_changes {
+                magnitude *= 0.6;
+            }
+        } else {
+            // Promotions land softer than demotions sting.
+            magnitude *= 0.7;
+        }
+        self.happiness.add_event_with_cooldown(
+            HappinessEventType::SquadStatusChange,
+            magnitude.clamp(-6.0, 5.0),
+            SquadStatusUpdater::EVENT_COOLDOWN_DAYS,
+        );
+    }
+}
+
+impl SquadStatusUpdater {
     /// Label pass for squads that don't own role labels (Reserve,
     /// U18..U23 — see [`crate::TeamType::owns_squad_status`]). Youngsters
     /// get their prospect label refreshed; a senior keeps his club-level

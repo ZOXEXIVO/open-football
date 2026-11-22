@@ -6,14 +6,13 @@
 
 use super::goal_celebration_tests::squad;
 use crate::PlayerSkills;
-use crate::r#match::common_states::{ChallengeKind, ClosingPoint, ShapeTempo};
 use crate::r#match::engine::ball::ball::{AwaitedRestart, PassOriginRestart, RestartQuiet};
 use crate::r#match::engine::engine::FootballEngine;
 use crate::r#match::engine::result::Score;
 use crate::r#match::engine::teamplay::plans::attack::AttackPlan;
 use crate::r#match::engine::teamplay::possession::TeamPossession;
 use crate::r#match::events::{Event, EventCollection, EventDispatcher};
-use crate::r#match::forwarders::states::common::{ForwardRead, RunLine};
+use crate::r#match::forwarders::states::shared::{ForwardRead, RunLine};
 use crate::r#match::forwarders::states::{
     ForwardCreatingSpaceState, ForwardCrossReceivingState, ForwardHeadingState,
     ForwardHoldingShapeState, ForwardHoldingWidthState, ForwardInterceptingState,
@@ -28,6 +27,7 @@ use crate::r#match::player::strategies::players::WonHeader;
 use crate::r#match::player::strategies::players::ops::box_movement::BoxMovement;
 use crate::r#match::player::strategies::players::ops::support::SupportOffer;
 use crate::r#match::player::transition::TransitionSource;
+use crate::r#match::shared_states::{ChallengeKind, ClosingPoint, ShapeTempo};
 use crate::r#match::{
     ActivityIntensity, BoxSlot, ConditionContext, DefenceRefreshInputs, DefensivePlan,
     GameTickContext, MatchContext, MatchField, MatchPlayerCollection, MatchRng, PlayerSide,

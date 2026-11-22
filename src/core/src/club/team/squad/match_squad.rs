@@ -355,12 +355,7 @@ impl MatchCoachSnapshot {
         let mut snapshot =
             CoachMatchSnapshot::new(head_coach.coach_memory.clone(), profile, strategy, ctx.date);
         snapshot.player_intents = players
-            .map(|p| {
-                (
-                    p.id,
-                    PlayerMatchIntent::assess(p, head_coach, ctx.room()),
-                )
-            })
+            .map(|p| (p.id, PlayerMatchIntent::assess(p, head_coach, ctx.room())))
             .collect();
         Some(snapshot)
     }

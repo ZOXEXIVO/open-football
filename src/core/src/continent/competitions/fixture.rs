@@ -9,9 +9,7 @@ use crate::club::team::{FixtureRun, NearestFixtures};
 use crate::continent::ContinentalRegulations;
 use crate::league::simulation::context::MatchdaySide;
 use crate::league::simulation::matchday::{MatchdayCommitments, MatchdayPool};
-use crate::league::{
-    KnockoutStakes, KnockoutTieReading, TableLine, TableStakes, TableStanding,
-};
+use crate::league::{KnockoutStakes, KnockoutTieReading, TableLine, TableStakes, TableStanding};
 use crate::r#match::{CompetitionKind, FixtureContext, Match, SelectionCompetition};
 use crate::{Club, Team};
 use chrono::NaiveDate;
@@ -151,7 +149,10 @@ impl ContinentalFixture<'_> {
                 points: i32::from(row.points),
             })
             .collect();
-        let lines = [TableLine::below(Self::QUALIFYING_PLACES, TableLine::PROMOTION)];
+        let lines = [TableLine::below(
+            Self::QUALIFYING_PLACES,
+            TableLine::PROMOTION,
+        )];
         let of = |club_id: u32| {
             let played = group
                 .rows
@@ -288,8 +289,14 @@ impl ContinentalCompetitions {
         for (tier, matches, groups, knockout) in competitions {
             for tie in matches {
                 if tie.result.is_some() && tie.date <= today {
-                    nearest.entry(tie.home_team).or_default().offer_recent(tie.date);
-                    nearest.entry(tie.away_team).or_default().offer_recent(tie.date);
+                    nearest
+                        .entry(tie.home_team)
+                        .or_default()
+                        .offer_recent(tie.date);
+                    nearest
+                        .entry(tie.away_team)
+                        .or_default()
+                        .offer_recent(tie.date);
                     continue;
                 }
                 if tie.result.is_some() || tie.date <= today {

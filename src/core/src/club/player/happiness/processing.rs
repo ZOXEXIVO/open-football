@@ -1,8 +1,6 @@
 use crate::PlayerPositionType;
 use crate::club::player::adaptation::ReputationGap;
-use crate::club::player::calculators::{
-    ContractValuation, ValuationContext, expected_annual_value, package_inputs_from_contract,
-};
+use crate::club::player::calculators::{ContractValuation, PackageInputs, ValuationContext};
 use crate::club::player::happiness::CareerExpectation;
 use crate::club::player::interaction::InteractionTopic;
 use crate::club::player::player::Player;
@@ -512,26 +510,66 @@ impl Player {
     ) {
         let age = DateUtils::age(self.birth_date, now);
 
-        // Decay old events weekly
+        // Decay old events weekly.
         self.happiness.decay_events();
 
         // Unresolved transfer-interest speculation drag — counts visible
-        // interest events landed in the past ~6 weeks and lets the
-        // owner-side method decide whether to add a distraction event.
+        // interest events landed in the past ~6 weeks and lets the owner-side
+        // method decide whether to add a distraction event.
         let recent_interest_count = self.count_recent_transfer_interest_events(45);
         self.on_unresolved_speculation_pressure(recent_interest_count);
 
-        // 1. Playing time vs squad status
+        let (playing_time_factor, salary_factor, gave_up_on_salary) =
+            self.update_core_happiness_factors(now, age, team_reputation, season_state);
+
+        // Loan-specific weekly modulation — extends the loan audit with
+        // per-player morale signals (out-of-position, too-good, young
+        // enjoying responsibility, veteran humiliation).
+        if self.contract_loan.is_some() {
+            self.process_loan_morale(now, team_reputation, season_state.league_reputation);
+        }
+
+        self.update_derived_happiness_factors(now, team_reputation, season_state, &club_ctx);
+
+        // Recalculate overall morale (now uses dampened salary factor +
+        // derived axes).
+        self.happiness.recalculate_morale();
+
+        self.update_salary_negotiation(result, now, salary_factor, gave_up_on_salary);
+
+        // Manager-relationship arc aggregator + private-talk request. Run
+        // after factors but before the unhappy status flag so a brand-new
+        // ManagerTrustEroding row can also drag the unhappy verdict in the
+        // same tick. Each has its own cooldown so the weekly tick produces
+        // at most one of these rows per player.
+        self.maybe_emit_manager_trust_arc();
+        self.maybe_emit_asked_for_private_talk();
+
+        self.update_unhappy_status(result, now, playing_time_factor);
+    }
+
+    /// The legacy factors. Returns the playing-time and salary readings plus
+    /// whether the player has given up on a salary grievance, because the
+    /// unhappy verdict and negotiation cooldown both need them.
+    fn update_core_happiness_factors(
+        &mut self,
+        now: NaiveDate,
+        age: u8,
+        team_reputation: f32,
+        season_state: TeamSeasonState,
+    ) -> (f32, f32, bool) {
+        // 1. Playing time vs squad status.
         let playing_time_factor = self.calculate_playing_time_factor(now);
         self.happiness.factors.playing_time = playing_time_factor;
 
-        // 2. Salary vs ability
+        // 2. Salary vs ability.
         let mut salary_factor =
             self.calculate_salary_factor(age, team_reputation, season_state.league_reputation);
 
-        // After 2 years of unresolved salary unhappiness, player accepts situation
-        // and salary frustration dampens — prevents permanent unhappiness loops.
-        // Must be applied BEFORE recalculate_morale() so dampening actually affects morale.
+        // After 2 years of unresolved salary unhappiness, the player accepts
+        // the situation and salary frustration dampens — prevents permanent
+        // unhappiness loops. Must be applied BEFORE recalculate_morale() so
+        // dampening actually affects morale.
         let gave_up_on_salary = salary_factor <= -5.0
             && self
                 .happiness
@@ -545,11 +583,11 @@ impl Player {
 
         self.happiness.factors.salary_satisfaction = salary_factor;
 
-        // 3. Manager relationship
+        // 3. Manager relationship.
         let manager_factor = self.calculate_manager_relationship_factor();
         self.happiness.factors.manager_relationship = manager_factor;
 
-        // 4. Injury frustration
+        // 4. Injury frustration.
         let injury_factor = self.calculate_injury_frustration();
         self.happiness.factors.injury_frustration = injury_factor;
 
@@ -559,7 +597,7 @@ impl Player {
         let ambition_factor = self.calculate_ambition_fit(team_reputation, &season_state, now);
         self.happiness.factors.ambition_fit = ambition_factor;
 
-        // 6. Praise/discipline from recent events (tracked separately)
+        // 6. Praise/discipline from recent events (tracked separately).
         let praise: f32 = self
             .happiness
             .recent_events
@@ -576,16 +614,18 @@ impl Player {
             .filter(|e| e.event_type == HappinessEventType::ManagerDiscipline)
             .map(|e| e.magnitude * (1.0 - e.days_ago as f32 / 60.0).max(0.0))
             .sum();
-
         self.happiness.factors.recent_discipline = discipline.clamp(-10.0, 0.0);
 
-        // Loan-specific weekly modulation — extends the loan audit with
-        // per-player morale signals (out-of-position, too-good, young
-        // enjoying responsibility, veteran humiliation).
-        if self.contract_loan.is_some() {
-            self.process_loan_morale(now, team_reputation, season_state.league_reputation);
-        }
+        (playing_time_factor, salary_factor, gave_up_on_salary)
+    }
 
+    fn update_derived_happiness_factors(
+        &mut self,
+        now: NaiveDate,
+        team_reputation: f32,
+        season_state: TeamSeasonState,
+        club_ctx: &ClubMoraleContext,
+    ) {
         // ── Derived factors ───────────────────────────────────
         // The five soft "settling-in" axes pass through the transfer
         // honeymoon ramp — their negative contribution is scaled down for
@@ -596,30 +636,36 @@ impl Player {
         self.happiness.factors.role_clarity =
             honeymoon.damp_negative(self.calculate_role_clarity());
         self.happiness.factors.coach_credibility =
-            honeymoon.damp_negative(self.calculate_coach_credibility(&club_ctx));
+            honeymoon.damp_negative(self.calculate_coach_credibility(club_ctx));
         self.happiness.factors.dressing_room_status =
             honeymoon.damp_negative(self.calculate_dressing_room_status());
         self.happiness.factors.club_fit = honeymoon.damp_negative(self.calculate_club_fit(
             team_reputation,
             season_state.league_reputation,
-            &club_ctx,
+            club_ctx,
         ));
         self.happiness.factors.pressure_load = honeymoon.damp_negative(
             self.calculate_pressure_load(team_reputation, season_state.league_reputation, now),
         );
         self.happiness.factors.promise_trust = self.calculate_promise_trust(now);
+    }
 
-        // Recalculate overall morale (now uses dampened salary factor + derived axes)
-        self.happiness.recalculate_morale();
-
-        // Salary unhappy: player wants contract renegotiation (with 1-year cooldown)
+    /// Salary unhappy: the player wants contract renegotiation (with a
+    /// one-year cooldown). A player who has given up keeps the negotiation
+    /// timestamp but stops asking.
+    fn update_salary_negotiation(
+        &mut self,
+        result: &mut PlayerResult,
+        now: NaiveDate,
+        salary_factor: f32,
+        gave_up_on_salary: bool,
+    ) {
         if salary_factor <= -5.0 && !gave_up_on_salary {
             let cooldown_passed = self
                 .happiness
                 .last_salary_negotiation
                 .map(|d| (now - d).num_days() >= 365)
                 .unwrap_or(true);
-
             if cooldown_passed {
                 result.contract.want_improve_contract = true;
                 if self.happiness.last_salary_negotiation.is_none() {
@@ -627,27 +673,25 @@ impl Player {
                 }
             }
         } else if salary_factor > -5.0 && !gave_up_on_salary {
-            // Salary is acceptable now — reset negotiation tracking
+            // Salary is acceptable now — reset negotiation tracking.
             self.happiness.last_salary_negotiation = None;
         }
-        // If gave_up_on_salary: keep last_salary_negotiation but don't request improvements
+    }
 
-        // Manager-relationship arc aggregator + private-talk request.
-        // Run after factors but before the unhappy status flag so a
-        // brand-new ManagerTrustEroding row can also drag the unhappy
-        // verdict in the same tick. Each has its own cooldown so the
-        // weekly tick produces at most one of these rows per player.
-        self.maybe_emit_manager_trust_arc();
-        self.maybe_emit_asked_for_private_talk();
-
-        // Unhappy-status verdict with hysteresis. The formal `Unh` status
-        // is no longer a bare `morale < 35` flag: a fresh signing's
-        // first-week settling dip must either be backed by a *serious*
-        // concern AND persist across two weekly ticks, or be driven by a
-        // genuinely major trigger (broken promise, severe wage betrayal,
-        // public conflict, repeated official-match omission). Recovery
-        // hysteresis is unchanged — the status clears only once morale
-        // climbs clear of the unhappy band (or above 40 with real minutes).
+    /// Unhappy-status verdict with hysteresis. The formal `Unh` status is no
+    /// longer a bare `morale < 35` flag: a fresh signing's first-week
+    /// settling dip must either be backed by a *serious* concern AND persist
+    /// across two weekly ticks, or be driven by a genuinely major trigger
+    /// (broken promise, severe wage betrayal, public conflict, repeated
+    /// official-match omission). Recovery hysteresis is unchanged — the
+    /// status clears only once morale climbs clear of the unhappy band (or
+    /// above 40 with real minutes).
+    fn update_unhappy_status(
+        &mut self,
+        result: &mut PlayerResult,
+        now: NaiveDate,
+        playing_time_factor: f32,
+    ) {
         let assessment = UnhappyAssessment::evaluate(self, playing_time_factor);
         let already_unhappy = self.statuses.has(PlayerStatusType::Unh);
 
@@ -833,8 +877,8 @@ impl Player {
         // (zeroing it out once paid via `signing_bonus_paid`),
         // probability-weights promotion / avoid-relegation bonuses, and
         // values per-event bonuses by realistic season frequencies.
-        let inputs = package_inputs_from_contract(contract, self);
-        let effective_salary = expected_annual_value(&inputs) as f32;
+        let inputs = PackageInputs::from_contract(contract, self);
+        let effective_salary = inputs.expected_annual_value() as f32;
 
         let ratio = effective_salary / expected;
         let mut factor = if ratio >= 1.20 {
@@ -989,8 +1033,11 @@ impl Player {
             return 0.0;
         }
 
-        let status_dampening =
-            ambition_status_dampening(self.contract.as_ref().map(|c| &c.squad_status));
+        let status_dampening = self
+            .contract
+            .as_ref()
+            .map(|c| c.squad_status.ambition_dampening())
+            .unwrap_or(0.5);
         let prestige = self.prestige_fit_component(ambition, team_reputation, status_dampening);
         let trajectory = self.season_trajectory_component(ambition, season, status_dampening);
         // Itchy feet: many years at one club erode ambition satisfaction even
@@ -1534,16 +1581,17 @@ impl Player {
     }
 }
 
-fn ambition_status_dampening(status: Option<&PlayerSquadStatus>) -> f32 {
-    match status {
-        Some(PlayerSquadStatus::KeyPlayer) => 1.0,
-        Some(PlayerSquadStatus::FirstTeamRegular) => 0.8,
-        Some(PlayerSquadStatus::FirstTeamSquadRotation) => 0.4,
-        Some(PlayerSquadStatus::MainBackupPlayer) => 0.2,
-        Some(PlayerSquadStatus::HotProspectForTheFuture)
-        | Some(PlayerSquadStatus::DecentYoungster) => 0.1,
-        Some(PlayerSquadStatus::NotNeeded) => 0.3,
-        _ => 0.5,
+impl PlayerSquadStatus {
+    fn ambition_dampening(&self) -> f32 {
+        match self {
+            PlayerSquadStatus::KeyPlayer => 1.0,
+            PlayerSquadStatus::FirstTeamRegular => 0.8,
+            PlayerSquadStatus::FirstTeamSquadRotation => 0.4,
+            PlayerSquadStatus::MainBackupPlayer => 0.2,
+            PlayerSquadStatus::HotProspectForTheFuture | PlayerSquadStatus::DecentYoungster => 0.1,
+            PlayerSquadStatus::NotNeeded => 0.3,
+            _ => 0.5,
+        }
     }
 }
 

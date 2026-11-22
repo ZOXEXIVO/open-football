@@ -1,12 +1,12 @@
-use crate::r#match::common_states::{
-    ChallengeKind, ClosingPoint, TackleDecision, TackleEngagement, TacticalFoul,
-};
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{
+use crate::r#match::forwarders::states::shared::{
     ActivityIntensity, ForwardCondition, ForwardRead, ReadLevel,
 };
 use crate::r#match::player::events::{FoulCommitted, FoulSeverity, FoulSource, PlayerEvent};
+use crate::r#match::shared_states::{
+    ChallengeKind, ClosingPoint, TackleDecision, TackleEngagement, TacticalFoul,
+};
 use crate::r#match::{
     ConditionContext, MatchContext, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,

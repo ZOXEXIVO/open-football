@@ -33,6 +33,46 @@ static MARK_CENSUS: [std::sync::atomic::AtomicU64; 11] = [
     std::sync::atomic::AtomicU64::new(0),
 ];
 
+/// The defending unit this side can give jobs to.
+struct DefensiveUnit {
+    positions: [(u32, Vector3<f32>, bool, bool); MAX_UNIT],
+    len: usize,
+}
+
+impl DefensiveUnit {
+    fn members(&self) -> &[(u32, Vector3<f32>, bool, bool)] {
+        &self.positions[..self.len]
+    }
+}
+
+/// The ranked opponents worth marking, most dangerous first.
+struct ThreatList {
+    threats: [(u32, Vector3<f32>, f32); MAX_THREATS],
+    len: usize,
+}
+
+impl ThreatList {
+    fn ranked(&self) -> &[(u32, Vector3<f32>, f32)] {
+        &self.threats[..self.len]
+    }
+}
+
+#[derive(Default)]
+struct DutyCensus {
+    #[cfg(feature = "match-logs")]
+    markers: usize,
+    #[cfg(feature = "match-logs")]
+    press: usize,
+    #[cfg(feature = "match-logs")]
+    cover: usize,
+    #[cfg(feature = "match-logs")]
+    marks: usize,
+    #[cfg(feature = "match-logs")]
+    unreachable: usize,
+    #[cfg(feature = "match-logs")]
+    skipped_depth: usize,
+}
+
 /// One side's duty assignment pass.
 pub(in crate::r#match::engine::teamplay::plans) struct DutyAssigner<'a> {
     pub(in crate::r#match::engine::teamplay::plans) field: &'a MatchField,
@@ -158,6 +198,61 @@ impl DutyAssigner<'_> {
         // defender along, and the one `nearest_free` charges for.
         let forward = side.forward_dir_x();
 
+        let mut _census = DutyCensus::default();
+        let Some(unit) = self.build_unit(&mut _census) else {
+            return;
+        };
+        plan.active = true;
+
+        let mut taken = [false; MAX_UNIT];
+        // A keeper with the ball in his hands carries nothing anybody can
+        // close — the states' own definition of a carrier.
+        let carrier = owner_team
+            .filter(|t| *t != self.team_id)
+            .and(self.field.ball.current_owner)
+            .filter(|_| !self.field.ball.held_in_hands)
+            .and_then(|id| self.field.players.iter().find(|p| p.id == id))
+            .filter(|p| p.team_id != self.team_id);
+
+        let point_of_attack = self.attack_point(carrier, plan);
+
+        self.press_and_cover(
+            plan,
+            &unit,
+            &mut taken,
+            point_of_attack,
+            previous,
+            forward,
+            &mut _census,
+        );
+
+        let threats = self.rank_threats(plan, own_goal, field_width, &mut _census);
+        self.assign_marks(
+            plan,
+            &unit,
+            &mut taken,
+            &threats,
+            previous,
+            forward,
+            &mut _census,
+        );
+        #[cfg(feature = "match-logs")]
+        self.note_mark_retention(plan, previous, &threats);
+        self.hold_zones(plan, &unit, &taken);
+
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::DefenceDiag::note_plan_shape(
+            _census.markers,
+            threats.len,
+            _census.skipped_depth,
+            _census.unreachable,
+            _census.press,
+            _census.cover,
+            _census.marks,
+        );
+    }
+
+    fn build_unit(&self, _census: &mut DutyCensus) -> Option<DefensiveUnit> {
         // The defensive unit: the back line AND the midfield.
         //
         // It was defenders only, and that turned out to be the single
@@ -189,12 +284,10 @@ impl DutyAssigner<'_> {
         // match**. From the stands that is a front two watching the
         // opposition play out from the back, which is how it was
         // reported.
-        let mut unit = [(0u32, Vector3::<f32>::zeros(), false, true); MAX_UNIT];
-        let mut unit_len = 0usize;
-        #[cfg(feature = "match-logs")]
-        let mut markers = 0usize;
+        let mut positions = [(0u32, Vector3::<f32>::zeros(), false, true); MAX_UNIT];
+        let mut len = 0usize;
         for p in self.field.players.iter() {
-            if p.team_id != self.team_id || unit_len == MAX_UNIT {
+            if p.team_id != self.team_id || len == MAX_UNIT {
                 continue;
             }
             let pos = p.tactical_position.current_position;
@@ -205,43 +298,21 @@ impl DutyAssigner<'_> {
             if !can_mark && MatchContext::press_off() {
                 continue; // A/B control — see `MatchContext::press_off`.
             }
-            unit[unit_len] = (p.id, p.position, can_mark, p.can_attempt_tackle());
-            unit_len += 1;
+            positions[len] = (p.id, p.position, can_mark, p.can_attempt_tackle());
+            len += 1;
             #[cfg(feature = "match-logs")]
             {
-                markers += can_mark as usize;
+                _census.markers += can_mark as usize;
             }
         }
-        if unit_len == 0 {
-            return;
-        }
-        plan.active = true;
+        (len > 0).then_some(DefensiveUnit { positions, len })
+    }
 
-        let mut taken = [false; MAX_UNIT];
-        // A keeper with the ball in his hands carries nothing anybody can
-        // close — the states' own definition of a carrier.
-        let carrier = owner_team
-            .filter(|t| *t != self.team_id)
-            .and(self.field.ball.current_owner)
-            .filter(|_| !self.field.ball.held_in_hands)
-            .and_then(|id| self.field.players.iter().find(|p| p.id == id))
-            .filter(|p| p.team_id != self.team_id);
-
-        // ── Press, then cover ────────────────────────────────────────
-        // Somebody goes to the ball and somebody backs him up. These come
-        // first because they are the only duties whose target is fixed;
-        // everything else is a choice between men.
-        #[cfg(feature = "match-logs")]
-        let mut n_press = 0usize;
-        #[cfg(feature = "match-logs")]
-        let mut n_cover = 0usize;
-        #[cfg(feature = "match-logs")]
-        let mut n_marks = 0usize;
-        #[cfg(feature = "match-logs")]
-        let mut n_unreachable = 0usize;
-        #[cfg(feature = "match-logs")]
-        let mut n_skipped_depth = 0usize;
-
+    fn attack_point(
+        &self,
+        carrier: Option<&crate::r#match::MatchPlayer>,
+        plan: &mut DefensivePlan,
+    ) -> Option<Vector3<f32>> {
         // ── Where the next touch is going to happen ──────────────────
         //
         // With an opponent on the ball this is simply the man. Without
@@ -302,69 +373,93 @@ impl DutyAssigner<'_> {
         // be borrowed for this.)
         let travelling = ball.velocity.norm() > 0.2;
         plan.carrier = carrier.map(|c| c.id);
-        let point_of_attack = match carrier {
+        match carrier {
             Some(c) => Some(c.position),
             // A/B control — see `MatchContext::press_off`.
             None if travelling && !our_reception && !MatchContext::press_off() => {
                 Some(ball.position)
             }
             None => None,
-        };
-
-        if let Some(point_of_attack) = point_of_attack {
-            // No layer bias on either of these — see `nearest_free`. The
-            // bias exists to hand a MAN to the defender already standing
-            // in his layer; the presser is whoever can reach the ball
-            // first, and charging him for being behind it would pick the
-            // man facing the wrong way.
-            if let Some(i) = self.nearest_free(
-                &unit[..unit_len],
-                &taken,
-                point_of_attack,
-                Self::PRESS_REACH,
-                previous.presser(),
-                forward,
-                0.0,
-                false,
-                true,
-            ) {
-                taken[i] = true;
-                #[cfg(feature = "match-logs")]
-                {
-                    n_press += 1;
-                }
-                Self::push(plan, unit[i].0, DefensiveDuty::Press);
-            }
-            // Cover is a back-line job — a forward sitting goal-side of
-            // the presser is not what the duty means — so it is markers
-            // only.
-            //
-            // Readiness counts here for the same reason it counts for
-            // the press: `Cover` is "the one who deals with it when the
-            // presser is beaten", and inside our own area
-            // `TackleEngagement::may_engage_carrier` now licenses him to
-            // do exactly that. A man who cannot challenge is a poor
-            // choice for the job whose definition is the challenge.
-            if let Some(i) = self.nearest_free(
-                &unit[..unit_len],
-                &taken,
-                point_of_attack,
-                Self::COVER_REACH,
-                previous.cover(),
-                forward,
-                0.0,
-                true,
-                true,
-            ) {
-                taken[i] = true;
-                #[cfg(feature = "match-logs")]
-                {
-                    n_cover += 1;
-                }
-                Self::push(plan, unit[i].0, DefensiveDuty::Cover);
-            }
         }
+    }
 
+    fn press_and_cover(
+        &self,
+        plan: &mut DefensivePlan,
+        unit: &DefensiveUnit,
+        taken: &mut [bool; MAX_UNIT],
+        point_of_attack: Option<Vector3<f32>>,
+        previous: DefensivePlan,
+        forward: f32,
+        _census: &mut DutyCensus,
+    ) {
+        // ── Press, then cover ────────────────────────────────────────
+        // Somebody goes to the ball and somebody backs him up. These come
+        // first because they are the only duties whose target is fixed;
+        // everything else is a choice between men.
+        let Some(point_of_attack) = point_of_attack else {
+            return;
+        };
+        // No layer bias on either of these — see `nearest_free`. The
+        // bias exists to hand a MAN to the defender already standing
+        // in his layer; the presser is whoever can reach the ball
+        // first, and charging him for being behind it would pick the
+        // man facing the wrong way.
+        if let Some(i) = self.nearest_free(
+            unit.members(),
+            taken,
+            point_of_attack,
+            Self::PRESS_REACH,
+            previous.presser(),
+            forward,
+            0.0,
+            false,
+            true,
+        ) {
+            taken[i] = true;
+            #[cfg(feature = "match-logs")]
+            {
+                _census.press += 1;
+            }
+            Self::push(plan, unit.members()[i].0, DefensiveDuty::Press);
+        }
+        // Cover is a back-line job — a forward sitting goal-side of
+        // the presser is not what the duty means — so it is markers
+        // only.
+        //
+        // Readiness counts here for the same reason it counts for
+        // the press: `Cover` is "the one who deals with it when the
+        // presser is beaten", and inside our own area
+        // `TackleEngagement::may_engage_carrier` now licenses him to
+        // do exactly that. A man who cannot challenge is a poor
+        // choice for the job whose definition is the challenge.
+        if let Some(i) = self.nearest_free(
+            unit.members(),
+            taken,
+            point_of_attack,
+            Self::COVER_REACH,
+            previous.cover(),
+            forward,
+            0.0,
+            true,
+            true,
+        ) {
+            taken[i] = true;
+            #[cfg(feature = "match-logs")]
+            {
+                _census.cover += 1;
+            }
+            Self::push(plan, unit.members()[i].0, DefensiveDuty::Cover);
+        }
+    }
+
+    fn rank_threats(
+        &self,
+        plan: &mut DefensivePlan,
+        own_goal: Vector3<f32>,
+        field_width: f32,
+        _census: &mut DutyCensus,
+    ) -> ThreatList {
         // ── Man-mark the rest, most dangerous first ──────────────────
         // Ranked once, assigned exclusively. This is the whole point: the
         // ranking decides WHO is dangerous, and the assignment guarantees
@@ -390,7 +485,7 @@ impl DutyAssigner<'_> {
             if !near_goal && !near_ball {
                 #[cfg(feature = "match-logs")]
                 {
-                    n_skipped_depth += 1;
+                    _census.skipped_depth += 1;
                 }
                 continue; // not a threat yet
             }
@@ -458,8 +553,23 @@ impl DutyAssigner<'_> {
             }
             threats[j] = item;
         }
+        ThreatList {
+            threats,
+            len: threat_len,
+        }
+    }
 
-        for &(opp_id, opp_pos, _) in &threats[..threat_len] {
+    fn assign_marks(
+        &self,
+        plan: &mut DefensivePlan,
+        unit: &DefensiveUnit,
+        taken: &mut [bool; MAX_UNIT],
+        threats: &ThreatList,
+        previous: DefensivePlan,
+        forward: f32,
+        _census: &mut DutyCensus,
+    ) {
+        for &(opp_id, opp_pos, _) in threats.ranked() {
             // Incumbency: whoever had this man keeps him if he is still
             // in range. A defender who swaps his man every refresh is not
             // marking anybody.
@@ -468,8 +578,8 @@ impl DutyAssigner<'_> {
                 .find(|(_, d)| d.target() == Some(opp_id))
                 .map(|(id, _)| *id);
             let Some(i) = self.nearest_free(
-                &unit[..unit_len],
-                &taken,
+                unit.members(),
+                taken,
                 opp_pos,
                 Self::MARK_REACH,
                 incumbent,
@@ -480,116 +590,112 @@ impl DutyAssigner<'_> {
             ) else {
                 #[cfg(feature = "match-logs")]
                 {
-                    n_unreachable += 1;
+                    _census.unreachable += 1;
                 }
                 continue;
             };
             taken[i] = true;
             #[cfg(feature = "match-logs")]
             {
-                n_marks += 1;
+                _census.marks += 1;
             }
-            Self::push(plan, unit[i].0, DefensiveDuty::Mark(opp_id));
+            Self::push(plan, unit.members()[i].0, DefensiveDuty::Mark(opp_id));
         }
+    }
 
+    #[cfg(feature = "match-logs")]
+    fn note_mark_retention(
+        &self,
+        plan: &DefensivePlan,
+        previous: DefensivePlan,
+        threats: &ThreatList,
+    ) {
         // ── TEMPORARY MARK-RETENTION CENSUS (additive, no behaviour) ──
-        #[cfg(feature = "match-logs")]
-        {
-            use std::sync::atomic::Ordering as CensusOrd;
-            for (d_id, duty) in previous.duties[..previous.len].iter() {
-                let Some(t_id) = duty.target() else { continue };
-                let Some(dpos) = self
-                    .field
-                    .players
-                    .iter()
-                    .find(|p| p.id == *d_id)
-                    .map(|p| p.position)
-                else {
-                    continue;
-                };
-                let Some(tpos) = self
-                    .field
-                    .players
-                    .iter()
-                    .find(|p| p.id == t_id)
-                    .map(|p| p.position)
-                else {
-                    continue;
-                };
-                let gap = (dpos - tpos).magnitude();
-                let was_threat = threats[..threat_len].iter().any(|(id, _, _)| *id == t_id);
-                let new_duty = plan.duties[..plan.len]
-                    .iter()
-                    .find(|(id, _)| id == d_id)
-                    .map(|(_, d)| *d);
-                let man_marked_by_other = plan.duties[..plan.len]
-                    .iter()
-                    .any(|(id, d)| id != d_id && d.target() == Some(t_id));
-                MARK_CENSUS[0].fetch_add(1, CensusOrd::Relaxed);
-                if new_duty == Some(DefensiveDuty::Mark(t_id)) {
-                    MARK_CENSUS[1].fetch_add(1, CensusOrd::Relaxed);
-                } else if matches!(new_duty, Some(DefensiveDuty::Mark(_))) {
-                    MARK_CENSUS[2].fetch_add(1, CensusOrd::Relaxed);
-                    if was_threat && gap <= Self::MARK_REACH {
-                        MARK_CENSUS[3].fetch_add(1, CensusOrd::Relaxed);
-                    }
-                } else if matches!(
-                    new_duty,
-                    Some(DefensiveDuty::Press) | Some(DefensiveDuty::Cover)
-                ) {
-                    MARK_CENSUS[4].fetch_add(1, CensusOrd::Relaxed);
-                } else if !was_threat {
-                    MARK_CENSUS[5].fetch_add(1, CensusOrd::Relaxed);
-                } else if gap > Self::MARK_REACH {
-                    MARK_CENSUS[6].fetch_add(1, CensusOrd::Relaxed);
-                } else {
-                    MARK_CENSUS[7].fetch_add(1, CensusOrd::Relaxed);
+        use std::sync::atomic::Ordering as CensusOrd;
+        for (d_id, duty) in previous.duties[..previous.len].iter() {
+            let Some(t_id) = duty.target() else { continue };
+            let Some(dpos) = self
+                .field
+                .players
+                .iter()
+                .find(|p| p.id == *d_id)
+                .map(|p| p.position)
+            else {
+                continue;
+            };
+            let Some(tpos) = self
+                .field
+                .players
+                .iter()
+                .find(|p| p.id == t_id)
+                .map(|p| p.position)
+            else {
+                continue;
+            };
+            let gap = (dpos - tpos).magnitude();
+            let was_threat = threats.ranked().iter().any(|(id, _, _)| *id == t_id);
+            let new_duty = plan.duties[..plan.len]
+                .iter()
+                .find(|(id, _)| id == d_id)
+                .map(|(_, d)| *d);
+            let man_marked_by_other = plan.duties[..plan.len]
+                .iter()
+                .any(|(id, d)| id != d_id && d.target() == Some(t_id));
+            MARK_CENSUS[0].fetch_add(1, CensusOrd::Relaxed);
+            if new_duty == Some(DefensiveDuty::Mark(t_id)) {
+                MARK_CENSUS[1].fetch_add(1, CensusOrd::Relaxed);
+            } else if matches!(new_duty, Some(DefensiveDuty::Mark(_))) {
+                MARK_CENSUS[2].fetch_add(1, CensusOrd::Relaxed);
+                if was_threat && gap <= Self::MARK_REACH {
+                    MARK_CENSUS[3].fetch_add(1, CensusOrd::Relaxed);
                 }
-                if man_marked_by_other {
-                    MARK_CENSUS[8].fetch_add(1, CensusOrd::Relaxed);
-                }
+            } else if matches!(
+                new_duty,
+                Some(DefensiveDuty::Press) | Some(DefensiveDuty::Cover)
+            ) {
+                MARK_CENSUS[4].fetch_add(1, CensusOrd::Relaxed);
+            } else if !was_threat {
+                MARK_CENSUS[5].fetch_add(1, CensusOrd::Relaxed);
+            } else if gap > Self::MARK_REACH {
+                MARK_CENSUS[6].fetch_add(1, CensusOrd::Relaxed);
+            } else {
+                MARK_CENSUS[7].fetch_add(1, CensusOrd::Relaxed);
             }
-            let n = MARK_CENSUS[10].fetch_add(1, CensusOrd::Relaxed) + 1;
-            if n % 20_000 == 0 {
-                let g = |i: usize| MARK_CENSUS[i].load(CensusOrd::Relaxed);
-                let tot = g(0).max(1) as f64;
-                eprintln!(
-                    "MARKCENSUS refreshes={} prev_pairs={} retained={:.1}% steal_same_def={:.2}% (reachable {:.2}%) to_press_cover={:.2}% man_left_threatset={:.2}% out_of_reach={:.2}% dropped_idle={:.2}% man_to_other_def={:.2}%",
-                    n,
-                    g(0),
-                    100.0 * g(1) as f64 / tot,
-                    100.0 * g(2) as f64 / tot,
-                    100.0 * g(3) as f64 / tot,
-                    100.0 * g(4) as f64 / tot,
-                    100.0 * g(5) as f64 / tot,
-                    100.0 * g(6) as f64 / tot,
-                    100.0 * g(7) as f64 / tot,
-                    100.0 * g(8) as f64 / tot,
-                );
+            if man_marked_by_other {
+                MARK_CENSUS[8].fetch_add(1, CensusOrd::Relaxed);
             }
         }
+        let n = MARK_CENSUS[10].fetch_add(1, CensusOrd::Relaxed) + 1;
+        if n % 20_000 == 0 {
+            let g = |i: usize| MARK_CENSUS[i].load(CensusOrd::Relaxed);
+            let tot = g(0).max(1) as f64;
+            eprintln!(
+                "MARKCENSUS refreshes={} prev_pairs={} retained={:.1}% steal_same_def={:.2}% (reachable {:.2}%) to_press_cover={:.2}% man_left_threatset={:.2}% out_of_reach={:.2}% dropped_idle={:.2}% man_to_other_def={:.2}%",
+                n,
+                g(0),
+                100.0 * g(1) as f64 / tot,
+                100.0 * g(2) as f64 / tot,
+                100.0 * g(3) as f64 / tot,
+                100.0 * g(4) as f64 / tot,
+                100.0 * g(5) as f64 / tot,
+                100.0 * g(6) as f64 / tot,
+                100.0 * g(7) as f64 / tot,
+                100.0 * g(8) as f64 / tot,
+            );
+        }
+    }
 
+    fn hold_zones(&self, plan: &mut DefensivePlan, unit: &DefensiveUnit, taken: &[bool; MAX_UNIT]) {
         // ── Everyone else holds the zone ─────────────────────────────
         //
         // Markers only. A forward the press did not need is not "holding
         // a zone" in any defensive sense — he is up the pitch waiting for
         // the ball back, and giving him the duty would only make the
         // zone-holding census lie.
-        for (i, (id, _, can_mark, _)) in unit[..unit_len].iter().enumerate() {
+        for (i, (id, _, can_mark, _)) in unit.members().iter().enumerate() {
             if !taken[i] && *can_mark {
                 Self::push(plan, *id, DefensiveDuty::HoldZone);
             }
         }
-
-        #[cfg(feature = "match-logs")]
-        crate::mid_run_diag::DefenceDiag::note_plan_shape(
-            markers,
-            threat_len,
-            n_skipped_depth,
-            n_unreachable,
-            n_press,
-            n_cover,
-            n_marks,
-        );
     }
 }

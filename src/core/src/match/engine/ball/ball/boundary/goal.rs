@@ -34,12 +34,29 @@ use std::cmp::Ordering;
 
 /// What a ball across the goal line inside the frame is.
 enum GoalCredit {
-    Scored { scorer: u32, own_goal: bool },
+    Scored {
+        scorer: u32,
+        own_goal: bool,
+    },
     /// Not a goal: no shot behind it (`no_shot`), an indirect free kick
     /// nobody else touched, or a scorer no longer on the pitch.
-    Refused { no_shot: bool },
+    Refused {
+        no_shot: bool,
+    },
     /// Nobody has ever touched it.
     Uncredited,
+}
+
+/// Where a corner is taken from, where the ball died, and whether it is
+/// still running out behind the goal.
+#[derive(Clone, Copy)]
+struct CornerSetup {
+    field_width: f32,
+    field_height: f32,
+    arc: Vector3<f32>,
+    died_at: Vector3<f32>,
+    walked: bool,
+    runs_out: bool,
 }
 
 impl Ball {
@@ -233,7 +250,11 @@ impl Ball {
     /// own goal against him, unless his touch met a shot by the other side
     /// that was already heading on frame — that goal is the shooter's. Off
     /// the other side, it is a goal only with a shot behind it.
-    fn credit_by_the_last_touch(&self, conceding: PlayerSide, context: &MatchContext) -> GoalCredit {
+    fn credit_by_the_last_touch(
+        &self,
+        conceding: PlayerSide,
+        context: &MatchContext,
+    ) -> GoalCredit {
         let Some(toucher_id) = self.last_touch_player_id.or(self.previous_owner) else {
             return GoalCredit::Uncredited;
         };
@@ -559,7 +580,10 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
-        let Some(keeper_side) = players.iter().find(|p| p.id == keeper_id).and_then(|p| p.side)
+        let Some(keeper_side) = players
+            .iter()
+            .find(|p| p.id == keeper_id)
+            .and_then(|p| p.side)
         else {
             return;
         };
@@ -596,6 +620,57 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) -> bool {
+        // Find the attacking team's designated corner taker via the
+        // shared `score_corner_taker` blend (corners 0.45 / crossing
+        // 0.30 / technique 0.15 / vision 0.10), restricted to players
+        // currently on the pitch.
+        //
+        // This used to be a local `crossing*0.6 + technique*0.3 +
+        // corners*0.1`, which put a player's actual corner attribute
+        // at a *tenth* of the decision — so the best crosser took every
+        // corner and a dedicated corner specialist essentially never
+        // took his own. `corners` reached nothing else in the engine,
+        // which made it the one attribute a player could max out for
+        // no in-match effect whatsoever.
+        let score_taker = |p: &MatchPlayer| {
+            score_corner_taker(
+                p.skills.technical.corners,
+                p.skills.technical.crossing,
+                p.skills.technical.technique,
+                p.skills.mental.vision,
+            )
+        };
+        let taker = players
+            .iter()
+            .filter(|p| {
+                p.side == Some(attacking_side)
+                    && !p.off_pitch
+                    && !p.tactical_position.current_position.is_goalkeeper()
+            })
+            .max_by(|a, b| {
+                score_taker(a)
+                    .partial_cmp(&score_taker(b))
+                    .unwrap_or(Ordering::Equal)
+            });
+
+        let Some(taker) = taker else {
+            // If no eligible outfielder was found, fall through to the
+            // goal kick.
+            return false;
+        };
+        let setup = self.corner_setup(side, outside_posts, context);
+        self.stage_corner(setup, taker, attacking_side, context, players, events);
+        true
+    }
+
+    /// Where the corner is taken from, where the ball died, and whether it
+    /// is still running out there.
+    fn corner_setup(
+        &self,
+        side: GoalSide,
+        outside_posts: bool,
+        context: &MatchContext,
+    ) -> CornerSetup {
         let field_width = context.field_size.width as f32;
         // Attacking team gets a corner. Place ball at the nearest corner
         // flag and hand it to the attacking team's best corner taker.
@@ -645,277 +720,294 @@ impl Ball {
         } else {
             field_height - inset
         };
-
-        // Find the attacking team's designated corner taker via the
-        // shared `score_corner_taker` blend (corners 0.45 / crossing
-        // 0.30 / technique 0.15 / vision 0.10), restricted to players
-        // currently on the pitch.
-        //
-        // This used to be a local `crossing*0.6 + technique*0.3 +
-        // corners*0.1`, which put a player's actual corner attribute
-        // at a *tenth* of the decision — so the best crosser took every
-        // corner and a dedicated corner specialist essentially never
-        // took his own. `corners` reached nothing else in the engine,
-        // which made it the one attribute a player could max out for
-        // no in-match effect whatsoever.
-        let score_taker = |p: &MatchPlayer| {
-            score_corner_taker(
-                p.skills.technical.corners,
-                p.skills.technical.crossing,
-                p.skills.technical.technique,
-                p.skills.mental.vision,
+        // **The ball dies where it went out and the taker comes to get
+        // it**, exactly as it does for a throw-in or a goal kick — and
+        // then, because a corner is the one restart NOT taken from where
+        // the ball died, he carries it to the arc. See
+        // [`AwaitedRestart::take_from`]; the two legs are what removes the
+        // 27.5 m the ball used to jump.
+        let walked = CornerWalk::armed();
+        let arc = Vector3::new(corner_x, corner_y, 0.0);
+        // ⚠ **The run-out is tied to the WALK, not to `RunOff` alone.**
+        // With `OF_CORNER_WALK` off — the default — the ball is placed on
+        // the arc on this tick and the taker is put on it, so letting it
+        // run out behind the goal first would only make the teleport that
+        // follows longer and more visible. The two switches have to agree.
+        // …and `outside_posts` for the same reason the goal-kick branch
+        // below carries it: a ball that crossed BETWEEN THE POSTS has hit
+        // the net, so it has nowhere to run out to, and letting it roll on
+        // would draw it through the mesh and out the back of the stadium.
+        let runs_out = walked && RunOff::armed() && outside_posts;
+        let died_at = if runs_out {
+            self.position
+        } else {
+            Vector3::new(
+                self.position.x.clamp(2.0, field_width - 2.0),
+                self.position.y.clamp(2.0, field_height - 2.0),
+                0.0,
             )
         };
-        let taker = players
-            .iter()
-            .filter(|p| {
-                p.side == Some(attacking_side)
-                    && !p.off_pitch
-                    && !p.tactical_position.current_position.is_goalkeeper()
-            })
-            .max_by(|a, b| {
-                score_taker(a)
-                    .partial_cmp(&score_taker(b))
-                    .unwrap_or(Ordering::Equal)
-            });
-
-        if let Some(taker) = taker {
-            let taker_id = taker.id;
-            let taker_team = taker.team_id;
-            #[cfg(feature = "match-logs")]
-            self.note_corner_source(players);
-            #[cfg(feature = "match-logs")]
-            crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(format!(
-                "award_corner: CORNER, ball ({:.1}, {:.1}, {:.2}) dies there; taker {taker_id} fetches it and carries it to ({corner_x:.1}, {corner_y:.1})",
-                self.position.x, self.position.y, self.position.z
-            ));
-            // **The ball dies where it went out and the taker comes to
-            // get it**, exactly as it does for a throw-in or a goal
-            // kick — and then, because a corner is the one restart NOT
-            // taken from where the ball died, he carries it to the
-            // arc. See [`AwaitedRestart::take_from`]; the two legs are
-            // what removes the 27.5 m the ball used to jump.
-            let walked = CornerWalk::armed();
-            let arc = Vector3::new(corner_x, corner_y, 0.0);
-            // ⚠ **The run-out is tied to the WALK, not to `RunOff`
-            // alone.** With `OF_CORNER_WALK` off — the default — the
-            // ball is placed on the arc on this tick and the taker is
-            // put on it, so letting it run out behind the goal first
-            // would only make the teleport that follows longer and
-            // more visible. The two switches have to agree.
-            // …and `outside_posts` for the same reason the goal-kick
-            // branch below carries it: a ball that crossed BETWEEN THE
-            // POSTS has hit the net, so it has nowhere to run out to,
-            // and letting it roll on would draw it through the mesh
-            // and out the back of the stadium.
-            let runs_out = walked && RunOff::armed() && outside_posts;
-            let died_at = if runs_out {
-                self.position
-            } else {
-                Vector3::new(
-                    self.position.x.clamp(2.0, field_width - 2.0),
-                    self.position.y.clamp(2.0, field_height - 2.0),
-                    0.0,
-                )
-            };
-            if !runs_out {
-                let rest = if walked { died_at } else { arc };
-                self.position.x = rest.x;
-                self.position.y = rest.y;
-                if !walked {
-                    self.position.z = 0.0;
-                }
-                self.velocity = Vector3::zeros();
-                self.spin = Vector3::zeros();
-            }
-
-            // Out of play, and NOBODY'S — the whole point. Handing the
-            // taker the ball on the tick it went behind is what let
-            // `MidfielderCrossingState` deliver it 50 ms later, from a
-            // flag the ball had teleported to and a man who had been
-            // teleported after it.
-            self.previous_owner = self.current_owner;
-            self.current_owner = if walked { None } else { Some(taker_id) };
-            self.ownership_duration = 0;
-            self.claim_cooldown = if walked { 0 } else { 30 };
-            self.flags.in_flight_state = if walked { 0 } else { 30 };
-            self.pass_target_player_id = None;
-            self.recent_passers.clear();
-            // Same as goal-kick restart: clear stale shot target so
-            // the eventual clearance/distribution doesn't false-credit
-            // a phantom save (see check_over_goal for the full bug
-            // explanation).
-            self.cached_shot_target = None;
-            // Dead ball: drop every open-play window in one place so a
-            // pass that was live when the ball went out cannot survive the
-            // restart and swallow the restart pass.
-            self.clear_open_play_metadata();
-            self.pass_origin_restart = PassOriginRestart::Corner;
-            // Pick the corner routine. The five routine scores used to
-            // be five hardcoded constants, which meant the routine was
-            // decided by the repeat-blocker alone: identical for a
-            // Premier League set-piece side and a pub team, in a gale
-            // and in still air, 3-0 up and 0-1 down. `score_corner_routines`
-            // is the intended model and it reads the taker's corners /
-            // crossing, the aerial match-up in the box, the keeper's
-            // command of his area, the score state and the weather.
-            let minute = (context.total_match_time / 60_000) as u32;
-            let is_home_attacking = taker_team == context.field_home_team_id;
-            let (att_goals, def_goals) = if is_home_attacking {
-                (context.score.home_team.get(), context.score.away_team.get())
-            } else {
-                (context.score.away_team.get(), context.score.home_team.get())
-            };
-            let late = minute >= 70;
-            let chasing_late = late && att_goals < def_goals;
-            let protecting_lead = late && att_goals > def_goals;
-
-            let aerial_advantage = Self::box_aerial_advantage(players, attacking_side, minute);
-            let gk_aerial = players
-                .iter()
-                .find(|p| {
-                    p.side != Some(attacking_side)
-                        && p.tactical_position.current_position.is_goalkeeper()
-                })
-                .map(|gk| {
-                    ((gk.skills.goalkeeping.command_of_area * 0.55
-                        + gk.skills.goalkeeping.aerial_reach * 0.45)
-                        / 20.0)
-                        .clamp(0.0, 1.0)
-                })
-                .unwrap_or(0.5);
-
-            let scores = score_corner_routines(
-                sc::n(taker.skills.technical.corners),
-                sc::n(taker.skills.technical.crossing),
-                aerial_advantage,
-                gk_aerial,
-                chasing_late,
-                protecting_lead,
-                &context.environment,
-            );
-            // One draw, at the award — the corner is a single
-            // opportunity and the routine is decided once, standing
-            // over it. `pick_corner_routine` samples the five scores
-            // rather than maximising over them; see its note.
-            let chosen_routine = pick_corner_routine(
-                &scores,
-                &context.set_piece_history,
-                is_home_attacking,
-                context.rng.unit_f32(),
-            );
-            self.pending_corner_routine = Some(chosen_routine);
-            // Stamp the taker's delivery quality so `resolve_corner_contest`
-            // can weigh the ball that actually arrives. Without it the
-            // contest reads only the two aerial duellists and the keeper —
-            // an elite dead-ball specialist and a centre-half hitting the
-            // first man produced identical corners.
-            #[cfg(feature = "match-logs")]
-            {
-                use crate::r#match::engine::set_pieces::CornerRoutine;
-                use crate::mid_run_diag::SetPieceDiag;
-                use std::sync::atomic::Ordering;
-                crate::mid_run_diag::CORNERS_AWARDED.fetch_add(1, Ordering::Relaxed);
-                let slot = match chosen_routine {
-                    CornerRoutine::NearPost => 0,
-                    CornerRoutine::PenaltySpot => 1,
-                    CornerRoutine::FarPost => 2,
-                    CornerRoutine::Short => 3,
-                    CornerRoutine::EdgeCutback => 4,
-                };
-                SetPieceDiag::note_corner(slot, sc::set_piece_delivery(taker, minute));
-            }
-            self.offside_snapshot = None;
-            // A carry that was still running ends HERE, at the byline —
-            // same reason as the goal kick and the throw-in: the whole
-            // ball update is skipped for the seconds the restart waits.
-            self.tick_carry_tracker(events);
-            let _ = taker_team;
-
-            // Dead-ball set-up. In real football both sides spend the
-            // thirty-to-sixty-second stoppage walking into a shape: the
-            // defending side brings ten men back, the attacking side
-            // loads the box and leaves a short option by the flag.
-            // Until the corner started waiting for its taker there was
-            // no stoppage here at all — the cross was struck 50 ms
-            // after the award — so the shape had to be WRITTEN, and
-            // before that it was simply whatever open-play positions
-            // the twenty-two were standing in when the ball went
-            // behind. After a counter that ended with a defender
-            // hooking it out, that routinely meant the DEFENDING SIDE
-            // HAD NOBODY BUT THE KEEPER IN ITS OWN BOX.
-            //
-            // The fetch and the carry are that stoppage, so the plan is
-            // now a set of stations both sides WALK to under
-            // `SetPieceHold`. `CornerShape::plan` still owns the geometry
-            // and the who-stands-where, and the engine still drains it
-            // in `apply_pending_set_piece_teleport` — that layer simply
-            // stopped writing the positions.
-            let goal_x = match side {
-                GoalSide::Home => 0.0,
-                GoalSide::Away => field_width,
-            };
-            // ⚠ The plan is laid out around the ARC, not around the
-            // ball: the ball is still on the byline where it went out
-            // and will be for several seconds, and a near-post station
-            // measured from there is in the wrong place by as much as
-            // the teleport this replaces.
-            self.pending_corner_teleports = CornerShape::plan(
-                players,
-                attacking_side,
-                taker_id,
-                goal_x,
-                arc,
-                field_width,
-                field_height,
-            );
-            // The aerial contest is armed when the kick becomes
-            // takeable, not at the award: `resolve_corner_contest`
-            // fires on the first airborne ownerless tick with a live
-            // `Corner` origin, and a walked corner spends its whole
-            // set-up ownerless.
-            self.corner_shape = Some(CornerShapeHold {
-                armed_tick: self.current_tick_cached,
-                live_tick: (!walked).then_some(self.current_tick_cached),
-                taker_id,
-            });
-
-            if walked {
-                let fetch = (taker.position - died_at).magnitude();
-                #[cfg(feature = "match-logs")]
-                RestartCensus::note_corner_walk(fetch, (died_at - arc).magnitude());
-                #[cfg(feature = "match-logs")]
-                if runs_out {
-                    RestartCensus::note_run_out_begun();
-                }
-                self.awaiting_restart = Some(AwaitedRestart {
-                    taker_id,
-                    spot: died_at,
-                    take_from: Some(arc),
-                    carrying: false,
-                    settled: !runs_out,
-                    origin: PassOriginRestart::Corner,
-                    awarded_tick: context.current_tick(),
-                    patience_ticks: AwaitedRestart::patience_for(fetch),
-                    settled_tick: None,
-                    hold: None,
-                    quiet: RestartQuiet::default(),
-                });
-                events.add_ball_event(BallEvent::TakeMe(taker_id));
-            } else {
-                // `OF_CORNER_WALK=off`: the ball is already on the arc,
-                // the taker owns it, and he is teleported onto it so
-                // `move_to`'s distance check does not null the
-                // ownership on the next tick.
-                self.record_touch(taker_id, taker_team, self.current_tick_cached, true);
-                self.pending_set_piece_teleport = Some((taker_id, self.position));
-                events.add_ball_event(BallEvent::Claimed(taker_id));
-            }
-
-            return true;
+        CornerSetup {
+            field_width,
+            field_height,
+            arc,
+            died_at,
+            walked,
+            runs_out,
         }
-        // If no eligible outfielder was found, fall through to the goal kick.
-        false
+    }
+
+    /// Put the ball where the corner leaves it, take it off whoever had it,
+    /// and choose the routine.
+    fn stage_corner(
+        &mut self,
+        setup: CornerSetup,
+        taker: &MatchPlayer,
+        attacking_side: PlayerSide,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        let CornerSetup {
+            arc,
+            died_at,
+            walked,
+            runs_out,
+            ..
+        } = setup;
+        let taker_id = taker.id;
+        #[cfg(feature = "match-logs")]
+        self.note_corner_source(players);
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(format!(
+            "award_corner: CORNER, ball ({:.1}, {:.1}, {:.2}) dies there; taker {taker_id} fetches it and carries it to ({:.1}, {:.1})",
+            self.position.x, self.position.y, self.position.z, arc.x, arc.y
+        ));
+        if !runs_out {
+            let rest = if walked { died_at } else { arc };
+            self.position.x = rest.x;
+            self.position.y = rest.y;
+            if !walked {
+                self.position.z = 0.0;
+            }
+            self.velocity = Vector3::zeros();
+            self.spin = Vector3::zeros();
+        }
+
+        // Out of play, and NOBODY'S — the whole point. Handing the
+        // taker the ball on the tick it went behind is what let
+        // `MidfielderCrossingState` deliver it 50 ms later, from a
+        // flag the ball had teleported to and a man who had been
+        // teleported after it.
+        self.previous_owner = self.current_owner;
+        self.current_owner = if walked { None } else { Some(taker_id) };
+        self.ownership_duration = 0;
+        self.claim_cooldown = if walked { 0 } else { 30 };
+        self.flags.in_flight_state = if walked { 0 } else { 30 };
+        self.pass_target_player_id = None;
+        self.recent_passers.clear();
+        // Same as goal-kick restart: clear stale shot target so
+        // the eventual clearance/distribution doesn't false-credit
+        // a phantom save (see check_over_goal for the full bug
+        // explanation).
+        self.cached_shot_target = None;
+        // Dead ball: drop every open-play window in one place so a
+        // pass that was live when the ball went out cannot survive the
+        // restart and swallow the restart pass.
+        self.clear_open_play_metadata();
+        self.pass_origin_restart = PassOriginRestart::Corner;
+        // A carry that was still running ends HERE, at the byline —
+        // same reason as the goal kick and the throw-in: the whole
+        // ball update is skipped for the seconds the restart waits.
+        self.tick_carry_tracker(events);
+
+        self.arm_corner_restart(setup, taker, attacking_side, context, players, events);
+    }
+
+    /// Pick the routine and put the taker and both sides on their stations.
+    fn arm_corner_restart(
+        &mut self,
+        setup: CornerSetup,
+        taker: &MatchPlayer,
+        attacking_side: PlayerSide,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        let CornerSetup {
+            field_width,
+            field_height,
+            arc,
+            died_at,
+            walked,
+            runs_out,
+        } = setup;
+        let taker_id = taker.id;
+        let taker_team = taker.team_id;
+        let minute = (context.total_match_time / 60_000) as u32;
+        let chosen_routine =
+            Self::choose_corner_routine(taker, attacking_side, minute, context, players);
+        self.pending_corner_routine = Some(chosen_routine);
+        // Stamp the taker's delivery quality so `resolve_corner_contest`
+        // can weigh the ball that actually arrives. Without it the
+        // contest reads only the two aerial duellists and the keeper —
+        // an elite dead-ball specialist and a centre-half hitting the
+        // first man produced identical corners.
+        #[cfg(feature = "match-logs")]
+        {
+            use crate::r#match::engine::set_pieces::CornerRoutine;
+            use crate::mid_run_diag::SetPieceDiag;
+            use std::sync::atomic::Ordering;
+            crate::mid_run_diag::CORNERS_AWARDED.fetch_add(1, Ordering::Relaxed);
+            let slot = match chosen_routine {
+                CornerRoutine::NearPost => 0,
+                CornerRoutine::PenaltySpot => 1,
+                CornerRoutine::FarPost => 2,
+                CornerRoutine::Short => 3,
+                CornerRoutine::EdgeCutback => 4,
+            };
+            SetPieceDiag::note_corner(slot, sc::set_piece_delivery(taker, minute));
+        }
+        self.offside_snapshot = None;
+
+        // Dead-ball set-up. In real football both sides spend the
+        // thirty-to-sixty-second stoppage walking into a shape: the
+        // defending side brings ten men back, the attacking side
+        // loads the box and leaves a short option by the flag.
+        // Until the corner started waiting for its taker there was
+        // no stoppage here at all — the cross was struck 50 ms
+        // after the award — so the shape had to be WRITTEN, and
+        // before that it was simply whatever open-play positions
+        // the twenty-two were standing in when the ball went
+        // behind. After a counter that ended with a defender
+        // hooking it out, that routinely meant the DEFENDING SIDE
+        // HAD NOBODY BUT THE KEEPER IN ITS OWN BOX.
+        //
+        // The fetch and the carry are that stoppage, so the plan is
+        // now a set of stations both sides WALK to under
+        // `SetPieceHold`. `CornerShape::plan` still owns the geometry
+        // and the who-stands-where, and the engine still drains it
+        // in `apply_pending_set_piece_teleport` — that layer simply
+        // stopped writing the positions.
+        // ⚠ The plan is laid out around the ARC, not around the
+        // ball: the ball is still on the byline where it went out
+        // and will be for several seconds, and a near-post station
+        // measured from there is in the wrong place by as much as
+        // the teleport this replaces.
+        self.pending_corner_teleports = CornerShape::plan(
+            players,
+            attacking_side,
+            taker_id,
+            self.corner_goal_x(arc),
+            arc,
+            field_width,
+            field_height,
+        );
+        // The aerial contest is armed when the kick becomes
+        // takeable, not at the award: `resolve_corner_contest`
+        // fires on the first airborne ownerless tick with a live
+        // `Corner` origin, and a walked corner spends its whole
+        // set-up ownerless.
+        self.corner_shape = Some(CornerShapeHold {
+            armed_tick: self.current_tick_cached,
+            live_tick: (!walked).then_some(self.current_tick_cached),
+            taker_id,
+        });
+
+        if walked {
+            let fetch = (taker.position - died_at).magnitude();
+            #[cfg(feature = "match-logs")]
+            RestartCensus::note_corner_walk(fetch, (died_at - arc).magnitude());
+            #[cfg(feature = "match-logs")]
+            if runs_out {
+                RestartCensus::note_run_out_begun();
+            }
+            self.awaiting_restart = Some(AwaitedRestart {
+                taker_id,
+                spot: died_at,
+                take_from: Some(arc),
+                carrying: false,
+                settled: !runs_out,
+                origin: PassOriginRestart::Corner,
+                awarded_tick: context.current_tick(),
+                patience_ticks: AwaitedRestart::patience_for(fetch),
+                settled_tick: None,
+                hold: None,
+                quiet: RestartQuiet::default(),
+            });
+            events.add_ball_event(BallEvent::TakeMe(taker_id));
+        } else {
+            // `OF_CORNER_WALK=off`: the ball is already on the arc,
+            // the taker owns it, and he is teleported onto it so
+            // `move_to`'s distance check does not null the
+            // ownership on the next tick.
+            self.record_touch(taker_id, taker_team, self.current_tick_cached, true);
+            self.pending_set_piece_teleport = Some((taker_id, self.position));
+            events.add_ball_event(BallEvent::Claimed(taker_id));
+        }
+    }
+
+    /// The five routine scores, sampled once — the corner is a single
+    /// opportunity and the routine is decided once, standing over it.
+    fn choose_corner_routine(
+        taker: &MatchPlayer,
+        attacking_side: PlayerSide,
+        minute: u32,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+    ) -> crate::r#match::engine::set_pieces::CornerRoutine {
+        let taker_team = taker.team_id;
+        let is_home_attacking = taker_team == context.field_home_team_id;
+        let (att_goals, def_goals) = if is_home_attacking {
+            (context.score.home_team.get(), context.score.away_team.get())
+        } else {
+            (context.score.away_team.get(), context.score.home_team.get())
+        };
+        let late = minute >= 70;
+        let chasing_late = late && att_goals < def_goals;
+        let protecting_lead = late && att_goals > def_goals;
+
+        let aerial_advantage = Ball::box_aerial_advantage(players, attacking_side, minute);
+        let gk_aerial = players
+            .iter()
+            .find(|p| {
+                p.side != Some(attacking_side)
+                    && p.tactical_position.current_position.is_goalkeeper()
+            })
+            .map(|gk| {
+                ((gk.skills.goalkeeping.command_of_area * 0.55
+                    + gk.skills.goalkeeping.aerial_reach * 0.45)
+                    / 20.0)
+                    .clamp(0.0, 1.0)
+            })
+            .unwrap_or(0.5);
+
+        let scores = score_corner_routines(
+            sc::n(taker.skills.technical.corners),
+            sc::n(taker.skills.technical.crossing),
+            aerial_advantage,
+            gk_aerial,
+            chasing_late,
+            protecting_lead,
+            &context.environment,
+        );
+        // One draw, at the award. `pick_corner_routine` samples the five
+        // scores rather than maximising over them; see its note.
+        pick_corner_routine(
+            &scores,
+            &context.set_piece_history,
+            is_home_attacking,
+            context.rng.unit_f32(),
+        )
+    }
+
+    /// The goal the corner is attacking, from the arc's own x.
+    fn corner_goal_x(&self, arc: Vector3<f32>) -> f32 {
+        if arc.x < self.field_width * 0.5 {
+            0.0
+        } else {
+            self.field_width
+        }
     }
 
     /// Ball crossed goal line within goal width but above crossbar — goal kick.
@@ -1078,26 +1170,11 @@ impl Ball {
         // its whole run-out past the byline, so without this the corner or
         // goal kick is re-awarded every tick, `awarded_tick` is rewritten
         // each time and the patience bound becomes unreachable.
-        if self.goal_scored || self.in_net.is_some() || self.awaiting_restart.is_some() {
+        let Some((side, goal_center_y)) = self.endline_crossing(context) else {
             return;
-        }
+        };
 
-        let field_width = context.field_size.width as f32;
         let goal_half_width = GOAL_WIDTH;
-
-        // Which endline, if either, the ball is past.
-        let (crossed_side, goal_center_y) = if self.position.x <= 0.0 {
-            (Some(GoalSide::Home), context.goal_positions.left.y)
-        } else if self.position.x >= field_width {
-            (Some(GoalSide::Away), context.goal_positions.right.y)
-        } else {
-            (None, 0.0)
-        };
-
-        let side = match crossed_side {
-            Some(s) => s,
-            None => return,
-        };
 
         // Between the posts this used to return, on the assumption that
         // `check_goal` / `check_over_goal` had it covered. They do not
@@ -1171,47 +1248,8 @@ impl Ball {
 
         let is_corner = last_toucher_side == Some(defending_side);
 
-        // Endline census — total crossings and how they split. A drop in
-        // corners can mean either "fewer balls go out behind" or "the same
-        // number go out but off the attacker", and the two have opposite
-        // fixes. The corner count alone cannot distinguish them.
         #[cfg(feature = "match-logs")]
-        {
-            let last_state = self
-                .last_touch_player_id
-                .and_then(|pid| players.iter().find(|p| p.id == pid))
-                .map(|p| p.state.compact_id())
-                .unwrap_or(0);
-            EndlineCensus::note(is_corner, last_state);
-            if let Some(census) = self.pass_block_census.take() {
-                census.close(PassBlockCensus::BEHIND);
-                if is_corner {
-                    crate::mid_run_diag::PASS_BLOCK_BEHIND_FIRED
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-            }
-            // …and when it is a goal kick, how far did the ball run after
-            // the last man touched it, and what was he doing? A pass
-            // struck too hard and a clearance hammered out are the same
-            // count and completely different bugs.
-            if !is_corner {
-                let run = (self.position - self.last_touch_position).magnitude();
-                let toucher_state = self
-                    .last_touch_player_id
-                    .and_then(|pid| players.iter().find(|p| p.id == pid))
-                    .map(|p| p.state.compact_id())
-                    .unwrap_or(0);
-                // Was this a MISSED SHOT rather than a pass? The last
-                // toucher being the last shooter is the test. The states
-                // above cannot answer it: they are read now, and a shooter
-                // is back in an off-ball state long before his shot
-                // reaches the line.
-                let was_shot = self.last_shot_shooter_id.is_some()
-                    && self.last_shot_shooter_id == self.last_touch_player_id;
-                let speed = Vector3::new(self.velocity.x, self.velocity.y, 0.0).magnitude();
-                EndlineCensus::note_goal_kick_run(toucher_state, run, was_shot, speed);
-            }
-        }
+        self.note_endline_census(is_corner, players);
 
         if is_corner
             && self.award_corner(
@@ -1226,67 +1264,141 @@ impl Ball {
             return;
         }
 
-        // Goal kick: give ball to defending goalkeeper
-        if let Some(gk) = players.iter().find(|p| {
-            p.side == Some(defending_side)
+        self.award_endline_goal_kick(side, outside_posts, goal_center_y, context, players, events);
+    }
+
+    /// Which endline, if either, the ball is past, and that goal's centre.
+    fn endline_crossing(&self, context: &MatchContext) -> Option<(GoalSide, f32)> {
+        if self.goal_scored || self.in_net.is_some() || self.awaiting_restart.is_some() {
+            return None;
+        }
+        let field_width = context.field_size.width as f32;
+        if self.position.x <= 0.0 {
+            Some((GoalSide::Home, context.goal_positions.left.y))
+        } else if self.position.x >= field_width {
+            Some((GoalSide::Away, context.goal_positions.right.y))
+        } else {
+            None
+        }
+    }
+
+    /// Endline census — total crossings and how they split. A drop in
+    /// corners can mean either "fewer balls go out behind" or "the same
+    /// number go out but off the attacker", and the two have opposite
+    /// fixes. The corner count alone cannot distinguish them.
+    #[cfg(feature = "match-logs")]
+    fn note_endline_census(&mut self, is_corner: bool, players: &[MatchPlayer]) {
+        let last_state = self
+            .last_touch_player_id
+            .and_then(|pid| players.iter().find(|p| p.id == pid))
+            .map(|p| p.state.compact_id())
+            .unwrap_or(0);
+        EndlineCensus::note(is_corner, last_state);
+        if let Some(census) = self.pass_block_census.take() {
+            census.close(PassBlockCensus::BEHIND);
+            if is_corner {
+                crate::mid_run_diag::PASS_BLOCK_BEHIND_FIRED
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        // …and when it is a goal kick, how far did the ball run after
+        // the last man touched it, and what was he doing? A pass
+        // struck too hard and a clearance hammered out are the same
+        // count and completely different bugs.
+        if !is_corner {
+            let run = (self.position - self.last_touch_position).magnitude();
+            let toucher_state = self
+                .last_touch_player_id
+                .and_then(|pid| players.iter().find(|p| p.id == pid))
+                .map(|p| p.state.compact_id())
+                .unwrap_or(0);
+            // Was this a MISSED SHOT rather than a pass? The last
+            // toucher being the last shooter is the test. The states
+            // above cannot answer it: they are read now, and a shooter
+            // is back in an off-ball state long before his shot
+            // reaches the line.
+            let was_shot = self.last_shot_shooter_id.is_some()
+                && self.last_shot_shooter_id == self.last_touch_player_id;
+            let speed = Vector3::new(self.velocity.x, self.velocity.y, 0.0).magnitude();
+            EndlineCensus::note_goal_kick_run(toucher_state, run, was_shot, speed);
+        }
+    }
+
+    /// Goal kick: give the ball to the defending goalkeeper.
+    fn award_endline_goal_kick(
+        &mut self,
+        side: GoalSide,
+        outside_posts: bool,
+        goal_center_y: f32,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        let field_width = context.field_size.width as f32;
+        let Some(gk) = players.iter().find(|p| {
+            p.side
+                == Some(match side {
+                    GoalSide::Home => PlayerSide::Left,
+                    GoalSide::Away => PlayerSide::Right,
+                })
                 && !p.off_pitch
                 && p.tactical_position.current_position.is_goalkeeper()
-        }) {
-            let gk_id = gk.id;
+        }) else {
+            return;
+        };
+        let gk_id = gk.id;
 
-            // The kick is taken from the point on the byline the ball
-            // crossed at, brought onto the pitch by the width of a stride
-            // and no further — see `goal_kick_spot`, which owns this
-            // placement for the over-the-bar case as well.
-            let byline = match side {
-                GoalSide::Home => 0.0,
-                GoalSide::Away => field_width,
-            };
-            let exit_y = self
-                .line_crossing(ExitAxis::Endline, byline)
-                .map(|p| p.y)
-                .unwrap_or(self.position.y);
-            let spot = self.goal_kick_spot(side, exit_y);
+        // The kick is taken from the point on the byline the ball
+        // crossed at, brought onto the pitch by the width of a stride
+        // and no further — see `goal_kick_spot`, which owns this
+        // placement for the over-the-bar case as well.
+        let byline = match side {
+            GoalSide::Home => 0.0,
+            GoalSide::Away => field_width,
+        };
+        let exit_y = self
+            .line_crossing(ExitAxis::Endline, byline)
+            .map(|p| p.y)
+            .unwrap_or(self.position.y);
+        let spot = self.goal_kick_spot(side, exit_y);
 
-            // ⚠ **A ball that crossed BETWEEN THE POSTS does not run out.**
-            // The goal is in the way. This branch takes those balls too —
-            // `check_goal` declines a ball with no shot behind it (a cross
-            // carrying through, a through-ball hit too hard), and they land
-            // here rather than in the net — and letting one roll on would
-            // draw it straight through the netting and out the back of the
-            // stadium. It has hit the net, so it stops where it hit it.
-            let runs_out = RunOff::armed() && outside_posts;
-            #[cfg(feature = "match-logs")]
-            if crate::r#match::engine::ball::ball::frame_trace::FrameTrace::captures_over_the_bar()
-            {
-                crate::r#match::engine::ball::ball::frame_trace::FrameTrace::open(format!(
-                    "ENDLINE GOAL KICK at ({:.1}, {:.1}, {:.2}) v({:.2},{:.2},{:.3}) outside_posts={outside_posts} runs_out={runs_out} -> from ({:.1}, {:.1})",
-                    self.position.x,
-                    self.position.y,
-                    self.position.z,
-                    self.velocity.x,
-                    self.velocity.y,
-                    self.velocity.z,
-                    spot.x,
-                    spot.y
-                ));
-            }
-            #[cfg(feature = "match-logs")]
-            crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(format!(
-                "check_wide_of_goal: GOAL KICK, ball ({:.1}, {:.1}, {:.2}) {}; GK {gk_id} takes it from ({:.1}, {:.1})",
+        // ⚠ **A ball that crossed BETWEEN THE POSTS does not run out.**
+        // The goal is in the way. This branch takes those balls too —
+        // `check_goal` declines a ball with no shot behind it (a cross
+        // carrying through, a through-ball hit too hard), and they land
+        // here rather than in the net — and letting one roll on would
+        // draw it straight through the netting and out the back of the
+        // stadium. It has hit the net, so it stops where it hit it.
+        let runs_out = RunOff::armed() && outside_posts;
+        #[cfg(feature = "match-logs")]
+        if crate::r#match::engine::ball::ball::frame_trace::FrameTrace::captures_over_the_bar() {
+            crate::r#match::engine::ball::ball::frame_trace::FrameTrace::open(format!(
+                "ENDLINE GOAL KICK at ({:.1}, {:.1}, {:.2}) v({:.2},{:.2},{:.3}) outside_posts={outside_posts} runs_out={runs_out} -> from ({:.1}, {:.1})",
                 self.position.x,
                 self.position.y,
                 self.position.z,
-                if runs_out {
-                    "runs out behind the goal"
-                } else {
-                    "dies there"
-                },
+                self.velocity.x,
+                self.velocity.y,
+                self.velocity.z,
                 spot.x,
                 spot.y
             ));
-            let _ = goal_center_y;
-            self.award_goal_kick(gk_id, spot, runs_out, context, players, events);
         }
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(format!(
+            "check_wide_of_goal: GOAL KICK, ball ({:.1}, {:.1}, {:.2}) {}; GK {gk_id} takes it from ({:.1}, {:.1})",
+            self.position.x,
+            self.position.y,
+            self.position.z,
+            if runs_out {
+                "runs out behind the goal"
+            } else {
+                "dies there"
+            },
+            spot.x,
+            spot.y
+        ));
+        let _ = goal_center_y;
+        self.award_goal_kick(gk_id, spot, runs_out, context, players, events);
     }
 }

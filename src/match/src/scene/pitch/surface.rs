@@ -27,8 +27,10 @@ pub(super) enum Pattern {
     Longitudinal,
 }
 
-pub(super) fn catalogue() -> &'static [Style; 20] {
-    &styles::STYLES
+impl Style {
+    pub(super) fn catalogue() -> &'static [Style; 20] {
+        &styles::STYLES
+    }
 }
 
 /// Chosen once during bring-up and reused by the surrounding grass.
@@ -40,7 +42,7 @@ impl Surface {
     pub(super) fn from_id(id: u8) -> Self {
         Self(
             id.checked_sub(1)
-                .and_then(|i| catalogue().get(i as usize))
+                .and_then(|i| Style::catalogue().get(i as usize))
                 .filter(|style| style.id == id),
         )
     }
@@ -105,85 +107,108 @@ impl Style {
             0.12 * ((along / 21.3 + phase).sin() + 0.4 * (along / 8.7 - phase).cos())
         };
         for band in 0..count {
-            let from = -span.x * 0.5 + width * band as f32;
-            let rows = (width / Sward::CELL).ceil() as usize + 2;
-            let columns = (span.y / Sward::CELL).ceil() as usize;
-            let base = sward.positions.len() as u32;
-            let pass = Pass {
-                tint: tint(band),
-                facing: if band % 2 == 1 { -1.0 } else { 1.0 },
-                phase: Vec2::new(
-                    Sward::hash(Vec2::new(band as f32, self.seed as f32)),
-                    Sward::hash(Vec2::new(self.seed as f32, band as f32 + 29.0)),
-                ),
-                lines: [0, Pitch::STRIPES],
-            };
-            for row in 0..=rows {
-                let fraction = if row == 0 {
-                    0.0
-                } else if row == rows {
-                    1.0
-                } else {
-                    (Sward::FEATHER
-                        + (width - 2.0 * Sward::FEATHER) * (row - 1) as f32 / (rows - 2) as f32)
-                        / width
-                };
-                for column in 0..=columns {
-                    let along = -span.y * 0.5 + span.y * column as f32 / columns as f32;
-                    let across = from
-                        + width * fraction
-                        + drift(band, along) * (1.0 - fraction)
-                        + drift(band + 1, along) * fraction;
-                    // A rotation, not a reflection, preserves triangle winding.
-                    let point = if lengthwise {
-                        Vec2::new(along, -across)
-                    } else {
-                        Vec2::new(across, along)
-                    };
-                    let uv = Sward::grass_uv(
-                        Vec2::new(across, along),
-                        pass,
-                        Pitch::TURF_TILE * self.grain_scale,
-                    );
-                    let edge_tint = if row == 0 && band > 0 {
-                        (tint(band - 1) + pass.tint) * 0.5
-                    } else if row == rows && band + 1 < count {
-                        (tint(band + 1) + pass.tint) * 0.5
-                    } else {
-                        pass.tint
-                    };
-                    sward.positions.push([point.x, 0.0, point.y]);
-                    sward.normals.push([0.0, 1.0, 0.0]);
-                    sward.uvs.push(uv.to_array());
-                    sward.tints.push(edge_tint);
-                    // Keep wear at the actual goals; shift only the organic variation.
-                    sward.ground.push(
-                        Sward::ground(point, true, self.wear + (upkeep.worn() - 1.0), 0.0)
-                            * Sward::ground(
-                                point + offset,
-                                false,
-                                0.0,
-                                self.variation + (upkeep.rough() - 1.0),
-                            ),
-                    );
-                }
-            }
-            let stride = (columns + 1) as u32;
-            for row in 0..rows as u32 {
-                for column in 0..columns as u32 {
-                    let a = base + row * stride + column;
-                    sward.indices.extend_from_slice(&[
-                        a,
-                        a + 1,
-                        a + stride,
-                        a + 1,
-                        a + stride + 1,
-                        a + stride,
-                    ]);
-                }
-            }
+            self.lay_band(
+                &mut sward, band, span, width, count, lengthwise, offset, upkeep, &tint, &drift,
+            );
         }
         sward.build()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lay_band(
+        &self,
+        sward: &mut Sward,
+        band: usize,
+        span: Vec2,
+        width: f32,
+        count: usize,
+        lengthwise: bool,
+        offset: Vec2,
+        upkeep: Upkeep,
+        tint: &impl Fn(usize) -> Vec3,
+        drift: &impl Fn(usize, f32) -> f32,
+    ) {
+        let from = -span.x * 0.5 + width * band as f32;
+        let rows = (width / Sward::CELL).ceil() as usize + 2;
+        let columns = (span.y / Sward::CELL).ceil() as usize;
+        let base = sward.positions.len() as u32;
+        let pass = Pass {
+            tint: tint(band),
+            facing: if band % 2 == 1 { -1.0 } else { 1.0 },
+            phase: Vec2::new(
+                Sward::hash(Vec2::new(band as f32, self.seed as f32)),
+                Sward::hash(Vec2::new(self.seed as f32, band as f32 + 29.0)),
+            ),
+            lines: [0, Pitch::STRIPES],
+        };
+        for row in 0..=rows {
+            let fraction = if row == 0 {
+                0.0
+            } else if row == rows {
+                1.0
+            } else {
+                (Sward::FEATHER
+                    + (width - 2.0 * Sward::FEATHER) * (row - 1) as f32 / (rows - 2) as f32)
+                    / width
+            };
+            for column in 0..=columns {
+                let along = -span.y * 0.5 + span.y * column as f32 / columns as f32;
+                let across = from
+                    + width * fraction
+                    + drift(band, along) * (1.0 - fraction)
+                    + drift(band + 1, along) * fraction;
+                // A rotation, not a reflection, preserves triangle winding.
+                let point = if lengthwise {
+                    Vec2::new(along, -across)
+                } else {
+                    Vec2::new(across, along)
+                };
+                let uv = Sward::grass_uv(
+                    Vec2::new(across, along),
+                    pass,
+                    Pitch::TURF_TILE * self.grain_scale,
+                );
+                let edge_tint = if row == 0 && band > 0 {
+                    (tint(band - 1) + pass.tint) * 0.5
+                } else if row == rows && band + 1 < count {
+                    (tint(band + 1) + pass.tint) * 0.5
+                } else {
+                    pass.tint
+                };
+                sward.positions.push([point.x, 0.0, point.y]);
+                sward.normals.push([0.0, 1.0, 0.0]);
+                sward.uvs.push(uv.to_array());
+                sward.tints.push(edge_tint);
+                // Keep wear at the actual goals; shift only the organic variation.
+                sward.ground.push(
+                    Sward::ground(point, true, self.wear + (upkeep.worn() - 1.0), 0.0)
+                        * Sward::ground(
+                            point + offset,
+                            false,
+                            0.0,
+                            self.variation + (upkeep.rough() - 1.0),
+                        ),
+                );
+            }
+        }
+        Self::stitch(sward, base, rows, columns);
+    }
+
+    fn stitch(sward: &mut Sward, base: u32, rows: usize, columns: usize) {
+        let stride = (columns + 1) as u32;
+        for row in 0..rows as u32 {
+            for column in 0..columns as u32 {
+                let a = base + row * stride + column;
+                sward.indices.extend_from_slice(&[
+                    a,
+                    a + 1,
+                    a + stride,
+                    a + 1,
+                    a + stride + 1,
+                    a + stride,
+                ]);
+            }
+        }
     }
     // Apply the same palette to the surround; the shared texture still grades upkeep.
     fn colour(&self) -> Vec3 {

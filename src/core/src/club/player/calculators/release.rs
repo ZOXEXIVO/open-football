@@ -364,7 +364,7 @@ mod tests {
     use super::*;
     use crate::PlayerFieldPositionGroup;
     use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
-    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPlan, PlayerPosition,

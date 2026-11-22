@@ -396,9 +396,7 @@ mod tests {
         let mut open = makeup(1);
         open.mental.adaptability = 18;
         let open = CoachCard::from_makeup(&open);
-        assert!(
-            open.temperament.resistance_to_change() < rigid.temperament.resistance_to_change()
-        );
+        assert!(open.temperament.resistance_to_change() < rigid.temperament.resistance_to_change());
     }
 
     #[test]
@@ -451,7 +449,9 @@ mod tests {
         // plain LCG, independent of the draw's own hash.
         let mut lcg = 0x2545_F491_4F6C_DD1Du64;
         let mut next = || {
-            lcg = lcg.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            lcg = lcg
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (lcg >> 40) as f32 / (1u64 << 24) as f32
         };
         let mut generated = [0.0f32; 4];
@@ -459,7 +459,10 @@ mod tests {
         let n = 1_000;
         for i in 0..n {
             let standing = next();
-            let (low, high) = ((standing * 8.0) as i32, (6 + (standing * 14.0) as i32).min(20));
+            let (low, high) = (
+                (standing * 8.0) as i32,
+                (6 + (standing * 14.0) as i32).min(20),
+            );
             let mut attribute =
                 || (low + ((next() * (high - low + 1) as f32) as i32).min(high - low)) as u8;
             let mut m = makeup(i);
@@ -474,15 +477,26 @@ mod tests {
             m.tactical_knowledge = attribute();
             let g = CoachCard::from_makeup(&m).temperament;
             let d = CoachCard::drawn(i as u64 * 7919, 1).temperament;
-            for (sum, v) in generated.iter_mut().zip([g.risk_tolerance, g.caution, g.volatility, g.read]) {
+            for (sum, v) in
+                generated
+                    .iter_mut()
+                    .zip([g.risk_tolerance, g.caution, g.volatility, g.read])
+            {
                 *sum += v / n as f32;
             }
-            for (sum, v) in drawn.iter_mut().zip([d.risk_tolerance, d.caution, d.volatility, d.read]) {
+            for (sum, v) in
+                drawn
+                    .iter_mut()
+                    .zip([d.risk_tolerance, d.caution, d.volatility, d.read])
+            {
                 *sum += v / n as f32;
             }
         }
         for (g, d) in generated.iter().zip(drawn.iter()) {
-            assert!((g - d).abs() < 0.03, "generated {generated:?} drawn {drawn:?}");
+            assert!(
+                (g - d).abs() < 0.03,
+                "generated {generated:?} drawn {drawn:?}"
+            );
         }
     }
 }

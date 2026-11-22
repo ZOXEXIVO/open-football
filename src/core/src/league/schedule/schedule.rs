@@ -38,6 +38,15 @@ impl Schedule {
         Schedule { tours: Vec::new() }
     }
 
+    /// True once every fixture in every tour has a result, and there is at
+    /// least one tour.
+    pub fn fully_played(&self) -> bool {
+        !self.tours.is_empty()
+            && self.tours.iter().all(|tour| {
+                !tour.items.is_empty() && tour.items.iter().all(|item| item.result.is_some())
+            })
+    }
+
     pub fn simulate(
         &mut self,
         league_settings: &LeagueSettings,

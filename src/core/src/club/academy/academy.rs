@@ -274,7 +274,7 @@ impl ClubAcademy {
             }
 
             let group = player.position().position_group();
-            health.group_counts[group_index(group)] += 1;
+            health.group_counts[group.index()] += 1;
 
             // "Ready for youth" is *eligibility for the youth pathway*, not a
             // quality bar: an old-enough, healthy, non-exhausted prospect
@@ -335,7 +335,8 @@ impl ClubAcademy {
             .filter_map(|(idx, group)| {
                 let deficit = targets[idx].saturating_sub(health.group_counts[idx]);
                 if deficit >= self.pathway_policy.max_group_imbalance.min(2) {
-                    let urgency = deficit * recruitment_group_urgency(group);
+                    let brief = AcademyRecruitmentBrief { group };
+                    let urgency = deficit * brief.urgency();
                     Some((group, urgency))
                 } else {
                     None
@@ -513,7 +514,51 @@ impl ClubAcademy {
         intake_index: usize,
     ) -> Option<PlayerPositionType> {
         let group = *self.recruitment_priorities.get(intake_index)?;
-        Some(position_for_priority_group(group, intake_index))
+        Some(AcademyRecruitmentBrief { group }.intake_position(intake_index))
+    }
+}
+
+/// The academy's brief for one position group: how urgently a shortage
+/// there should be filled, and which concrete position the next intake
+/// slot in that group becomes.
+#[derive(Debug, Clone, Copy)]
+struct AcademyRecruitmentBrief {
+    group: PlayerFieldPositionGroup,
+}
+
+impl AcademyRecruitmentBrief {
+    fn urgency(self) -> usize {
+        match self.group {
+            PlayerFieldPositionGroup::Goalkeeper => 3,
+            PlayerFieldPositionGroup::Defender => 1,
+            PlayerFieldPositionGroup::Midfielder => 1,
+            PlayerFieldPositionGroup::Forward => 1,
+        }
+    }
+
+    fn intake_position(self, intake_index: usize) -> PlayerPositionType {
+        match self.group {
+            PlayerFieldPositionGroup::Goalkeeper => PlayerPositionType::Goalkeeper,
+            PlayerFieldPositionGroup::Defender => match intake_index % 4 {
+                0 => PlayerPositionType::DefenderCenter,
+                1 => PlayerPositionType::DefenderLeft,
+                2 => PlayerPositionType::DefenderRight,
+                _ => PlayerPositionType::DefensiveMidfielder,
+            },
+            PlayerFieldPositionGroup::Midfielder => match intake_index % 5 {
+                0 => PlayerPositionType::MidfielderCenter,
+                1 => PlayerPositionType::MidfielderLeft,
+                2 => PlayerPositionType::MidfielderRight,
+                3 => PlayerPositionType::AttackingMidfielderCenter,
+                _ => PlayerPositionType::DefensiveMidfielder,
+            },
+            PlayerFieldPositionGroup::Forward => match intake_index % 4 {
+                0 => PlayerPositionType::Striker,
+                1 => PlayerPositionType::ForwardLeft,
+                2 => PlayerPositionType::ForwardRight,
+                _ => PlayerPositionType::ForwardCenter,
+            },
+        }
     }
 }
 
@@ -657,52 +702,6 @@ impl<'a> AcademyReadinessScorer<'a> {
     }
 }
 
-fn position_for_priority_group(
-    group: PlayerFieldPositionGroup,
-    intake_index: usize,
-) -> PlayerPositionType {
-    match group {
-        PlayerFieldPositionGroup::Goalkeeper => PlayerPositionType::Goalkeeper,
-        PlayerFieldPositionGroup::Defender => match intake_index % 4 {
-            0 => PlayerPositionType::DefenderCenter,
-            1 => PlayerPositionType::DefenderLeft,
-            2 => PlayerPositionType::DefenderRight,
-            _ => PlayerPositionType::DefensiveMidfielder,
-        },
-        PlayerFieldPositionGroup::Midfielder => match intake_index % 5 {
-            0 => PlayerPositionType::MidfielderCenter,
-            1 => PlayerPositionType::MidfielderLeft,
-            2 => PlayerPositionType::MidfielderRight,
-            3 => PlayerPositionType::AttackingMidfielderCenter,
-            _ => PlayerPositionType::DefensiveMidfielder,
-        },
-        PlayerFieldPositionGroup::Forward => match intake_index % 4 {
-            0 => PlayerPositionType::Striker,
-            1 => PlayerPositionType::ForwardLeft,
-            2 => PlayerPositionType::ForwardRight,
-            _ => PlayerPositionType::ForwardCenter,
-        },
-    }
-}
-
-fn group_index(group: PlayerFieldPositionGroup) -> usize {
-    match group {
-        PlayerFieldPositionGroup::Goalkeeper => 0,
-        PlayerFieldPositionGroup::Defender => 1,
-        PlayerFieldPositionGroup::Midfielder => 2,
-        PlayerFieldPositionGroup::Forward => 3,
-    }
-}
-
-fn recruitment_group_urgency(group: PlayerFieldPositionGroup) -> usize {
-    match group {
-        PlayerFieldPositionGroup::Goalkeeper => 3,
-        PlayerFieldPositionGroup::Defender => 1,
-        PlayerFieldPositionGroup::Midfielder => 1,
-        PlayerFieldPositionGroup::Forward => 1,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -738,10 +737,19 @@ mod tests {
     #[test]
     fn priority_position_maps_group_to_real_position() {
         assert_eq!(
-            position_for_priority_group(PlayerFieldPositionGroup::Goalkeeper, 0),
+            AcademyRecruitmentBrief {
+                group: PlayerFieldPositionGroup::Goalkeeper
+            }
+            .intake_position(0),
             PlayerPositionType::Goalkeeper
         );
-        assert!(position_for_priority_group(PlayerFieldPositionGroup::Forward, 1).is_forward());
+        assert!(
+            AcademyRecruitmentBrief {
+                group: PlayerFieldPositionGroup::Forward
+            }
+            .intake_position(1)
+            .is_forward()
+        );
     }
 
     #[test]

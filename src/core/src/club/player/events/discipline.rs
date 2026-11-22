@@ -69,7 +69,11 @@ impl PlayerDiscipline {
 impl Player {
     /// A suspension he carries keeps him out of a fixture of `family`.
     pub fn is_suspended_in(&self, family: CompetitionFamily) -> bool {
-        self.player_attributes.discipline.book(family).suspension_matches > 0
+        self.player_attributes
+            .discipline
+            .book(family)
+            .suspension_matches
+            > 0
     }
 
     /// His team's next competitive fixture belongs to `family`. Whether he
@@ -202,20 +206,39 @@ mod tests {
     #[test]
     fn red_card_sets_one_match_suspension() {
         let mut p = make_player();
-        let added = p.on_match_disciplinary_result(0, 1, YELLOW_CARD_BAN_THRESHOLD, CompetitionFamily::Domestic);
+        let added = p.on_match_disciplinary_result(
+            0,
+            1,
+            YELLOW_CARD_BAN_THRESHOLD,
+            CompetitionFamily::Domestic,
+        );
         assert_eq!(added, 1);
         assert!(p.player_attributes.is_banned);
-        assert_eq!(p.player_attributes.discipline.domestic.suspension_matches, 1);
+        assert_eq!(
+            p.player_attributes.discipline.domestic.suspension_matches,
+            1
+        );
     }
 
     #[test]
     fn single_yellow_does_not_trigger_ban() {
         let mut p = make_player();
-        let added = p.on_match_disciplinary_result(1, 0, YELLOW_CARD_BAN_THRESHOLD, CompetitionFamily::Domestic);
+        let added = p.on_match_disciplinary_result(
+            1,
+            0,
+            YELLOW_CARD_BAN_THRESHOLD,
+            CompetitionFamily::Domestic,
+        );
         assert_eq!(added, 0);
         assert!(!p.player_attributes.is_banned);
-        assert_eq!(p.player_attributes.discipline.domestic.suspension_matches, 0);
-        assert_eq!(p.player_attributes.discipline.domestic.yellow_card_running, 1);
+        assert_eq!(
+            p.player_attributes.discipline.domestic.suspension_matches,
+            0
+        );
+        assert_eq!(
+            p.player_attributes.discipline.domestic.yellow_card_running,
+            1
+        );
     }
 
     #[test]
@@ -223,27 +246,57 @@ mod tests {
         let mut p = make_player();
         // Pile 4 yellows — no ban yet.
         for _ in 0..4 {
-            p.on_match_disciplinary_result(1, 0, YELLOW_CARD_BAN_THRESHOLD, CompetitionFamily::Domestic);
+            p.on_match_disciplinary_result(
+                1,
+                0,
+                YELLOW_CARD_BAN_THRESHOLD,
+                CompetitionFamily::Domestic,
+            );
         }
         assert!(!p.player_attributes.is_banned);
-        assert_eq!(p.player_attributes.discipline.domestic.yellow_card_running, 4);
+        assert_eq!(
+            p.player_attributes.discipline.domestic.yellow_card_running,
+            4
+        );
         // 5th yellow crosses the threshold → 1-match ban.
-        let added = p.on_match_disciplinary_result(1, 0, YELLOW_CARD_BAN_THRESHOLD, CompetitionFamily::Domestic);
+        let added = p.on_match_disciplinary_result(
+            1,
+            0,
+            YELLOW_CARD_BAN_THRESHOLD,
+            CompetitionFamily::Domestic,
+        );
         assert_eq!(added, 1);
         assert!(p.player_attributes.is_banned);
-        assert_eq!(p.player_attributes.discipline.domestic.suspension_matches, 1);
+        assert_eq!(
+            p.player_attributes.discipline.domestic.suspension_matches,
+            1
+        );
         // Tally rolled past the threshold instead of zeroed.
-        assert_eq!(p.player_attributes.discipline.domestic.yellow_card_running, 0);
+        assert_eq!(
+            p.player_attributes.discipline.domestic.yellow_card_running,
+            0
+        );
     }
 
     #[test]
     fn serving_match_decrements_and_clears_ban() {
         let mut p = make_player();
-        p.on_match_disciplinary_result(0, 1, YELLOW_CARD_BAN_THRESHOLD, CompetitionFamily::Domestic);
-        assert_eq!(p.player_attributes.discipline.domestic.suspension_matches, 1);
+        p.on_match_disciplinary_result(
+            0,
+            1,
+            YELLOW_CARD_BAN_THRESHOLD,
+            CompetitionFamily::Domestic,
+        );
+        assert_eq!(
+            p.player_attributes.discipline.domestic.suspension_matches,
+            1
+        );
         assert!(p.player_attributes.is_banned);
         p.serve_suspension_match(CompetitionFamily::Domestic);
-        assert_eq!(p.player_attributes.discipline.domestic.suspension_matches, 0);
+        assert_eq!(
+            p.player_attributes.discipline.domestic.suspension_matches,
+            0
+        );
         assert!(!p.player_attributes.is_banned);
     }
 
@@ -252,18 +305,37 @@ mod tests {
         let mut p = make_player();
         // Not banned to start with.
         p.serve_suspension_match(CompetitionFamily::Domestic);
-        assert_eq!(p.player_attributes.discipline.domestic.suspension_matches, 0);
+        assert_eq!(
+            p.player_attributes.discipline.domestic.suspension_matches,
+            0
+        );
         assert!(!p.player_attributes.is_banned);
     }
 
     #[test]
     fn red_card_during_existing_ban_extends_it() {
         let mut p = make_player();
-        p.on_match_disciplinary_result(0, 1, YELLOW_CARD_BAN_THRESHOLD, CompetitionFamily::Domestic);
-        assert_eq!(p.player_attributes.discipline.domestic.suspension_matches, 1);
+        p.on_match_disciplinary_result(
+            0,
+            1,
+            YELLOW_CARD_BAN_THRESHOLD,
+            CompetitionFamily::Domestic,
+        );
+        assert_eq!(
+            p.player_attributes.discipline.domestic.suspension_matches,
+            1
+        );
         // Player got banned and somehow got another red — extend.
-        p.on_match_disciplinary_result(0, 1, YELLOW_CARD_BAN_THRESHOLD, CompetitionFamily::Domestic);
-        assert_eq!(p.player_attributes.discipline.domestic.suspension_matches, 2);
+        p.on_match_disciplinary_result(
+            0,
+            1,
+            YELLOW_CARD_BAN_THRESHOLD,
+            CompetitionFamily::Domestic,
+        );
+        assert_eq!(
+            p.player_attributes.discipline.domestic.suspension_matches,
+            2
+        );
     }
 
     #[test]
@@ -271,15 +343,34 @@ mod tests {
         let mut p = make_player();
         // Build up yellows AND a suspension.
         for _ in 0..4 {
-            p.on_match_disciplinary_result(1, 0, YELLOW_CARD_BAN_THRESHOLD, CompetitionFamily::Domestic);
+            p.on_match_disciplinary_result(
+                1,
+                0,
+                YELLOW_CARD_BAN_THRESHOLD,
+                CompetitionFamily::Domestic,
+            );
         }
-        p.on_match_disciplinary_result(0, 1, YELLOW_CARD_BAN_THRESHOLD, CompetitionFamily::Domestic);
-        assert_eq!(p.player_attributes.discipline.domestic.suspension_matches, 1);
+        p.on_match_disciplinary_result(
+            0,
+            1,
+            YELLOW_CARD_BAN_THRESHOLD,
+            CompetitionFamily::Domestic,
+        );
+        assert_eq!(
+            p.player_attributes.discipline.domestic.suspension_matches,
+            1
+        );
         p.reset_season_disciplinary_state();
-        assert_eq!(p.player_attributes.discipline.domestic.yellow_card_running, 0);
+        assert_eq!(
+            p.player_attributes.discipline.domestic.yellow_card_running,
+            0
+        );
         // Active ban survives — players carrying a ban into the new
         // season still serve it.
-        assert_eq!(p.player_attributes.discipline.domestic.suspension_matches, 1);
+        assert_eq!(
+            p.player_attributes.discipline.domestic.suspension_matches,
+            1
+        );
         assert!(p.player_attributes.is_banned);
     }
 
@@ -310,7 +401,12 @@ mod tests {
     #[test]
     fn a_league_red_card_is_served_in_the_cup_tie_that_follows() {
         let mut p = make_player();
-        p.on_match_disciplinary_result(0, 1, YELLOW_CARD_BAN_THRESHOLD, CompetitionFamily::Domestic);
+        p.on_match_disciplinary_result(
+            0,
+            1,
+            YELLOW_CARD_BAN_THRESHOLD,
+            CompetitionFamily::Domestic,
+        );
         // The cup is domestic too: he misses it, and that serves the ban.
         assert!(p.is_suspended_in(CompetitionFamily::Domestic));
         assert!(p.player_attributes.is_banned);
@@ -322,7 +418,12 @@ mod tests {
     #[test]
     fn a_ban_in_each_family_is_served_by_its_own_next_fixture() {
         let mut p = make_player();
-        p.on_match_disciplinary_result(0, 1, YELLOW_CARD_BAN_THRESHOLD, CompetitionFamily::Domestic);
+        p.on_match_disciplinary_result(
+            0,
+            1,
+            YELLOW_CARD_BAN_THRESHOLD,
+            CompetitionFamily::Domestic,
+        );
         p.on_match_disciplinary_result(
             0,
             1,
@@ -335,8 +436,14 @@ mod tests {
         p.on_next_fixture_family(CompetitionFamily::Continental);
         assert!(p.player_attributes.is_banned);
         p.serve_suspension_match(CompetitionFamily::Continental);
-        assert!(!p.player_attributes.is_banned, "the continental ban is done");
-        assert!(p.is_suspended_in(CompetitionFamily::Domestic), "the domestic one is not");
+        assert!(
+            !p.player_attributes.is_banned,
+            "the continental ban is done"
+        );
+        assert!(
+            p.is_suspended_in(CompetitionFamily::Domestic),
+            "the domestic one is not"
+        );
 
         p.on_next_fixture_family(CompetitionFamily::Domestic);
         assert!(p.player_attributes.is_banned);
@@ -362,7 +469,16 @@ mod tests {
             CompetitionFamily::Continental,
         );
         assert_eq!(added, 0);
-        assert_eq!(p.player_attributes.discipline.domestic.yellow_card_running, 4);
-        assert_eq!(p.player_attributes.discipline.continental.yellow_card_running, 1);
+        assert_eq!(
+            p.player_attributes.discipline.domestic.yellow_card_running,
+            4
+        );
+        assert_eq!(
+            p.player_attributes
+                .discipline
+                .continental
+                .yellow_card_running,
+            1
+        );
     }
 }

@@ -211,7 +211,10 @@ mod tests {
             75, 72, 70, 68, 60, 58, 52, 50, 44, 43, 42, 41, 40, 39, 38, 37, 36, 20, 18, 15,
         ]);
         let chasing = stakes_at(&table, 8, 32, 6);
-        assert!(chasing >= 0.72, "two points off Europe with six left: {chasing}");
+        assert!(
+            chasing >= 0.72,
+            "two points off Europe with six left: {chasing}"
+        );
         assert!(chasing > stakes_at(&table, 12, 32, 6) + 0.1);
     }
 
@@ -222,7 +225,10 @@ mod tests {
         points.extend((0..20).map(|i| 60 - i * 2));
         let table = standings(&points);
         let level_with_third = TableStakes::of(&table, 4, 42, 4, &lines);
-        assert!(level_with_third >= 0.85, "level on points with promotion: {level_with_third}");
+        assert!(
+            level_with_third >= 0.85,
+            "level on points with promotion: {level_with_third}"
+        );
 
         let no_promotion = TableLine::of_league(&settings(2, 0, 3), 24);
         assert!(TableStakes::of(&table, 4, 42, 4, &no_promotion) < level_with_third - 0.2);
@@ -249,9 +255,13 @@ mod tests {
                 let mut far = late_table();
                 near[16].points = near[17].points + gap;
                 far[16].points = far[17].points + gap + 1;
-                let step = (stakes_at(&near, 17, played, left) - stakes_at(&far, 17, played, left)).abs();
+                let step =
+                    (stakes_at(&near, 17, played, left) - stakes_at(&far, 17, played, left)).abs();
                 let limit = 0.56 / (f32::from(left) * 3.0) + 1e-4;
-                assert!(step <= limit, "gap {gap}, {left} left: a point moved it by {step}");
+                assert!(
+                    step <= limit,
+                    "gap {gap}, {left} left: a point moved it by {step}"
+                );
             }
         }
     }
@@ -279,6 +289,9 @@ mod tests {
             TableStakes::PROFESSIONAL_FLOOR,
             "nineteen adrift with one to play"
         );
-        assert!(TableStakes::of(&table, 2, 5, 1, &lines) < 0.5, "second is safe by eighteen");
+        assert!(
+            TableStakes::of(&table, 2, 5, 1, &lines) < 0.5,
+            "second is safe by eighteen"
+        );
     }
 }

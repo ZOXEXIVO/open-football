@@ -25,10 +25,10 @@
 //! [`ForwardHoldingWidthState`]: crate::r#match::forwarders::states::ForwardHoldingWidthState
 
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{
+use crate::r#match::midfielders::states::shared::{
     ActivityIntensity, MidfielderCondition, MidfielderRead,
 };
-use crate::r#match::player::strategies::common::team::WideChannel;
+use crate::r#match::player::strategies::shared::team::WideChannel;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,

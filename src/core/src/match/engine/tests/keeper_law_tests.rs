@@ -12,7 +12,7 @@ use crate::r#match::engine::player::injury::{InjuryCause, InjuryGrade, MatchInju
 use crate::r#match::engine::result::Score;
 use crate::r#match::engine::substitutions::Substitutions;
 use crate::r#match::events::Event;
-use crate::r#match::goalkeepers::states::common::{KeeperSmother, SmotherOutcome};
+use crate::r#match::goalkeepers::states::shared::{KeeperSmother, SmotherOutcome};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::goalkeepers::states::{GoalkeeperDivingState, GoalkeeperHoldingState};
 use crate::r#match::player::events::{

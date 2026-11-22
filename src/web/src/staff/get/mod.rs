@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -121,10 +121,10 @@ pub struct StaffMedicalDto {
 }
 
 /// What a member of staff is called on his own page.
-struct StaffRole;
+pub(crate) struct StaffRole;
 
 impl StaffRole {
-    fn as_i18n_key(position: &StaffPosition) -> &'static str {
+    pub(crate) fn as_i18n_key(position: &StaffPosition) -> &'static str {
         match position {
             StaffPosition::Manager => "staff_manager",
             StaffPosition::AssistantManager => "staff_assistant_manager",
@@ -154,174 +154,263 @@ impl StaffRole {
     }
 }
 
-pub async fn staff_get_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<StaffGetRequest>,
-) -> ApiResult<impl IntoResponse> {
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let guard = state.data.read().await;
-
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
-
-    let (staff, team) = simulator_data
-        .staff_with_team(route_params.staff_id)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("Staff with ID {} not found", route_params.staff_id))
-        })?;
-
-    let country = simulator_data.country(staff.country_id);
-    let now = simulator_data.date.date();
-
-    let role_key = staff
-        .contract
-        .as_ref()
-        .map(|c| StaffRole::as_i18n_key(&c.position).to_string())
-        .unwrap_or_else(|| "staff_free".to_string());
-
-    let contract = staff.contract.as_ref().map(|c| StaffContractDto {
-        salary: FormattingUtils::format_money(c.salary as f64),
-        expiration: c.expired.format("%d.%m.%Y").to_string(),
-    });
-
-    let (neighbor_teams, country_leagues) =
-        get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
-    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-
-    let title = format!(
-        "{} {}",
-        staff.full_name.first_name, staff.full_name.last_name
-    );
-
-    let known_players = KnownPlayers::of(staff, simulator_data, now);
-
-    let staff_vm = StaffViewModel {
-        id: staff.id,
-        role_key: role_key.clone(),
-        age: DateUtils::age(staff.birth_date, now),
-        birth_date: staff.birth_date.format("%d.%m.%Y").to_string(),
-        country_slug: country.map(|c| c.slug.clone()).unwrap_or_default(),
-        country_code: country.map(|c| c.code.clone()).unwrap_or_default(),
-        country_name: country.map(|c| c.name.clone()).unwrap_or_default(),
-        team_slug: team.slug.clone(),
-        team_name: team.name.clone(),
-        contract,
-        coaching: StaffCoachingDto {
-            attacking: staff.staff_attributes.coaching.attacking,
-            defending: staff.staff_attributes.coaching.defending,
-            fitness: staff.staff_attributes.coaching.fitness,
-            mental: staff.staff_attributes.coaching.mental,
-            tactical: staff.staff_attributes.coaching.tactical,
-            technical: staff.staff_attributes.coaching.technical,
-            working_with_youngsters: staff.staff_attributes.coaching.working_with_youngsters,
-        },
-        goalkeeping: StaffGoalkeepingDto {
-            distribution: staff.staff_attributes.goalkeeping.distribution,
-            handling: staff.staff_attributes.goalkeeping.handling,
-            shot_stopping: staff.staff_attributes.goalkeeping.shot_stopping,
-        },
-        mental: StaffMentalDto {
-            adaptability: staff.staff_attributes.mental.adaptability,
-            determination: staff.staff_attributes.mental.determination,
-            discipline: staff.staff_attributes.mental.discipline,
-            man_management: staff.staff_attributes.mental.man_management,
-            motivating: staff.staff_attributes.mental.motivating,
-        },
-        knowledge: StaffKnowledgeDto {
-            judging_player_ability: staff.staff_attributes.knowledge.judging_player_ability,
-            judging_player_potential: staff.staff_attributes.knowledge.judging_player_potential,
-            tactical_knowledge: staff.staff_attributes.knowledge.tactical_knowledge,
-        },
-        known_players,
-        medical: StaffMedicalDto {
-            physiotherapy: staff.staff_attributes.medical.physiotherapy,
-            sports_science: staff.staff_attributes.medical.sports_science,
-        },
-    };
-
-    let _league = team.league_id.and_then(|id| simulator_data.league(id));
-
-    Ok(StaffGetTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        title,
-        sub_title_prefix: i18n.t(&role_key).to_string(),
-        sub_title_suffix: if team.team_type == core::TeamType::Main {
-            String::new()
-        } else {
-            i18n.t(team.team_type.as_i18n_key()).to_string()
-        },
-        sub_title: team.name.clone(),
-        sub_title_link: format!("/{}/teams/{}", route_params.lang, team.slug),
-        sub_title_flag: None,
-        header_color: simulator_data
-            .club(team.club_id)
-            .map(|c| c.colors.background.clone())
-            .unwrap_or_default(),
-        foreground_color: simulator_data
-            .club(team.club_id)
-            .map(|c| c.colors.foreground.clone())
-            .unwrap_or_default(),
-        menu_sections: {
-            let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-            let current_path = format!("/{}/teams/{}", route_params.lang, team.slug);
-            let mp = views::MenuParams {
-                i18n: &i18n,
-                lang: &route_params.lang,
-                current_path: &current_path,
-                country_name: cn,
-                country_slug: cs,
-            };
-            views::team_menu(&mp, &neighbor_refs, &league_refs)
-        },
-        i18n,
-        lang: route_params.lang.clone(),
-        staff: staff_vm,
-    })
+pub struct StaffGetPage<'a> {
+    data: &'a SimulatorData,
+    i18n: I18n,
+    lang: String,
+    staff: &'a Staff,
+    team: &'a core::Team,
 }
 
-fn get_neighbor_teams(
-    club_id: u32,
-    data: &SimulatorData,
-    i18n: &I18n,
-) -> Result<NeighborMenus, ApiError> {
-    let club = data
-        .club(club_id)
-        .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
+impl<'a> StaffGetPage<'a> {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<StaffGetRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let guard = state.data.read().await;
 
-    let teams = views::neighbor_teams(club, i18n);
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let mut country_leagues: Vec<(u32, String, String)> = data
-        .country_by_club(club_id)
-        .map(|country| {
-            country
-                .leagues
-                .leagues
-                .iter()
-                .filter(|l| !l.friendly)
-                .map(|l| (l.id, l.name.clone(), l.slug.clone()))
-                .collect()
+        let (staff, team) = simulator_data
+            .staff_with_team(route_params.staff_id)
+            .ok_or_else(|| {
+                ApiError::NotFound(format!("Staff with ID {} not found", route_params.staff_id))
+            })?;
+
+        let page = StaffGetPage {
+            data: simulator_data,
+            i18n,
+            lang: route_params.lang,
+            staff,
+            team,
+        };
+        page.render()
+    }
+
+    fn render(self) -> ApiResult<StaffGetTemplate> {
+        let now = self.data.date.date();
+
+        let role_key = self
+            .staff
+            .contract
+            .as_ref()
+            .map(|c| StaffRole::as_i18n_key(&c.position).to_string())
+            .unwrap_or_else(|| "staff_free".to_string());
+
+        let (neighbor_teams, country_leagues) =
+            StaffMenus::of(self.team.club_id, self.data, &self.i18n)?;
+
+        let title = format!(
+            "{} {}",
+            self.staff.full_name.first_name, self.staff.full_name.last_name
+        );
+
+        let known_players = KnownPlayers::of(self.staff, self.data, now);
+        let staff_vm = StaffViewModel::of(self.staff, self.team, self.data, now, known_players);
+
+        Ok(StaffGetTemplate {
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
+            cpu_brand: &CPU_BRAND,
+            cores_count: *CPU_CORES,
+            title,
+            sub_title_prefix: self.i18n.t(&role_key).to_string(),
+            sub_title_suffix: if self.team.team_type == core::TeamType::Main {
+                String::new()
+            } else {
+                self.i18n.t(self.team.team_type.as_i18n_key()).to_string()
+            },
+            sub_title: self.team.name.clone(),
+            sub_title_link: format!("/{}/teams/{}", self.lang, self.team.slug),
+            sub_title_flag: None,
+            header_color: self
+                .data
+                .club(self.team.club_id)
+                .map(|c| c.colors.background.clone())
+                .unwrap_or_default(),
+            foreground_color: self
+                .data
+                .club(self.team.club_id)
+                .map(|c| c.colors.foreground.clone())
+                .unwrap_or_default(),
+            menu_sections: self.menu_sections(&neighbor_teams, &country_leagues),
+            staff: staff_vm,
+            i18n: self.i18n,
+            lang: self.lang,
         })
-        .unwrap_or_default();
-    country_leagues.sort_by_key(|(id, _, _)| *id);
+    }
 
-    Ok((
-        teams,
-        country_leagues
-            .into_iter()
-            .map(|(_, name, slug)| (name, slug))
-            .collect(),
-    ))
+    fn menu_sections(
+        &self,
+        neighbor_teams: &[(String, String)],
+        country_leagues: &[(String, String)],
+    ) -> Vec<MenuSection> {
+        let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
+            .iter()
+            .map(|(n, s)| (n.as_str(), s.as_str()))
+            .collect();
+        let league_refs: Vec<(&str, &str)> = country_leagues
+            .iter()
+            .map(|(n, s)| (n.as_str(), s.as_str()))
+            .collect();
+        let (cn, cs) = views::Menus::club_country_info(self.data, self.team.club_id);
+        let current_path = format!("/{}/teams/{}", self.lang, self.team.slug);
+        let mp = views::MenuParams {
+            i18n: &self.i18n,
+            lang: &self.lang,
+            current_path: &current_path,
+            country_name: cn,
+            country_slug: cs,
+        };
+        views::Menus::team_menu(&mp, &neighbor_refs, &league_refs)
+    }
+}
+
+pub(crate) struct StaffMenus;
+
+impl StaffMenus {
+    pub(crate) fn of(
+        club_id: u32,
+        data: &SimulatorData,
+        i18n: &I18n,
+    ) -> Result<NeighborMenus, ApiError> {
+        let club = data.club(club_id).ok_or_else(|| {
+            ApiError::InternalError(format!("Club with ID {} not found", club_id))
+        })?;
+
+        let teams = views::Menus::neighbor_teams(club, i18n);
+
+        let mut country_leagues: Vec<(u32, String, String)> = data
+            .country_by_club(club_id)
+            .map(|country| {
+                country
+                    .leagues
+                    .leagues
+                    .iter()
+                    .filter(|l| !l.friendly)
+                    .map(|l| (l.id, l.name.clone(), l.slug.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        country_leagues.sort_by_key(|(id, _, _)| *id);
+
+        Ok((
+            teams,
+            country_leagues
+                .into_iter()
+                .map(|(_, name, slug)| (name, slug))
+                .collect(),
+        ))
+    }
+}
+
+impl StaffViewModel {
+    fn of(
+        staff: &Staff,
+        team: &core::Team,
+        data: &SimulatorData,
+        now: NaiveDate,
+        known_players: Vec<KnownPlayerDto>,
+    ) -> StaffViewModel {
+        let country = data.country(staff.country_id);
+        let role_key = staff
+            .contract
+            .as_ref()
+            .map(|c| StaffRole::as_i18n_key(&c.position).to_string())
+            .unwrap_or_else(|| "staff_free".to_string());
+        let contract = staff.contract.as_ref().map(StaffContractDto::from_contract);
+
+        StaffViewModel {
+            id: staff.id,
+            role_key,
+            age: DateUtils::age(staff.birth_date, now),
+            birth_date: staff.birth_date.format("%d.%m.%Y").to_string(),
+            country_slug: country.map(|c| c.slug.clone()).unwrap_or_default(),
+            country_code: country.map(|c| c.code.clone()).unwrap_or_default(),
+            country_name: country.map(|c| c.name.clone()).unwrap_or_default(),
+            team_slug: team.slug.clone(),
+            team_name: team.name.clone(),
+            contract,
+            coaching: StaffCoachingDto::of(staff),
+            goalkeeping: StaffGoalkeepingDto::of(staff),
+            mental: StaffMentalDto::of(staff),
+            knowledge: StaffKnowledgeDto::of(staff),
+            known_players,
+            medical: StaffMedicalDto::of(staff),
+        }
+    }
+}
+
+impl StaffContractDto {
+    fn from_contract(contract: &core::StaffClubContract) -> StaffContractDto {
+        StaffContractDto {
+            salary: FormattingUtils::format_money(contract.salary as f64),
+            expiration: contract.expired.format("%d.%m.%Y").to_string(),
+        }
+    }
+}
+
+impl StaffCoachingDto {
+    fn of(staff: &Staff) -> StaffCoachingDto {
+        let c = &staff.staff_attributes.coaching;
+        StaffCoachingDto {
+            attacking: c.attacking,
+            defending: c.defending,
+            fitness: c.fitness,
+            mental: c.mental,
+            tactical: c.tactical,
+            technical: c.technical,
+            working_with_youngsters: c.working_with_youngsters,
+        }
+    }
+}
+
+impl StaffGoalkeepingDto {
+    fn of(staff: &Staff) -> StaffGoalkeepingDto {
+        let g = &staff.staff_attributes.goalkeeping;
+        StaffGoalkeepingDto {
+            distribution: g.distribution,
+            handling: g.handling,
+            shot_stopping: g.shot_stopping,
+        }
+    }
+}
+
+impl StaffMentalDto {
+    fn of(staff: &Staff) -> StaffMentalDto {
+        let m = &staff.staff_attributes.mental;
+        StaffMentalDto {
+            adaptability: m.adaptability,
+            determination: m.determination,
+            discipline: m.discipline,
+            man_management: m.man_management,
+            motivating: m.motivating,
+        }
+    }
+}
+
+impl StaffKnowledgeDto {
+    fn of(staff: &Staff) -> StaffKnowledgeDto {
+        let k = &staff.staff_attributes.knowledge;
+        StaffKnowledgeDto {
+            judging_player_ability: k.judging_player_ability,
+            judging_player_potential: k.judging_player_potential,
+            tactical_knowledge: k.tactical_knowledge,
+        }
+    }
+}
+
+impl StaffMedicalDto {
+    fn of(staff: &Staff) -> StaffMedicalDto {
+        let m = &staff.staff_attributes.medical;
+        StaffMedicalDto {
+            physiotherapy: m.physiotherapy,
+            sports_science: m.sports_science,
+        }
+    }
 }
 
 /// The block on a manager's page that is not an attribute.

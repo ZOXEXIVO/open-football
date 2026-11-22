@@ -361,7 +361,12 @@ mod tests {
     fn the_first_europa_league_matchday_of_2026_is_thursday_17_september() {
         let season = Season::new(2026);
         assert_eq!(
-            ContinentalMatchweek::day(&season, ContinentalMatchweek::LEAGUE_PHASE[0], &[Weekday::Thu], 0),
+            ContinentalMatchweek::day(
+                &season,
+                ContinentalMatchweek::LEAGUE_PHASE[0],
+                &[Weekday::Thu],
+                0
+            ),
             d(2026, 9, 17)
         );
     }
@@ -370,9 +375,18 @@ mod tests {
     fn the_index_spreads_a_round_across_the_weekdays() {
         let season = Season::new(2026);
         let weekdays = [Weekday::Tue, Weekday::Wed];
-        assert_eq!(ContinentalMatchweek::day(&season, 2, &weekdays, 0), d(2026, 9, 15));
-        assert_eq!(ContinentalMatchweek::day(&season, 2, &weekdays, 1), d(2026, 9, 16));
-        assert_eq!(ContinentalMatchweek::day(&season, 2, &weekdays, 2), d(2026, 9, 15));
+        assert_eq!(
+            ContinentalMatchweek::day(&season, 2, &weekdays, 0),
+            d(2026, 9, 15)
+        );
+        assert_eq!(
+            ContinentalMatchweek::day(&season, 2, &weekdays, 1),
+            d(2026, 9, 16)
+        );
+        assert_eq!(
+            ContinentalMatchweek::day(&season, 2, &weekdays, 2),
+            d(2026, 9, 15)
+        );
     }
 
     #[test]
@@ -385,7 +399,12 @@ mod tests {
             .collect();
         assert_eq!(
             days,
-            vec![d(2027, 2, 16), d(2027, 2, 17), d(2027, 2, 23), d(2027, 2, 24)]
+            vec![
+                d(2027, 2, 16),
+                d(2027, 2, 17),
+                d(2027, 2, 23),
+                d(2027, 2, 24)
+            ]
         );
     }
 
@@ -421,7 +440,11 @@ mod tests {
                 let saturday = (1..(*next - window.closes).num_days())
                     .map(|k| window.closes + Duration::days(k))
                     .any(|day| day.weekday() == Weekday::Sat);
-                assert!(saturday, "{year}: no Saturday between {} and {next}", window.closes);
+                assert!(
+                    saturday,
+                    "{year}: no Saturday between {} and {next}",
+                    window.closes
+                );
             }
         }
     }
@@ -433,7 +456,10 @@ mod tests {
         assert!(ContinentalMatchweek::is_matchweek(d(2026, 9, 14)));
         assert!(ContinentalMatchweek::is_matchweek(d(2026, 9, 20)));
         assert!(!ContinentalMatchweek::is_matchweek(d(2026, 9, 21)));
-        assert!(!ContinentalMatchweek::is_matchweek(d(2026, 8, 20)), "before week 0");
+        assert!(
+            !ContinentalMatchweek::is_matchweek(d(2026, 8, 20)),
+            "before week 0"
+        );
     }
 
     #[test]
@@ -469,7 +495,11 @@ mod tests {
                 assert_eq!(cl_weeks, weeks(&el.matches, knockout), "{year} CL v EL");
                 assert_eq!(cl_weeks, weeks(&uecl.matches, knockout), "{year} CL v UECL");
             }
-            assert_eq!(weeks(&cl.matches, false).len(), 6, "{year}: six league-phase weeks");
+            assert_eq!(
+                weeks(&cl.matches, false).len(),
+                6,
+                "{year}: six league-phase weeks"
+            );
         }
     }
 

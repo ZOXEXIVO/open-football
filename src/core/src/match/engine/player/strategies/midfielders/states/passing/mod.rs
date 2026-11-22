@@ -1,16 +1,14 @@
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{
+use crate::r#match::midfielders::states::shared::{
     ActivityIntensity, MidfieldPlay, MidfieldRole, MidfielderCondition, MidfielderRead, Opportunity,
 };
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::player::strategies::common::passing::ThroughBall;
-use crate::r#match::player::strategies::common::players::ops::clearance::TouchlineCall;
-use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
-    ShotDecision, evaluate_forward_shot_decision,
-};
-use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
+use crate::r#match::player::strategies::shared::passing::ThroughBall;
+use crate::r#match::player::strategies::shared::players::ops::clearance::TouchlineCall;
+use crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::ShotDecision;
+use crate::r#match::player::strategies::shared::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
     Ball, ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -53,8 +51,7 @@ impl StateProcessingHandler for MidfielderPassingState {
         // anti-monopoly cap. Unified (2026-06-11) with the rest of the
         // MID shot paths during the fatigue-normalization rebalance so
         // chance-quality logic lives in one place.
-        if let ShotDecision::Shoot { reason } = evaluate_forward_shot_decision(ctx, "MID_PASS_FWD")
-        {
+        if let ShotDecision::Shoot { reason } = ShotDecision::evaluate(ctx, "MID_PASS_FWD") {
             return Some(
                 StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
                     .with_shot_reason(reason),

@@ -1,11 +1,11 @@
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{
+use crate::r#match::forwarders::states::shared::{
     ActivityIntensity, ForwardCondition, ForwardRead, RunLine,
 };
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::forward_census::ForwardCensus;
-use crate::r#match::common_states::StationKeeping;
-use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
+use crate::r#match::player::strategies::shared::players::ops::marker_evasion::MarkerEvasion;
+use crate::r#match::shared_states::StationKeeping;
 use crate::r#match::{
     ConditionContext, MatchContext, PlayerSide, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,

@@ -1,13 +1,13 @@
-use crate::r#match::common_states::{
-    BlockChallenge, ChallengeKind, ClosingPoint, TackleDecision, TackleEngagement, TacticalFoul,
-};
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{
+use crate::r#match::defenders::states::shared::{
     ActivityIntensity, DefenderCondition, DefenderRead, ReadLevel,
 };
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{FoulCommitted, FoulSeverity, FoulSource, PlayerEvent};
-use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::shared::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::shared_states::{
+    BlockChallenge, ChallengeKind, ClosingPoint, TackleDecision, TackleEngagement, TacticalFoul,
+};
 use crate::r#match::{
     ConditionContext, MatchContext, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,

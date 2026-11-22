@@ -2937,45 +2937,25 @@ impl Textures {
         /// Texels across one tile, and so down one row. See the note above for
         /// why sixty-four and not sixteen.
         const TILE: u32 = 64;
-        /// **What a crowd wears over whatever else it is wearing**: winter
-        /// coats, in the greys, greens, dark blues and browns people actually
-        /// own. This is most of a ground and all of the main stands.
-        ///
-        /// Deliberately low in saturation. The club's colours below have to be
-        /// the only bright thing in a stand or the eye reads the crowd as
-        /// bunting — and, more to the point, a fan end only reads as one
-        /// because the seats either side of it do NOT.
-        ///
-        /// Sixteen of them, and the variety that pays is in the VALUE: what
-        /// tells one spectator from his neighbour at a hundred metres is light
-        /// against dark, and a coat that is a third grey rather than a quarter
-        /// grey is a coat nobody will ever resolve. So the run goes from
-        /// near-black to pale and only wanders off the greys where a real
-        /// wardrobe does — olive, navy, brown, burgundy.
-        ///
-        /// It was ten, which was enough while a spectator was a rectangle and
-        /// the whole of him was one of these. He is a body, two sleeves and a
-        /// pair of hands now, all cut from the same tile, so the coat carries
-        /// more of the figure than it used to and a repeat is correspondingly
-        /// easier to see.
-        const COATS: [Color; 16] = [
-            Color::srgb(0.145, 0.160, 0.205),
-            Color::srgb(0.235, 0.235, 0.245),
-            Color::srgb(0.355, 0.345, 0.330),
-            Color::srgb(0.185, 0.150, 0.125),
-            Color::srgb(0.300, 0.245, 0.195),
-            Color::srgb(0.115, 0.130, 0.155),
-            Color::srgb(0.430, 0.415, 0.385),
-            Color::srgb(0.170, 0.220, 0.165),
-            Color::srgb(0.560, 0.545, 0.520),
-            Color::srgb(0.135, 0.175, 0.245),
-            Color::srgb(0.085, 0.090, 0.100),
-            Color::srgb(0.265, 0.180, 0.180),
-            Color::srgb(0.215, 0.240, 0.255),
-            Color::srgb(0.400, 0.330, 0.245),
-            Color::srgb(0.495, 0.500, 0.535),
-            Color::srgb(0.230, 0.205, 0.150),
-        ];
+
+        let faces = Self::crowd_faces();
+        let (flat, heads, coats, club, visiting) =
+            Self::crowd_tiles(&faces, home, trim, visitor, visitor_trim);
+        let columns = flat.len() as u32;
+        let (width, height) = (columns * TILE, TILE * 2);
+        let data = Self::paint_crowd(width, height, TILE, &faces, &flat);
+
+        CrowdPalette {
+            sheet: images.add(Self::mipped_tiles(width, height, data, TILE)),
+            heads,
+            coats,
+            club,
+            visiting,
+            tile: TILE as f32,
+        }
+    }
+
+    fn crowd_faces() -> Vec<Face> {
         /// How many different people are in the stand.
         ///
         /// Twenty-four, against twelve complexions, ten hair colours and eight
@@ -3055,6 +3035,60 @@ impl Textures {
                 hat: (person % 3 == 1).then(|| coat(HATS[person / 3 % HATS.len()])),
             })
             .collect();
+        faces
+    }
+
+    fn crowd_tiles(
+        faces: &[Face],
+        home: Color,
+        trim: Color,
+        visitor: Color,
+        visitor_trim: Color,
+    ) -> (Vec<Vec3>, usize, usize, usize, usize) {
+        /// **What a crowd wears over whatever else it is wearing**: winter
+        /// coats, in the greys, greens, dark blues and browns people actually
+        /// own. This is most of a ground and all of the main stands.
+        ///
+        /// Deliberately low in saturation. The club's colours below have to be
+        /// the only bright thing in a stand or the eye reads the crowd as
+        /// bunting — and, more to the point, a fan end only reads as one
+        /// because the seats either side of it do NOT.
+        ///
+        /// Sixteen of them, and the variety that pays is in the VALUE: what
+        /// tells one spectator from his neighbour at a hundred metres is light
+        /// against dark, and a coat that is a third grey rather than a quarter
+        /// grey is a coat nobody will ever resolve. So the run goes from
+        /// near-black to pale and only wanders off the greys where a real
+        /// wardrobe does — olive, navy, brown, burgundy.
+        ///
+        /// It was ten, which was enough while a spectator was a rectangle and
+        /// the whole of him was one of these. He is a body, two sleeves and a
+        /// pair of hands now, all cut from the same tile, so the coat carries
+        /// more of the figure than it used to and a repeat is correspondingly
+        /// easier to see.
+        const COATS: [Color; 16] = [
+            Color::srgb(0.145, 0.160, 0.205),
+            Color::srgb(0.235, 0.235, 0.245),
+            Color::srgb(0.355, 0.345, 0.330),
+            Color::srgb(0.185, 0.150, 0.125),
+            Color::srgb(0.300, 0.245, 0.195),
+            Color::srgb(0.115, 0.130, 0.155),
+            Color::srgb(0.430, 0.415, 0.385),
+            Color::srgb(0.170, 0.220, 0.165),
+            Color::srgb(0.560, 0.545, 0.520),
+            Color::srgb(0.135, 0.175, 0.245),
+            Color::srgb(0.085, 0.090, 0.100),
+            Color::srgb(0.265, 0.180, 0.180),
+            Color::srgb(0.215, 0.240, 0.255),
+            Color::srgb(0.400, 0.330, 0.245),
+            Color::srgb(0.495, 0.500, 0.535),
+            Color::srgb(0.230, 0.205, 0.150),
+        ];
+
+        let coat = |colour: Color| {
+            let entry = colour.to_srgba();
+            Vec3::new(entry.red, entry.green, entry.blue)
+        };
 
         // A head's tile in the flat row is his HANDS, and nothing else: the
         // head itself is skinned off the drawn row the whole way round now, so
@@ -3104,8 +3138,10 @@ impl Textures {
         flat.extend_from_slice(&shirts(visitor, visitor_trim));
         let visiting = flat.len() - heads - coats - club;
 
-        let columns = flat.len() as u32;
-        let (width, height) = (columns * TILE, TILE * 2);
+        (flat, heads, coats, club, visiting)
+    }
+
+    fn paint_crowd(width: u32, height: u32, tile: u32, faces: &[Face], flat: &[Vec3]) -> Vec<u8> {
         let mut data = vec![0u8; (width * height * 4) as usize];
         let mut put = |x: u32, y: u32, colour: Vec3| {
             let at = ((y * width + x) * 4) as usize;
@@ -3116,31 +3152,24 @@ impl Textures {
         };
 
         for (column, block) in flat.iter().enumerate() {
-            let left = column as u32 * TILE;
+            let left = column as u32 * tile;
             // The drawn face on top, where there is one; the flat colour
             // repeated up there for a coat, which nothing ever samples but
             // which must not be a hole in the mip chain.
             let face = faces.get(column);
-            for y in 0..TILE {
-                for x in 0..TILE {
+            for y in 0..tile {
+                for x in 0..tile {
                     let painted = match face {
-                        Some(face) => face.at(x, y, TILE),
+                        Some(face) => face.at(x, y, tile),
                         None => *block,
                     };
                     put(left + x, y, painted);
-                    put(left + x, TILE + y, *block);
+                    put(left + x, tile + y, *block);
                 }
             }
         }
 
-        CrowdPalette {
-            sheet: images.add(Self::mipped_tiles(width, height, data, TILE)),
-            heads,
-            coats,
-            club,
-            visiting,
-            tile: TILE as f32,
-        }
+        data
     }
 
     /// The gradient the sky dome is skinned with, read top to bottom: zenith at

@@ -1,13 +1,14 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::staff::get::{StaffMenus, StaffRole};
+use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use core::utils::FormattingUtils;
-use core::{CoachingStyle, SimulatorData, Staff, StaffEventType, StaffLicenseType, StaffPosition};
+use core::{CoachingStyle, SimulatorData, Staff, StaffEventType, StaffLicenseType};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -114,413 +115,395 @@ pub struct StaffRecentEventDto {
     /// for events emitted today, "{n}d ago" otherwise.
     pub time_ago_label: String,
 }
-
-pub async fn staff_personal_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<StaffPersonalRequest>,
-) -> ApiResult<impl IntoResponse> {
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let guard = state.data.read().await;
-
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
-
-    let (staff, team) = simulator_data
-        .staff_with_team(route_params.staff_id)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("Staff with ID {} not found", route_params.staff_id))
-        })?;
-
-    let (neighbor_teams, country_leagues) =
-        get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
-    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-
-    let title = format!(
-        "{} {}",
-        staff.full_name.first_name, staff.full_name.last_name
-    );
-
-    let role_key = staff
-        .contract
-        .as_ref()
-        .map(|c| position_to_i18n_key(&c.position).to_string())
-        .unwrap_or_else(|| "staff_free".to_string());
-
-    let personality = get_personality(staff);
-    let staff_info = get_staff_info(staff, &i18n);
-    let performance = get_performance(staff);
-    let recent_events = get_recent_events(staff, &i18n);
-    let monitoring = get_monitoring(staff, simulator_data);
-
-    Ok(StaffPersonalTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        title,
-        sub_title_prefix: i18n.t(&role_key).to_string(),
-        sub_title_suffix: if team.team_type == core::TeamType::Main {
-            String::new()
-        } else {
-            i18n.t(team.team_type.as_i18n_key()).to_string()
-        },
-        sub_title: team.name.clone(),
-        sub_title_link: format!("/{}/teams/{}", route_params.lang, team.slug),
-        sub_title_flag: None,
-        header_color: simulator_data
-            .club(team.club_id)
-            .map(|c| c.colors.background.clone())
-            .unwrap_or_default(),
-        foreground_color: simulator_data
-            .club(team.club_id)
-            .map(|c| c.colors.foreground.clone())
-            .unwrap_or_default(),
-        menu_sections: {
-            let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-            let current_path = format!("/{}/teams/{}", route_params.lang, team.slug);
-            let mp = views::MenuParams {
-                i18n: &i18n,
-                lang: &route_params.lang,
-                current_path: &current_path,
-                country_name: cn,
-                country_slug: cs,
-            };
-            views::team_menu(&mp, &neighbor_refs, &league_refs)
-        },
-        i18n,
-        lang: route_params.lang.clone(),
-        staff_id: staff.id,
-        personality,
-        staff_info,
-        performance,
-        recent_events,
-        monitoring,
-    })
+pub struct StaffPersonalPage<'a> {
+    data: &'a SimulatorData,
+    i18n: I18n,
+    lang: String,
+    staff: &'a Staff,
+    team: &'a core::Team,
 }
 
-fn get_monitoring(staff: &Staff, data: &SimulatorData) -> Vec<StaffMonitoringDto> {
-    // Only meaningful for scouting roles. Non-scouts render an empty
-    // list in the template (which the template hides).
-    let is_scouting_role = staff
-        .contract
-        .as_ref()
-        .map(|c| c.position.is_scouting())
-        .unwrap_or(false);
-    if !is_scouting_role {
-        return Vec::new();
+impl<'a> StaffPersonalPage<'a> {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<StaffPersonalRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let guard = state.data.read().await;
+
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+
+        let (staff, team) = simulator_data
+            .staff_with_team(route_params.staff_id)
+            .ok_or_else(|| {
+                ApiError::NotFound(format!("Staff with ID {} not found", route_params.staff_id))
+            })?;
+
+        let page = StaffPersonalPage {
+            data: simulator_data,
+            i18n,
+            lang: route_params.lang,
+            staff,
+            team,
+        };
+        page.render()
     }
-    data.staff_monitoring_workload(staff.id)
-        .into_iter()
-        .map(|row| StaffMonitoringDto {
-            player_id: row.player_id,
-            player_name: row.player_name,
-            target_club_name: row.target_club_name,
-            target_team_slug: row.target_team_slug,
-            status_key: format!("monitoring_status_{}", row.status),
-            last_observed: row
-                .last_observed
-                .map(|d| d.format("%d.%m.%Y").to_string())
+
+    fn render(self) -> ApiResult<StaffPersonalTemplate> {
+        let (neighbor_teams, country_leagues) =
+            StaffMenus::of(self.team.club_id, self.data, &self.i18n)?;
+
+        let title = format!(
+            "{} {}",
+            self.staff.full_name.first_name, self.staff.full_name.last_name
+        );
+
+        let role_key = self
+            .staff
+            .contract
+            .as_ref()
+            .map(|c| StaffRole::as_i18n_key(&c.position).to_string())
+            .unwrap_or_else(|| "staff_free".to_string());
+
+        Ok(StaffPersonalTemplate {
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
+            cpu_brand: &CPU_BRAND,
+            cores_count: *CPU_CORES,
+            title,
+            sub_title_prefix: self.i18n.t(&role_key).to_string(),
+            sub_title_suffix: if self.team.team_type == core::TeamType::Main {
+                String::new()
+            } else {
+                self.i18n.t(self.team.team_type.as_i18n_key()).to_string()
+            },
+            sub_title: self.team.name.clone(),
+            sub_title_link: format!("/{}/teams/{}", self.lang, self.team.slug),
+            sub_title_flag: None,
+            header_color: self
+                .data
+                .club(self.team.club_id)
+                .map(|c| c.colors.background.clone())
                 .unwrap_or_default(),
-            confidence_pct: (row.confidence * 100.0).round().clamp(0.0, 100.0) as u8,
-            times_watched: row.times_watched,
-            matches_watched: row.matches_watched,
-            assessed_ability: row.assessed_ability,
-            assessed_potential: row.assessed_potential,
-            latest_vote_key: row
-                .latest_vote
-                .map(|v| format!("scout_vote_{}", v))
+            foreground_color: self
+                .data
+                .club(self.team.club_id)
+                .map(|c| c.colors.foreground.clone())
                 .unwrap_or_default(),
+            menu_sections: self.menu_sections(&neighbor_teams, &country_leagues),
+            staff_id: self.staff.id,
+            personality: PersonalityDto::of(self.staff),
+            staff_info: StaffInfoDto::of(self.staff, &self.i18n),
+            performance: PerformanceDto::of(self.staff),
+            recent_events: StaffRecentEventDto::rows(self.staff, &self.i18n),
+            monitoring: StaffMonitoringDto::rows(self.staff, self.data),
+            i18n: self.i18n,
+            lang: self.lang,
         })
-        .collect()
+    }
+
+    fn menu_sections(
+        &self,
+        neighbor_teams: &[(String, String)],
+        country_leagues: &[(String, String)],
+    ) -> Vec<MenuSection> {
+        let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
+            .iter()
+            .map(|(n, s)| (n.as_str(), s.as_str()))
+            .collect();
+        let league_refs: Vec<(&str, &str)> = country_leagues
+            .iter()
+            .map(|(n, s)| (n.as_str(), s.as_str()))
+            .collect();
+        let (cn, cs) = views::Menus::club_country_info(self.data, self.team.club_id);
+        let current_path = format!("/{}/teams/{}", self.lang, self.team.slug);
+        let mp = views::MenuParams {
+            i18n: &self.i18n,
+            lang: &self.lang,
+            current_path: &current_path,
+            country_name: cn,
+            country_slug: cs,
+        };
+        views::Menus::team_menu(&mp, &neighbor_refs, &league_refs)
+    }
 }
 
-fn get_personality(staff: &Staff) -> PersonalityDto {
-    let attrs = &staff.attributes;
-
-    let values: [u8; 8] = [
-        attrs.adaptability.round().clamp(1.0, 20.0) as u8,
-        attrs.ambition.round().clamp(1.0, 20.0) as u8,
-        attrs.controversy.round().clamp(1.0, 20.0) as u8,
-        attrs.loyalty.round().clamp(1.0, 20.0) as u8,
-        attrs.pressure.round().clamp(1.0, 20.0) as u8,
-        attrs.professionalism.round().clamp(1.0, 20.0) as u8,
-        attrs.sportsmanship.round().clamp(1.0, 20.0) as u8,
-        attrs.temperament.round().clamp(1.0, 20.0) as u8,
-    ];
-    let names = [
-        "adaptability",
-        "ambition",
-        "controversy",
-        "loyalty",
-        "pressure",
-        "professionalism",
-        "sportsmanship",
-        "temperament",
-    ];
-
-    let cx: f32 = 200.0;
-    let cy: f32 = 140.0;
-    let max_r: f32 = 75.0;
-    let label_r: f32 = 90.0;
-    let n = values.len();
-
-    let angle_at = |i: usize| -> f32 {
-        std::f32::consts::PI * 2.0 * (i as f32) / (n as f32) - std::f32::consts::FRAC_PI_2
-    };
-
-    let grid_polygon = |radius: f32| -> String {
-        (0..n)
-            .map(|i| {
-                let a = angle_at(i);
-                format!("{:.1},{:.1}", cx + radius * a.cos(), cy + radius * a.sin())
+impl StaffMonitoringDto {
+    fn rows(staff: &Staff, data: &SimulatorData) -> Vec<StaffMonitoringDto> {
+        // Only meaningful for scouting roles. Non-scouts render an empty
+        // list in the template (which the template hides).
+        let is_scouting_role = staff
+            .contract
+            .as_ref()
+            .map(|c| c.position.is_scouting())
+            .unwrap_or(false);
+        if !is_scouting_role {
+            return Vec::new();
+        }
+        data.staff_monitoring_workload(staff.id)
+            .into_iter()
+            .map(|row| StaffMonitoringDto {
+                player_id: row.player_id,
+                player_name: row.player_name,
+                target_club_name: row.target_club_name,
+                target_team_slug: row.target_team_slug,
+                status_key: format!("monitoring_status_{}", row.status),
+                last_observed: row
+                    .last_observed
+                    .map(|d| d.format("%d.%m.%Y").to_string())
+                    .unwrap_or_default(),
+                confidence_pct: (row.confidence * 100.0).round().clamp(0.0, 100.0) as u8,
+                times_watched: row.times_watched,
+                matches_watched: row.matches_watched,
+                assessed_ability: row.assessed_ability,
+                assessed_potential: row.assessed_potential,
+                latest_vote_key: row
+                    .latest_vote
+                    .map(|v| format!("scout_vote_{}", v))
+                    .unwrap_or_default(),
             })
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
+            .collect()
+    }
+}
 
-    let mut data_points = Vec::new();
-    let mut radar_axes = Vec::new();
-    let mut radar_items = Vec::new();
+impl PersonalityDto {
+    fn of(staff: &Staff) -> PersonalityDto {
+        let attrs = &staff.attributes;
 
-    for i in 0..n {
-        let angle = angle_at(i);
-        let ratio = values[i] as f32 / 20.0;
-        data_points.push(format!(
-            "{:.1},{:.1}",
-            cx + max_r * ratio * angle.cos(),
-            cy + max_r * ratio * angle.sin()
-        ));
+        let values: [u8; 8] = [
+            attrs.adaptability.round().clamp(1.0, 20.0) as u8,
+            attrs.ambition.round().clamp(1.0, 20.0) as u8,
+            attrs.controversy.round().clamp(1.0, 20.0) as u8,
+            attrs.loyalty.round().clamp(1.0, 20.0) as u8,
+            attrs.pressure.round().clamp(1.0, 20.0) as u8,
+            attrs.professionalism.round().clamp(1.0, 20.0) as u8,
+            attrs.sportsmanship.round().clamp(1.0, 20.0) as u8,
+            attrs.temperament.round().clamp(1.0, 20.0) as u8,
+        ];
+        let names = [
+            "adaptability",
+            "ambition",
+            "controversy",
+            "loyalty",
+            "pressure",
+            "professionalism",
+            "sportsmanship",
+            "temperament",
+        ];
 
-        radar_axes.push(RadarAxisDto {
-            x2: cx + max_r * angle.cos(),
-            y2: cy + max_r * angle.sin(),
-        });
+        let cx: f32 = 200.0;
+        let cy: f32 = 140.0;
+        let max_r: f32 = 75.0;
+        let label_r: f32 = 90.0;
+        let n = values.len();
 
-        let lx = cx + label_r * angle.cos();
-        let ly = cy + label_r * angle.sin();
-        let anchor = if angle.cos().abs() < 0.01 {
-            "middle"
-        } else if angle.cos() > 0.0 {
-            "start"
-        } else {
-            "end"
+        let angle_at = |i: usize| -> f32 {
+            std::f32::consts::PI * 2.0 * (i as f32) / (n as f32) - std::f32::consts::FRAC_PI_2
         };
 
-        radar_items.push(RadarLabelDto {
-            name: names[i].to_string(),
-            value: values[i],
-            x: lx,
-            y: ly,
-            anchor: anchor.to_string(),
-        });
-    }
+        let grid_polygon = |radius: f32| -> String {
+            (0..n)
+                .map(|i| {
+                    let a = angle_at(i);
+                    format!("{:.1},{:.1}", cx + radius * a.cos(), cy + radius * a.sin())
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
 
-    PersonalityDto {
-        radar_points: data_points.join(" "),
-        radar_grid_4: grid_polygon(max_r),
-        radar_grid_3: grid_polygon(max_r * 0.75),
-        radar_grid_2: grid_polygon(max_r * 0.5),
-        radar_grid_1: grid_polygon(max_r * 0.25),
-        radar_axes,
-        radar_items,
+        let mut data_points = Vec::new();
+        let mut radar_axes = Vec::new();
+        let mut radar_items = Vec::new();
+
+        for i in 0..n {
+            let angle = angle_at(i);
+            let ratio = values[i] as f32 / 20.0;
+            data_points.push(format!(
+                "{:.1},{:.1}",
+                cx + max_r * ratio * angle.cos(),
+                cy + max_r * ratio * angle.sin()
+            ));
+
+            radar_axes.push(RadarAxisDto {
+                x2: cx + max_r * angle.cos(),
+                y2: cy + max_r * angle.sin(),
+            });
+
+            let lx = cx + label_r * angle.cos();
+            let ly = cy + label_r * angle.sin();
+            let anchor = if angle.cos().abs() < 0.01 {
+                "middle"
+            } else if angle.cos() > 0.0 {
+                "start"
+            } else {
+                "end"
+            };
+
+            radar_items.push(RadarLabelDto {
+                name: names[i].to_string(),
+                value: values[i],
+                x: lx,
+                y: ly,
+                anchor: anchor.to_string(),
+            });
+        }
+
+        PersonalityDto {
+            radar_points: data_points.join(" "),
+            radar_grid_4: grid_polygon(max_r),
+            radar_grid_3: grid_polygon(max_r * 0.75),
+            radar_grid_2: grid_polygon(max_r * 0.5),
+            radar_grid_1: grid_polygon(max_r * 0.25),
+            radar_axes,
+            radar_items,
+        }
     }
 }
 
-fn get_staff_info(staff: &Staff, i18n: &I18n) -> StaffInfoDto {
-    let behaviour = i18n
-        .t(&format!(
-            "behaviour_{}",
-            staff.behaviour.as_str().to_lowercase()
-        ))
+impl StaffInfoDto {
+    fn of(staff: &Staff, i18n: &I18n) -> StaffInfoDto {
+        let behaviour = i18n
+            .t(&format!(
+                "behaviour_{}",
+                staff.behaviour.as_str().to_lowercase()
+            ))
+            .to_string();
+
+        let coaching_style = match staff.coaching_style {
+            CoachingStyle::Authoritarian => i18n.t("style_authoritarian"),
+            CoachingStyle::Democratic => i18n.t("style_democratic"),
+            CoachingStyle::LaissezFaire => i18n.t("style_laissez_faire"),
+            CoachingStyle::Transformational => i18n.t("style_transformational"),
+            CoachingStyle::Tactical => i18n.t("style_tactical"),
+        }
         .to_string();
 
-    let coaching_style = match staff.coaching_style {
-        CoachingStyle::Authoritarian => i18n.t("style_authoritarian"),
-        CoachingStyle::Democratic => i18n.t("style_democratic"),
-        CoachingStyle::LaissezFaire => i18n.t("style_laissez_faire"),
-        CoachingStyle::Transformational => i18n.t("style_transformational"),
-        CoachingStyle::Tactical => i18n.t("style_tactical"),
-    }
-    .to_string();
+        let license = match staff.license {
+            StaffLicenseType::ContinentalPro => i18n.t("license_continental_pro"),
+            StaffLicenseType::ContinentalA => i18n.t("license_continental_a"),
+            StaffLicenseType::ContinentalB => i18n.t("license_continental_b"),
+            StaffLicenseType::ContinentalC => i18n.t("license_continental_c"),
+            StaffLicenseType::NationalA => i18n.t("license_national_a"),
+            StaffLicenseType::NationalB => i18n.t("license_national_b"),
+            StaffLicenseType::NationalC => i18n.t("license_national_c"),
+        }
+        .to_string();
 
-    let license = match staff.license {
-        StaffLicenseType::ContinentalPro => i18n.t("license_continental_pro"),
-        StaffLicenseType::ContinentalA => i18n.t("license_continental_a"),
-        StaffLicenseType::ContinentalB => i18n.t("license_continental_b"),
-        StaffLicenseType::ContinentalC => i18n.t("license_continental_c"),
-        StaffLicenseType::NationalA => i18n.t("license_national_a"),
-        StaffLicenseType::NationalB => i18n.t("license_national_b"),
-        StaffLicenseType::NationalC => i18n.t("license_national_c"),
-    }
-    .to_string();
+        let fatigue = staff.fatigue.round().clamp(0.0, 100.0) as u8;
+        let job_satisfaction = staff.job_satisfaction.round().clamp(0.0, 100.0) as u8;
 
-    let fatigue = staff.fatigue.round().clamp(0.0, 100.0) as u8;
-    let job_satisfaction = staff.job_satisfaction.round().clamp(0.0, 100.0) as u8;
+        let mental = &staff.staff_attributes.mental;
+        let determination = mental.determination;
+        let man_management = mental.man_management;
+        let motivating = mental.motivating;
+        let discipline = mental.discipline;
 
-    let mental = &staff.staff_attributes.mental;
-    let determination = mental.determination;
-    let man_management = mental.man_management;
-    let motivating = mental.motivating;
-    let discipline = mental.discipline;
+        let (salary, contract_expiry, role) = if let Some(contract) = &staff.contract {
+            let wage = format!(
+                "{} {}",
+                FormattingUtils::format_money(contract.salary as f64),
+                i18n.t("per_week")
+            );
+            let expiry = contract.expired.format("%d.%m.%Y").to_string();
+            let role = i18n
+                .t(StaffRole::as_i18n_key(&contract.position))
+                .to_string();
+            (wage, expiry, role)
+        } else {
+            (String::new(), String::new(), String::new())
+        };
 
-    let (salary, contract_expiry, role) = if let Some(contract) = &staff.contract {
-        let wage = format!(
-            "{} {}",
-            FormattingUtils::format_money(contract.salary as f64),
-            i18n.t("per_week")
-        );
-        let expiry = contract.expired.format("%d.%m.%Y").to_string();
-        let role = i18n.t(position_to_i18n_key(&contract.position)).to_string();
-        (wage, expiry, role)
-    } else {
-        (String::new(), String::new(), String::new())
-    };
-
-    StaffInfoDto {
-        behaviour,
-        coaching_style,
-        license,
-        fatigue,
-        job_satisfaction,
-        determination,
-        man_management,
-        motivating,
-        discipline,
-        salary,
-        contract_expiry,
-        role,
+        StaffInfoDto {
+            behaviour,
+            coaching_style,
+            license,
+            fatigue,
+            job_satisfaction,
+            determination,
+            man_management,
+            motivating,
+            discipline,
+            salary,
+            contract_expiry,
+            role,
+        }
     }
 }
 
-fn get_performance(staff: &Staff) -> PerformanceDto {
-    let perf = &staff.recent_performance;
-    PerformanceDto {
-        training_effectiveness: (perf.training_effectiveness * 100.0)
-            .round()
-            .clamp(0.0, 100.0) as u8,
-        player_development: (perf.player_development_rate * 100.0)
-            .round()
-            .clamp(0.0, 100.0) as u8,
-        injury_prevention: (perf.injury_prevention_rate * 100.0)
-            .round()
-            .clamp(0.0, 100.0) as u8,
-        tactical_implementation: (perf.tactical_implementation * 100.0)
-            .round()
-            .clamp(0.0, 100.0) as u8,
+impl PerformanceDto {
+    fn of(staff: &Staff) -> PerformanceDto {
+        let perf = &staff.recent_performance;
+        PerformanceDto {
+            training_effectiveness: (perf.training_effectiveness * 100.0)
+                .round()
+                .clamp(0.0, 100.0) as u8,
+            player_development: (perf.player_development_rate * 100.0)
+                .round()
+                .clamp(0.0, 100.0) as u8,
+            injury_prevention: (perf.injury_prevention_rate * 100.0)
+                .round()
+                .clamp(0.0, 100.0) as u8,
+            tactical_implementation: (perf.tactical_implementation * 100.0)
+                .round()
+                .clamp(0.0, 100.0) as u8,
+        }
     }
 }
 
-fn get_recent_events(staff: &Staff, i18n: &I18n) -> Vec<StaffRecentEventDto> {
-    let mut events: Vec<_> = staff
-        .recent_events
-        .iter()
-        .take(8)
-        .map(|e| {
-            let (key, positive) = match &e.event_type {
-                StaffEventType::TrainingConducted => ("staff_event_training", true),
-                StaffEventType::MatchObserved => ("staff_event_match_observed", true),
-                StaffEventType::PlayerScouted => ("staff_event_player_scouted", true),
-                StaffEventType::PositiveInteraction => ("staff_event_positive_interaction", true),
-                StaffEventType::Conflict => ("staff_event_conflict", false),
-                StaffEventType::MentorshipStarted => ("staff_event_mentorship", true),
-                StaffEventType::TrustBuilt => ("staff_event_trust_built", true),
-                StaffEventType::PerformanceExcellent => ("staff_event_excellent_performance", true),
-                StaffEventType::PerformanceDeclined => ("staff_event_performance_declined", false),
-                StaffEventType::LicenseUpgrade => ("staff_event_license_upgrade", true),
-                StaffEventType::ProfessionalDevelopment => ("staff_event_professional_dev", true),
-                StaffEventType::Birthday => ("staff_event_birthday", true),
-                StaffEventType::HighFatigue => ("staff_event_high_fatigue", false),
-                StaffEventType::ContractNegotiation => ("staff_event_contract_negotiation", false),
-                StaffEventType::RecruitmentMeeting => ("staff_event_recruitment_meeting", true),
-                StaffEventType::TargetRecommended => ("staff_event_target_recommended", true),
-                StaffEventType::TargetRejected => ("staff_event_target_rejected", false),
-                StaffEventType::BoardPresentation => ("staff_event_board_presentation", true),
-            };
-            let time_ago_label = if e.days_ago == 0 {
-                i18n.t("now").to_string()
-            } else {
-                format!("{}{}", e.days_ago, i18n.t("days_ago_short"))
-            };
-            StaffRecentEventDto {
-                description: i18n.t(key).to_string(),
-                is_positive: positive,
-                days_ago: e.days_ago,
-                time_ago_label,
-            }
-        })
-        .collect();
+impl StaffRecentEventDto {
+    fn rows(staff: &Staff, i18n: &I18n) -> Vec<StaffRecentEventDto> {
+        let mut events: Vec<_> = staff
+            .recent_events
+            .iter()
+            .take(8)
+            .map(|e| {
+                let (key, positive) = match &e.event_type {
+                    StaffEventType::TrainingConducted => ("staff_event_training", true),
+                    StaffEventType::MatchObserved => ("staff_event_match_observed", true),
+                    StaffEventType::PlayerScouted => ("staff_event_player_scouted", true),
+                    StaffEventType::PositiveInteraction => {
+                        ("staff_event_positive_interaction", true)
+                    }
+                    StaffEventType::Conflict => ("staff_event_conflict", false),
+                    StaffEventType::MentorshipStarted => ("staff_event_mentorship", true),
+                    StaffEventType::TrustBuilt => ("staff_event_trust_built", true),
+                    StaffEventType::PerformanceExcellent => {
+                        ("staff_event_excellent_performance", true)
+                    }
+                    StaffEventType::PerformanceDeclined => {
+                        ("staff_event_performance_declined", false)
+                    }
+                    StaffEventType::LicenseUpgrade => ("staff_event_license_upgrade", true),
+                    StaffEventType::ProfessionalDevelopment => {
+                        ("staff_event_professional_dev", true)
+                    }
+                    StaffEventType::Birthday => ("staff_event_birthday", true),
+                    StaffEventType::HighFatigue => ("staff_event_high_fatigue", false),
+                    StaffEventType::ContractNegotiation => {
+                        ("staff_event_contract_negotiation", false)
+                    }
+                    StaffEventType::RecruitmentMeeting => ("staff_event_recruitment_meeting", true),
+                    StaffEventType::TargetRecommended => ("staff_event_target_recommended", true),
+                    StaffEventType::TargetRejected => ("staff_event_target_rejected", false),
+                    StaffEventType::BoardPresentation => ("staff_event_board_presentation", true),
+                };
+                let time_ago_label = if e.days_ago == 0 {
+                    i18n.t("now").to_string()
+                } else {
+                    format!("{}{}", e.days_ago, i18n.t("days_ago_short"))
+                };
+                StaffRecentEventDto {
+                    description: i18n.t(key).to_string(),
+                    is_positive: positive,
+                    days_ago: e.days_ago,
+                    time_ago_label,
+                }
+            })
+            .collect();
 
-    events.sort_by_key(|a| a.days_ago);
-    events
-}
-
-fn position_to_i18n_key(position: &StaffPosition) -> &'static str {
-    match position {
-        StaffPosition::Manager => "staff_manager",
-        StaffPosition::AssistantManager => "staff_assistant_manager",
-        StaffPosition::CaretakerManager => "staff_caretaker_manager",
-        StaffPosition::Coach => "staff_coach",
-        StaffPosition::FirstTeamCoach => "staff_first_team_coach",
-        StaffPosition::FitnessCoach => "staff_fitness_coach",
-        StaffPosition::GoalkeeperCoach => "staff_goalkeeper_coach",
-        StaffPosition::YouthCoach => "staff_youth_coach",
-        StaffPosition::U21Manager => "staff_u21_manager",
-        StaffPosition::U19Manager => "staff_u19_manager",
-        StaffPosition::Scout => "staff_scout",
-        StaffPosition::ChiefScout => "staff_chief_scout",
-        StaffPosition::Physio => "staff_physio",
-        StaffPosition::HeadOfPhysio => "staff_head_of_physio",
-        StaffPosition::Chairman => "staff_chairman",
-        StaffPosition::Director => "staff_director",
-        StaffPosition::ManagingDirector => "staff_managing_director",
-        StaffPosition::DirectorOfFootball => "staff_director_of_football",
-        StaffPosition::GeneralManager => "staff_general_manager",
-        StaffPosition::HeadOfYouthDevelopment => "staff_head_of_youth_dev",
-        StaffPosition::MediaPundit => "staff_media_pundit",
-        StaffPosition::DataAnalyst => "staff_data_analyst",
-        StaffPosition::HeadOfRecruitment => "staff_head_of_recruitment",
-        StaffPosition::Free => "staff_free",
+        events.sort_by_key(|a| a.days_ago);
+        events
     }
-}
-
-fn get_neighbor_teams(
-    club_id: u32,
-    data: &SimulatorData,
-    i18n: &I18n,
-) -> Result<NeighborMenus, ApiError> {
-    let club = data
-        .club(club_id)
-        .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
-
-    let teams = views::neighbor_teams(club, i18n);
-
-    let mut country_leagues: Vec<(u32, String, String)> = data
-        .country_by_club(club_id)
-        .map(|country| {
-            country
-                .leagues
-                .leagues
-                .iter()
-                .filter(|l| !l.friendly)
-                .map(|l| (l.id, l.name.clone(), l.slug.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
-    country_leagues.sort_by_key(|(id, _, _)| *id);
-
-    Ok((
-        teams,
-        country_leagues
-            .into_iter()
-            .map(|(_, name, slug)| (name, slug))
-            .collect(),
-    ))
 }

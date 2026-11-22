@@ -1,8 +1,9 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::leagues::address::LeagueAddress;
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::teams::newspaper::NewspaperCounter;
+use crate::teams::{TeamLookup, TeamNeighborhood};
 use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -82,101 +83,85 @@ pub struct RecentUsedShape {
     pub change_minute_label: String,
 }
 
-pub async fn team_tactics_get_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<TeamTacticsGetRequest>,
-) -> ApiResult<impl IntoResponse> {
-    let guard = state.data.read().await;
+pub struct TeamTacticsPage;
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+impl TeamTacticsPage {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<TeamTacticsGetRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        let guard = state.data.read().await;
 
-    let i18n = state.i18n.for_lang(&route_params.lang);
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let team_id = simulator_data
-        .indexes
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Indexes not available".to_string()))?
-        .slug_indexes
-        .get_team_by_slug(&route_params.team_slug)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("Team '{}' not found", route_params.team_slug))
-        })?;
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let team = TeamLookup::by_slug(simulator_data, &route_params.team_slug)?;
 
-    let team = simulator_data
-        .team(team_id)
-        .ok_or_else(|| ApiError::NotFound(format!("Team with ID {} not found", team_id)))?;
+        Self::template(simulator_data, team, i18n, &route_params)
+    }
 
-    let league = team.league_id.and_then(|id| simulator_data.league(id));
+    fn template(
+        data: &SimulatorData,
+        team: &Team,
+        i18n: I18n,
+        route_params: &TeamTacticsGetRequest,
+    ) -> Result<TeamTacticsTemplate, ApiError> {
+        let league = team.league_id.and_then(|id| data.league(id));
 
-    let last_match = LastMatchLookup::find(team);
-    let lineup = TacticsLineupBuilder::build(team, last_match);
-    let formation_name = lineup.formation_name;
-    let formation_players = lineup.players;
+        let last_match = LastMatchLookup::find(team);
+        let lineup = TacticsLineupBuilder::build(team, last_match);
+        let recent_used_shapes = RecentShapesView::build(team, data, &i18n);
 
-    let recent_used_shapes = RecentShapesView::build(team, simulator_data, &i18n);
+        let current_path = format!("/{}/teams/{}/tactics", route_params.lang, team.slug);
+        let neighborhood = TeamNeighborhood::for_club(team.club_id, data, &i18n)?;
+        let menu_sections = neighborhood.menu_sections(
+            data,
+            team.club_id,
+            &i18n,
+            &route_params.lang,
+            &current_path,
+        );
+        let title = team.name.clone();
+        let league_title = league
+            .map(|l| views::Menus::league_display_name(l, &i18n, data))
+            .unwrap_or_default();
 
-    let neighborhood = TeamNeighborhood::for_club(team.club_id, simulator_data, &i18n)?;
-    let neighbor_refs: Vec<(&str, &str)> = neighborhood
-        .teams
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-    let league_refs: Vec<(&str, &str)> = neighborhood
-        .leagues
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-
-    let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-    let current_path = format!("/{}/teams/{}/tactics", route_params.lang, team.slug);
-    let menu_params = views::MenuParams {
-        i18n: &i18n,
-        lang: &route_params.lang,
-        current_path: &current_path,
-        country_name: cn,
-        country_slug: cs,
-    };
-    let menu_sections = views::team_menu(&menu_params, &neighbor_refs, &league_refs);
-    let title = team.name.clone();
-    let league_title = league
-        .map(|l| views::league_display_name(l, &i18n, simulator_data))
-        .unwrap_or_default();
-
-    Ok(TeamTacticsTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        i18n,
-        lang: route_params.lang.clone(),
-        title,
-        sub_title_prefix: String::new(),
-        sub_title_suffix: String::new(),
-        sub_title: league_title,
-        sub_title_link: league
-            .map(|l| LeagueAddress::of(simulator_data, l).url(&route_params.lang))
-            .unwrap_or_default(),
-        sub_title_flag: None,
-        header_color: simulator_data
-            .club(team.club_id)
-            .map(|c| c.colors.background.clone())
-            .unwrap_or_default(),
-        foreground_color: simulator_data
-            .club(team.club_id)
-            .map(|c| c.colors.foreground.clone())
-            .unwrap_or_default(),
-        menu_sections,
-        team_slug: team.slug.clone(),
-        active_tab: "tactics",
-        show_finances_tab: team.team_type.is_own_team(),
-        show_academy_tab: team.team_type == TeamType::Main || team.team_type == TeamType::U18,
-        newspaper_count: NewspaperCounter::count(simulator_data, team),
-        formation_name,
-        formation_players,
-        recent_used_shapes,
-    })
+        Ok(TeamTacticsTemplate {
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
+            cpu_brand: &CPU_BRAND,
+            cores_count: *CPU_CORES,
+            i18n,
+            lang: route_params.lang.clone(),
+            title,
+            sub_title_prefix: String::new(),
+            sub_title_suffix: String::new(),
+            sub_title: league_title,
+            sub_title_link: league
+                .map(|l| LeagueAddress::of(data, l).url(&route_params.lang))
+                .unwrap_or_default(),
+            sub_title_flag: None,
+            header_color: data
+                .club(team.club_id)
+                .map(|c| c.colors.background.clone())
+                .unwrap_or_default(),
+            foreground_color: data
+                .club(team.club_id)
+                .map(|c| c.colors.foreground.clone())
+                .unwrap_or_default(),
+            menu_sections,
+            team_slug: team.slug.clone(),
+            active_tab: "tactics",
+            show_finances_tab: team.team_type.is_own_team(),
+            show_academy_tab: team.team_type == TeamType::Main || team.team_type == TeamType::U18,
+            newspaper_count: NewspaperCounter::count(data, team),
+            formation_name: lineup.formation_name,
+            formation_players: lineup.players,
+            recent_used_shapes,
+        })
+    }
 }
 
 struct PositionCss;
@@ -355,42 +340,5 @@ impl RecentShapesView {
             })
             .take(5)
             .collect()
-    }
-}
-
-struct TeamNeighborhood {
-    teams: Vec<(String, String)>,
-    leagues: Vec<(String, String)>,
-}
-
-impl TeamNeighborhood {
-    fn for_club(club_id: u32, data: &SimulatorData, i18n: &I18n) -> Result<Self, ApiError> {
-        let club = data.club(club_id).ok_or_else(|| {
-            ApiError::InternalError(format!("Club with ID {} not found", club_id))
-        })?;
-
-        let teams = views::neighbor_teams(club, i18n);
-
-        let mut country_leagues: Vec<(u32, String, String)> = data
-            .country_by_club(club_id)
-            .map(|country| {
-                country
-                    .leagues
-                    .leagues
-                    .iter()
-                    .filter(|l| !l.friendly)
-                    .map(|l| (l.id, l.name.clone(), l.slug.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        country_leagues.sort_by_key(|(id, _, _)| *id);
-
-        Ok(TeamNeighborhood {
-            teams,
-            leagues: country_leagues
-                .into_iter()
-                .map(|(_, name, slug)| (name, slug))
-                .collect(),
-        })
     }
 }

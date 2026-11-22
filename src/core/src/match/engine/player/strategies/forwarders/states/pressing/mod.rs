@@ -1,8 +1,8 @@
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{
+use crate::r#match::forwarders::states::shared::{
     ActivityIntensity, ForwardCondition, ForwardRead, ReadLevel,
 };
-use crate::r#match::player::strategies::common::states::{
+use crate::r#match::player::strategies::shared::states::{
     ChallengeKind, ClosingPoint, RecoveryChallenge, TackleEngagement,
 };
 use crate::r#match::{

@@ -122,11 +122,32 @@ impl RoleDutyFitScorer {
     /// declarative role recipes, not magic numbers buried inline at the
     /// scoring call site.
     pub fn role_attribute_fit(player: &Player, profile: SelectionRoleProfile) -> f32 {
-        let t = &player.skills.technical;
-        let m = &player.skills.mental;
-        let p = &player.skills.physical;
-        let gk = &player.skills.goalkeeping;
         let v = match profile {
+            SelectionRoleProfile::SweeperKeeper | SelectionRoleProfile::LineKeeper => {
+                Self::goalkeeper_fit(player, profile)
+            }
+            SelectionRoleProfile::BallPlayingCentreBack
+            | SelectionRoleProfile::StopperCentreBack
+            | SelectionRoleProfile::DefensiveFullback
+            | SelectionRoleProfile::OverlappingFullback => Self::defender_fit(player, profile),
+            SelectionRoleProfile::HoldingMidfielder
+            | SelectionRoleProfile::BallWinner
+            | SelectionRoleProfile::DeepPlaymaker
+            | SelectionRoleProfile::BoxToBoxMidfielder => Self::midfielder_fit(player, profile),
+            SelectionRoleProfile::AdvancedPlaymaker
+            | SelectionRoleProfile::TouchlineWinger
+            | SelectionRoleProfile::InvertedWinger
+            | SelectionRoleProfile::PressingForward
+            | SelectionRoleProfile::TargetForward
+            | SelectionRoleProfile::Poacher => Self::forward_fit(player, profile),
+        };
+        (v / 20.0).clamp(0.0, 1.0)
+    }
+
+    fn goalkeeper_fit(player: &Player, profile: SelectionRoleProfile) -> f32 {
+        let m = &player.skills.mental;
+        let gk = &player.skills.goalkeeping;
+        match profile {
             SelectionRoleProfile::SweeperKeeper => {
                 gk.handling * 0.16
                     + gk.reflexes * 0.16
@@ -144,6 +165,15 @@ impl RoleDutyFitScorer {
                     + m.positioning * 0.14
                     + m.concentration * 0.12
             }
+            _ => unreachable!("goalkeeper role group"),
+        }
+    }
+
+    fn defender_fit(player: &Player, profile: SelectionRoleProfile) -> f32 {
+        let t = &player.skills.technical;
+        let m = &player.skills.mental;
+        let p = &player.skills.physical;
+        match profile {
             SelectionRoleProfile::BallPlayingCentreBack => {
                 t.passing * 0.18
                     + t.technique * 0.10
@@ -181,6 +211,15 @@ impl RoleDutyFitScorer {
                     + t.tackling * 0.12
                     + m.off_the_ball * 0.12
             }
+            _ => unreachable!("defender role group"),
+        }
+    }
+
+    fn midfielder_fit(player: &Player, profile: SelectionRoleProfile) -> f32 {
+        let t = &player.skills.technical;
+        let m = &player.skills.mental;
+        let p = &player.skills.physical;
+        match profile {
             SelectionRoleProfile::HoldingMidfielder => {
                 m.positioning * 0.18
                     + m.anticipation * 0.14
@@ -218,6 +257,15 @@ impl RoleDutyFitScorer {
                     + m.teamwork * 0.10
                     + t.finishing * 0.10
             }
+            _ => unreachable!("midfielder role group"),
+        }
+    }
+
+    fn forward_fit(player: &Player, profile: SelectionRoleProfile) -> f32 {
+        let t = &player.skills.technical;
+        let m = &player.skills.mental;
+        let p = &player.skills.physical;
+        match profile {
             SelectionRoleProfile::AdvancedPlaymaker => {
                 m.vision * 0.20
                     + t.passing * 0.18
@@ -272,8 +320,8 @@ impl RoleDutyFitScorer {
                     + p.acceleration * 0.14
                     + m.concentration * 0.12
             }
-        };
-        (v / 20.0).clamp(0.0, 1.0)
+            _ => unreachable!("forward role group"),
+        }
     }
 
     /// Lightweight duty fit: how well the player's work-rate / discipline

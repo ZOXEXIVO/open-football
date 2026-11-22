@@ -2,9 +2,13 @@ use crate::GameAppData;
 use axum::Router;
 use axum::routing::get;
 
-pub fn routes() -> Router<GameAppData> {
-    Router::new().route(
-        "/{lang}/champions-league",
-        get(super::champions_league_get_action),
-    )
+pub struct ChampionsLeagueGetRoutes;
+
+impl ChampionsLeagueGetRoutes {
+    pub fn router() -> Router<GameAppData> {
+        Router::new().route(
+            "/{lang}/champions-league",
+            get(super::ChampionsLeagueGet::action),
+        )
+    }
 }

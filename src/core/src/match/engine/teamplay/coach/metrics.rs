@@ -58,7 +58,9 @@ impl ReadCounters {
             line_breaks_against: self
                 .line_breaks_against
                 .saturating_sub(earlier.line_breaks_against),
-            possession_ticks: self.possession_ticks.saturating_sub(earlier.possession_ticks),
+            possession_ticks: self
+                .possession_ticks
+                .saturating_sub(earlier.possession_ticks),
             tilt_ticks: self.tilt_ticks.saturating_sub(earlier.tilt_ticks),
             ticks: self.ticks.saturating_sub(earlier.ticks),
         }
@@ -201,6 +203,10 @@ mod tests {
     #[test]
     fn before_the_window_is_played_the_read_is_the_play_so_far() {
         let read = played_to(5).read();
-        assert!((read.xg_for_last_15 - 5.0).abs() < 0.6, "{}", read.xg_for_last_15);
+        assert!(
+            (read.xg_for_last_15 - 5.0).abs() < 0.6,
+            "{}",
+            read.xg_for_last_15
+        );
     }
 }

@@ -49,7 +49,8 @@ fn audit_source_ability() {
         }
         let Some(attrs) = &record.attrs else { continue };
         let recorded = RecordedSkills::from_attrs(&attrs.player);
-        let primary = positions_from_odb(record.id, &record.positions).positions[0].position;
+        let primary =
+            OdbPositionCode::positions(record.id, &record.positions).positions[0].position;
         // Do not impute missing inputs then present the result as validation.
         // Only score records whose missing slots cannot affect the result.
         let mut lower = recorded.values;

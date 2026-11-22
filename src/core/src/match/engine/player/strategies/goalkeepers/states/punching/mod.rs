@@ -1,5 +1,5 @@
 use crate::r#match::engine::ball::ball::AerialReach;
-use crate::r#match::goalkeepers::states::common::{
+use crate::r#match::goalkeepers::states::shared::{
     ActivityIntensity, GoalkeeperCondition, KeeperRead, ReadLevel,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;

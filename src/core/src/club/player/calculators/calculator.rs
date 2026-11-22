@@ -266,7 +266,10 @@ impl PlayerValueCalculator {
         if x >= last.0 {
             return last.1;
         }
-        let at = knots.iter().position(|k| x < k.0).unwrap_or(knots.len() - 1);
+        let at = knots
+            .iter()
+            .position(|k| x < k.0)
+            .unwrap_or(knots.len() - 1);
         let (lo, hi) = (knots[at - 1], knots[at]);
         lo.1 + (hi.1 - lo.1) * (x - lo.0) / (hi.0 - lo.0)
     }
@@ -278,7 +281,11 @@ impl PlayerValueCalculator {
     /// goal in a top-5 league is worth more to the market than a goal in a
     /// semi-pro division. Half-weight when no league context is available
     /// (academy, free agents, calibration tests).
-    fn determine_performance_factor(player: &Player, now: NaiveDate, league_reputation: u16) -> f64 {
+    fn determine_performance_factor(
+        player: &Player,
+        now: NaiveDate,
+        league_reputation: u16,
+    ) -> f64 {
         let record = FootballRecord::of(player, now);
         let group = player.position().position_group();
         let mut factor = Self::football_played_factor(record.appearances);
@@ -715,12 +722,16 @@ mod tests {
     #[test]
     fn a_year_of_football_is_worth_more_than_a_year_on_the_bench() {
         let now = d(2025);
-        let benched = make_valuation_player(now, 130, 140, 26, PlayerPositionType::MidfielderCenter);
+        let benched =
+            make_valuation_player(now, 130, 140, 26, PlayerPositionType::MidfielderCenter);
         let played = with_ordinary_season(benched.clone(), 30);
 
         let on_the_bench = PlayerValueCalculator::calculate(&benched, now, 1.0, 7000, 7000);
         let on_the_pitch = PlayerValueCalculator::calculate(&played, now, 1.0, 7000, 7000);
-        assert!(on_the_pitch > on_the_bench, "{on_the_pitch} against {on_the_bench}");
+        assert!(
+            on_the_pitch > on_the_bench,
+            "{on_the_pitch} against {on_the_bench}"
+        );
     }
 
     #[test]
@@ -735,7 +746,11 @@ mod tests {
         let mut previous = factor(0);
         for played in 1..=40 {
             let next = factor(played);
-            assert!(next >= previous, "{played} appearances read below {}", played - 1);
+            assert!(
+                next >= previous,
+                "{played} appearances read below {}",
+                played - 1
+            );
             // The old bands were five to fifteen per cent apart.
             assert!(
                 next - previous <= 0.02,

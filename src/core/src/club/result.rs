@@ -63,6 +63,24 @@ impl UnresolvedSalaryTrigger {
     }
 }
 
+struct SalaryFallbackFacts {
+    squad_avg_ability: u8,
+    squad_avg: i16,
+    annual_wage_bill: u32,
+    team_id: u32,
+    club_rep: u16,
+    league_rep: u16,
+}
+
+struct ReactiveRenewalContext {
+    negotiation_skill: u8,
+    judging_ability: u8,
+    wage_budget: u32,
+    current_wage_bill: u32,
+    club_rep_score: f32,
+    league_reputation: u16,
+}
+
 pub struct ClubResult {
     pub club_id: u32,
     pub finance: ClubFinanceResult,
@@ -127,10 +145,10 @@ impl ClubResult {
             .unwrap_or(false);
 
         // Contract rejected — escalation is gated on the rolling
-        // contract-stalemate assessment, NOT on a single rejection.
-        // Loaned players can't be transfer-listed remotely by the parent
-        // club; the rejection still records in history so the parent
-        // sees the failed talk next assessment.
+        // contract-stalemate assessment, NOT on a single rejection. Loaned
+        // players can't be transfer-listed remotely by the parent club; the
+        // rejection still records in history so the parent sees the failed
+        // talk next assessment.
         if result.contract.contract_rejected {
             if !is_on_loan && Self::stalemate_permits_listing(result.player_id, data, club_id) {
                 Self::handle_unresolved_salary(
@@ -140,512 +158,524 @@ impl ClubResult {
                     UnresolvedSalaryTrigger::FailedRenewal,
                 );
             }
-            // First / mid-stalemate rejections: the renewal manager will
-            // come back next cycle with an improved offer informed by
+            // First / mid-stalemate rejections: the renewal manager will come
+            // back next cycle with an improved offer informed by
             // `pending_contract_ask`. No listing yet.
             return;
         }
 
-        // Reactive renewal cooldown. process_contract sets
-        // want_extend_contract every tick the contract is < 1 year from
-        // expiry, and process_happiness sets want_improve_contract every
-        // week the player is salary-unhappy. Without a gate here, the
-        // club would send a fresh proposal each tick and pile up
-        // rejection entries. Reuse the same retry rules as the proactive
-        // ContractRenewalManager: 60-day cooldown after an offer, 120-day
-        // cooldown after a rejection, max 3 attempts per rolling year.
+        if !Self::renewal_attempt_allowed(result.player_id, data) {
+            return;
+        }
+        if !(result.contract.no_contract
+            || result.contract.want_improve_contract
+            || result.contract.want_extend_contract)
+        {
+            return;
+        }
+        // For loaned players, only handle parent contract extensions. Salary
+        // improvements are between the player and borrowing club — not
+        // relevant here.
+        if is_on_loan && !result.contract.want_extend_contract {
+            return;
+        }
+
+        let Some(contract_club_id) =
+            Self::contract_club_id(result.player_id, data, club_id, is_on_loan)
+        else {
+            return;
+        };
+
+        // Parallel per-club pass: a loan parent outside this worker's club is
+        // out of write scope — queue the whole interaction for a serial replay
+        // with full country access. Country-wide views answer `false` and
+        // continue inline.
+        if data.try_defer_contract_interaction(
+            contract_club_id,
+            DeferredContractInteraction {
+                player_id: result.player_id,
+                employing_club_id: club_id,
+                no_contract: result.contract.no_contract,
+                want_improve_contract: result.contract.want_improve_contract,
+                want_extend_contract: result.contract.want_extend_contract,
+            },
+        ) {
+            return;
+        }
+
+        let Some(context) = Self::reactive_renewal_context(data, contract_club_id) else {
+            return;
+        };
+        let Some((proposal, final_salary, years)) =
+            Self::build_reactive_proposal(data, result, club_id, is_on_loan, &context)
+        else {
+            return;
+        };
+
+        Self::deliver_message(
+            data,
+            club_id,
+            result.player_id,
+            PlayerMessage {
+                message_type: PlayerMessageType::ContractProposal(proposal),
+            },
+        );
+        Self::record_reactive_offer(data, result.player_id, years, final_salary);
+    }
+
+    /// Reactive renewal cooldown. `process_contract` sets
+    /// `want_extend_contract` every tick the contract is < 1 year from expiry,
+    /// and `process_happiness` sets `want_improve_contract` every week the
+    /// player is salary-unhappy. Without a gate here, the club would send a
+    /// fresh proposal each tick and pile up rejection entries. Reuse the same
+    /// retry rules as the proactive `ContractRenewalManager`: 60-day cooldown
+    /// after an offer, 120-day cooldown after a rejection, max 3 attempts per
+    /// rolling year.
+    fn renewal_attempt_allowed<D: LeagueProcessAccess>(player_id: u32, data: &D) -> bool {
         const OFFER_COOLDOWN_DAYS: i64 = 60;
         const REJECT_COOLDOWN_DAYS: i64 = 120;
         const MAX_ATTEMPTS_PER_YEAR: usize = 3;
+
         let today = data.date().date();
-        if let Some(player) = data.player(result.player_id) {
-            let last = player.decision_history.items.iter().rev().find(|d| {
+        let Some(player) = data.player(player_id) else {
+            return false;
+        };
+        let last =
+            player.decision_history.items.iter().rev().find(|d| {
                 d.decision == RENEWAL_OFFERED_LABEL || d.decision == RENEWAL_REJECTED_LABEL
             });
-            if let Some(d) = last {
-                let days = (today - d.date).num_days();
-                let cooldown = if d.decision == RENEWAL_REJECTED_LABEL {
-                    REJECT_COOLDOWN_DAYS
-                } else {
-                    OFFER_COOLDOWN_DAYS
-                };
-                if days < cooldown {
-                    return;
-                }
-            }
-            let attempts = player
-                .decision_history
-                .items
-                .iter()
-                .filter(|d| {
-                    d.decision == RENEWAL_OFFERED_LABEL && (today - d.date).num_days() < 365
-                })
-                .count();
-            if attempts >= MAX_ATTEMPTS_PER_YEAR {
-                return;
+        if let Some(d) = last {
+            let days = (today - d.date).num_days();
+            let cooldown = if d.decision == RENEWAL_REJECTED_LABEL {
+                REJECT_COOLDOWN_DAYS
+            } else {
+                OFFER_COOLDOWN_DAYS
+            };
+            if days < cooldown {
+                return false;
             }
         }
+        let attempts = player
+            .decision_history
+            .items
+            .iter()
+            .filter(|d| d.decision == RENEWAL_OFFERED_LABEL && (today - d.date).num_days() < 365)
+            .count();
+        attempts < MAX_ATTEMPTS_PER_YEAR
+    }
 
-        if result.contract.no_contract
-            || result.contract.want_improve_contract
-            || result.contract.want_extend_contract
-        {
-            // For loaned players, only handle parent contract extensions
-            // Salary improvements are between the player and borrowing club — not relevant here
-            if is_on_loan && !result.contract.want_extend_contract {
-                return;
-            }
+    fn contract_club_id<D: LeagueProcessAccess>(
+        player_id: u32,
+        data: &D,
+        club_id: u32,
+        is_on_loan: bool,
+    ) -> Option<u32> {
+        if !is_on_loan {
+            return Some(club_id);
+        }
+        data.player(player_id)
+            .and_then(|p| p.contract_loan.as_ref())
+            .and_then(|c| c.loan_from_club_id)
+    }
 
-            // Resolve which club handles the contract: parent club for loaned players
-            let contract_club_id = if is_on_loan {
-                match data
-                    .player(result.player_id)
-                    .and_then(|p| p.contract_loan.as_ref())
-                    .and_then(|c| c.loan_from_club_id)
-                {
-                    Some(id) => id,
-                    None => return,
-                }
-            } else {
-                club_id
-            };
-
-            // Parallel per-club pass: a loan parent outside this
-            // worker's club is out of write scope — queue the whole
-            // interaction for a serial replay with full country access.
-            // Country-wide views answer `false` and continue inline.
-            if data.try_defer_contract_interaction(
-                contract_club_id,
-                DeferredContractInteraction {
-                    player_id: result.player_id,
-                    employing_club_id: club_id,
-                    no_contract: result.contract.no_contract,
-                    want_improve_contract: result.contract.want_improve_contract,
-                    want_extend_contract: result.contract.want_extend_contract,
-                },
-            ) {
-                return;
-            }
-
-            // Step 1: Resolve contract renewal staff, wage budget, and current wage bill
-            // Uses the parent club's context for loaned players. Also pull
-            // club + league reputation so the reactive offer can run through
-            // the same ContractValuation as the proactive renewal pass.
-            let (
-                negotiation_skill,
-                judging_ability,
+    fn reactive_renewal_context<D: LeagueProcessAccess>(
+        data: &D,
+        contract_club_id: u32,
+    ) -> Option<ReactiveRenewalContext> {
+        data.club(contract_club_id).map(|club| {
+            let main_team = club.teams.teams.first();
+            let (neg, judge) = main_team
+                .map(|team| {
+                    let staff = team
+                        .staffs
+                        .responsibility
+                        .contract_renewal
+                        .handle_first_team_contracts
+                        .and_then(|id| team.staffs.find(id));
+                    match staff {
+                        Some(s) => {
+                            let is_active = s
+                                .contract
+                                .as_ref()
+                                .map(|c| matches!(c.status, StaffStatus::Active))
+                                .unwrap_or(false);
+                            if is_active {
+                                (
+                                    s.staff_attributes.mental.man_management,
+                                    s.staff_attributes.knowledge.judging_player_ability,
+                                )
+                            } else {
+                                (3u8, 3u8)
+                            }
+                        }
+                        None => (5u8, 5u8),
+                    }
+                })
+                .unwrap_or((5, 5));
+            let wage_budget = club
+                .board
+                .season_targets
+                .as_ref()
+                .map(|t| t.wage_budget as u32)
+                .unwrap_or(0);
+            let current_wage_bill: u32 = club.teams.iter().map(|t| t.get_annual_salary()).sum();
+            let club_rep_score = main_team
+                .map(|t| t.reputation.overall_score())
+                .unwrap_or(0.5);
+            let league_reputation = main_team
+                .and_then(|t| t.league_id)
+                .and_then(|lid| data.league(lid))
+                .map(|l| l.reputation)
+                .unwrap_or(5_000);
+            ReactiveRenewalContext {
+                negotiation_skill: neg,
+                judging_ability: judge,
                 wage_budget,
                 current_wage_bill,
                 club_rep_score,
                 league_reputation,
-            ) = data
-                .club(contract_club_id)
-                .map(|club| {
-                    let main_team = club.teams.teams.first();
-                    let (neg, judge) = main_team
-                        .map(|team| {
-                            let staff = team
-                                .staffs
-                                .responsibility
-                                .contract_renewal
-                                .handle_first_team_contracts
-                                .and_then(|id| team.staffs.find(id));
-                            match staff {
-                                Some(s) => {
-                                    let is_active = s
-                                        .contract
-                                        .as_ref()
-                                        .map(|c| matches!(c.status, StaffStatus::Active))
-                                        .unwrap_or(false);
-                                    if is_active {
-                                        (
-                                            s.staff_attributes.mental.man_management,
-                                            s.staff_attributes.knowledge.judging_player_ability,
-                                        )
-                                    } else {
-                                        (3u8, 3u8)
-                                    }
-                                }
-                                None => (5u8, 5u8),
-                            }
-                        })
-                        .unwrap_or((5, 5));
-
-                    let wb = club
-                        .board
-                        .season_targets
-                        .as_ref()
-                        .map(|t| t.wage_budget as u32)
-                        .unwrap_or(0);
-
-                    let total_wages: u32 = club.teams.iter().map(|t| t.get_annual_salary()).sum();
-
-                    let club_rep = main_team
-                        .map(|t| t.reputation.overall_score())
-                        .unwrap_or(0.5);
-                    let league_id = main_team.and_then(|t| t.league_id);
-                    let league_rep = league_id
-                        .and_then(|lid| data.league(lid))
-                        .map(|l| l.reputation)
-                        .unwrap_or(5_000);
-
-                    (neg, judge, wb, total_wages, club_rep, league_rep)
-                })
-                .unwrap_or((5, 5, 0, 0, 0.5, 5_000));
-
-            // Step 2: Read player info (immutable)
-            let player = match data.player(result.player_id) {
-                Some(p) => p,
-                None => return,
-            };
-
-            let current_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0);
-            let ability = player.player_attributes.current_ability;
-            let age = DateUtils::age(player.birth_date, data.date().date());
-
-            // Reactive renewal salary now flows through ContractValuation,
-            // the same model used by the proactive renewal pass and salary
-            // happiness — otherwise the three systems disagree about what a
-            // fair wage looks like and chase each other in circles.
-            let squad_status = player
-                .contract
-                .as_ref()
-                .map(|c| c.squad_status.clone())
-                .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
-            let is_not_needed = matches!(squad_status, PlayerSquadStatus::NotNeeded);
-
-            // Not needed players don't get raises — transfer list or
-            // release instead. This path doesn't require a prior
-            // rejection: the squad plan already says "we don't want
-            // this player", and they're asking for more money. Going
-            // through the stalemate gate would be a no-op (NotNeeded
-            // permits listing at Emerging, which a fresh "wants raise"
-            // signal satisfies).
-            if !is_on_loan && result.contract.want_improve_contract && is_not_needed {
-                Self::handle_unresolved_salary(
-                    result.player_id,
-                    data,
-                    club_id,
-                    UnresolvedSalaryTrigger::NotNeededWantsRaise,
-                );
-                return;
             }
+        })
+    }
 
-            let months_remaining = player
-                .contract
-                .as_ref()
-                .map(|c| ((c.expiration - data.date().date()).num_days() / 30).max(0) as i32)
-                .unwrap_or(0);
-            let has_market_interest = player.statuses.has(PlayerStatusType::Wnt)
-                || player.statuses.has(PlayerStatusType::Enq)
-                || player.statuses.has(PlayerStatusType::Bid);
+    fn build_reactive_proposal<D: LeagueProcessAccess>(
+        data: &mut D,
+        result: &PlayerResult,
+        club_id: u32,
+        is_on_loan: bool,
+        context: &ReactiveRenewalContext,
+    ) -> Option<(PlayerContractProposal, u32, u8)> {
+        let player = data.player(result.player_id)?;
+        let today = data.date().date();
 
-            let valuation_ctx = ValuationContext {
-                age,
-                club_reputation_score: club_rep_score,
-                league_reputation,
-                squad_status: squad_status.clone(),
-                current_salary,
-                months_remaining,
-                has_market_interest,
-            };
-            let valuation = ContractValuation::evaluate(player, &valuation_ctx);
-
-            // Staff judging_ability narrows the offer around the unified
-            // target: poor staff under-offer (~85%), elite ones land within
-            // ±15% of the right number.
-            let accuracy = 0.85 + (judging_ability as f32 / 20.0) * 0.30;
-            let target = (valuation.expected_wage as f32 * accuracy) as u32;
-
-            // Anchor never below current salary plus a token bump.
-            let mut offered_salary = target
-                .max(current_salary + current_salary / 20)
-                .max(current_salary + 1);
-
-            // Salary-unhappy reactive offer: lean toward the player's own
-            // valuation rather than asking them to settle for a band-based
-            // average. Use max(target, expected) here so we don't underpay
-            // when the staff filter clipped it back.
-            if !is_on_loan && result.contract.want_improve_contract {
-                offered_salary = offered_salary.max(valuation.expected_wage);
-            }
-            let _ = ability; // silence unused-warning if future logic drops it
-
-            // Converge toward the player's own ask when we have it. When
-            // affordability evidence says the ask fits wage headroom, match
-            // it outright — repeated split-the-gap underbids let the
-            // rejection cap fire long before either side compromises, and
-            // the stalemate escalates to a listing for a deal the club
-            // could have closed.
-            if let Some(ask) = &player.pending_contract_ask
-                && ask.desired_salary > offered_salary
-            {
-                let headroom = if wage_budget > 0 {
-                    Some(wage_budget.saturating_sub(current_wage_bill))
-                } else {
-                    None
-                };
-                let stalemate = ContractStalemate::assess(
-                    player,
-                    data.date().date(),
-                    AffordabilityInput {
-                        wage_budget_headroom: headroom,
-                        current_salary,
-                    },
-                );
-                if stalemate.should_improve_offer() {
-                    offered_salary = ask.desired_salary;
-                } else {
-                    offered_salary = (offered_salary + ask.desired_salary) / 2;
-                }
-            }
-
-            // Wage budget enforcement: don't offer salary that would bust the budget
-            // The new salary replaces the current one, so check the net increase
-            let salary_increase = offered_salary.saturating_sub(current_salary);
-            let final_salary =
-                if wage_budget > 0 && current_wage_bill + salary_increase > wage_budget {
-                    // Over budget: cap the offer to what the budget allows
-                    let remaining = wage_budget.saturating_sub(current_wage_bill);
-                    let capped_salary = current_salary + remaining;
-                    // If we can't even match current salary the renewal
-                    // is structurally unaffordable. We don't auto-list
-                    // here — that would skip the rejection ladder. Skip
-                    // the offer this tick instead; the player stays
-                    // salary-unhappy, may eventually go UNH/REQ, and the
-                    // country pipeline picks that up explicitly. Listing
-                    // from this branch would jump straight to "club
-                    // forced him out" without the negotiation history
-                    // the stalemate model is built to track.
-                    if capped_salary <= current_salary
-                        && result.contract.want_improve_contract
-                        && !is_on_loan
-                    {
-                        return;
-                    }
-                    capped_salary.max(current_salary)
-                } else {
-                    offered_salary
-                };
-
-            let mut years =
-                negotiate_contract_years(player, age, negotiation_skill, data.date().date());
-            // The agent's minimum acceptable length is known at the table —
-            // an offer below it is an automatic ShortContract rejection, so
-            // lift to it (the proactive pass already does the same via
-            // proactive_contract_years). And when length was the stated
-            // sticking point of the LAST rejection, honor the years the
-            // player actually asked for instead of re-offering the deal he
-            // already refused.
-            years = years.max(ProcessContractHandler::player_minimum_years(
-                player,
-                data.date().date(),
-            ));
-            if let Some(ask) = &player.pending_contract_ask
-                && matches!(ask.rejection_reason, Some(RejectionReason::ShortContract))
-            {
-                years = years.max(ask.desired_years);
-            }
-
-            // Reactive path stays lean on sweeteners — the player has
-            // asked for the renewal themselves, so greed is usually not
-            // the blocker. Attach loyalty bonus for veterans to cover the
-            // same case where a 30+ player hesitates on length.
-            let loyalty_bonus = if age >= 30 {
-                (final_salary as f32 * 0.10) as u32
-            } else {
-                0
-            };
-
-            let mut reactive_proposal = PlayerContractProposal::basic(
-                final_salary,
-                years,
-                negotiation_skill,
-                0,
-                loyalty_bonus,
-                None,
-            );
-
-            // Honor the other non-wage demands captured from the last
-            // rejection — matching the proactive pass. Without this the
-            // reactive path kept re-offering the exact package the player
-            // had already turned down over a role promise or a missing
-            // clause, burning the yearly attempts (and escalating the
-            // stalemate toward a listing) on a resolvable negotiation.
-            if let Some(ask) = &player.pending_contract_ask {
-                if reactive_proposal.release_clause.is_none() {
-                    reactive_proposal.release_clause = ask.demanded_release_clause;
-                }
-                if let Some(status) = &ask.demanded_status
-                    && reactive_proposal.squad_status_promise.is_none()
-                    && status.seniority_rank() > squad_status.seniority_rank()
-                {
-                    reactive_proposal.squad_status_promise = Some(status.clone());
-                }
-                if let Some(bonus) = ask.demanded_signing_bonus
-                    && reactive_proposal.signing_bonus < bonus
-                {
-                    reactive_proposal.signing_bonus = bonus;
-                }
-            }
-            // Pass the valuation context through so player acceptance
-            // evaluates against the same club/league expectations this
-            // reactive offer was built from — matches the proactive path.
-            reactive_proposal.valuation_club_reputation = Some(club_rep_score);
-            reactive_proposal.valuation_league_reputation = Some(league_reputation);
-            reactive_proposal.valuation_expected_wage = Some(valuation.expected_wage);
-            reactive_proposal.valuation_min_acceptable = Some(valuation.min_acceptable);
-
-            Self::deliver_message(
+        // Not needed players don't get raises — transfer list or release
+        // instead. This path doesn't require a prior rejection: the squad plan
+        // already says "we don't want this player", and they're asking for
+        // more money. Going through the stalemate gate would be a no-op
+        // (NotNeeded permits listing at Emerging, which a fresh "wants raise"
+        // signal satisfies).
+        let squad_status = player
+            .contract
+            .as_ref()
+            .map(|c| c.squad_status.clone())
+            .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
+        if !is_on_loan
+            && result.contract.want_improve_contract
+            && matches!(squad_status, PlayerSquadStatus::NotNeeded)
+        {
+            Self::handle_unresolved_salary(
+                result.player_id,
                 data,
                 club_id,
-                result.player_id,
-                PlayerMessage {
-                    message_type: PlayerMessageType::ContractProposal(reactive_proposal),
+                UnresolvedSalaryTrigger::NotNeededWantsRaise,
+            );
+            return None;
+        }
+
+        let (final_salary, valuation) = Self::reactive_salary(
+            player,
+            is_on_loan,
+            result.contract.want_improve_contract,
+            context,
+            today,
+        )?;
+        let age = DateUtils::age(player.birth_date, today);
+        let years = Self::reactive_years(player, age, context.negotiation_skill, today);
+
+        let loyalty_bonus = if age >= 30 {
+            (final_salary as f32 * 0.10) as u32
+        } else {
+            0
+        };
+        let mut proposal = PlayerContractProposal::basic(
+            final_salary,
+            years,
+            context.negotiation_skill,
+            0,
+            loyalty_bonus,
+            None,
+        );
+        Self::apply_reactive_demands(&mut proposal, player, &squad_status);
+        // Pass the valuation context through so player acceptance evaluates
+        // against the same club/league expectations this reactive offer was
+        // built from — matches the proactive path.
+        proposal.valuation_club_reputation = Some(context.club_rep_score);
+        proposal.valuation_league_reputation = Some(context.league_reputation);
+        proposal.valuation_expected_wage = Some(valuation.expected_wage);
+        proposal.valuation_min_acceptable = Some(valuation.min_acceptable);
+
+        Some((proposal, final_salary, years))
+    }
+
+    fn reactive_salary(
+        player: &Player,
+        is_on_loan: bool,
+        want_improve: bool,
+        context: &ReactiveRenewalContext,
+        today: NaiveDate,
+    ) -> Option<(u32, ContractValuation)> {
+        let current_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0);
+        let age = DateUtils::age(player.birth_date, today);
+        let squad_status = player
+            .contract
+            .as_ref()
+            .map(|c| c.squad_status.clone())
+            .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
+        let months_remaining = player
+            .contract
+            .as_ref()
+            .map(|c| ((c.expiration - today).num_days() / 30).max(0) as i32)
+            .unwrap_or(0);
+        let has_market_interest = player.statuses.has(PlayerStatusType::Wnt)
+            || player.statuses.has(PlayerStatusType::Enq)
+            || player.statuses.has(PlayerStatusType::Bid);
+        let valuation_ctx = ValuationContext {
+            age,
+            club_reputation_score: context.club_rep_score,
+            league_reputation: context.league_reputation,
+            squad_status,
+            current_salary,
+            months_remaining,
+            has_market_interest,
+        };
+        let valuation = ContractValuation::evaluate(player, &valuation_ctx);
+
+        // Staff judging_ability narrows the offer around the unified target:
+        // poor staff under-offer (~85%), elite ones land within ±15% of the
+        // right number.
+        let accuracy = 0.85 + (context.judging_ability as f32 / 20.0) * 0.30;
+        let target = (valuation.expected_wage as f32 * accuracy) as u32;
+        let mut offered_salary = target
+            .max(current_salary + current_salary / 20)
+            .max(current_salary + 1);
+
+        // Salary-unhappy reactive offer: lean toward the player's own
+        // valuation rather than asking them to settle for a band-based
+        // average. Use max(target, expected) here so we don't underpay when
+        // the staff filter clipped it back.
+        if !is_on_loan && want_improve {
+            offered_salary = offered_salary.max(valuation.expected_wage);
+        }
+
+        // Converge toward the player's own ask when we have it. When
+        // affordability evidence says the ask fits wage headroom, match it
+        // outright — repeated split-the-gap underbids let the rejection cap
+        // fire long before either side compromises, and the stalemate
+        // escalates to a listing for a deal the club could have closed.
+        if let Some(ask) = &player.pending_contract_ask
+            && ask.desired_salary > offered_salary
+        {
+            let headroom = if context.wage_budget > 0 {
+                Some(
+                    context
+                        .wage_budget
+                        .saturating_sub(context.current_wage_bill),
+                )
+            } else {
+                None
+            };
+            let stalemate = ContractStalemate::assess(
+                player,
+                today,
+                AffordabilityInput {
+                    wage_budget_headroom: headroom,
+                    current_salary,
                 },
             );
-
-            // Record the offer so the cooldown + attempt cap at the top
-            // of this function can see it next tick. Without this the
-            // reactive path would chain proposals every cycle while the
-            // player kept signalling want_improve/extend_contract.
-            let movement = format!(
-                "{}y · ${}/y",
-                years,
-                FormattingUtils::format_money(final_salary as f64)
-            );
-            let offer_date = data.date().date();
-            if let Some(player_mut) = data.player_mut(result.player_id) {
-                player_mut.decision_history.add(
-                    offer_date,
-                    movement,
-                    RENEWAL_OFFERED_LABEL.to_string(),
-                    String::new(),
-                );
+            if stalemate.should_improve_offer() {
+                offered_salary = ask.desired_salary;
+            } else {
+                offered_salary = (offered_salary + ask.desired_salary) / 2;
             }
         }
 
-        /// Contract duration negotiation.
-        ///
-        /// Player wants: long contract (job security, commitment signal)
-        /// Club wants: shorter contract (flexibility if player declines)
-        ///
-        /// Factors:
-        /// - Age: clubs offer shorter deals to older players; young stars get longer
-        /// - Ability/reputation: high-profile players demand and get longer deals
-        /// - Loyalty: loyal players accept shorter deals (trust the club)
-        /// - Ambition: ambitious players push for longer deals (higher commitment)
-        /// - Other club interest (Wnt/Enq/Bid statuses): gives player leverage for longer deals
-        /// - Staff negotiation skill: better negotiator → result closer to club's preference
-        fn negotiate_contract_years(
-            player: &Player,
-            age: u8,
-            negotiation_skill: u8,
-            date: NaiveDate,
-        ) -> u8 {
-            let ability = player.player_attributes.current_ability;
-            let reputation = player.player_attributes.current_reputation;
-            let loyalty = player.attributes.loyalty;
-            let ambition = player.attributes.ambition;
-
-            // --- Player desired years (what the agent demands) ---
-            let mut player_years: f32 = 3.0;
-
-            // High reputation players demand longer contracts (security)
-            if reputation > 7000 {
-                player_years += 2.0;
-            } else if reputation > 4000 {
-                player_years += 1.0;
+        // Wage budget enforcement: don't offer salary that would bust the
+        // budget. The new salary replaces the current one, so check the net
+        // increase.
+        let salary_increase = offered_salary.saturating_sub(current_salary);
+        let final_salary = if context.wage_budget > 0
+            && context.current_wage_bill + salary_increase > context.wage_budget
+        {
+            let remaining = context
+                .wage_budget
+                .saturating_sub(context.current_wage_bill);
+            let capped_salary = current_salary + remaining;
+            // If we can't even match current salary the renewal is
+            // structurally unaffordable. We don't auto-list here — that would
+            // skip the rejection ladder. Skip the offer this tick instead;
+            // the player stays salary-unhappy, may eventually go UNH/REQ, and
+            // the country pipeline picks that up explicitly.
+            if capped_salary <= current_salary && want_improve && !is_on_loan {
+                return None;
             }
+            capped_salary.max(current_salary)
+        } else {
+            offered_salary
+        };
 
-            // High ability players want commitment
-            if ability > 150 {
-                player_years += 1.0;
-            } else if ability > 120 {
-                player_years += 0.5;
+        Some((final_salary, valuation))
+    }
+
+    fn reactive_years(player: &Player, age: u8, negotiation_skill: u8, today: NaiveDate) -> u8 {
+        let mut years = Self::negotiate_contract_years(player, age, negotiation_skill, today);
+        // The agent's minimum acceptable length is known at the table — an
+        // offer below it is an automatic ShortContract rejection, so lift to
+        // it (the proactive pass already does the same via
+        // proactive_contract_years). And when length was the stated sticking
+        // point of the LAST rejection, honor the years the player actually
+        // asked for instead of re-offering the deal he already refused.
+        years = years.max(ProcessContractHandler::player_minimum_years(player, today));
+        if let Some(ask) = &player.pending_contract_ask
+            && matches!(ask.rejection_reason, Some(RejectionReason::ShortContract))
+        {
+            years = years.max(ask.desired_years);
+        }
+        years
+    }
+
+    fn apply_reactive_demands(
+        proposal: &mut PlayerContractProposal,
+        player: &Player,
+        squad_status: &PlayerSquadStatus,
+    ) {
+        // Honor the other non-wage demands captured from the last rejection —
+        // matching the proactive pass. Without this the reactive path kept
+        // re-offering the exact package the player had already turned down
+        // over a role promise or a missing clause, burning the yearly
+        // attempts (and escalating the stalemate toward a listing) on a
+        // resolvable negotiation.
+        if let Some(ask) = &player.pending_contract_ask {
+            if proposal.release_clause.is_none() {
+                proposal.release_clause = ask.demanded_release_clause;
             }
-
-            // Young players whose VISIBLE trajectory points up want
-            // long-term deals — agent and club negotiate on the
-            // observable ceiling, not the hidden biological PA.
-            if age < 24
-                && PotentialEstimator::observable_ceiling(player, date) > ability.saturating_add(20)
+            if let Some(status) = &ask.demanded_status
+                && proposal.squad_status_promise.is_none()
+                && status.seniority_rank() > squad_status.seniority_rank()
             {
-                player_years += 1.0;
+                proposal.squad_status_promise = Some(status.clone());
             }
-
-            // Ambitious players push for longer contracts
-            // ambition is 0-20
-            if ambition > 15.0 {
-                player_years += 1.0;
-            } else if ambition > 10.0 {
-                player_years += 0.5;
+            if let Some(bonus) = ask.demanded_signing_bonus
+                && proposal.signing_bonus < bonus
+            {
+                proposal.signing_bonus = bonus;
             }
-
-            // Low loyalty = wants flexibility to move, shorter preferred
-            if loyalty < 5.0 {
-                player_years -= 1.0;
-            } else if loyalty < 10.0 {
-                player_years -= 0.5;
-            }
-
-            // Other club interest gives player leverage → pushes for longer commitment
-            let has_interest = player.statuses.has(PlayerStatusType::Wnt)
-                || player.statuses.has(PlayerStatusType::Enq)
-                || player.statuses.has(PlayerStatusType::Bid);
-            if has_interest {
-                player_years += 1.0;
-            }
-
-            // Older players know they can't demand as much
-            if age >= 34 {
-                player_years -= 2.0;
-            } else if age >= 32 {
-                player_years -= 1.0;
-            } else if age >= 30 {
-                player_years -= 0.5;
-            }
-
-            // --- Club desired years (what the club wants to offer) ---
-            let mut club_years: f32 = 3.0;
-
-            // Club wants shorter deals for older players (decline risk)
-            if age >= 34 {
-                club_years = 1.0;
-            } else if age >= 32 {
-                club_years = 1.5;
-            } else if age >= 30 {
-                club_years = 2.0;
-            }
-
-            // Club wants to lock in young prospects (protect investment)
-            if age < 22 && ability > 80 {
-                club_years += 2.0;
-            } else if age < 24 {
-                club_years += 1.0;
-            }
-
-            // Club wants to lock in star players
-            if ability > 150 {
-                club_years += 1.5;
-            } else if ability > 120 {
-                club_years += 1.0;
-            }
-
-            // Low ability/rotation players: club wants short deals
-            if ability < 70 {
-                club_years -= 1.0;
-            }
-
-            // --- Negotiation: compromise between player and club ---
-            // Staff negotiation skill (0-20) determines how much the club gets its way
-            // 0 skill → 50/50 split, 20 skill → 80% club's preference
-            let staff_weight = 0.5 + (negotiation_skill as f32 / 20.0) * 0.3; // 0.5 to 0.8
-            let negotiated = club_years * staff_weight + player_years * (1.0 - staff_weight);
-
-            // Clamp to realistic range: 1-5 years
-            (negotiated.round() as u8).clamp(1, 5)
         }
+    }
+
+    fn record_reactive_offer<D: LeagueProcessAccess>(
+        data: &mut D,
+        player_id: u32,
+        years: u8,
+        final_salary: u32,
+    ) {
+        // Record the offer so the cooldown + attempt cap at the top of this
+        // function can see it next tick. Without this the reactive path would
+        // chain proposals every cycle while the player kept signalling
+        // want_improve/extend_contract.
+        let movement = format!(
+            "{}y · ${}/y",
+            years,
+            FormattingUtils::format_money(final_salary as f64)
+        );
+        let offer_date = data.date().date();
+        if let Some(player_mut) = data.player_mut(player_id) {
+            player_mut.decision_history.add(
+                offer_date,
+                movement,
+                RENEWAL_OFFERED_LABEL.to_string(),
+                String::new(),
+            );
+        }
+    }
+
+    /// Contract duration negotiation.
+    ///
+    /// Player wants: long contract (job security, commitment signal). Club
+    /// wants: shorter contract (flexibility if player declines).
+    fn negotiate_contract_years(
+        player: &Player,
+        age: u8,
+        negotiation_skill: u8,
+        date: NaiveDate,
+    ) -> u8 {
+        let ability = player.player_attributes.current_ability;
+        let reputation = player.player_attributes.current_reputation;
+        let loyalty = player.attributes.loyalty;
+        let ambition = player.attributes.ambition;
+
+        // --- Player desired years (what the agent demands) ---
+        let mut player_years: f32 = 3.0;
+        if reputation > 7000 {
+            player_years += 2.0;
+        } else if reputation > 4000 {
+            player_years += 1.0;
+        }
+        if ability > 150 {
+            player_years += 1.0;
+        } else if ability > 120 {
+            player_years += 0.5;
+        }
+        // Young players whose VISIBLE trajectory points up want long-term
+        // deals — agent and club negotiate on the observable ceiling, not the
+        // hidden biological PA.
+        if age < 24
+            && PotentialEstimator::observable_ceiling(player, date) > ability.saturating_add(20)
+        {
+            player_years += 1.0;
+        }
+        if ambition > 15.0 {
+            player_years += 1.0;
+        } else if ambition > 10.0 {
+            player_years += 0.5;
+        }
+        if loyalty < 5.0 {
+            player_years -= 1.0;
+        } else if loyalty < 10.0 {
+            player_years -= 0.5;
+        }
+        let has_interest = player.statuses.has(PlayerStatusType::Wnt)
+            || player.statuses.has(PlayerStatusType::Enq)
+            || player.statuses.has(PlayerStatusType::Bid);
+        if has_interest {
+            player_years += 1.0;
+        }
+        if age >= 34 {
+            player_years -= 2.0;
+        } else if age >= 32 {
+            player_years -= 1.0;
+        } else if age >= 30 {
+            player_years -= 0.5;
+        }
+
+        // --- Club desired years (what the club wants to offer) ---
+        let mut club_years: f32 = 3.0;
+        if age >= 34 {
+            club_years = 1.0;
+        } else if age >= 32 {
+            club_years = 1.5;
+        } else if age >= 30 {
+            club_years = 2.0;
+        }
+        if age < 22 && ability > 80 {
+            club_years += 2.0;
+        } else if age < 24 {
+            club_years += 1.0;
+        }
+        if ability > 150 {
+            club_years += 1.5;
+        } else if ability > 120 {
+            club_years += 1.0;
+        }
+        if ability < 70 {
+            club_years -= 1.0;
+        }
+
+        // --- Negotiation: compromise between player and club ---
+        // Staff negotiation skill (0-20) determines how much the club gets its
+        // way. 0 skill → 50/50 split, 20 skill → 80% club's preference.
+        let staff_weight = 0.5 + (negotiation_skill as f32 / 20.0) * 0.3;
+        let negotiated = club_years * staff_weight + player_years * (1.0 - staff_weight);
+        (negotiated.round() as u8).clamp(1, 5)
     }
 
     /// Wage budget headroom for the club's main team. Used to evaluate
@@ -697,175 +727,231 @@ impl ClubResult {
         trigger: UnresolvedSalaryTrigger,
     ) {
         let date = data.date().date();
+        let Some((decision, asking_price, team_id)) =
+            Self::unresolved_salary_decision(player_id, data, club_id, trigger)
+        else {
+            return;
+        };
+        Self::apply_unresolved_salary(
+            data,
+            club_id,
+            player_id,
+            team_id,
+            decision,
+            asking_price,
+            trigger,
+            date,
+        );
+    }
 
-        // Gather decision info from immutable access
-        let (decision, asking_price, team_id) = {
-            let club = match data.club(club_id) {
-                Some(c) => c,
-                None => return,
-            };
-            let main_team = match club.teams.teams.first() {
-                Some(t) => t,
-                None => return,
-            };
-            let squad_avg_ability = main_team.players.current_ability_avg();
-            let squad_avg = squad_avg_ability as i16;
-            let annual_wage_bill: u32 = club.teams.iter().map(|t| t.get_annual_salary()).sum();
-            let team_id = main_team.id;
-            let club_rep = main_team.reputation.market_value_score();
-            let league_rep = main_team
+    fn salary_fallback_eligible(
+        player: &Player,
+        date: NaiveDate,
+        trigger: UnresolvedSalaryTrigger,
+    ) -> bool {
+        // Already listed — don't re-process.
+        if player.statuses.has(PlayerStatusType::Lst) || player.statuses.has(PlayerStatusType::Frt)
+        {
+            return false;
+        }
+        // Manager-pinned players: skip the salary-dispute fallback entirely.
+        // Neither transfer-list nor free-release applies.
+        if player.is_force_match_selection {
+            return false;
+        }
+        // Defence in depth: loaned players are handled by their parent club,
+        // never the borrower. The rejection path above already filters this
+        // out, but `handle_unresolved_salary` is also reachable from the
+        // NotNeeded branch and tests.
+        if player.is_on_loan() {
+            return false;
+        }
+        // A signing still inside its evaluation window is not squad surplus,
+        // whatever the wage conversation says — the club committed to him and
+        // the same patience clock the rebalance and the positional trim honour
+        // applies here. Only the squad-shape branch. A failed RENEWAL is a
+        // fact about an expiring contract rather than an opinion about the
+        // squad, and a man who has just arrived cannot be in one anyway.
+        if matches!(trigger, UnresolvedSalaryTrigger::NotNeededWantsRaise)
+            && player.signing_protection_active(date)
+        {
+            return false;
+        }
+        true
+    }
+
+    fn unresolved_salary_decision<D: LeagueProcessAccess>(
+        player_id: u32,
+        data: &D,
+        club_id: u32,
+        trigger: UnresolvedSalaryTrigger,
+    ) -> Option<(UnresolvedSalaryDecision, CurrencyValue, u32)> {
+        let date = data.date().date();
+        let club = data.club(club_id)?;
+        let main_team = club.teams.teams.first()?;
+        let player = data.player(player_id)?;
+        if !Self::salary_fallback_eligible(player, date, trigger) {
+            return None;
+        }
+        let facts = SalaryFallbackFacts {
+            squad_avg_ability: main_team.players.current_ability_avg(),
+            squad_avg: main_team.players.current_ability_avg() as i16,
+            annual_wage_bill: club.teams.iter().map(|t| t.get_annual_salary()).sum(),
+            team_id: main_team.id,
+            club_rep: main_team.reputation.market_value_score(),
+            league_rep: main_team
                 .league_id
                 .and_then(|lid| data.league(lid))
                 .map(|l| l.reputation)
-                .unwrap_or(5_000);
-
-            let player = match data.player(player_id) {
-                Some(p) => p,
-                None => return,
-            };
-
-            // Already listed — don't re-process
-            if player.statuses.has(PlayerStatusType::Lst)
-                || player.statuses.has(PlayerStatusType::Frt)
-            {
-                return;
-            }
-
-            // Manager-pinned players: skip the salary-dispute fallback
-            // entirely. Neither transfer-list nor free-release applies.
-            if player.is_force_match_selection {
-                return;
-            }
-
-            // Defence in depth: loaned players are handled by their
-            // parent club, never the borrower. The rejection path above
-            // already filters this out, but `handle_unresolved_salary`
-            // is also reachable from the NotNeeded branch and tests.
-            if player.is_on_loan() {
-                return;
-            }
-
-            // A signing still inside its evaluation window is not squad
-            // surplus, whatever the wage conversation says — the club
-            // committed to him and the same patience clock the rebalance
-            // and the positional trim honour applies here.
-            //
-            // Only the squad-shape branch. A failed RENEWAL is a fact about
-            // an expiring contract rather than an opinion about the squad,
-            // and a man who has just arrived cannot be in one anyway.
-            if matches!(trigger, UnresolvedSalaryTrigger::NotNeededWantsRaise)
-                && player.signing_protection_active(date)
-            {
-                return;
-            }
-
-            let ability = player.player_attributes.current_ability as i16;
-            let age = DateUtils::age(player.birth_date, date);
-            let loyalty = player.attributes.loyalty;
-
-            // Central squad-asset classification — computed once and reused
-            // for both the keep guard and the release gate below. Inferring
-            // the role here is what protects a still-`NotYetSet` but useful
-            // senior from being walked for free over a salary dispute.
-            let asset_ctx = SquadAssetContext::build(club, date);
-            // A label minted by a B / reserve squad is dressing-room
-            // standing, not a first-team promise — read it through the tier
-            // that awarded it before it protects him from the market.
-            let squad_tier = club.teams.squad_tier_of(player.id);
-            let asset_class = asset_ctx.classify_in_squad(player, date, squad_tier);
-            let formal_key = player
-                .contract
-                .as_ref()
-                .map(|c| {
-                    matches!(
-                        c.squad_status.as_first_team_designation(squad_tier),
-                        PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
-                    )
-                })
-                .unwrap_or(false);
-            // A formally-designated OR inferred-core/first-team player is
-            // treated as key for the "keep trying" guard.
-            let is_key = formal_key || asset_class.is_first_team_protected();
-
-            // Key players and first-team regulars: club keeps trying — don't list them
-            // unless they're well below squad average
-            if is_key && ability >= squad_avg - 10 {
-                return;
-            }
-
-            // Loyal players get more patience
-            if loyalty > 14.0 && ability >= squad_avg - 10 {
-                return;
-            }
-
-            // Competitive players (within 15 CA of squad avg): keep trying regardless of age
-            // A 32-year-old with ability near the squad average is still valuable
-            if ability >= squad_avg - 15 && age < 35 {
-                return;
-            }
-
-            // Free release only when the central eligibility gate agrees:
-            // clearly below team level, negligible market value, and a
-            // severance the club can shrug off. Anything it blocks —
-            // still useful, sellable, or expensive to pay off — goes to
-            // the transfer list instead of walking for free.
-            let market_value = player.value(date, league_rep, club_rep);
-            let release_ctx = ReleaseEligibilityContext {
-                date,
-                squad_avg_ability,
-                market_value,
-                annual_wage_bill,
-                asset_class,
-                early_season: asset_ctx.is_early_season(),
-                squad_tier,
-            };
-            let decision = match AutomaticReleaseEligibility::assess(player, &release_ctx) {
-                None => UnresolvedSalaryDecision::FreeTransfer,
-                Some(block) => {
-                    debug!(
-                        "salary-fallback free release blocked for {} (id={}): {:?} — CA {} vs \
-                         squad avg {}, value={:.0}, severance={} → transfer-listing instead",
-                        player.full_name,
-                        player_id,
-                        block,
-                        ability,
-                        squad_avg,
-                        market_value,
-                        player
-                            .contract
-                            .as_ref()
-                            .map(|c| c.termination_cost(date))
-                            .unwrap_or(0),
-                    );
-                    UnresolvedSalaryDecision::TransferList
-                }
-            };
-
-            let asking_price = CurrencyValue {
-                amount: FormattingUtils::round_fee(market_value),
-                currency: Currency::Usd,
-            };
-            (decision, asking_price, team_id)
+                .unwrap_or(5_000),
         };
+        Self::classify_salary_fallback(player, club, date, trigger, &facts)
+    }
 
+    fn classify_salary_fallback(
+        player: &Player,
+        club: &crate::Club,
+        date: NaiveDate,
+        _trigger: UnresolvedSalaryTrigger,
+        facts: &SalaryFallbackFacts,
+    ) -> Option<(UnresolvedSalaryDecision, CurrencyValue, u32)> {
+        let ability = player.player_attributes.current_ability as i16;
+        let age = DateUtils::age(player.birth_date, date);
+        let loyalty = player.attributes.loyalty;
+
+        // Central squad-asset classification — computed once and reused for
+        // both the keep guard and the release gate below. Inferring the role
+        // here is what protects a still-`NotYetSet` but useful senior from
+        // being walked for free over a salary dispute.
+        let asset_ctx = SquadAssetContext::build(club, date);
+        // A label minted by a B / reserve squad is dressing-room standing,
+        // not a first-team promise — read it through the tier that awarded it
+        // before it protects him from the market.
+        let squad_tier = club.teams.squad_tier_of(player.id);
+        let asset_class = asset_ctx.classify_in_squad(player, date, squad_tier);
+        let formal_key = player
+            .contract
+            .as_ref()
+            .map(|c| {
+                matches!(
+                    c.squad_status.as_first_team_designation(squad_tier),
+                    PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
+                )
+            })
+            .unwrap_or(false);
+        // A formally-designated OR inferred-core/first-team player is treated
+        // as key for the "keep trying" guard.
+        let is_key = formal_key || asset_class.is_first_team_protected();
+
+        // Key players and first-team regulars: club keeps trying — don't list
+        // them unless they're well below squad average.
+        if is_key && ability >= facts.squad_avg - 10 {
+            return None;
+        }
+        // Loyal players get more patience.
+        if loyalty > 14.0 && ability >= facts.squad_avg - 10 {
+            return None;
+        }
+        // Competitive players (within 15 CA of squad avg): keep trying
+        // regardless of age. A 32-year-old with ability near the squad
+        // average is still valuable.
+        if ability >= facts.squad_avg - 15 && age < 35 {
+            return None;
+        }
+
+        let market_value = player.value(date, facts.league_rep, facts.club_rep);
+        let decision = Self::automatic_release_decision(
+            player,
+            date,
+            ability,
+            market_value,
+            asset_class,
+            asset_ctx,
+            squad_tier,
+            facts,
+        );
+        let asking_price = CurrencyValue {
+            amount: FormattingUtils::round_fee(market_value),
+            currency: Currency::Usd,
+        };
+        Some((decision, asking_price, facts.team_id))
+    }
+
+    fn automatic_release_decision(
+        player: &Player,
+        date: NaiveDate,
+        ability: i16,
+        market_value: f64,
+        asset_class: crate::club::team::squad::SquadAssetClass,
+        asset_ctx: SquadAssetContext,
+        squad_tier: crate::TeamType,
+        facts: &SalaryFallbackFacts,
+    ) -> UnresolvedSalaryDecision {
+        // Free release only when the central eligibility gate agrees: clearly
+        // below team level, negligible market value, and a severance the club
+        // can shrug off. Anything it blocks — still useful, sellable, or
+        // expensive to pay off — goes to the transfer list instead of walking
+        // for free.
+        let release_ctx = ReleaseEligibilityContext {
+            date,
+            squad_avg_ability: facts.squad_avg_ability,
+            market_value,
+            annual_wage_bill: facts.annual_wage_bill,
+            asset_class,
+            early_season: asset_ctx.is_early_season(),
+            squad_tier,
+        };
+        match AutomaticReleaseEligibility::assess(player, &release_ctx) {
+            None => UnresolvedSalaryDecision::FreeTransfer,
+            Some(block) => {
+                debug!(
+                    "salary-fallback free release blocked for {} (id={}): {:?} — CA {} vs \
+                     squad avg {}, value={:.0}, severance={} → transfer-listing instead",
+                    player.full_name,
+                    player.id,
+                    block,
+                    ability,
+                    facts.squad_avg,
+                    market_value,
+                    player
+                        .contract
+                        .as_ref()
+                        .map(|c| c.termination_cost(date))
+                        .unwrap_or(0),
+                );
+                UnresolvedSalaryDecision::TransferList
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_unresolved_salary<D: LeagueProcessAccess>(
+        data: &mut D,
+        club_id: u32,
+        player_id: u32,
+        team_id: u32,
+        decision: UnresolvedSalaryDecision,
+        asking_price: CurrencyValue,
+        trigger: UnresolvedSalaryTrigger,
+        date: NaiveDate,
+    ) {
         let listed_now = matches!(decision, UnresolvedSalaryDecision::TransferList);
 
         // Apply player-side state under club_mut. The mirror into
-        // `team.transfer_list` keeps the web team-transfers page in sync
-        // with the country-level market: the buying pipeline reads the
-        // country market, the team UI reads its own list, and both must
-        // see the same listing or the player effectively disappears from
-        // half the surface. Both writes are idempotent (`Transfers::add`
-        // and `TransferMarket::add_listing` both skip duplicates), so
-        // repeated cycles don't create stutter.
+        // `team.transfer_list` keeps the web team-transfers page in sync with
+        // the country-level market: the buying pipeline reads the country
+        // market, the team UI reads its own list, and both must see the same
+        // listing or the player effectively disappears from half the surface.
+        // Both writes are idempotent (`Transfers::add` and
+        // `TransferMarket::add_listing` both skip duplicates), so repeated
+        // cycles don't create stutter.
         {
-            let club = match data.club_mut(club_id) {
-                Some(c) => c,
-                None => return,
+            let Some(club) = data.club_mut(club_id) else {
+                return;
             };
             // Coach name is resolved from the main team so the decision
-            // history attributes the listing to the manager, not the
-            // stub. Falls back to the board key when the seat is empty.
+            // history attributes the listing to the manager, not the stub.
+            // Falls back to the board key when the seat is empty.
             let mut coach_name = String::new();
             for team in &mut club.teams.teams {
                 if team.id == team_id {
@@ -877,56 +963,15 @@ impl ClubResult {
                     } else {
                         coach_name.clone()
                     };
-                    match decision {
-                        UnresolvedSalaryDecision::FreeTransfer => {
-                            let release_reason = trigger.release_reason();
-                            TransferTrace::exit(
-                                player,
-                                date,
-                                "unresolved_salary",
-                                release_reason.history_reason(),
-                            );
-                            player.statuses.add(date, PlayerStatusType::Frt);
-                            player.contract = None;
-                            // Stamp the explicit exit so the free-agent
-                            // sweep records this specific reason rather
-                            // than collapsing it to "mutual agreement".
-                            player.set_release_reason(release_reason);
-                            player.decision_history.add(
-                                date,
-                                "dec_free_transfer_listed".to_string(),
-                                release_reason.history_reason().to_string(),
-                                decided_by,
-                            );
-                        }
-                        UnresolvedSalaryDecision::TransferList => {
-                            TransferTrace::list(
-                                player,
-                                date,
-                                "unresolved_salary",
-                                trigger.list_reason(),
-                            );
-                            player.statuses.add(date, PlayerStatusType::Lst);
-                            if let Some(ref mut contract) = player.contract {
-                                contract.is_transfer_listed = true;
-                            }
-                            player.decision_history.add(
-                                date,
-                                "dec_transfer_listed".to_string(),
-                                trigger.list_reason().to_string(),
-                                decided_by,
-                            );
-                        }
-                    }
+                    Self::apply_fallback_to_player(player, date, decision, trigger, &decided_by);
                     break;
                 }
             }
 
-            // Mirror the listing onto the team's own transfer_list so the
-            // web team-transfers page surfaces stalemate listings. Only
-            // the actual selling team carries the item; loaned players
-            // were filtered out earlier, so the parent team is always the
-            // current team.
+            // Mirror the listing onto the team's own transfer_list so the web
+            // team-transfers page surfaces stalemate listings. Only the actual
+            // selling team carries the item; loaned players were filtered out
+            // earlier, so the parent team is always the current team.
             if listed_now && let Some(team) = club.teams.teams.iter_mut().find(|t| t.id == team_id)
             {
                 team.transfer_list
@@ -934,12 +979,12 @@ impl ClubResult {
             }
         }
 
-        // Push the listing into the country transfer market so the
-        // buying pipeline can actually discover it. Without this step
-        // the country pipeline's "already listed" guard short-circuits
-        // and the listing never reaches the market. Routed through the
-        // trait: the parallel per-club view stages it for the serial
-        // post-pass, the country-wide views apply inline.
+        // Push the listing into the country transfer market so the buying
+        // pipeline can actually discover it. Without this step the country
+        // pipeline's "already listed" guard short-circuits and the listing
+        // never reaches the market. Routed through the trait: the parallel
+        // per-club view stages it for the serial post-pass, the country-wide
+        // views apply inline.
         if listed_now {
             data.push_transfer_market_listing(
                 club_id,
@@ -952,6 +997,51 @@ impl ClubResult {
                     TransferListingType::Transfer,
                 ),
             );
+        }
+    }
+
+    fn apply_fallback_to_player(
+        player: &mut Player,
+        date: NaiveDate,
+        decision: UnresolvedSalaryDecision,
+        trigger: UnresolvedSalaryTrigger,
+        decided_by: &str,
+    ) {
+        match decision {
+            UnresolvedSalaryDecision::FreeTransfer => {
+                let release_reason = trigger.release_reason();
+                TransferTrace::exit(
+                    player,
+                    date,
+                    "unresolved_salary",
+                    release_reason.history_reason(),
+                );
+                player.statuses.add(date, PlayerStatusType::Frt);
+                player.contract = None;
+                // Stamp the explicit exit so the free-agent sweep records this
+                // specific reason rather than collapsing it to "mutual
+                // agreement".
+                player.set_release_reason(release_reason);
+                player.decision_history.add(
+                    date,
+                    "dec_free_transfer_listed".to_string(),
+                    release_reason.history_reason().to_string(),
+                    decided_by.to_string(),
+                );
+            }
+            UnresolvedSalaryDecision::TransferList => {
+                TransferTrace::list(player, date, "unresolved_salary", trigger.list_reason());
+                player.statuses.add(date, PlayerStatusType::Lst);
+                if let Some(ref mut contract) = player.contract {
+                    contract.is_transfer_listed = true;
+                }
+                player.decision_history.add(
+                    date,
+                    "dec_transfer_listed".to_string(),
+                    trigger.list_reason().to_string(),
+                    decided_by.to_string(),
+                );
+            }
         }
     }
 
@@ -981,8 +1071,8 @@ mod tests {
     use crate::academy::ClubAcademy;
     use crate::club::board::SeasonTargets;
     use crate::club::player::contract::{RENEWAL_OFFERED_LABEL, RENEWAL_REJECTED_LABEL};
-    use crate::club::player::core::builder::PlayerBuilder;
     use crate::club::player::mailbox::{PlayerContractAsk, RejectionReason};
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::club::player::personality::PlayerDecisionHistory;
     use crate::competitions::global::GlobalCompetitions;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};

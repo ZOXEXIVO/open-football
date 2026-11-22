@@ -202,9 +202,9 @@ fn skill_array_round_trip_preserves_all_fields() {
     for (i, v) in tagged.iter_mut().enumerate() {
         *v = 1.0 + (i as f32) * 0.1;
     }
-    write_array_into(&mut p.skills, &tagged);
+    p.skills.write_from_array(&tagged);
 
-    let round_tripped = skills_to_array(&p);
+    let round_tripped = p.skills_to_array();
     for i in 0..SKILL_COUNT {
         assert!(
             (round_tripped[i] - tagged[i]).abs() < 1e-6,

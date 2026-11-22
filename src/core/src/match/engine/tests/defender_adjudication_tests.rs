@@ -6,7 +6,7 @@
 
 use super::goal_celebration_tests::squad;
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderRead, ReadLevel};
+use crate::r#match::defenders::states::shared::{DefenderRead, ReadLevel};
 use crate::r#match::engine::ball::ball::flight::roll::BallRoll;
 use crate::r#match::engine::ball::ball::{AerialDelivery, AerialOutcome, Ball};
 use crate::r#match::engine::engine::FootballEngine;

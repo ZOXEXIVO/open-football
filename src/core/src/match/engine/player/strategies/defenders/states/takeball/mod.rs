@@ -1,6 +1,8 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition, DefenderRead};
-use crate::r#match::player::strategies::common::states::LooseBallChase;
+use crate::r#match::defenders::states::shared::{
+    ActivityIntensity, DefenderCondition, DefenderRead,
+};
+use crate::r#match::player::strategies::shared::states::LooseBallChase;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };

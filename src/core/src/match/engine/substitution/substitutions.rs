@@ -4,15 +4,15 @@ use std::cmp::Ordering;
 
 use crate::club::staff::{CoachDecisionEngine, CoachLiveMatchContext};
 use crate::r#match::engine::coach::TacticalNeed;
+use crate::r#match::engine::flow::context::MATCH_TIME_INCREMENT_MS;
 use crate::r#match::engine::flow::result::SubstitutionReason;
 use crate::r#match::engine::flow::touchline::SubstitutionBreak;
-use crate::r#match::engine::sub_scoring::{LiveSubstitutionStats, SubScoring};
-use crate::r#match::engine::urgency::{BenchPressure, ChangeOpportunity, SubstitutionUrgency};
-use crate::r#match::field::MatchField;
-use crate::r#match::engine::flow::context::MATCH_TIME_INCREMENT_MS;
 use crate::r#match::engine::officiating::management::TimeWastingRestart;
 use crate::r#match::engine::player::injury::MatchInjury;
 use crate::r#match::engine::result::DeadTime;
+use crate::r#match::engine::sub_scoring::{LiveSubstitutionStats, SubScoring};
+use crate::r#match::engine::urgency::{BenchPressure, ChangeOpportunity, SubstitutionUrgency};
+use crate::r#match::field::MatchField;
 use crate::r#match::{Bench, MatchContext, MatchPlayer};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 
@@ -464,203 +464,290 @@ impl Substitutions {
         let team_ids = [field.home_team_id, field.away_team_id];
 
         for &team_id in &team_ids {
-            if !context.can_substitute(team_id) {
-                continue;
-            }
-            if !field.substitutes.iter().any(|p| p.team_id == team_id) {
-                continue;
-            }
-            let is_home = team_id == field.home_team_id;
+            Self::process_team(
+                field,
+                context,
+                max_subs_per_team,
+                today,
+                home_coach,
+                away_coach,
+                team_id,
+            );
+        }
+        context.substitution_windows.close_interval();
+    }
 
-            // The bench sees the score from the goal, as the pitch does.
-            let (own_goals, opp_goals) = if !context.bench_score_visible() {
-                (0, 0)
-            } else if team_id == context.field_home_team_id {
-                (
-                    context.score.home_team.get() as i32,
-                    context.score.away_team.get() as i32,
-                )
-            } else {
-                (
-                    context.score.away_team.get() as i32,
-                    context.score.home_team.get() as i32,
-                )
-            };
-            let goal_diff = own_goals - opp_goals;
-            let match_minutes = context.total_match_time / 60_000;
-            let coach = if team_id == context.field_home_team_id {
-                home_coach
-            } else {
-                away_coach
-            };
+    /// One side's pass over its bench: the protective changes first, then
+    /// the situation-driven discretionary rounds.
+    fn process_team(
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        max_subs_per_team: usize,
+        today: NaiveDate,
+        home_coach: Option<&CoachDecisionEngine<'_>>,
+        away_coach: Option<&CoachDecisionEngine<'_>>,
+        team_id: u32,
+    ) {
+        if !context.can_substitute(team_id) {
+            return;
+        }
+        if !field.substitutes.iter().any(|p| p.team_id == team_id) {
+            return;
+        }
+        let is_home = team_id == field.home_team_id;
 
-            let mut youth_protection_candidates: Vec<(u32, i16, PlayerPositionType)> = field
-                .players
-                .iter()
-                .filter(|p| p.team_id == team_id)
-                .filter(|p| YouthProtection::is_candidate(p, today))
-                .map(|p| {
-                    (
-                        p.id,
-                        p.player_attributes.condition,
-                        p.tactical_position.current_position,
-                    )
-                })
-                .collect();
-            youth_protection_candidates.sort_by_key(|&(_, cond, _)| cond);
+        // The bench sees the score from the goal, as the pitch does.
+        let (own_goals, opp_goals) = if !context.bench_score_visible() {
+            (0, 0)
+        } else if team_id == context.field_home_team_id {
+            (
+                context.score.home_team.get() as i32,
+                context.score.away_team.get() as i32,
+            )
+        } else {
+            (
+                context.score.away_team.get() as i32,
+                context.score.home_team.get() as i32,
+            )
+        };
+        let goal_diff = own_goals - opp_goals;
+        let match_minutes = context.total_match_time / 60_000;
+        let coach = if team_id == context.field_home_team_id {
+            home_coach
+        } else {
+            away_coach
+        };
 
-            // Safety-net critical sweep for injuries that landed between
-            // medical passes; counts against this pass's cap.
-            let mut subs_made =
-                Self::force_critical_subs(field, context, team_id, max_subs_per_team);
+        let subs_made =
+            Self::process_youth_protection(field, context, team_id, today, max_subs_per_team);
 
-            for (player_out_id, _condition, position) in &youth_protection_candidates {
-                if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
-                    break;
-                }
-                if field.get_player(*player_out_id).is_none() {
-                    continue;
-                }
-                let position_group = position.position_group();
-                if let Some(player_in_id) =
-                    Self::find_best_substitute(field, team_id, position_group)
-                    && Self::execute_substitution(
-                        field,
-                        context,
-                        team_id,
-                        *player_out_id,
-                        player_in_id,
-                        SubstitutionReason::YouthProtection,
-                    )
-                {
-                    subs_made += 1;
-                }
-            }
+        // How badly this bench wants using, right now — the whole of the
+        // timing decision, and the only thing that decides it. See
+        // [`urgency`](super::urgency).
+        let pressure = Self::bench_pressure(field, context, team_id, goal_diff);
+        let need = Self::tactical_need(field, context, team_id, match_minutes);
 
-            // How badly this bench wants using, right now — the whole of the
-            // timing decision, and the only thing that decides it. See
-            // [`urgency`](super::urgency).
-            let pressure = Self::bench_pressure(field, context, team_id, goal_diff);
-
-            let need = if match_minutes >= 45 {
-                let match_coach = context.coach_for_team(team_id);
-                let condition_avg = field
-                    .players
-                    .iter()
-                    .filter(|p| p.team_id == team_id)
-                    .map(|p| p.player_attributes.condition as f32 / 10000.0)
-                    .sum::<f32>()
-                    / field
-                        .players
-                        .iter()
-                        .filter(|p| p.team_id == team_id)
-                        .count()
-                        .max(1) as f32;
-                // The bench answers to the same coach as the pitch: his
-                // stance and his read decide what it is asked for.
-                TacticalNeed::from_coach(match_coach.stance(), match_coach.metrics, condition_avg)
-            } else {
-                TacticalNeed::Fatigue
-            };
-
+        let pass = TeamSubstitutionPass {
+            team_id,
+            own_goals,
+            opp_goals,
+            match_minutes,
+            max_subs_per_team,
+            subs_made,
+            need,
+            pressure,
             // A change may be made at the interval, on a stoppage a
             // team-mate has already caused, or by interrupting play — and
             // the three cost the manager very different things. See
             // [`ChangeOpportunity`].
-            let at_half_time = context.substitution_windows.at_interval();
-            let windows_spent = context.substitution_windows.spent(is_home);
-            loop {
-                if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
-                    break;
-                }
-                let used = context.subs_used_by_team(team_id) as u8;
-                // Three stoppages a side over normal time; the interval is
-                // free and does not spend one. A window already open is
-                // ridden by every further change in the same pass, which is
-                // exactly how five changes fit into three windows.
-                let riding_open_window = subs_made > 0;
-                if !at_half_time
-                    && !riding_open_window
-                    && windows_spent >= context.substitution_windows.allowance()
-                {
-                    break;
-                }
-                let opportunity = ChangeOpportunity::new(
-                    match_minutes as u32,
-                    at_half_time,
-                    riding_open_window,
-                    windows_spent,
-                    context
-                        .max_substitutions_per_team
-                        .saturating_sub(used as usize)
-                        .min(u8::MAX as usize) as u8,
-                );
-                if !pressure.clears_at(used, &opportunity) {
-                    break;
-                }
+            at_half_time: context.substitution_windows.at_interval(),
+            windows_spent: context.substitution_windows.spent(is_home),
+        };
+        Self::process_discretionary_rounds(field, context, today, coach, pass);
+    }
 
-                // How badly he wants it, on a 0..1 scale — the same reading
-                // that decided he wants it at all, reused to decide how
-                // fussy he is about which change it is. A manager three
-                // down with twenty minutes left takes a swap he would have
-                // turned down at 1-1 on the hour.
-                let conviction = pressure.conviction_at(used, &opportunity);
-                // Star protection follows COMFORT, not urgency, and the two
-                // are not the same thing. A side two goals down wants a
-                // change badly and still would not dream of hooking the man
-                // who scored — it hooks the passengers. A side three up with
-                // ten minutes left has no urgency at all and takes its
-                // scorer off to a standing ovation. So the thing that
-                // softens the protection is the lead being killed, which is
-                // exactly what [`BenchPressure::close_out`] measures.
-                //
-                // Squared so a one-goal lead barely touches it: at 2-1 on
-                // 78' the scorer keeps nine-tenths of his protection, which
-                // is the behaviour
-                // `process_substitutions_removes_tired_winger_over_high_rated_scorer`
-                // exists to hold.
-                let comfort = pressure.close_out_share();
-                let protection_dampening = (1.0 - 0.65 * comfort * comfort).clamp(0.35, 1.0);
-                // What the (out, in) pair has to be worth. Slides between a
-                // fussy manager and a desperate one across the same span
-                // the old fixed ladder covered, but driven by the situation
-                // rather than by the minute hand.
-                let threshold = Self::PAIR_BAR_RELUCTANT
-                    - (Self::PAIR_BAR_RELUCTANT - Self::PAIR_BAR_DESPERATE) * conviction;
+    /// Youth protection and the safety-net critical sweep, in the order the
+    /// bench sees them. Returns how many changes this phase made.
+    fn process_youth_protection(
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        team_id: u32,
+        today: NaiveDate,
+        max_subs_per_team: usize,
+    ) -> usize {
+        let mut youth_protection_candidates: Vec<(u32, i16, PlayerPositionType)> = field
+            .players
+            .iter()
+            .filter(|p| p.team_id == team_id)
+            .filter(|p| YouthProtection::is_candidate(p, today))
+            .map(|p| {
+                (
+                    p.id,
+                    p.player_attributes.condition,
+                    p.tactical_position.current_position,
+                )
+            })
+            .collect();
+        youth_protection_candidates.sort_by_key(|&(_, cond, _)| cond);
 
-                let chosen = Self::best_discretionary_pair_with_coach(
+        // Safety-net critical sweep for injuries that landed between
+        // medical passes; counts against this pass's cap.
+        let mut subs_made = Self::force_critical_subs(field, context, team_id, max_subs_per_team);
+
+        for (player_out_id, _condition, position) in &youth_protection_candidates {
+            if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
+                break;
+            }
+            if field.get_player(*player_out_id).is_none() {
+                continue;
+            }
+            let position_group = position.position_group();
+            if let Some(player_in_id) = Self::find_best_substitute(field, team_id, position_group)
+                && Self::execute_substitution(
                     field,
+                    context,
                     team_id,
-                    need,
-                    own_goals as u8,
-                    opp_goals as u8,
-                    context.total_match_time,
-                    today,
-                    protection_dampening,
-                    threshold,
-                    coach,
-                );
-
-                match chosen {
-                    Some((out_id, in_id)) => {
-                        if !Self::execute_substitution(
-                            field,
-                            context,
-                            team_id,
-                            out_id,
-                            in_id,
-                            SubstitutionReason::Discretionary,
-                        ) {
-                            break;
-                        }
-                        subs_made += 1;
-                    }
-                    None => break,
-                }
+                    *player_out_id,
+                    player_in_id,
+                    SubstitutionReason::YouthProtection,
+                )
+            {
+                subs_made += 1;
             }
         }
-        context.substitution_windows.close_interval();
+        subs_made
     }
+
+    /// After the hour the bench answers to the coach's read of the match;
+    /// before it, everything is read as fatigue.
+    fn tactical_need(
+        field: &MatchField,
+        context: &MatchContext,
+        team_id: u32,
+        match_minutes: u64,
+    ) -> TacticalNeed {
+        if match_minutes >= 45 {
+            let match_coach = context.coach_for_team(team_id);
+            let condition_avg = field
+                .players
+                .iter()
+                .filter(|p| p.team_id == team_id)
+                .map(|p| p.player_attributes.condition as f32 / 10000.0)
+                .sum::<f32>()
+                / field
+                    .players
+                    .iter()
+                    .filter(|p| p.team_id == team_id)
+                    .count()
+                    .max(1) as f32;
+            // The bench answers to the same coach as the pitch: his
+            // stance and his read decide what it is asked for.
+            TacticalNeed::from_coach(match_coach.stance(), match_coach.metrics, condition_avg)
+        } else {
+            TacticalNeed::Fatigue
+        }
+    }
+
+    /// The discretionary rounds: repeat while the pressure model clears a
+    /// change, the windows allow it, and a pair worth making exists.
+    fn process_discretionary_rounds(
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        today: NaiveDate,
+        coach: Option<&CoachDecisionEngine<'_>>,
+        pass: TeamSubstitutionPass,
+    ) {
+        let mut subs_made = pass.subs_made;
+        let pressure = pass.pressure;
+        loop {
+            if subs_made >= pass.max_subs_per_team || !context.can_substitute(pass.team_id) {
+                break;
+            }
+            let used = context.subs_used_by_team(pass.team_id) as u8;
+            // Three stoppages a side over normal time; the interval is
+            // free and does not spend one. A window already open is
+            // ridden by every further change in the same pass, which is
+            // exactly how five changes fit into three windows.
+            let riding_open_window = subs_made > 0;
+            if !pass.at_half_time
+                && !riding_open_window
+                && pass.windows_spent >= context.substitution_windows.allowance()
+            {
+                break;
+            }
+            let opportunity = ChangeOpportunity::new(
+                pass.match_minutes as u32,
+                pass.at_half_time,
+                riding_open_window,
+                pass.windows_spent,
+                context
+                    .max_substitutions_per_team
+                    .saturating_sub(used as usize)
+                    .min(u8::MAX as usize) as u8,
+            );
+            if !pressure.clears_at(used, &opportunity) {
+                break;
+            }
+
+            // How badly he wants it, on a 0..1 scale — the same reading
+            // that decided he wants it at all, reused to decide how
+            // fussy he is about which change it is. A manager three
+            // down with twenty minutes left takes a swap he would have
+            // turned down at 1-1 on the hour.
+            let conviction = pressure.conviction_at(used, &opportunity);
+            let (protection_dampening, threshold) = Self::pair_requirements(&pressure, conviction);
+
+            let chosen = Self::best_discretionary_pair_with_coach(
+                field,
+                pass.team_id,
+                pass.need,
+                pass.own_goals as u8,
+                pass.opp_goals as u8,
+                context.total_match_time,
+                today,
+                protection_dampening,
+                threshold,
+                coach,
+            );
+
+            match chosen {
+                Some((out_id, in_id)) => {
+                    if !Self::execute_substitution(
+                        field,
+                        context,
+                        pass.team_id,
+                        out_id,
+                        in_id,
+                        SubstitutionReason::Discretionary,
+                    ) {
+                        break;
+                    }
+                    subs_made += 1;
+                }
+                None => break,
+            }
+        }
+    }
+
+    /// Star protection and the pair bar the chosen swap has to clear.
+    ///
+    /// Star protection follows COMFORT, not urgency, and the two are not
+    /// the same thing. A side two goals down wants a change badly and
+    /// still would not dream of hooking the man who scored — it hooks the
+    /// passengers. A side three up with ten minutes left has no urgency at
+    /// all and takes its scorer off to a standing ovation. So the thing
+    /// that softens the protection is the lead being killed, which is
+    /// exactly what [`BenchPressure::close_out`] measures.
+    ///
+    /// Squared so a one-goal lead barely touches it: at 2-1 on 78' the
+    /// scorer keeps nine-tenths of his protection, which is the behaviour
+    /// `process_substitutions_removes_tired_winger_over_high_rated_scorer`
+    /// exists to hold.
+    fn pair_requirements(pressure: &BenchPressure, conviction: f32) -> (f32, f32) {
+        let comfort = pressure.close_out_share();
+        let protection_dampening = (1.0 - 0.65 * comfort * comfort).clamp(0.35, 1.0);
+        // What the (out, in) pair has to be worth. Slides between a fussy
+        // manager and a desperate one across the same span the old fixed
+        // ladder covered, but driven by the situation rather than by the
+        // minute hand.
+        let threshold = Self::PAIR_BAR_RELUCTANT
+            - (Self::PAIR_BAR_RELUCTANT - Self::PAIR_BAR_DESPERATE) * conviction;
+        (protection_dampening, threshold)
+    }
+}
+
+/// A side's bench state for one discretionary pass.
+struct TeamSubstitutionPass {
+    team_id: u32,
+    own_goals: i32,
+    opp_goals: i32,
+    match_minutes: u64,
+    max_subs_per_team: usize,
+    subs_made: usize,
+    need: TacticalNeed,
+    pressure: BenchPressure,
+    at_half_time: bool,
+    windows_spent: u8,
 }
 
 /// The timing half of the substitution decision — everything that answers
@@ -1336,8 +1423,8 @@ impl CoachLiveAdapter {
 mod tests {
     use super::*;
     use crate::club::player::builder::PlayerBuilder;
-    use crate::r#match::{CoachCard, MatchRng};
     use crate::r#match::engine::environment::EnvModifiers;
+    use crate::r#match::{CoachCard, MatchRng};
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositions, PlayerSkills,
@@ -1445,7 +1532,7 @@ mod tests {
     #[test]
     fn higher_starting_recovery_debt_drains_condition_faster_in_match() {
         use crate::r#match::ConditionContext;
-        use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+        use crate::r#match::defenders::states::shared::{ActivityIntensity, DefenderCondition};
         use nalgebra::Vector3;
 
         let mut fresh = build_match_player(d(1998, 1, 1), PlayerPositionType::MidfielderCenter);

@@ -1737,15 +1737,17 @@ impl Pitch {
         upkeep: Upkeep,
     ) {
         let stature = Stature::of(&venue.venue);
+        let trim = Self::spawn_hoardings(commands, meshes, materials, images, upkeep);
+        Self::spawn_stands(commands, materials, images, venue, throng, stature, trim);
+    }
 
-        const HOARDING_HEIGHT: f32 = 0.95;
-        const HOARDING_DEPTH: f32 = 0.14;
-        // How wide one advert reads on the boards, in metres. Matched to the
-        // panel `Textures::hoarding` draws — 1024 texels against 128 for the
-        // 0.95 m height — so a texel is square and the lockup is neither
-        // stretched nor squashed.
-        const AD_PANEL: f32 = 7.6;
-
+    fn spawn_hoardings(
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+        upkeep: Upkeep,
+    ) -> Handle<StandardMaterial> {
         // Advertising hoardings. Lifted out of near-black too, but only to a
         // mid tone: these run the full length of the touchline right at the
         // edge of the play, and a bright band there pulls the eye off the
@@ -1774,12 +1776,31 @@ impl Pitch {
             ..default()
         });
 
-        // What the boards actually advertise. One panel, tiled — which is what
-        // a ground with a single perimeter sponsor looks like, and the only
-        // honest thing to put here: this is the project's own mark, name and
-        // address, not an invented brand. Set in the same face as the shirts
-        // in front of them; see `Textures::hoarding`.
         let advert = Textures::hoarding(images, "OF", "OpenFootball", "open-football.org");
+        let (boards, trims, adverts) = Self::perimeter();
+        Self::spawn_perimeter(
+            commands,
+            meshes,
+            materials,
+            &advert,
+            lit,
+            board,
+            trim.clone(),
+            boards,
+            trims,
+            adverts,
+        );
+        trim
+    }
+
+    fn perimeter() -> (Option<Mesh>, Option<Mesh>, Vec<(f32, Mesh)>) {
+        const HOARDING_HEIGHT: f32 = 0.95;
+        const HOARDING_DEPTH: f32 = 0.14;
+        // How wide one advert reads on the boards, in metres. Matched to the
+        // panel `Textures::hoarding` draws — 1024 texels against 128 for the
+        // 0.95 m height — so a texel is square and the lockup is neither
+        // stretched nor squashed.
+        const AD_PANEL: f32 = 7.6;
 
         let along = Field::HALF_LENGTH + Self::END_MARGIN;
         let across = Field::HALF_WIDTH + Self::SIDE_MARGIN;
@@ -1865,6 +1886,21 @@ impl Pitch {
             }
         }
 
+        (boards, trims, adverts)
+    }
+
+    fn spawn_perimeter(
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        advert: &Handle<Image>,
+        lit: f32,
+        board: Handle<StandardMaterial>,
+        trim: Handle<StandardMaterial>,
+        boards: Option<Mesh>,
+        trims: Option<Mesh>,
+        adverts: Vec<(f32, Mesh)>,
+    ) {
         for (panels, face) in adverts {
             commands.spawn((
                 Mesh3d(Self::stock(meshes, face)),
@@ -1905,7 +1941,17 @@ impl Pitch {
                 MeshMaterial3d(trim.clone()),
             ));
         }
+    }
 
+    fn spawn_stands(
+        commands: &mut Commands,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+        venue: &ViewerConfig,
+        throng: Option<Throng>,
+        stature: Stature,
+        trim: Handle<StandardMaterial>,
+    ) {
         // Four banks of seating, open to the sky — none of these stands is
         // roofed.
         //
@@ -1950,7 +1996,7 @@ impl Pitch {
         commands.insert_resource(Stands {
             pending: Stands::plan(stature),
             seating,
-            trim: trim.clone(),
+            trim,
             spectators,
             stature,
             throng,

@@ -1,7 +1,7 @@
 use crate::r#match::engine::ball::ball::{AerialReach, Ball, PlayerReach};
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{
+use crate::r#match::midfielders::states::shared::{
     ActivityIntensity, MidfielderCondition, MidfielderRead,
 };
 #[cfg(feature = "match-logs")]

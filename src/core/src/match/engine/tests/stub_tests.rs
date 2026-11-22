@@ -67,7 +67,11 @@ fn the_substitution_draw_holds_at_every_bench_the_competitions_allow() {
                     .iter()
                     .filter(|s| s.team_id == side.team_id)
                     .collect();
-                assert!(made.len() <= 5, "bench {size}, seed {seed}: {} changes", made.len());
+                assert!(
+                    made.len() <= 5,
+                    "bench {size}, seed {seed}: {} changes",
+                    made.len()
+                );
                 let mut came_on: Vec<u32> = made.iter().map(|s| s.player_in_id).collect();
                 assert!(
                     came_on
@@ -77,7 +81,11 @@ fn the_substitution_draw_holds_at_every_bench_the_competitions_allow() {
                 );
                 came_on.sort_unstable();
                 came_on.dedup();
-                assert_eq!(came_on.len(), made.len(), "bench {size}, seed {seed}: one man came on twice");
+                assert_eq!(
+                    came_on.len(),
+                    made.len(),
+                    "bench {size}, seed {seed}: one man came on twice"
+                );
                 changes += made.len();
             }
         }

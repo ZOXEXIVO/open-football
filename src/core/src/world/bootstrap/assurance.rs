@@ -49,7 +49,11 @@ impl ClubStandardTable {
             .map(|(slug, (sum, count))| (slug, sum / count as f32))
             .collect();
         let var = n * sxx - sx * sx;
-        let slope = if var > 0.0 { (n * sxy - sx * sy) / var } else { 0.0 };
+        let slope = if var > 0.0 {
+            (n * sxy - sx * sy) / var
+        } else {
+            0.0
+        };
         let intercept = if n > 0.0 { (sy - slope * sx) / n } else { 0.0 };
         ClubStandardTable {
             by_team,
@@ -143,14 +147,23 @@ mod tests {
 
     fn table() -> ClubStandardTable {
         ClubStandardTable {
-            by_team: FxHashMap::from_iter([("top-club".to_string(), 0.72), ("second-tier".to_string(), 0.58)]),
+            by_team: FxHashMap::from_iter([
+                ("top-club".to_string(), 0.72),
+                ("second-tier".to_string(), 0.58),
+            ]),
             by_league: FxHashMap::from_iter([("abroad-league".to_string(), 0.64)]),
             intercept: 0.30,
             slope: 0.0001,
         }
     }
 
-    fn season(year: u16, team: &str, league: &str, starts: u16, subs: u16) -> PlayerStatisticsHistoryItem {
+    fn season(
+        year: u16,
+        team: &str,
+        league: &str,
+        starts: u16,
+        subs: u16,
+    ) -> PlayerStatisticsHistoryItem {
         PlayerStatisticsHistoryItem {
             season: Season::new(year),
             team_name: team.to_string(),
@@ -198,7 +211,9 @@ mod tests {
     fn a_veteran_starts_assured() {
         let mut p = keeper(34);
         for year in 2015..2025 {
-            p.statistics_history.items.push(season(year, "top-club", "x", 32, 1));
+            p.statistics_history
+                .items
+                .push(season(year, "top-club", "x", 32, 1));
         }
         assert!((seed(&mut p) - 0.72).abs() < 0.01);
     }
@@ -207,7 +222,9 @@ mod tests {
     fn a_third_choice_with_no_senior_football_starts_unassured() {
         let mut p = keeper(19);
         for year in 2022..2025 {
-            p.statistics_history.items.push(season(year, "top-club", "x", 0, 0));
+            p.statistics_history
+                .items
+                .push(season(year, "top-club", "x", 0, 0));
         }
         assert!(seed(&mut p) < 0.72 - 0.10);
     }
@@ -215,10 +232,18 @@ mod tests {
     #[test]
     fn a_returning_loanee_starts_at_the_loan_level() {
         let mut p = keeper(23);
-        p.statistics_history.items.push(season(2021, "top-club", "x", 2, 1));
-        p.statistics_history.items.push(season(2022, "top-club", "x", 1, 0));
-        p.statistics_history.items.push(season(2023, "second-tier", "y", 34, 0));
-        p.statistics_history.items.push(season(2024, "second-tier", "y", 36, 0));
+        p.statistics_history
+            .items
+            .push(season(2021, "top-club", "x", 2, 1));
+        p.statistics_history
+            .items
+            .push(season(2022, "top-club", "x", 1, 0));
+        p.statistics_history
+            .items
+            .push(season(2023, "second-tier", "y", 34, 0));
+        p.statistics_history
+            .items
+            .push(season(2024, "second-tier", "y", 36, 0));
         let a = seed(&mut p);
         assert!((a - 0.58).abs() < (a - 0.72).abs());
     }
@@ -238,7 +263,10 @@ mod tests {
     fn a_club_out_of_the_world_reads_its_league_then_its_reputation() {
         let t = table();
         assert_eq!(t.standard_of(&season(2020, "top-club", "x", 0, 0)), 0.72);
-        assert_eq!(t.standard_of(&season(2020, "gone", "abroad-league", 0, 0)), 0.64);
+        assert_eq!(
+            t.standard_of(&season(2020, "gone", "abroad-league", 0, 0)),
+            0.64
+        );
         assert!((t.standard_of(&season(2020, "gone", "gone", 0, 0)) - 0.60).abs() < 1e-6);
     }
 }

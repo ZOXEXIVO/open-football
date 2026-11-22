@@ -7,7 +7,7 @@
 //! purchase negotiation.
 use super::super::*;
 use crate::academy::ClubAcademy;
-use crate::club::player::core::builder::PlayerBuilder;
+use crate::club::player::model::builder::PlayerBuilder;
 use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
 use crate::shared::Location;
 use crate::shared::fullname::FullName;

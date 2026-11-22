@@ -586,364 +586,370 @@ pub struct MoraleEventCatalog {
     pub personal_training_plan_set: f32,
 }
 
+const DEFAULT_MORALE_EVENT_CATALOG: MoraleEventCatalog = MoraleEventCatalog {
+    manager_praise: 3.0,
+    manager_discipline: -3.0,
+    manager_playing_time_promise: 4.0,
+    manager_criticism: -2.0,
+    manager_encouragement: 2.0,
+    manager_tactical_instruction: 1.0,
+    good_training: 2.0,
+    poor_training: -2.0,
+    match_dropped: -1.5,
+    contract_offer: 2.0,
+    contract_renewal: 5.0,
+    squad_status_change: 2.0,
+    lack_of_playing_time: -3.0,
+    loan_listing_accepted: -2.0,
+    injury_return: 3.0,
+    player_of_the_match: 4.0,
+    // Career-memory weekly award. Larger than POM because the
+    // recipient outperformed every other player in the league for
+    // a full week of fixtures, not just a single ninety minutes.
+    player_of_the_week: 6.0,
+    teammate_bonding: 1.5,
+    conflict_with_teammate: -2.0,
+    dressing_room_speech: 1.5,
+    settled_into_squad: 1.0,
+    feeling_isolated: -2.0,
+    salary_gap_noticed: -3.0,
+    promise_kept: 4.0,
+    promise_broken: -6.0,
+    ambition_shock: -8.0,
+    salary_shock: -6.0,
+    role_mismatch: -6.0,
+    dream_move: 10.0,
+    dream_loan_opportunity: 6.0,
+    salary_boost: 4.0,
+    joining_elite: 6.0,
+    contract_terminated: -3.0,
+    // Deliberately 0: the departure's real magnitude is
+    // bond-sized per player at the emit site
+    // (`fire_manager_departure_events`) — a favourite of the
+    // outgoing manager takes -8, a frozen-out player gains.
+    // Never emit this event through the catalog default.
+    manager_departure: 0.0,
+    national_team_callup: 6.0,
+    national_team_dropped: -4.0,
+    // Winning a tournament is the largest single lift a
+    // footballer ever gets, and losing one lands like a
+    // bereavement for about a fortnight.
+    national_team_triumph: 14.0,
+    national_team_heartbreak: -8.0,
+    shirt_number_promotion: 2.0,
+    controversy_incident: -3.0,
+    // Match performance — small/medium routine events plus a
+    // career milestone (first_club_goal). Magnitudes here are
+    // *base* values; emit sites may scale by rating, derby
+    // multiplier, role or starter-vs-sub.
+    first_club_goal: 6.0,
+    decisive_goal: 3.0,
+    substitute_impact: 2.0,
+    clean_sheet_pride: 1.5,
+    costly_mistake: -3.5,
+    red_card_fallout: -5.0,
+    derby_hero: 5.0,
+    // Squad-wide derby win — a moderate lift for everyone on the
+    // winning side. Standout performers get the bigger DerbyHero
+    // on top, but only one of the two events fires per player.
+    derby_win: 2.5,
+    // Base defeat is squad-wide; emit site adds up to -3.0 extra
+    // for poor performers / red cards, so worst case lands around
+    // -6 — a meaningful but not crushing rivalry blow.
+    derby_defeat: -3.0,
+    // Team season events — major positives are once-a-season
+    // career memories; relegation is a year-defining wound.
+    trophy_won: 10.0,
+    // Domestic cup is real silverware but a step below a league
+    // title — most squads rate it just under a championship
+    // medal. Emit-side prestige + involvement multipliers refine
+    // it further per player.
+    domestic_cup_won: 7.5,
+    cup_final_defeat: -5.0,
+    promotion_celebration: 8.0,
+    relegation_fear: -2.5,
+    relegated: -10.0,
+    qualified_for_europe: 6.0,
+    // Role / status — captaincy is the strongest pure status
+    // event short of a trophy; squad omission silently chronic.
+    won_starting_place: 4.0,
+    lost_starting_place: -4.0,
+    captaincy_awarded: 7.0,
+    captaincy_removed: -7.0,
+    youth_breakthrough: 8.0,
+    squad_registration_omitted: -5.0,
+    // Transfer / media — fan/media events are softer than the
+    // dressing-room layer; a collapsed dream move stings.
+    wanted_by_bigger_club: 3.0,
+    transfer_bid_rejected: -3.0,
+    dream_move_collapsed: -7.0,
+    fan_praise: 2.0,
+    fan_criticism: -2.5,
+    media_praise: 1.5,
+    media_criticism: -2.0,
+    // Transfer-interest funnel — magnitudes are *base* values;
+    // emit sites scale by personality, rep gap, and stage.
+    scouted_by_club: 0.5,
+    transfer_rumour: 0.0,
+    agent_stirs_interest: 0.0,
+    interest_from_bigger_club: 2.0,
+    interest_from_rival: -1.0,
+    homecoming_rumour: 1.0,
+    former_club_interest: 0.5,
+    favorite_club_interest: 2.5,
+    transfer_speculation_distracts: -1.5,
+    transfer_interest_dismissed: 0.5,
+    transfer_talks_expected: 1.5,
+    interest_cooled: -1.0,
+    // Bigger than the anticipation of talks: the wages are
+    // agreed and the move is real.
+    agreed_personal_terms: 2.5,
+    // His own decision, taken on his own terms.
+    rejected_move_on_personal_terms: 0.5,
+    used_interest_for_contract_leverage: 1.0,
+    fans_react_to_transfer_rumour: 0.0,
+    // Discipline lifecycle / career story beats. The
+    // accumulation ban is the avoidable, self-inflicted kind;
+    // serving it out is a small relief. Scoring on a former
+    // club and the decade-of-service milestone are big personal
+    // moments; announcing international retirement is a
+    // considered, mostly-neutral decision.
+    banned_through_accumulation: -3.0,
+    suspension_served: 2.0,
+    scored_against_former_club: 6.0,
+    club_servant_milestone: 6.0,
+    international_retirement: 1.0,
+    // Social / culture — quiet ongoing events. Friend sold and
+    // mentor departed are felt; compatriot/language are gentle
+    // integration helpers.
+    close_friend_sold: -3.0,
+    compatriot_joined: 2.5,
+    mentor_departed: -3.0,
+    language_progress: 1.5,
+    // Awards / nominations — career-visible silverware.
+    player_of_the_month: 8.0,
+    young_player_of_the_month: 7.0,
+    // Slightly bigger than the senior weekly award because for a
+    // 20-or-under it's a much rarer, prouder moment than a 28
+    // year-old's nth POW.
+    young_player_of_the_week: 5.0,
+    team_of_the_week_selection: 3.0,
+    young_team_of_the_week_selection: 2.5,
+    // Monthly XI sits between the weekly selection and the
+    // season XI — full month of fixtures, but not a campaign.
+    team_of_the_month_selection: 5.0,
+    young_team_of_the_month_selection: 4.0,
+    team_of_the_season_selection: 9.0,
+    // Calendar-year XI — full year of consistency, between
+    // Team of the Season (one league campaign) and a full
+    // Player-of-the-Season pick.
+    team_of_the_year_selection: 8.0,
+    player_of_the_season: 12.0,
+    young_player_of_the_season: 10.0,
+    league_top_scorer: 10.0,
+    league_top_assists: 8.0,
+    league_golden_glove: 8.0,
+    continental_player_of_year_nomination: 7.0,
+    continental_player_of_year: 14.0,
+    world_player_of_year_nomination: 10.0,
+    world_player_of_year: 18.0,
+    // Real-life football events — milestones, hot streaks, slumps.
+    senior_debut: 6.0,
+    national_team_debut: 8.0,
+    hat_trick: 7.0,
+    assist_hat_trick: 6.0,
+    goal_drought_ended: 3.5,
+    scoring_drought_concern: -3.0,
+    appearance_milestone: 5.0,
+    goal_milestone: 5.0,
+    clean_sheet_milestone: 5.0,
+    training_ground_bust_up: -4.0,
+    public_apology: 1.0,
+    fans_chant_player_name: 3.0,
+    media_pressure_mounting: -3.5,
+    leadership_emergence: 4.0,
+    // Career-desire moods — chronic ambient drag while the
+    // mismatch persists. Magnitudes mirror the catalog band the
+    // requirements call for: return-home is the deepest cut
+    // (homesickness compounds isolation), the two ambition
+    // moods sit a notch below.
+    wants_return_home: -5.0,
+    wants_european_competition: -4.0,
+    wants_copa_libertadores: -4.0,
+    home_return_opportunity: 4.0,
+    continental_ambition_satisfied: 4.0,
+    life_simulation_desire: -3.0,
+    // Transfer-environment realism — base magnitudes from the
+    // requirements doc. Aspirational events sit in the +2..+6
+    // band; negative pressure events in the -2.5..-6 band. The
+    // emit sites scale these by age (younger amplifies), ambition
+    // (higher amplifies positives + step-down embarrassment),
+    // and professionalism (high dampens negatives).
+    top_club_opportunity: 6.0,
+    elite_training_lift: 2.0,
+    adaptation_breakthrough: 4.0,
+    trusted_after_step_up: 5.0,
+    proved_level_after_move: 6.0,
+    senior_mentor_support: 2.5,
+    overawed_by_elite_club: -4.0,
+    role_path_blocked_at_elite_club: -5.0,
+    media_spotlight_pressure: -2.5,
+    dressing_room_status_shock: -3.0,
+    too_good_for_level: -6.0,
+    training_standard_frustration: -3.0,
+    fan_expectation_burden: -3.5,
+    step_down_embarrassment: -5.0,
+    loan_level_mismatch: -3.0,
+    // Career-stage arc — see the field docs. Retirement
+    // announcement carries a *positive* base (planned farewell);
+    // the emit site flips it negative for forced / injury cases.
+    retirement_considering: -1.0,
+    retirement_announced: 1.0,
+    coaching_career_interest: 1.5,
+    // Squad-ambition / title pressure — chronic drags while the
+    // mismatch persists. Title challenge is the deepest (it drives
+    // top-player transfer realism); stronger-squad sits a notch up.
+    wants_stronger_squad: -3.0,
+    wants_title_challenge: -4.0,
+    // Wanting a stronger league is a chronic ambition itch on par
+    // with the squad-strength one — a settled drag, not an acute hit.
+    wants_stronger_league: -3.0,
+    // A career visibly stalling in the reserves gnaws like the
+    // squad-ambition moods — chronic, not acute.
+    wants_first_team_football: -3.0,
+    // Post-relegation exodus mood — as deep as the title itch:
+    // the level he plays at just dropped underneath him.
+    wants_to_leave_after_relegation: -4.0,
+    // Loan pressure — development concern and recall request both
+    // sit above the routine minutes-concern note.
+    loan_development_concern: -2.5,
+    loan_recall_requested: -3.0,
+    loan_form_concern: -1.5,
+    // Longing, not a grievance — he's playing and happy where he
+    // is; he just doesn't want it to end.
+    wants_loan_made_permanent: -1.0,
+    // The carousel itch bites deeper than the permanence longing
+    // and just under the reserve-squad dream: he is playing, but
+    // the seasons are going by at somebody else's club.
+    wants_to_prove_himself_at_parent: -2.5,
+    // Back from real football to a bench he didn't choose.
+    unsettled_after_loan_return: -3.5,
+    // Came back a footballer — quiet confidence, not euphoria;
+    // the record's real weight is in the expectation machinery.
+    returned_from_loan_proven: 3.0,
+    // The flop return stings like the unchosen return, a touch
+    // deeper — it's his own performance, not the club's choice.
+    returned_from_loan_deflated: -4.0,
+    // Being backed with a real role lands as strongly as the
+    // proven-return confidence — the club said it out loud.
+    backed_after_loan_return: 3.5,
+    // The report carries the record, the triptych carries the
+    // mood. See the field doc for why this one is silent.
+    loan_spell_reviewed: 0.0,
+    // Same band as the new-signing threat: the shirt is the
+    // shirt, whoever comes for it.
+    threatened_by_returning_loanee: -3.0,
+    // Star treatment on arrival lifts harder than a routine
+    // welcome; the emit site scales it by the background gap.
+    admired_for_big_club_spell: 4.0,
+    // The bubble bursting stings, but it's embarrassment, not a
+    // grievance against the club — milder than a broken promise.
+    big_club_aura_faded: -3.0,
+    // Training next to a genuine star every day is a quiet
+    // privilege for the understudy, not a headline moment.
+    learning_from_star_teammate: 2.5,
+    // Passing the shirt on sits well with the professional —
+    // pride in the role, not joy.
+    takes_replacement_under_wing: 2.0,
+    // The leader's own mood dips only mildly — the frustration
+    // mostly lands on the flop via relations and his event.
+    losing_patience_with_signing: -1.5,
+    // Feeling the room turn is heavier than fan noise — these
+    // are the people he trains with every day.
+    feels_dressing_room_pressure: -2.5,
+    // Sharper than plain lack of minutes: the pathway itself
+    // reads as shut, and the kid knows who's holding it.
+    pathway_blocked_by_loan_signing: -3.5,
+    // A message-to-the-academy grievance, not a personal one —
+    // mild on any single senior.
+    unhappy_about_blocked_homegrown: -1.5,
+    // Being visibly better and still not picked gnaws harder
+    // than routine rotation.
+    feels_selection_favouritism: -2.5,
+    // A cold room, not an open feud — it thaws when he plays.
+    cold_shoulder_over_rival_past: -2.0,
+    // Contract tension.
+    release_clause_demanded: -2.0,
+    contract_talks_stalled: -3.0,
+    // Hard rejection sits a step above stalled talks — the deal
+    // is dead, not paused. Magnitude scales further at the emit
+    // site (wage gap / status / loyalty).
+    rejected_contract_offer: -4.5,
+    // Silence in the final year is quieter than a broken-down
+    // negotiation, but it compounds monthly while nothing moves.
+    contract_expiry_anxiety: -2.5,
+    playing_for_new_contract: 2.0,
+    // Manager-relationship arc & match-trust band.
+    // `asked_for_private_talk` is a request, not a verdict — the
+    // morale hit is light; the renderer makes it feel weighty.
+    asked_for_private_talk: -2.5,
+    // The ask itself is a mild frustration note — the unsold
+    // listing behind it is the real grievance.
+    asked_club_to_arrange_transfer: -1.5,
+    // The window shutting on an unsold listing is the moment the
+    // limbo becomes real — until January, nothing can change.
+    unsold_window_closed: -2.5,
+    // The club killed the exit he formally asked for — one of
+    // the sharpest boardroom wounds short of a broken promise.
+    move_vetoed_by_club: -5.0,
+    concerned_by_club_direction: -4.0,
+    encouraged_by_squad_investment: 3.5,
+    // Tactical-role frustration is chronic; sits a notch below
+    // `role_mismatch` because the formation gate (structural)
+    // already covers the full no-slot case.
+    unhappy_with_tactical_role: -4.0,
+    trusted_in_big_match: 4.5,
+    benched_for_big_match: -5.5,
+    substitution_frustration: -2.5,
+    // Setback during a recovery — fresh wound on top of the
+    // existing layoff. Bigger than a routine drop.
+    injury_setback: -4.5,
+    threatened_by_new_signing: -3.0,
+    manager_trust_growing: 3.5,
+    manager_trust_eroding: -4.0,
+    new_manager_bounce: 2.5,
+    reunited_with_former_manager: 6.0,
+    rallies_behind_manager: 3.0,
+    senses_manager_change: -2.0,
+    formal_warning_issued: -1.5,
+    fined_by_club: -3.0,
+    dressing_room_inquest: -2.5,
+    resilience_praised: 2.5,
+    told_not_in_plans: -4.5,
+    personal_training_plan_set: 1.5,
+};
+
 impl Default for MoraleEventCatalog {
     fn default() -> Self {
-        // Magnitudes match the canonical (most common) inline value at each
-        // emit site at the time of extraction. Multi-magnitude sites that
-        // scale by context (e.g. AmbitionShock = -8 * severity * damp) keep
-        // these as their *base* — the scaling happens at the call site.
-        MoraleEventCatalog {
-            manager_praise: 3.0,
-            manager_discipline: -3.0,
-            manager_playing_time_promise: 4.0,
-            manager_criticism: -2.0,
-            manager_encouragement: 2.0,
-            manager_tactical_instruction: 1.0,
-            good_training: 2.0,
-            poor_training: -2.0,
-            match_dropped: -1.5,
-            contract_offer: 2.0,
-            contract_renewal: 5.0,
-            squad_status_change: 2.0,
-            lack_of_playing_time: -3.0,
-            loan_listing_accepted: -2.0,
-            injury_return: 3.0,
-            player_of_the_match: 4.0,
-            // Career-memory weekly award. Larger than POM because the
-            // recipient outperformed every other player in the league for
-            // a full week of fixtures, not just a single ninety minutes.
-            player_of_the_week: 6.0,
-            teammate_bonding: 1.5,
-            conflict_with_teammate: -2.0,
-            dressing_room_speech: 1.5,
-            settled_into_squad: 1.0,
-            feeling_isolated: -2.0,
-            salary_gap_noticed: -3.0,
-            promise_kept: 4.0,
-            promise_broken: -6.0,
-            ambition_shock: -8.0,
-            salary_shock: -6.0,
-            role_mismatch: -6.0,
-            dream_move: 10.0,
-            dream_loan_opportunity: 6.0,
-            salary_boost: 4.0,
-            joining_elite: 6.0,
-            contract_terminated: -3.0,
-            // Deliberately 0: the departure's real magnitude is
-            // bond-sized per player at the emit site
-            // (`fire_manager_departure_events`) — a favourite of the
-            // outgoing manager takes -8, a frozen-out player gains.
-            // Never emit this event through the catalog default.
-            manager_departure: 0.0,
-            national_team_callup: 6.0,
-            national_team_dropped: -4.0,
-            // Winning a tournament is the largest single lift a
-            // footballer ever gets, and losing one lands like a
-            // bereavement for about a fortnight.
-            national_team_triumph: 14.0,
-            national_team_heartbreak: -8.0,
-            shirt_number_promotion: 2.0,
-            controversy_incident: -3.0,
-            // Match performance — small/medium routine events plus a
-            // career milestone (first_club_goal). Magnitudes here are
-            // *base* values; emit sites may scale by rating, derby
-            // multiplier, role or starter-vs-sub.
-            first_club_goal: 6.0,
-            decisive_goal: 3.0,
-            substitute_impact: 2.0,
-            clean_sheet_pride: 1.5,
-            costly_mistake: -3.5,
-            red_card_fallout: -5.0,
-            derby_hero: 5.0,
-            // Squad-wide derby win — a moderate lift for everyone on the
-            // winning side. Standout performers get the bigger DerbyHero
-            // on top, but only one of the two events fires per player.
-            derby_win: 2.5,
-            // Base defeat is squad-wide; emit site adds up to -3.0 extra
-            // for poor performers / red cards, so worst case lands around
-            // -6 — a meaningful but not crushing rivalry blow.
-            derby_defeat: -3.0,
-            // Team season events — major positives are once-a-season
-            // career memories; relegation is a year-defining wound.
-            trophy_won: 10.0,
-            // Domestic cup is real silverware but a step below a league
-            // title — most squads rate it just under a championship
-            // medal. Emit-side prestige + involvement multipliers refine
-            // it further per player.
-            domestic_cup_won: 7.5,
-            cup_final_defeat: -5.0,
-            promotion_celebration: 8.0,
-            relegation_fear: -2.5,
-            relegated: -10.0,
-            qualified_for_europe: 6.0,
-            // Role / status — captaincy is the strongest pure status
-            // event short of a trophy; squad omission silently chronic.
-            won_starting_place: 4.0,
-            lost_starting_place: -4.0,
-            captaincy_awarded: 7.0,
-            captaincy_removed: -7.0,
-            youth_breakthrough: 8.0,
-            squad_registration_omitted: -5.0,
-            // Transfer / media — fan/media events are softer than the
-            // dressing-room layer; a collapsed dream move stings.
-            wanted_by_bigger_club: 3.0,
-            transfer_bid_rejected: -3.0,
-            dream_move_collapsed: -7.0,
-            fan_praise: 2.0,
-            fan_criticism: -2.5,
-            media_praise: 1.5,
-            media_criticism: -2.0,
-            // Transfer-interest funnel — magnitudes are *base* values;
-            // emit sites scale by personality, rep gap, and stage.
-            scouted_by_club: 0.5,
-            transfer_rumour: 0.0,
-            agent_stirs_interest: 0.0,
-            interest_from_bigger_club: 2.0,
-            interest_from_rival: -1.0,
-            homecoming_rumour: 1.0,
-            former_club_interest: 0.5,
-            favorite_club_interest: 2.5,
-            transfer_speculation_distracts: -1.5,
-            transfer_interest_dismissed: 0.5,
-            transfer_talks_expected: 1.5,
-            interest_cooled: -1.0,
-            // Bigger than the anticipation of talks: the wages are
-            // agreed and the move is real.
-            agreed_personal_terms: 2.5,
-            // His own decision, taken on his own terms.
-            rejected_move_on_personal_terms: 0.5,
-            used_interest_for_contract_leverage: 1.0,
-            fans_react_to_transfer_rumour: 0.0,
-            // Discipline lifecycle / career story beats. The
-            // accumulation ban is the avoidable, self-inflicted kind;
-            // serving it out is a small relief. Scoring on a former
-            // club and the decade-of-service milestone are big personal
-            // moments; announcing international retirement is a
-            // considered, mostly-neutral decision.
-            banned_through_accumulation: -3.0,
-            suspension_served: 2.0,
-            scored_against_former_club: 6.0,
-            club_servant_milestone: 6.0,
-            international_retirement: 1.0,
-            // Social / culture — quiet ongoing events. Friend sold and
-            // mentor departed are felt; compatriot/language are gentle
-            // integration helpers.
-            close_friend_sold: -3.0,
-            compatriot_joined: 2.5,
-            mentor_departed: -3.0,
-            language_progress: 1.5,
-            // Awards / nominations — career-visible silverware.
-            player_of_the_month: 8.0,
-            young_player_of_the_month: 7.0,
-            // Slightly bigger than the senior weekly award because for a
-            // 20-or-under it's a much rarer, prouder moment than a 28
-            // year-old's nth POW.
-            young_player_of_the_week: 5.0,
-            team_of_the_week_selection: 3.0,
-            young_team_of_the_week_selection: 2.5,
-            // Monthly XI sits between the weekly selection and the
-            // season XI — full month of fixtures, but not a campaign.
-            team_of_the_month_selection: 5.0,
-            young_team_of_the_month_selection: 4.0,
-            team_of_the_season_selection: 9.0,
-            // Calendar-year XI — full year of consistency, between
-            // Team of the Season (one league campaign) and a full
-            // Player-of-the-Season pick.
-            team_of_the_year_selection: 8.0,
-            player_of_the_season: 12.0,
-            young_player_of_the_season: 10.0,
-            league_top_scorer: 10.0,
-            league_top_assists: 8.0,
-            league_golden_glove: 8.0,
-            continental_player_of_year_nomination: 7.0,
-            continental_player_of_year: 14.0,
-            world_player_of_year_nomination: 10.0,
-            world_player_of_year: 18.0,
-            // Real-life football events — milestones, hot streaks, slumps.
-            senior_debut: 6.0,
-            national_team_debut: 8.0,
-            hat_trick: 7.0,
-            assist_hat_trick: 6.0,
-            goal_drought_ended: 3.5,
-            scoring_drought_concern: -3.0,
-            appearance_milestone: 5.0,
-            goal_milestone: 5.0,
-            clean_sheet_milestone: 5.0,
-            training_ground_bust_up: -4.0,
-            public_apology: 1.0,
-            fans_chant_player_name: 3.0,
-            media_pressure_mounting: -3.5,
-            leadership_emergence: 4.0,
-            // Career-desire moods — chronic ambient drag while the
-            // mismatch persists. Magnitudes mirror the catalog band the
-            // requirements call for: return-home is the deepest cut
-            // (homesickness compounds isolation), the two ambition
-            // moods sit a notch below.
-            wants_return_home: -5.0,
-            wants_european_competition: -4.0,
-            wants_copa_libertadores: -4.0,
-            home_return_opportunity: 4.0,
-            continental_ambition_satisfied: 4.0,
-            life_simulation_desire: -3.0,
-            // Transfer-environment realism — base magnitudes from the
-            // requirements doc. Aspirational events sit in the +2..+6
-            // band; negative pressure events in the -2.5..-6 band. The
-            // emit sites scale these by age (younger amplifies), ambition
-            // (higher amplifies positives + step-down embarrassment),
-            // and professionalism (high dampens negatives).
-            top_club_opportunity: 6.0,
-            elite_training_lift: 2.0,
-            adaptation_breakthrough: 4.0,
-            trusted_after_step_up: 5.0,
-            proved_level_after_move: 6.0,
-            senior_mentor_support: 2.5,
-            overawed_by_elite_club: -4.0,
-            role_path_blocked_at_elite_club: -5.0,
-            media_spotlight_pressure: -2.5,
-            dressing_room_status_shock: -3.0,
-            too_good_for_level: -6.0,
-            training_standard_frustration: -3.0,
-            fan_expectation_burden: -3.5,
-            step_down_embarrassment: -5.0,
-            loan_level_mismatch: -3.0,
-            // Career-stage arc — see the field docs. Retirement
-            // announcement carries a *positive* base (planned farewell);
-            // the emit site flips it negative for forced / injury cases.
-            retirement_considering: -1.0,
-            retirement_announced: 1.0,
-            coaching_career_interest: 1.5,
-            // Squad-ambition / title pressure — chronic drags while the
-            // mismatch persists. Title challenge is the deepest (it drives
-            // top-player transfer realism); stronger-squad sits a notch up.
-            wants_stronger_squad: -3.0,
-            wants_title_challenge: -4.0,
-            // Wanting a stronger league is a chronic ambition itch on par
-            // with the squad-strength one — a settled drag, not an acute hit.
-            wants_stronger_league: -3.0,
-            // A career visibly stalling in the reserves gnaws like the
-            // squad-ambition moods — chronic, not acute.
-            wants_first_team_football: -3.0,
-            // Post-relegation exodus mood — as deep as the title itch:
-            // the level he plays at just dropped underneath him.
-            wants_to_leave_after_relegation: -4.0,
-            // Loan pressure — development concern and recall request both
-            // sit above the routine minutes-concern note.
-            loan_development_concern: -2.5,
-            loan_recall_requested: -3.0,
-            loan_form_concern: -1.5,
-            // Longing, not a grievance — he's playing and happy where he
-            // is; he just doesn't want it to end.
-            wants_loan_made_permanent: -1.0,
-            // The carousel itch bites deeper than the permanence longing
-            // and just under the reserve-squad dream: he is playing, but
-            // the seasons are going by at somebody else's club.
-            wants_to_prove_himself_at_parent: -2.5,
-            // Back from real football to a bench he didn't choose.
-            unsettled_after_loan_return: -3.5,
-            // Came back a footballer — quiet confidence, not euphoria;
-            // the record's real weight is in the expectation machinery.
-            returned_from_loan_proven: 3.0,
-            // The flop return stings like the unchosen return, a touch
-            // deeper — it's his own performance, not the club's choice.
-            returned_from_loan_deflated: -4.0,
-            // Being backed with a real role lands as strongly as the
-            // proven-return confidence — the club said it out loud.
-            backed_after_loan_return: 3.5,
-            // The report carries the record, the triptych carries the
-            // mood. See the field doc for why this one is silent.
-            loan_spell_reviewed: 0.0,
-            // Same band as the new-signing threat: the shirt is the
-            // shirt, whoever comes for it.
-            threatened_by_returning_loanee: -3.0,
-            // Star treatment on arrival lifts harder than a routine
-            // welcome; the emit site scales it by the background gap.
-            admired_for_big_club_spell: 4.0,
-            // The bubble bursting stings, but it's embarrassment, not a
-            // grievance against the club — milder than a broken promise.
-            big_club_aura_faded: -3.0,
-            // Training next to a genuine star every day is a quiet
-            // privilege for the understudy, not a headline moment.
-            learning_from_star_teammate: 2.5,
-            // Passing the shirt on sits well with the professional —
-            // pride in the role, not joy.
-            takes_replacement_under_wing: 2.0,
-            // The leader's own mood dips only mildly — the frustration
-            // mostly lands on the flop via relations and his event.
-            losing_patience_with_signing: -1.5,
-            // Feeling the room turn is heavier than fan noise — these
-            // are the people he trains with every day.
-            feels_dressing_room_pressure: -2.5,
-            // Sharper than plain lack of minutes: the pathway itself
-            // reads as shut, and the kid knows who's holding it.
-            pathway_blocked_by_loan_signing: -3.5,
-            // A message-to-the-academy grievance, not a personal one —
-            // mild on any single senior.
-            unhappy_about_blocked_homegrown: -1.5,
-            // Being visibly better and still not picked gnaws harder
-            // than routine rotation.
-            feels_selection_favouritism: -2.5,
-            // A cold room, not an open feud — it thaws when he plays.
-            cold_shoulder_over_rival_past: -2.0,
-            // Contract tension.
-            release_clause_demanded: -2.0,
-            contract_talks_stalled: -3.0,
-            // Hard rejection sits a step above stalled talks — the deal
-            // is dead, not paused. Magnitude scales further at the emit
-            // site (wage gap / status / loyalty).
-            rejected_contract_offer: -4.5,
-            // Silence in the final year is quieter than a broken-down
-            // negotiation, but it compounds monthly while nothing moves.
-            contract_expiry_anxiety: -2.5,
-            playing_for_new_contract: 2.0,
-            // Manager-relationship arc & match-trust band.
-            // `asked_for_private_talk` is a request, not a verdict — the
-            // morale hit is light; the renderer makes it feel weighty.
-            asked_for_private_talk: -2.5,
-            // The ask itself is a mild frustration note — the unsold
-            // listing behind it is the real grievance.
-            asked_club_to_arrange_transfer: -1.5,
-            // The window shutting on an unsold listing is the moment the
-            // limbo becomes real — until January, nothing can change.
-            unsold_window_closed: -2.5,
-            // The club killed the exit he formally asked for — one of
-            // the sharpest boardroom wounds short of a broken promise.
-            move_vetoed_by_club: -5.0,
-            concerned_by_club_direction: -4.0,
-            encouraged_by_squad_investment: 3.5,
-            // Tactical-role frustration is chronic; sits a notch below
-            // `role_mismatch` because the formation gate (structural)
-            // already covers the full no-slot case.
-            unhappy_with_tactical_role: -4.0,
-            trusted_in_big_match: 4.5,
-            benched_for_big_match: -5.5,
-            substitution_frustration: -2.5,
-            // Setback during a recovery — fresh wound on top of the
-            // existing layoff. Bigger than a routine drop.
-            injury_setback: -4.5,
-            threatened_by_new_signing: -3.0,
-            manager_trust_growing: 3.5,
-            manager_trust_eroding: -4.0,
-            new_manager_bounce: 2.5,
-            reunited_with_former_manager: 6.0,
-            rallies_behind_manager: 3.0,
-            senses_manager_change: -2.0,
-            formal_warning_issued: -1.5,
-            fined_by_club: -3.0,
-            dressing_room_inquest: -2.5,
-            resilience_praised: 2.5,
-            told_not_in_plans: -4.5,
-            personal_training_plan_set: 1.5,
-        }
+        DEFAULT_MORALE_EVENT_CATALOG
     }
 }
 
 impl MoraleEventCatalog {
-    /// Default magnitude for `source`. Lookup is a match arm — switching
-    /// from a HashMap means O(1) without hashing and exhaustiveness checks
-    /// flag missing variants if the enum grows.
+    /// Default magnitude for `source`. The lookup is split into
+    /// category-sized matches so each stays readable and exhaustive.
     pub fn magnitude(&self, source: HappinessEventType) -> f32 {
+        let mut value = Self::magnitude_part_1(self, &source);
+        value = value.or_else(|| Self::magnitude_part_2(self, &source));
+        value = value.or_else(|| Self::magnitude_part_3(self, &source));
+        value = value.or_else(|| Self::magnitude_part_4(self, &source));
+        value = value.or_else(|| Self::magnitude_part_5(self, &source));
+        value.unwrap_or(0.0)
+    }
+
+    fn magnitude_part_1(&self, source: &HappinessEventType) -> Option<f32> {
         use crate::HappinessEventType::*;
-        match source {
+        Some(match source {
             ManagerPraise => self.manager_praise,
             ManagerDiscipline => self.manager_discipline,
             ManagerPlayingTimePromise => self.manager_playing_time_promise,
@@ -985,6 +991,12 @@ impl MoraleEventCatalog {
             ShirtNumberPromotion => self.shirt_number_promotion,
             ControversyIncident => self.controversy_incident,
             FirstClubGoal => self.first_club_goal,
+            _ => return None,
+        })
+    }
+    fn magnitude_part_2(&self, source: &HappinessEventType) -> Option<f32> {
+        use crate::HappinessEventType::*;
+        Some(match source {
             DecisiveGoal => self.decisive_goal,
             SubstituteImpact => self.substitute_impact,
             CleanSheetPride => self.clean_sheet_pride,
@@ -1026,6 +1038,12 @@ impl MoraleEventCatalog {
             YoungTeamOfTheMonthSelection => self.young_team_of_the_month_selection,
             TeamOfTheSeasonSelection => self.team_of_the_season_selection,
             TeamOfTheYearSelection => self.team_of_the_year_selection,
+            _ => return None,
+        })
+    }
+    fn magnitude_part_3(&self, source: &HappinessEventType) -> Option<f32> {
+        use crate::HappinessEventType::*;
+        Some(match source {
             PlayerOfTheSeason => self.player_of_the_season,
             YoungPlayerOfTheSeason => self.young_player_of_the_season,
             LeagueTopScorer => self.league_top_scorer,
@@ -1067,6 +1085,12 @@ impl MoraleEventCatalog {
             FansReactToTransferRumour => self.fans_react_to_transfer_rumour,
             WantsReturnHome => self.wants_return_home,
             WantsEuropeanCompetition => self.wants_european_competition,
+            _ => return None,
+        })
+    }
+    fn magnitude_part_4(&self, source: &HappinessEventType) -> Option<f32> {
+        use crate::HappinessEventType::*;
+        Some(match source {
             WantsCopaLibertadores => self.wants_copa_libertadores,
             HomeReturnOpportunity => self.home_return_opportunity,
             ContinentalAmbitionSatisfied => self.continental_ambition_satisfied,
@@ -1108,6 +1132,12 @@ impl MoraleEventCatalog {
             AdmiredForBigClubSpell => self.admired_for_big_club_spell,
             BigClubAuraFaded => self.big_club_aura_faded,
             LearningFromStarTeammate => self.learning_from_star_teammate,
+            _ => return None,
+        })
+    }
+    fn magnitude_part_5(&self, source: &HappinessEventType) -> Option<f32> {
+        use crate::HappinessEventType::*;
+        Some(match source {
             TakesReplacementUnderWing => self.takes_replacement_under_wing,
             LosingPatienceWithSigning => self.losing_patience_with_signing,
             FeelsDressingRoomPressure => self.feels_dressing_room_pressure,
@@ -1149,7 +1179,8 @@ impl MoraleEventCatalog {
             ScoredAgainstFormerClub => self.scored_against_former_club,
             ClubServantMilestone => self.club_servant_milestone,
             InternationalRetirement => self.international_retirement,
-        }
+            _ => return None,
+        })
     }
 }
 

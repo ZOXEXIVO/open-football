@@ -10,7 +10,7 @@ use log::info;
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use super::compiled::compiled;
+use super::compiled::CompiledDatabase;
 
 /// A single player record. Fields with `#[serde(default)]` are optional —
 /// the hydrator fills sensible defaults so a minimal scraper output still
@@ -293,7 +293,7 @@ pub struct OdbPosition {
 /// Per-field reputation override. Every field is optional — a record may
 /// supply all three, just one (e.g. a scraper that only captured world
 /// fame), or none. Missing fields are derived from current ability via
-/// the ability-curve fallback in `build_player_attributes`.
+/// the ability-curve fallback in `PlayerAttributeHydrator`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct OdbReputation {
     #[serde(default)]
@@ -415,7 +415,7 @@ impl PlayersOdb {
     /// only when the compiled doc has no players at all (fresh repo, no
     /// imports yet).
     pub fn load() -> Option<Self> {
-        let source = &compiled().players;
+        let source = &CompiledDatabase::get().players;
         if source.is_empty() {
             return None;
         }

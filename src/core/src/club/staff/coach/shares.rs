@@ -346,7 +346,10 @@ mod tests {
         let men = [man(140.0), man(130.0), man(120.0)];
         let quiet = ShirtShares::divide(&ShareClimate::ONE_COMPETITION, &men, false);
         let crowded = ShirtShares::divide(&busy(), &men, false);
-        assert!(crowded[0] < quiet[0] - 0.08, "{quiet:?} against {crowded:?}");
+        assert!(
+            crowded[0] < quiet[0] - 0.08,
+            "{quiet:?} against {crowded:?}"
+        );
         assert!(crowded[1] > quiet[1] && crowded[2] > quiet[2]);
     }
 
@@ -409,7 +412,10 @@ mod tests {
     fn a_goalkeeper_shares_least() {
         let keeper = ShirtShares::first_choice(&busy(), Some(3.0), true);
         let outfield = ShirtShares::first_choice(&busy(), Some(3.0), false);
-        assert!(keeper > outfield + 0.1 && keeper > 0.85, "{keeper} against {outfield}");
+        assert!(
+            keeper > outfield + 0.1 && keeper > 0.85,
+            "{keeper} against {outfield}"
+        );
     }
 
     #[test]
@@ -479,7 +485,10 @@ mod tests {
                 floor(PlanFloorKind::LoanAgreement, 0.7),
             ],
         );
-        assert!((shares[2] - 0.7).abs() < 1e-5, "the loan agreement is kept: {shares:?}");
+        assert!(
+            (shares[2] - 0.7).abs() < 1e-5,
+            "the loan agreement is kept: {shares:?}"
+        );
         assert!(shares[1] < 0.6, "the promise cannot be: {shares:?}");
         assert_eq!(unmet, vec![1]);
         assert!((shares.iter().sum::<f32>() - 1.0).abs() < 1e-5);

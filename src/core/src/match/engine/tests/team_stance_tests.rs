@@ -7,14 +7,15 @@
 use super::goal_celebration_tests::squad;
 use crate::PlayerPositionType;
 use crate::r#match::defenders::states::DefenderRunningState;
+use crate::r#match::engine::result::Score;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
-use crate::r#match::engine::result::Score;
-use crate::r#match::player::strategies::players::ops::forward_shot_decision::evaluate_forward_shot_decision;
+use crate::r#match::player::strategies::players::ops::forward_shot_decision::ShotDecision;
 use crate::r#match::{
     CoachCard, DefensivePlan, GamePlan, GameTickContext, MatchContext, MatchField, MatchPlayer,
-    MatchPlayerCollection, Outlook, ReadCounters, RollingTeamMetrics, Situation, SquadFit, StateChangeResult,
-    StateProcessingContext, StateProcessingHandler, StateProcessor, TacticalNeed,
+    MatchPlayerCollection, Outlook, ReadCounters, RollingTeamMetrics, Situation, SquadFit,
+    StateChangeResult, StateProcessingContext, StateProcessingHandler, StateProcessor,
+    TacticalNeed,
 };
 use nalgebra::Vector3;
 
@@ -76,8 +77,9 @@ impl StateProcessingHandler for Run {
 }
 
 fn run_velocity(context: &MatchContext, field: &MatchField) -> Vector3<f32> {
-    let mut player =
-        home_player(field, |p| p.tactical_position.current_position.is_defender());
+    let mut player = home_player(field, |p| {
+        p.tactical_position.current_position.is_defender()
+    });
     player.position = Vector3::new(400.0, 272.0, 0.0);
     let tick = GameTickContext::new(field, &context.players);
     StateProcessor::new(0, &mut player, context, &tick)
@@ -114,18 +116,32 @@ fn context_for<'a>(
 #[test]
 fn keeping_the_ball_follows_the_plan_and_the_stance() {
     let (field, mut context) = pitch();
-    let player = home_player(&field, |p| !p.tactical_position.current_position.is_goalkeeper());
+    let player = home_player(&field, |p| {
+        !p.tactical_position.current_position.is_goalkeeper()
+    });
     let tick = GameTickContext::new(&field, &context.players);
 
     context.coach_home.plan = GamePlan::neutral();
-    assert!(!context_for(&player, &context, &tick).team().prefers_keeping_the_ball());
+    assert!(
+        !context_for(&player, &context, &tick)
+            .team()
+            .prefers_keeping_the_ball()
+    );
 
     context.tactical_home.stance = -0.25;
-    assert!(context_for(&player, &context, &tick).team().prefers_keeping_the_ball());
+    assert!(
+        context_for(&player, &context, &tick)
+            .team()
+            .prefers_keeping_the_ball()
+    );
 
     context.tactical_home.stance = 0.0;
     context.coach_home.plan = GamePlan::from_pin("tempo=0.2/direct=0.2").unwrap();
-    assert!(context_for(&player, &context, &tick).team().prefers_keeping_the_ball());
+    assert!(
+        context_for(&player, &context, &tick)
+            .team()
+            .prefers_keeping_the_ball()
+    );
 }
 
 #[test]
@@ -137,7 +153,12 @@ fn a_protecting_carrier_with_an_open_team_mate_passes_on_the_first_tick() {
     })
     .id;
     // The opposition is back in its own half; nobody is near him.
-    for (i, p) in field.players.iter_mut().filter(|p| p.team_id == AWAY).enumerate() {
+    for (i, p) in field
+        .players
+        .iter_mut()
+        .filter(|p| p.team_id == AWAY)
+        .enumerate()
+    {
         p.position = Vector3::new(620.0 + 10.0 * (i % 3) as f32, 40.0 + 45.0 * i as f32, 0.0);
     }
     let at = Vector3::new(250.0, 272.0, 0.0);
@@ -164,7 +185,10 @@ fn a_protecting_carrier_with_an_open_team_mate_passes_on_the_first_tick() {
 fn a_protecting_side_still_breaks_when_the_counter_is_on() {
     let (mut field, mut context) = pitch();
     protecting(&mut context);
-    let carrier = home_player(&field, |p| p.tactical_position.current_position.is_midfielder()).id;
+    let carrier = home_player(&field, |p| {
+        p.tactical_position.current_position.is_midfielder()
+    })
+    .id;
     // Won the ball this instant, with five of theirs caught upfield in our half.
     context.coach_home.last_possession_gain_tick = context.current_tick();
     let mut caught = 0;
@@ -183,7 +207,10 @@ fn a_protecting_side_still_breaks_when_the_counter_is_on() {
     tick.refresh_ball(&field);
     tick.possession.update(&field);
     let ctx = context_for(&player, &context, &tick);
-    assert!(ctx.team().prefers_keeping_the_ball(), "the side means to keep it");
+    assert!(
+        ctx.team().prefers_keeping_the_ball(),
+        "the side means to keep it"
+    );
     assert!(ctx.team().counter_window(), "the counter is on");
     assert!(!ctx.team().should_play_possession(), "and it breaks");
 }
@@ -191,8 +218,7 @@ fn a_protecting_side_still_breaks_when_the_counter_is_on() {
 #[test]
 fn a_protecting_side_s_chance_is_weighed_as_at_level() {
     let shooter_at = |field: &mut MatchField| {
-        let shooter =
-            home_player(field, |p| p.tactical_position.current_position.is_forward()).id;
+        let shooter = home_player(field, |p| p.tactical_position.current_position.is_forward()).id;
         for (i, p) in field.players.iter_mut().enumerate() {
             if p.id != shooter && !p.tactical_position.current_position.is_goalkeeper() {
                 p.position = Vector3::new(200.0, 40.0 + 10.0 * i as f32, 0.0);
@@ -218,7 +244,7 @@ fn a_protecting_side_s_chance_is_weighed_as_at_level() {
         tick.possession.update(&field);
         format!(
             "{:?}",
-            evaluate_forward_shot_decision(&context_for(&player, &context, &tick), "TEST")
+            ShotDecision::evaluate(&context_for(&player, &context, &tick), "TEST")
         )
     };
     assert_eq!(
@@ -231,7 +257,12 @@ fn a_protecting_side_s_chance_is_weighed_as_at_level() {
 fn a_fifteenth_minute_goal_moves_both_stances_and_the_bench_on_the_next_reading() {
     let (_, mut context) = pitch();
     for coach in [&mut context.coach_home, &mut context.coach_away] {
-        coach.on_kickoff(CoachCard::neutral(), Outlook::default(), &SquadFit::default(), None);
+        coach.on_kickoff(
+            CoachCard::neutral(),
+            Outlook::default(),
+            &SquadFit::default(),
+            None,
+        );
     }
     let read = RollingTeamMetrics::default();
     let counters = ReadCounters::default();
@@ -241,8 +272,12 @@ fn a_fifteenth_minute_goal_moves_both_stances_and_the_bench_on_the_next_reading(
             minutes_left: 90.0 - minute,
             ..Situation::default()
         };
-        context.coach_home.observe(at(home_difference), minute, counters);
-        context.coach_away.observe(at(-home_difference), minute, counters);
+        context
+            .coach_home
+            .observe(at(home_difference), minute, counters);
+        context
+            .coach_away
+            .observe(at(-home_difference), minute, counters);
         let need = |stance: f32| TacticalNeed::from_coach(stance, read, 0.8);
         (
             context.coach_home.stance(),
@@ -256,7 +291,10 @@ fn a_fifteenth_minute_goal_moves_both_stances_and_the_bench_on_the_next_reading(
     let (home_after, away_after, away_need_after) = observe(&mut context, 1, 15.0 + 1.0 / 12.0);
     assert!(home_after < home_before, "{home_after} {home_before}");
     assert!(away_after > away_before, "{away_after} {away_before}");
-    assert_ne!(away_need_after, away_need_before, "the side behind wants a goal");
+    assert_ne!(
+        away_need_after, away_need_before,
+        "the side behind wants a goal"
+    );
 }
 
 #[test]

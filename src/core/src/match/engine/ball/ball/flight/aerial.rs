@@ -350,22 +350,7 @@ impl Ball {
         let Some(delivery) = self.aerial_delivery else {
             return;
         };
-        if self.current_tick_cached >= delivery.deadline_tick {
-            self.aerial_delivery = None;
-            #[cfg(feature = "match-logs")]
-            TeleportCensus::note_delivery_lost();
-            // The grant goes with it: a contest whose ball never arrived
-            // did not award anybody anything, and leaving the flag up
-            // would let the winner head a ball he had to chase down.
-            self.aerial_contest_winner = None;
-            self.flags.in_flight_state = 0;
-            return;
-        }
-        if players.iter().all(|p| p.id != delivery.winner_id) {
-            self.aerial_delivery = None;
-            self.aerial_contest_winner = None;
-            #[cfg(feature = "match-logs")]
-            TeleportCensus::note_delivery_lost();
+        if self.aerial_delivery_expired(delivery, players) {
             return;
         }
         // Still climbing, or still above head height: not there yet.
@@ -476,9 +461,47 @@ impl Ball {
             self.position.z,
             !in_reach,
         );
-        // Arrived. Apply the outcome on the VELOCITY only — the position
-        // is wherever the flight put it, which is the whole difference
-        // between this and the write it replaces.
+        self.apply_aerial_outcome(delivery, winner, events);
+        self.aerial_delivery = None;
+    }
+
+    /// Has the delivery run out of time, or lost its winner to the bench or
+    /// a red card? Either way it is nobody's award any more.
+    fn aerial_delivery_expired(
+        &mut self,
+        delivery: AerialDelivery,
+        players: &[MatchPlayer],
+    ) -> bool {
+        if self.current_tick_cached >= delivery.deadline_tick {
+            self.aerial_delivery = None;
+            #[cfg(feature = "match-logs")]
+            TeleportCensus::note_delivery_lost();
+            // The grant goes with it: a contest whose ball never arrived
+            // did not award anybody anything, and leaving the flag up
+            // would let the winner head a ball he had to chase down.
+            self.aerial_contest_winner = None;
+            self.flags.in_flight_state = 0;
+            return true;
+        }
+        if players.iter().all(|p| p.id != delivery.winner_id) {
+            self.aerial_delivery = None;
+            self.aerial_contest_winner = None;
+            #[cfg(feature = "match-logs")]
+            TeleportCensus::note_delivery_lost();
+            return true;
+        }
+        false
+    }
+
+    /// Arrived. Apply the outcome on the VELOCITY only — the position is
+    /// wherever the flight put it, which is the whole difference between
+    /// this and the write it replaces.
+    fn apply_aerial_outcome(
+        &mut self,
+        delivery: AerialDelivery,
+        winner: Option<&MatchPlayer>,
+        events: &mut EventCollection,
+    ) {
         if delivery.force_heading {
             self.pending_aerial_strike = Some(delivery.winner_id);
         }
@@ -564,7 +587,6 @@ impl Ball {
                 velocity
             }
         };
-        self.aerial_delivery = None;
     }
 }
 

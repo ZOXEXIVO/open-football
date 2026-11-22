@@ -10,7 +10,7 @@ pub struct ForeignPlayerEntry {
 pub struct LeagueEntity {
     pub id: u32,
     /// Whether this league is active in the simulation. Set to false to skip.
-    #[serde(default = "default_enabled")]
+    #[serde(default = "LeagueEntity::default_enabled")]
     pub enabled: bool,
     pub slug: String,
     pub name: String,
@@ -79,8 +79,10 @@ pub struct PlayoffConfigEntity {
     pub stage_names: Vec<String>,
 }
 
-fn default_enabled() -> bool {
-    false
+impl LeagueEntity {
+    fn default_enabled() -> bool {
+        false
+    }
 }
 
 #[derive(Deserialize, Clone)]

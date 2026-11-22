@@ -3,6 +3,13 @@ pub mod get;
 use crate::GameAppData;
 use axum::Router;
 
-pub fn europa_league_routes() -> Router<GameAppData> {
-    Router::new().merge(get::routes::routes())
+pub struct EuropaLeagueRoutes;
+
+impl EuropaLeagueRoutes {
+    pub fn router() -> Router<GameAppData> {
+        Router::new().merge(get::routes::EuropaLeagueGetRoutes::router())
+    }
 }
+
+#[allow(non_upper_case_globals)]
+pub const europa_league_routes: fn() -> Router<GameAppData> = EuropaLeagueRoutes::router;

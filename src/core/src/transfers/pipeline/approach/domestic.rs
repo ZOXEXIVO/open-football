@@ -19,7 +19,7 @@ use chrono::NaiveDate;
 use log::debug;
 
 use crate::Country;
-use crate::transfers::pipeline::ShortlistCandidate;
+use crate::transfers::pipeline::{ShortlistCandidate, TransferShortlist};
 
 use super::*;
 
@@ -66,6 +66,34 @@ enum TargetOutcome<'a> {
     Reject,
     /// Nothing to stage — he cannot be read, or his club no longer holds him.
     Skip,
+}
+
+/// A shortlist row that has passed the identity and availability gates and is
+/// ready to be priced: the candidate at the cursor, his owning request, and
+/// the club that currently holds him.
+struct Pursuit<'a> {
+    shortlist: &'a TransferShortlist,
+    request: Option<&'a TransferRequest>,
+    candidate: &'a ShortlistCandidate,
+    selling_club_id: u32,
+}
+
+/// What deciding one pursuit produced.
+enum PursuitOutcome {
+    Action(NegotiationAction),
+    /// The gate or the age band refused him; the caller stages the reject.
+    Rejected,
+    /// Nothing to stage — the target or his club could not be read.
+    Skip,
+}
+
+/// The recruitment department's read on one player: the monitoring row, the
+/// latest report, and the believed numbers they carry.
+struct ScoutView<'a> {
+    monitoring: Option<&'a ScoutPlayerMonitoring>,
+    scouting_report: Option<&'a DetailedScoutingReport>,
+    assessed: Option<(u8, u8)>,
+    confidence: Option<f32>,
 }
 
 /// The pass itself: decide, write, then clear the duds.
@@ -196,105 +224,182 @@ impl DomesticApproachPass {
         actions: &mut Vec<NegotiationAction>,
         plausibility_rejected: &mut Vec<PlausibilityReject>,
     ) {
+        let club = buyer.club;
+        let mut negotiations_this_club = 0usize;
+
+        for shortlist in &buyer.plan.shortlists {
+            if negotiations_this_club >= buyer.slots_available {
+                break;
+            }
+
+            let Some(pursuit) = Self::next_pursuit(buyer, shortlist, date, current_window) else {
+                continue;
+            };
+
+            match Self::decide(buyer, &pursuit, date, price_level) {
+                PursuitOutcome::Action(action) => actions.push(action),
+                PursuitOutcome::Rejected => {
+                    plausibility_rejected.push(PlausibilityReject {
+                        club_id: club.id,
+                        player_id: pursuit.candidate.player_id,
+                        shortlist_request_id: pursuit.shortlist.transfer_request_id,
+                    });
+                    continue;
+                }
+                PursuitOutcome::Skip => continue,
+            }
+
+            negotiations_this_club += 1;
+        }
+    }
+
+    /// The candidate at this shortlist's cursor, if the row is live and free
+    /// of every reason not to approach him this tick.
+    fn next_pursuit<'a>(
+        buyer: &'a DomesticBuyer<'a>,
+        shortlist: &'a TransferShortlist,
+        date: NaiveDate,
+        current_window: Option<(NaiveDate, NaiveDate)>,
+    ) -> Option<Pursuit<'a>> {
+        if shortlist.has_pursuing_candidate() || shortlist.all_exhausted() {
+            return None;
+        }
+
+        // The owning request must still be live. A board veto
+        // stamps `board_approved = Some(false)` + Abandoned; a
+        // need already filled elsewhere (FA instant signing, a
+        // won race) stamps Fulfilled. This loop used to ignore
+        // both — vetoed targets were approached the same tick
+        // the chairman blocked them, and the negotiation open
+        // then overwrote the veto's Abandoned back to
+        // Negotiating.
+        let request = buyer
+            .plan
+            .transfer_requests
+            .iter()
+            .find(|r| r.id == shortlist.transfer_request_id);
+        if request.is_some_and(|r| !Self::request_is_live(r)) {
+            return None;
+        }
+
+        let candidate = match shortlist.current_candidate() {
+            Some(c) if c.status == ShortlistCandidateStatus::Available => c,
+            _ => return None,
+        };
+
+        let country = buyer.country;
+        let club = buyer.club;
+        let player_id = candidate.player_id;
+
+        if country
+            .transfer_market
+            .has_active_negotiation_for(player_id, club.id)
+        {
+            return None;
+        }
+
+        // Skip players on loan contracts — they belong to another club
+        // Skip recently signed players — their club has a plan for them
+        if !Self::player_is_approachable(country, player_id, date, current_window) {
+            return None;
+        }
+
+        let selling_club_id = country
+            .clubs
+            .iter()
+            .find(|c| c.teams.contains_player(player_id))
+            .map(|c| c.id)?;
+        if selling_club_id == club.id {
+            // Foreign players handled by initiate_foreign_negotiations
+            return None;
+        }
+
+        Some(Pursuit {
+            shortlist,
+            request,
+            candidate,
+            selling_club_id,
+        })
+    }
+
+    /// A request is still worth pursuing unless it was vetoed, fulfilled or
+    /// abandoned; a missing request does not close the shortlist.
+    fn request_is_live(request: &TransferRequest) -> bool {
+        request.status != TransferRequestStatus::Abandoned
+            && request.status != TransferRequestStatus::Fulfilled
+            && request.board_approved != Some(false)
+    }
+
+    /// On loan, or protected from a move this window — either way not a
+    /// domestic approach this tick.
+    fn player_is_approachable(
+        country: &Country,
+        player_id: u32,
+        date: NaiveDate,
+        current_window: Option<(NaiveDate, NaiveDate)>,
+    ) -> bool {
+        let (is_on_loan, is_protected) = PlayerView::find_player_in_country(country, player_id)
+            .map(|p| {
+                (
+                    p.is_on_loan(),
+                    p.is_transfer_protected(date, current_window),
+                )
+            })
+            .unwrap_or((false, false));
+        !is_on_loan && !is_protected
+    }
+
+    /// Read the target and build the offer the shared builder prices.
+    fn decide(
+        buyer: &DomesticBuyer<'_>,
+        pursuit: &Pursuit<'_>,
+        date: NaiveDate,
+        price_level: f32,
+    ) -> PursuitOutcome {
         let country = buyer.country;
         let club = buyer.club;
         let team = buyer.team;
         let plan = buyer.plan;
-        let buying_rep_score = buyer.buying_rep_score;
-        let buying_league_reputation = buyer.buying_league_reputation;
-        let avg_ability = buyer.avg_ability;
-        let budget = buyer.budget;
-        let slots_available = buyer.slots_available;
-        let mut negotiations_this_club = 0usize;
+        let player_id = pursuit.candidate.player_id;
 
-        for shortlist in &plan.shortlists {
-            if negotiations_this_club >= slots_available {
-                break;
-            }
+        let target = match Self::target(
+            buyer,
+            pursuit.candidate,
+            pursuit.request,
+            pursuit.selling_club_id,
+            date,
+        ) {
+            TargetOutcome::Pursue(target) => target,
+            TargetOutcome::Reject => return PursuitOutcome::Rejected,
+            TargetOutcome::Skip => return PursuitOutcome::Skip,
+        };
+        let DomesticTarget {
+            player,
+            selling_club,
+            selling_club_id,
+            selling_rep_score,
+            selling_league_reputation,
+            is_rival,
+            monitoring,
+            scouting_report,
+            approach,
+            is_loan,
+            has_option_to_buy,
+            is_prospect_purchase,
+        } = target;
 
-            if shortlist.has_pursuing_candidate() {
-                continue;
-            }
-
-            if shortlist.all_exhausted() {
-                continue;
-            }
-
-            // The owning request must still be live. A board veto
-            // stamps `board_approved = Some(false)` + Abandoned; a
-            // need already filled elsewhere (FA instant signing, a
-            // won race) stamps Fulfilled. This loop used to ignore
-            // both — vetoed targets were approached the same tick
-            // the chairman blocked them, and the negotiation open
-            // then overwrote the veto's Abandoned back to
-            // Negotiating.
-            let request = plan
-                .transfer_requests
-                .iter()
-                .find(|r| r.id == shortlist.transfer_request_id);
-            let request_live = request
-                .map(|r| {
-                    r.status != TransferRequestStatus::Abandoned
-                        && r.status != TransferRequestStatus::Fulfilled
-                        && r.board_approved != Some(false)
-                })
-                .unwrap_or(true);
-            if !request_live {
-                continue;
-            }
-
-            let candidate = match shortlist.current_candidate() {
-                Some(c) if c.status == ShortlistCandidateStatus::Available => c,
-                _ => continue,
-            };
-
-            let player_id = candidate.player_id;
-
-            if country
-                .transfer_market
-                .has_active_negotiation_for(player_id, club.id)
-            {
-                continue;
-            }
-
-            // Skip players on loan contracts — they belong to another club
-            // Skip recently signed players — their club has a plan for them
-            let (is_on_loan, is_protected) = PlayerView::find_player_in_country(country, player_id)
-                .map(|p| {
-                    (
-                        p.is_on_loan(),
-                        p.is_transfer_protected(date, current_window),
-                    )
-                })
-                .unwrap_or((false, false));
-            if is_on_loan || is_protected {
-                continue;
-            }
-
-            let selling_club_id = country
-                .clubs
-                .iter()
-                .find(|c| c.teams.contains_player(player_id))
-                .map(|c| c.id);
-
-            let selling_club_id = match selling_club_id {
-                Some(id) if id != club.id => id,
-                _ => continue, // Foreign players handled by initiate_foreign_negotiations
-            };
-
-            let target = match Self::target(buyer, candidate, request, selling_club_id, date) {
-                TargetOutcome::Pursue(target) => target,
-                TargetOutcome::Reject => {
-                    plausibility_rejected.push(PlausibilityReject {
-                        club_id: club.id,
-                        player_id,
-                        shortlist_request_id: shortlist.transfer_request_id,
-                    });
-                    continue;
-                }
-                TargetOutcome::Skip => continue,
-            };
-            let DomesticTarget {
+        let outcome = ApproachBuilder::build(
+            &ApproachBuyer {
+                club,
+                suitor: &buyer.suitor,
+                team,
+                plan,
+                rep_score: buyer.buying_rep_score,
+                league_reputation: buyer.buying_league_reputation,
+                avg_ability: buyer.avg_ability,
+                budget: buyer.budget,
+            },
+            &ApproachTarget {
                 player,
                 selling_club,
                 selling_club_id,
@@ -303,80 +408,53 @@ impl DomesticApproachPass {
                 is_rival,
                 monitoring,
                 scouting_report,
-                approach,
+            },
+            pursuit.request,
+            &ApproachContext {
+                // One country, so it is both reaches at once.
+                buy_country: country,
+                sell_country: country,
+                market_map: buyer.market_map,
+                price_level,
+                date,
+                shortlist_request_id: pursuit.shortlist.transfer_request_id,
+                approach: approach.clone(),
                 is_loan,
                 has_option_to_buy,
                 is_prospect_purchase,
-            } = target;
+            },
+            &Self::drift(buyer, pursuit, player_id),
+        );
 
-            let outcome = ApproachBuilder::build(
-                &ApproachBuyer {
-                    club,
-                    suitor: &buyer.suitor,
-                    team,
-                    plan,
-                    rep_score: buying_rep_score,
-                    league_reputation: buying_league_reputation,
-                    avg_ability,
-                    budget,
-                },
-                &ApproachTarget {
-                    player,
-                    selling_club,
-                    selling_club_id,
-                    selling_rep_score,
-                    selling_league_reputation,
-                    is_rival,
-                    monitoring,
-                    scouting_report,
-                },
-                request,
-                &ApproachContext {
-                    // One country, so it is both reaches at once.
-                    buy_country: country,
-                    sell_country: country,
-                    market_map: buyer.market_map,
-                    price_level,
-                    date,
-                    shortlist_request_id: shortlist.transfer_request_id,
-                    approach: approach.clone(),
-                    is_loan,
-                    has_option_to_buy,
-                    is_prospect_purchase,
-                },
-                &ApproachDrift {
-                    allocated_budget: shortlist.allocated_budget.min(budget),
-                    valuation_reputation: team.reputation.market_value_score(),
-                    shortlist_rank: shortlist
-                        .candidates
-                        .iter()
-                        .position(|c| c.player_id == player_id)
-                        .map(|p| p as u8),
-                    competition_count: Some(
-                        country
-                            .transfer_market
-                            .active_rival_bids(player_id, club.id)
-                            .min(u8::MAX as u32) as u8,
-                    ),
-                    loan_appearance_fee: true,
-                    generic_reason_fallback: false,
-                    final_gate_fee: Some(candidate.estimated_fee),
-                },
-            );
+        match outcome {
+            ApproachOutcome::Approach(action) => PursuitOutcome::Action(*action),
+            ApproachOutcome::Refused => PursuitOutcome::Rejected,
+        }
+    }
 
-            match outcome {
-                ApproachOutcome::Refused => {
-                    plausibility_rejected.push(PlausibilityReject {
-                        club_id: club.id,
-                        player_id,
-                        shortlist_request_id: shortlist.transfer_request_id,
-                    });
-                    continue;
-                }
-                ApproachOutcome::Approach(action) => actions.push(*action),
-            }
-
-            negotiations_this_club += 1;
+    /// The inputs on which the domestic reach differs from the cross-border
+    /// one, read off the shortlist this bid belongs to.
+    fn drift(buyer: &DomesticBuyer<'_>, pursuit: &Pursuit<'_>, player_id: u32) -> ApproachDrift {
+        let country = buyer.country;
+        let team = buyer.team;
+        ApproachDrift {
+            allocated_budget: pursuit.shortlist.allocated_budget.min(buyer.budget),
+            valuation_reputation: team.reputation.market_value_score(),
+            shortlist_rank: pursuit
+                .shortlist
+                .candidates
+                .iter()
+                .position(|c| c.player_id == player_id)
+                .map(|p| p as u8),
+            competition_count: Some(
+                country
+                    .transfer_market
+                    .active_rival_bids(player_id, buyer.club.id)
+                    .min(u8::MAX as u32) as u8,
+            ),
+            loan_appearance_fee: true,
+            generic_reason_fallback: false,
+            final_gate_fee: Some(pursuit.candidate.estimated_fee),
         }
     }
 
@@ -391,12 +469,6 @@ impl DomesticApproachPass {
     ) -> TargetOutcome<'a> {
         let country = buyer.country;
         let club = buyer.club;
-        let plan = buyer.plan;
-        let rep_level = buyer.rep_level;
-        let buying_rep_score = buyer.buying_rep_score;
-        let buying_league_reputation = buyer.buying_league_reputation;
-        let budget = buyer.budget;
-        let wage_headroom = buyer.wage_headroom;
         let player_id = candidate.player_id;
 
         // Rivalry is a deal friction, not an absolute block. A weaker
@@ -420,20 +492,7 @@ impl DomesticApproachPass {
         // ability/potential from monitoring rows or reports.
         // Drives both the buy/loan decision and (further down)
         // the offer strategy. Hidden PA is never consulted.
-        let monitoring = plan
-            .scout_monitoring
-            .iter()
-            .find(|m| m.player_id == player_id);
-        let scouting_report = plan
-            .scouting_reports
-            .iter()
-            .find(|r| r.player_id == player_id);
-        let scout_assessed = monitoring
-            .map(|m| (m.current_assessed_ability, m.current_assessed_potential))
-            .or_else(|| scouting_report.map(|r| (r.assessed_ability, r.assessed_potential)));
-        let scout_confidence = monitoring
-            .map(|m| m.confidence)
-            .or_else(|| scouting_report.map(|r| r.confidence));
+        let scout = Self::scout_view(buyer.plan, player_id);
 
         let target = PlayerView::find_player_in_country(country, player_id);
         let player_age = target.map(|p| p.age(date)).unwrap_or(25);
@@ -452,60 +511,36 @@ impl DomesticApproachPass {
         {
             return TargetOutcome::Reject;
         }
+
         // "Gettable" signals: a peer/bigger seller only parts with
         // a prospect who is listed, wants out, or barely plays.
-        let target_available = target
-            .map(|p| {
-                p.statuses.has(PlayerStatusType::Lst)
-                    || p.statuses.has(PlayerStatusType::Loa)
-                    || p.statuses.has(PlayerStatusType::Req)
-                    || p.statuses.has(PlayerStatusType::Unh)
-                    || (p.statistics.played + p.statistics.played_subs) < 10
-            })
-            .unwrap_or(false);
-        let expected_wage = target
-            .map(|p| {
-                WageCalculator::expected_annual_wage(
-                    p,
-                    player_age,
-                    buying_rep_score,
-                    buying_league_reputation,
-                )
-            })
-            .unwrap_or(0);
-        let selling_rep_score = country
-            .clubs
-            .iter()
-            .find(|c| c.id == selling_club_id)
-            .and_then(|c| c.teams.teams.first())
-            .map(|t| t.reputation.overall_score())
-            .unwrap_or(0.3);
-        let selling_league_reputation = country
-            .clubs
-            .iter()
-            .find(|c| c.id == selling_club_id)
-            .and_then(|c| c.teams.teams.first())
-            .and_then(|t| t.league_id)
-            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-            .map(|l| l.reputation)
-            .unwrap_or(0);
+        let target_available = Self::target_available(target);
+        let expected_wage = Self::expected_wage(
+            target,
+            player_age,
+            buyer.buying_rep_score,
+            buyer.buying_league_reputation,
+        );
+        let (selling_rep_score, selling_league_reputation) =
+            Self::selling_standing(country, selling_club_id);
 
         let prospect_ctx = ProspectSigningContext {
-            scout_assessed,
-            scout_confidence,
-            prospect_slots_used: plan
+            scout_assessed: scout.assessed,
+            scout_confidence: scout.confidence,
+            prospect_slots_used: buyer
+                .plan
                 .prospect_buys_this_window
-                .saturating_add(plan.prospect_pursuits_active),
+                .saturating_add(buyer.plan.prospect_pursuits_active),
             seller_rep_score: selling_rep_score,
-            buyer_rep_score: buying_rep_score,
+            buyer_rep_score: buyer.buying_rep_score,
             target_available,
-            wage_headroom,
+            wage_headroom: buyer.wage_headroom,
             expected_wage,
         };
 
         let approach = ApproachPass::determine_transfer_approach(
-            &rep_level,
-            budget,
+            &buyer.rep_level,
+            buyer.budget,
             candidate.estimated_fee,
             request,
             player_age,
@@ -537,13 +572,92 @@ impl DomesticApproachPass {
             selling_rep_score,
             selling_league_reputation,
             is_rival,
-            monitoring,
-            scouting_report,
+            monitoring: scout.monitoring,
+            scouting_report: scout.scouting_report,
             approach,
             is_loan,
             has_option_to_buy,
             is_prospect_purchase,
         })
+    }
+
+    /// The monitoring row and latest report behind one name, with the
+    /// believed numbers the buy/loan decision reads.
+    fn scout_view(plan: &ClubTransferPlan, player_id: u32) -> ScoutView<'_> {
+        let monitoring = plan
+            .scout_monitoring
+            .iter()
+            .find(|m| m.player_id == player_id);
+        let scouting_report = plan
+            .scouting_reports
+            .iter()
+            .find(|r| r.player_id == player_id);
+        let assessed = monitoring
+            .map(|m| (m.current_assessed_ability, m.current_assessed_potential))
+            .or_else(|| scouting_report.map(|r| (r.assessed_ability, r.assessed_potential)));
+        let confidence = monitoring
+            .map(|m| m.confidence)
+            .or_else(|| scouting_report.map(|r| r.confidence));
+        ScoutView {
+            monitoring,
+            scouting_report,
+            assessed,
+            confidence,
+        }
+    }
+
+    /// A peer/bigger seller only parts with a prospect who is listed, wants
+    /// out, or barely plays.
+    fn target_available(target: Option<&Player>) -> bool {
+        target
+            .map(|p| {
+                p.statuses.has(PlayerStatusType::Lst)
+                    || p.statuses.has(PlayerStatusType::Loa)
+                    || p.statuses.has(PlayerStatusType::Req)
+                    || p.statuses.has(PlayerStatusType::Unh)
+                    || (p.statistics.played + p.statistics.played_subs) < 10
+            })
+            .unwrap_or(false)
+    }
+
+    /// The annual wage the buyer would commit to him, when he is readable.
+    fn expected_wage(
+        target: Option<&Player>,
+        player_age: u8,
+        buying_rep_score: f32,
+        buying_league_reputation: u16,
+    ) -> u32 {
+        target
+            .map(|p| {
+                WageCalculator::expected_annual_wage(
+                    p,
+                    player_age,
+                    buying_rep_score,
+                    buying_league_reputation,
+                )
+            })
+            .unwrap_or(0)
+    }
+
+    /// The selling club's reputation score and league reputation.
+    fn selling_standing(country: &Country, selling_club_id: u32) -> (f32, u16) {
+        let selling_rep_score = country
+            .clubs
+            .iter()
+            .find(|c| c.id == selling_club_id)
+            .and_then(|c| c.teams.teams.first())
+            .map(|t| t.reputation.overall_score())
+            .unwrap_or(0.3);
+        let selling_league_reputation = country
+            .clubs
+            .iter()
+            .find(|c| c.id == selling_club_id)
+            .and_then(|c| c.teams.teams.first())
+            .and_then(|t| t.league_id)
+            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+            .map(|l| l.reputation)
+            .unwrap_or(0);
+        (selling_rep_score, selling_league_reputation)
     }
 
     /// Pass 2 — write: open a negotiation for every offer the clubs decided on.

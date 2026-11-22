@@ -47,7 +47,7 @@ mod tests;
 
 pub use closer::{PartingReport, SpellCloser};
 pub use prior::ReunionPrior;
-pub use seeder::{ReunionSeed, ReunionSeeder};
 pub use record::{MedalFlags, PlayerDossier, ScarFlags, SeparationCause};
+pub use seeder::{ReunionSeed, ReunionSeeder};
 pub use store::{CoachDossierStore, DossierCensus, Dossiers, SpellOpening};
 pub use tuning::DossierTuning;

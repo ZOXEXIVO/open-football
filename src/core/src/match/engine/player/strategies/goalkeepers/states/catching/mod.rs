@@ -6,7 +6,7 @@
 //! came for: the aerial contest decides that claim as it reaches him.
 
 use crate::r#match::goalkeepers::states::GoalkeeperPunchingState;
-use crate::r#match::goalkeepers::states::common::{
+use crate::r#match::goalkeepers::states::shared::{
     ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperDelivery, KeeperFeetDecision,
     KeeperPenaltyStance, KeeperRead, KeeperSetPosition, KeeperShotDive, KeeperShotReaction,
     KeeperSmother, ReadLevel,

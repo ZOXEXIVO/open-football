@@ -1,13 +1,13 @@
-mod common;
 pub mod defenders;
 pub mod forwarders;
 pub mod goalkeepers;
 pub mod midfielders;
 pub mod processor;
+mod shared;
 
-// Re-export common items
-pub use common::states as common_states;
-pub use common::{
+// Re-export shared items
+pub use shared::states as shared_states;
+pub use shared::{
     ball::{BallOperationsImpl, MatchBallLogic},
     passing, players, team,
 };

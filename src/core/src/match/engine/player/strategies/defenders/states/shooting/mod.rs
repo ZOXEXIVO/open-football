@@ -1,4 +1,4 @@
-use crate::r#match::defenders::states::common::{
+use crate::r#match::defenders::states::shared::{
     ActivityIntensity, DefenderCondition, DefenderRead,
 };
 use crate::r#match::events::Event;

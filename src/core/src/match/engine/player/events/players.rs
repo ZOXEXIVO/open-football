@@ -18,39 +18,40 @@ use crate::r#match::engine::ball::ball::{
     AerialReach, Ball, DeadBall, FlightProtection, GRAVITY_PER_TICK, GoalOrigin, PlayerReach,
     PossessionSource,
 };
+use crate::r#match::engine::environment::EnvModifiers;
+use crate::r#match::engine::flow::context::MATCH_TIME_INCREMENT_MS;
 use crate::r#match::engine::flow::context::PendingAdvantage;
 use crate::r#match::engine::flow::rng::MatchRng;
 use crate::r#match::engine::goal::GOAL_WIDTH as GOAL_MOUTH_HALF_WIDTH;
-use crate::r#match::engine::environment::EnvModifiers;
-use crate::r#match::engine::flow::context::MATCH_TIME_INCREMENT_MS;
-use crate::r#match::engine::officiating::restart_shape::RestartShape;
 use crate::r#match::engine::officiating::management::{
     CounterAttackThreat, Dissent, ProfessionalFoul,
 };
-use crate::r#match::engine::officiating::referee::{ContactLocation, FoulCallContext, RefereeProfile};
-use crate::r#match::engine::player::injury::{InjuryCause, InjuryRisk, InjuryGrade, MatchInjury};
-use crate::r#match::engine::result::DeadTime;
+use crate::r#match::engine::officiating::referee::{
+    ContactLocation, FoulCallContext, RefereeProfile,
+};
+use crate::r#match::engine::officiating::restart_shape::RestartShape;
+use crate::r#match::engine::player::injury::{InjuryCause, InjuryGrade, InjuryRisk, MatchInjury};
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::psychology::lapse::lapse_diag;
 use crate::r#match::engine::psychology::{
     ActionLapse, LapseFamily, NegativeEvent, PositiveEvent, PsychState,
 };
-#[cfg(feature = "match-logs")]
-use crate::r#match::engine::psychology::lapse::lapse_diag;
-#[cfg(feature = "match-logs")]
-use crate::r#match::player::diagnostics::defender_census::DefenderCensus;
-#[cfg(feature = "match-logs")]
-use crate::r#match::player::diagnostics::midfielder_census::MidfielderCensus;
+use crate::r#match::engine::result::DeadTime;
 use crate::r#match::engine::set_pieces::{FreeKickBand, wall_block_prob, wall_size_for};
 use crate::r#match::engine::zones::MatchZone;
 use crate::r#match::engine::zones::Progression;
 use crate::r#match::events::{Event, EventCollection};
-use crate::r#match::common_states::{BlockChallenge, ChallengeKind, TackleOutcome};
-use crate::r#match::goalkeepers::states::common::KeeperAerialClaim;
+use crate::r#match::goalkeepers::states::shared::KeeperAerialClaim;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::events::gk_claim::GkClaimContest;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::DefenderCensus;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::defender_census::{DeflectionKind, TakeRule};
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::keeper_census::KeeperCensus;
 #[cfg(feature = "match-logs")]
-use crate::r#match::player::diagnostics::defender_census::{DeflectionKind, TakeRule};
+use crate::r#match::player::diagnostics::midfielder_census::MidfielderCensus;
+use crate::r#match::player::events::gk_claim::GkClaimContest;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::events::gk_claim::gk_claim_diag;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
@@ -61,7 +62,7 @@ use crate::r#match::player::strategies::players::HeaderStrike;
 use crate::r#match::player::strategies::players::ShotSkillInputs;
 use crate::r#match::player::strategies::players::ShotSkillProfile;
 use crate::r#match::player::strategies::players::ops::dead_ball_strike::{
-    FreeKickShot, PenaltyKick,
+    DeadBallStrike, FreeKickShot, PenaltyKick,
 };
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext as EffSkillCtx, effective_skill,
@@ -74,6 +75,7 @@ use crate::r#match::player::strategies::players::ops::goalkeeper_skill::{
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::ops::xg::ShotType;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
+use crate::r#match::shared_states::{BlockChallenge, ChallengeKind, TackleOutcome};
 use crate::r#match::{
     ChanceDetail, GoalDetail, GoalPosition, HighlightSelector, MatchContext, MatchField,
     MatchPlayer, OffsideLine, OffsideSnapshot, PassOriginRestart, PlayerSide,
@@ -587,6 +589,127 @@ struct PassSkills {
     availability_factor: f32,
 }
 
+/// The passer's aim before targeting error is priced: who is striking,
+/// where the receiver is running, and the distance the ball must cover.
+struct PassAim {
+    passer_position: Vector3<f32>,
+    passer_side: Option<PlayerSide>,
+    passer_team_id: u32,
+    skills: PassSkills,
+    overall_quality: f32,
+    ideal_target: Vector3<f32>,
+    pass_origin: Vector3<f32>,
+    horizontal_distance: f32,
+}
+
+/// The point the ball is actually aimed at, after skill error, mishit
+/// rolls and swing, plus the shape the cross-spin solver needs.
+struct PassPlacement {
+    actual_target: Vector3<f32>,
+    swing_units: f32,
+    actual_horizontal_distance: f32,
+}
+
+/// The solved launch: the velocity the ball leaves with and the shape it
+/// was solved as.
+struct PassLaunch {
+    velocity: Vector3<f32>,
+    trajectory_type: TrajectoryType,
+}
+
+/// What the strike was, as the cross bookkeeping sees it.
+struct PassShape {
+    declared_cross: Option<CrossType>,
+    was_cross: bool,
+    booked_cross: bool,
+    #[cfg_attr(not(feature = "match-logs"), allow(dead_code))]
+    lofted: bool,
+}
+
+/// The shooter's body and technical snapshot at the moment of the strike.
+struct ShotShooter {
+    condition_pct: f32,
+    position: Vector3<f32>,
+    side: Option<PlayerSide>,
+    technique_skill: f32,
+    finishing_skill: f32,
+    long_shot_skill: f32,
+    team_id: u32,
+    composure01: f32,
+}
+
+/// The bodies around the shooter and the keeper's distance.
+struct ShotPressure {
+    close_5u: u32,
+    close_10u: u32,
+    ring_24u: u32,
+    gk_distance: Option<f32>,
+}
+
+/// Everything a shot reads before aiming: the shooter's profile, the goal
+/// frame, the pressure around him and the keeper's distance.
+struct ShotSetup {
+    minute: u32,
+    shot_type: ShotType,
+    force: f32,
+    wall_stopper: Option<u32>,
+    shooter_position: Vector3<f32>,
+    shooter_side: Option<PlayerSide>,
+    shooter_team_id: u32,
+    technique_skill: f32,
+    finishing_skill: f32,
+    long_shot_skill: f32,
+    profile: ShotSkillProfile,
+    goal_center: Vector3<f32>,
+    goal_left_post: f32,
+    goal_right_post: f32,
+    ball_to_goal_vector: Vector3<f32>,
+    horizontal_distance: f32,
+    pressure_5u: u32,
+    pressure_10u: u32,
+    pressure_24u: u32,
+    desperation: f32,
+    finisher_head: Option<PsychState>,
+}
+
+/// The aim point and the forced-miss outcomes that shape it.
+struct ShotPlacement {
+    dead_ball: Option<DeadBallStrike>,
+    #[cfg_attr(not(feature = "match-logs"), allow(dead_code))]
+    y_target_unclamped: f32,
+    actual_target: Vector3<f32>,
+    clamped_y_target: f32,
+    original_y_target: f32,
+    deflected: bool,
+    curl_units: f32,
+    accuracy_edge: f32,
+    finisher_head: Option<PsychState>,
+    #[cfg_attr(not(feature = "match-logs"), allow(dead_code))]
+    forced_wide: bool,
+    #[cfg_attr(not(feature = "match-logs"), allow(dead_code))]
+    miskicked: bool,
+}
+
+/// The solved strike, before it is written onto the ball.
+struct ShotLaunch {
+    final_velocity: Vector3<f32>,
+    struck_apex: f32,
+    on_target: bool,
+}
+
+/// Where the strike crosses the defending goal line, and what the keeper
+/// is allowed to know about it.
+struct ShotCrossing {
+    defending_side: PlayerSide,
+    goal_line_x: f32,
+    goal_line_y: f32,
+    goal_line_z: f32,
+    true_goal_line_y: f32,
+    shooter_threat: f32,
+    seen_from: Vector3<f32>,
+    ticks_to_goal: f32,
+}
+
 impl PassSkills {
     /// Build a fatigue-aware skill snapshot. Skill values pass through
     /// `effective_skill` so a tired player produces lower passing
@@ -603,25 +726,21 @@ impl PassSkills {
         // Flair was already unfloored.
         let passing = (effective_skill(player, player.skills.technical.passing, tech) / 20.0)
             .clamp(0.02, 1.0);
-        let technique =
-            (effective_skill(player, player.skills.technical.technique, tech) / 20.0)
-                .clamp(0.02, 1.0);
-        let vision = (effective_skill(player, player.skills.mental.vision, mental) / 20.0)
+        let technique = (effective_skill(player, player.skills.technical.technique, tech) / 20.0)
             .clamp(0.02, 1.0);
-        let composure =
-            (effective_skill(player, player.skills.mental.composure, mental) / 20.0)
-                .clamp(0.02, 1.0);
-        let concentration =
-            (effective_skill(player, player.skills.mental.concentration, mental) / 20.0)
-                .clamp(0.02, 1.0);
-        let flair = (effective_skill(player, player.skills.mental.flair, mental) / 20.0)
-            .clamp(0.0, 1.0);
-        let long_shots =
-            (effective_skill(player, player.skills.technical.long_shots, tech) / 20.0)
-                .clamp(0.02, 1.0);
-        let crossing =
-            (effective_skill(player, player.skills.technical.crossing, tech) / 20.0)
-                .clamp(0.02, 1.0);
+        let vision =
+            (effective_skill(player, player.skills.mental.vision, mental) / 20.0).clamp(0.02, 1.0);
+        let composure = (effective_skill(player, player.skills.mental.composure, mental) / 20.0)
+            .clamp(0.02, 1.0);
+        let concentration = (effective_skill(player, player.skills.mental.concentration, mental)
+            / 20.0)
+            .clamp(0.02, 1.0);
+        let flair =
+            (effective_skill(player, player.skills.mental.flair, mental) / 20.0).clamp(0.0, 1.0);
+        let long_shots = (effective_skill(player, player.skills.technical.long_shots, tech) / 20.0)
+            .clamp(0.02, 1.0);
+        let crossing = (effective_skill(player, player.skills.technical.crossing, tech) / 20.0)
+            .clamp(0.02, 1.0);
         // Availability factor — independent of `effective_skill`'s
         // condition handling. Captures chronic fitness (long-term shape)
         // and jadedness (cumulative load not yet recovered). Lightly
@@ -1108,7 +1227,11 @@ impl FoulResolver {
         let ball = field.ball.position;
         let to_goal = Vector3::new(goal.x - ball.x, goal.y - ball.y, 0.0);
         let reach = to_goal.norm();
-        let dir = if reach > 0.0 { to_goal / reach } else { to_goal };
+        let dir = if reach > 0.0 {
+            to_goal / reach
+        } else {
+            to_goal
+        };
         let across = |p: &MatchPlayer| {
             let rel = Vector3::new(p.position.x - ball.x, p.position.y - ball.y, 0.0);
             let along = rel.dot(&dir);
@@ -1291,6 +1414,775 @@ impl PlayerEventDispatcher {
         out
     }
 
+    /// The dead-ball guards that stop any touch while the ball is in the
+    /// net or waiting for a restart. Returns the console's refusal line
+    /// when the event may not touch it.
+    fn dead_ball_refusal(event: &PlayerEvent, field: &MatchField) -> Option<&'static str> {
+        // The ball is in the net: the whistle has gone and nothing anybody
+        // does with it counts.
+        //
+        // This is a one-tick window — `handle_goal_reset` freezes the world
+        // at the end of the same tick the goal is scored in — but the events
+        // queued during that tick are still waiting to be dispatched, and
+        // several of them WRITE the ball: a keeper beaten on his line is
+        // within `KICKABLE_DISTANCE` of a ball that has just crossed it, so a
+        // pass or a clearance he asked for a moment earlier would drag it
+        // straight back out of the goal. (The old engine hid this by
+        // teleporting everybody into formation mid-dispatch, so the reach
+        // check failed by accident.)
+        //
+        // Allow-list rather than deny-list: `Goal` and `Assist` ARE the goal
+        // — they are queued by the goal handler itself and credit it — and
+        // the rest are bookkeeping the goal does not invalidate.
+        if field.ball.in_net.is_some() {
+            let touches_the_ball = matches!(
+                event,
+                PlayerEvent::PassTo(_)
+                    | PlayerEvent::Shoot(_)
+                    | PlayerEvent::ClearBall(_, _)
+                    | PlayerEvent::MiscuedClearance(_, _)
+                    | PlayerEvent::KnockDown(_, _)
+                    | PlayerEvent::PutOut(_, _)
+                    | PlayerEvent::MoveBall(_, _)
+                    | PlayerEvent::ClaimBall(_)
+                    | PlayerEvent::GainBall(_)
+                    | PlayerEvent::CaughtBall(_)
+                    | PlayerEvent::TakeBall(_)
+                    | PlayerEvent::TacklingBall(_)
+                    | PlayerEvent::BallCollision(_)
+                    | PlayerEvent::BallOwnerChange(_)
+                    | PlayerEvent::RequestHeading(_, _)
+                    | PlayerEvent::RequestShot(_, _)
+                    | PlayerEvent::RequestBallReceive(_)
+            );
+            if touches_the_ball {
+                return Some("the ball is in the net");
+            }
+        }
+
+        // The ball is OUT OF PLAY, waiting for its restart taker to walk to
+        // it. Nobody may touch it — see [`DeadBall`], which owns the whole
+        // argument and the trace behind it.
+        //
+        // Same shape as the `in_net` guard above and for the same reason:
+        // the ball's own update pins a dead ball and strips its owner every
+        // tick, then returns, so the ONLY way one can move is a player
+        // event dispatched afterwards. `secure_ball_for` snaps the ball to
+        // the player's feet, so each of those is a visible 1-2 m jump and a
+        // jump back on the next tick.
+        //
+        // `TakeBall` is deliberately not on the list: it sets no ball state
+        // at all (`run_for_ball`), and it is how `tick_awaited_restart`
+        // keeps sending the taker. It is still refused for everybody else,
+        // because twenty-one players converging on a ball they may not
+        // touch is the other half of the same artefact.
+        let taker = field.ball.awaiting_restart.map(|r| r.taker_id)?;
+        let touches_the_ball = matches!(
+            event,
+            PlayerEvent::PassTo(_)
+                | PlayerEvent::Shoot(_)
+                | PlayerEvent::ClearBall(_, _)
+                | PlayerEvent::MiscuedClearance(_, _)
+                | PlayerEvent::KnockDown(_, _)
+                | PlayerEvent::PutOut(_, _)
+                | PlayerEvent::MoveBall(_, _)
+                | PlayerEvent::ClaimBall(_)
+                | PlayerEvent::GainBall(_)
+                | PlayerEvent::CaughtBall(_)
+                | PlayerEvent::TacklingBall(_)
+                | PlayerEvent::BallCollision(_)
+                | PlayerEvent::BallOwnerChange(_)
+                | PlayerEvent::RequestHeading(_, _)
+                | PlayerEvent::RequestShot(_, _)
+                | PlayerEvent::RequestBallReceive(_)
+        ) || matches!(event, PlayerEvent::TakeBall(id) if *id != taker);
+        if !touches_the_ball {
+            return None;
+        }
+        // Counted BEFORE the arm is consulted, so `OF_DEAD_BALL=off`
+        // reports the same pressure it then goes on to apply.
+        #[cfg(feature = "match-logs")]
+        {
+            let from_goalkeeper = Self::actor_of(event).is_some_and(|id| {
+                field
+                    .players
+                    .iter()
+                    .any(|p| p.id == id && p.tactical_position.current_position.is_goalkeeper())
+            });
+            crate::mid_run_diag::RestartCensus::note_dead_ball_event(from_goalkeeper);
+        }
+        DeadBall::armed().then_some("the ball is dead, waiting for its restart")
+    }
+
+    /// The pass strike and everything it books: reach, offside, pressure,
+    /// cross classification, lane census and the ball's pass metadata.
+    fn dispatch_pass_to(
+        pass_event_model: PassingEventContext,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        match_data: &mut ResultMatchPositionData,
+        refusal: &mut Option<&'static str>,
+        remaining_events: &mut Vec<Event>,
+    ) {
+        #[cfg(feature = "match-logs")]
+        GoalKickCensus::note_intent(
+            &mut field.ball.goal_kick_track,
+            pass_event_model.from_player_id,
+            GoalKickRelease::intent_of(pass_event_model.reason),
+        );
+        // You can only kick a ball you can reach — across the
+        // grass, and up the vertical axis. Without the first, a
+        // player in a passing state rewrote the ball's velocity
+        // from anywhere on the pitch (see `KICKABLE_DISTANCE`);
+        // without the second, a Running-state midfielder passed
+        // it off the top of his own head. Ownership isn't
+        // required: a first-time pass off a ball arriving at your
+        // feet is legal, and the ball settles to its owner
+        // anyway, so reach covers both.
+        if !Self::strike_in_reach(
+            StrikeKind::Pass,
+            pass_event_model.from_player_id,
+            false,
+            field,
+            context.current_tick(),
+        ) {
+            *refusal = Some(StrikeKind::Pass.refusal());
+            return;
+        }
+        if Self::offside_on_strike(
+            pass_event_model.from_player_id,
+            field,
+            context,
+            remaining_events,
+        ) {
+            return;
+        }
+        #[cfg(feature = "match-logs")]
+        context
+            .forward_census
+            .borrow_mut()
+            .note_pass_struck(pass_event_model.from_player_id);
+        let snapshot = Self::prepare_pass_snapshot(&pass_event_model, field, context, match_data);
+        let passer_id = pass_event_model.from_player_id;
+        let pass_target = pass_event_model.pass_target;
+        let (passer_position, passer_side, passer_team) = field
+            .get_player(passer_id)
+            .map(|p| (p.position, p.side, p.team_id))
+            .unwrap_or((Vector3::zeros(), None, 0));
+        // ── Pressure producer ─────────────────────────────────
+        // Opponents within the pressing radius (~8u) of the
+        // passer at emit time are credited with a pressure
+        // event. Per-player cooldown prevents a single
+        // shadowing defender from generating one pressure per
+        // tick across a multi-second press burst. Pressers are
+        // stashed on the ball so the interception handler can
+        // promote them to "successful pressure" if the same
+        // pass is intercepted within the response window.
+        Self::credit_pressures_on_pass(passer_id, passer_position, passer_team, field, context);
+        let shape = Self::strike_pass_shape(
+            pass_event_model,
+            passer_position,
+            passer_side,
+            pass_target,
+            field,
+            context,
+        );
+        let declared_cross = shape.declared_cross;
+        let was_cross = shape.was_cross;
+        let booked_cross = shape.booked_cross;
+        #[cfg(feature = "match-logs")]
+        DeliveryCensus::on_strike(
+            field,
+            context,
+            passer_id,
+            declared_cross,
+            booked_cross,
+            shape.lofted,
+            pass_target,
+        );
+        // A modelled cross arms the open-play aerial contest: the
+        // delivery is aimed at a patch of the box, so it must be
+        // contestable rather than reserved for one named receiver
+        // (see `resolve_cross_contest`). Ground deliveries resolve
+        // through the normal reception path and stay disarmed.
+        field.ball.cross_contest_resolved =
+            !declared_cross.map(|ct| ct.is_lofted()).unwrap_or(false);
+        field.ball.pending_cross_type = declared_cross;
+        // Who closed the crosser, in which state, and whether he
+        // stood on the delivery's line — `CrossPriceCensus`.
+        #[cfg(feature = "match-logs")]
+        Self::note_cross_price(
+            field,
+            context,
+            passer_id,
+            passer_position,
+            passer_team,
+            pass_target,
+            declared_cross,
+            passer_side,
+        );
+        Self::apply_pass_metadata(
+            field,
+            context,
+            passer_id,
+            passer_position,
+            passer_team,
+            pass_target,
+            was_cross,
+            booked_cross,
+            declared_cross,
+            snapshot,
+        );
+    }
+
+    /// Build the offside snapshot and record the pass intent on the
+    /// match sheet.
+    fn prepare_pass_snapshot(
+        pass_event_model: &PassingEventContext,
+        field: &MatchField,
+        context: &mut MatchContext,
+        match_data: &mut ResultMatchPositionData,
+    ) -> Option<OffsideSnapshot> {
+        // Build (but don't yet fire) the offside snapshot. The
+        // resolver fires only when the receiver becomes active —
+        // touches the ball, claims, or actively challenges. This
+        // matches how offside is judged in real football: the
+        // referee waits to see if the receiver gets involved
+        // before raising the flag.
+        //
+        // Set-piece restarts (goal kicks, corners, throw-ins)
+        // are exempt by rule. Normal goalkeeper open-play passes
+        // are NOT exempt — the previous "exempt all GK passes"
+        // shortcut hid genuine offsides on long GK clearances.
+        let snapshot = Self::build_offside_snapshot(
+            pass_event_model.from_player_id,
+            field.ball.pass_origin_restart,
+            field,
+            context.current_tick(),
+        );
+        Self::note_offside_trap(
+            pass_event_model.from_player_id,
+            pass_event_model.to_player_id,
+            snapshot.as_ref(),
+            field,
+            context,
+        );
+        if match_data.is_tracking_events() {
+            match_data.add_pass_event(
+                context.total_match_time,
+                pass_event_model.from_player_id,
+                pass_event_model.to_player_id,
+            );
+        }
+        snapshot
+    }
+
+    /// Strike the pass and classify its shape as the cross bookkeeping
+    /// reads it.
+    fn strike_pass_shape(
+        pass_event_model: PassingEventContext,
+        passer_position: Vector3<f32>,
+        passer_side: Option<PlayerSide>,
+        pass_target: Vector3<f32>,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) -> PassShape {
+        // A delivery the crossing model built declares itself. Any
+        // OTHER pass is still geometry-classified at emit time —
+        // passer in a wide channel delivering toward the box — so
+        // it picks up the dedicated crossing-skill error term (a
+        // low-crossing player's cross sails harder off-target than
+        // their open-play pass would).
+        let declared_cross = pass_event_model.cross_type;
+        let was_cross = declared_cross.is_some()
+            || passer_side.is_some_and(|side| {
+                CrossModel::is_cross(passer_position, pass_target, side, context)
+            });
+        let lofted = Self::handle_pass_to_event(pass_event_model, field, context, was_cross);
+        // **Booked** as a cross by what it is, once its shape is known:
+        // a delivery the model built, a corner, or a ball lofted — or
+        // driven or pulled back — into the box from wide. The flag
+        // above stays what the strike and the keeper read.
+        let booked_cross = if MatchContext::cross_booking_off() {
+            was_cross
+        } else {
+            declared_cross.is_some()
+                || passer_side.is_some_and(|side| {
+                    CrossModel::books_as_cross(passer_position, pass_target, lofted, side, context)
+                })
+        };
+        PassShape {
+            declared_cross,
+            was_cross,
+            booked_cross,
+            lofted,
+        }
+    }
+
+    /// Tag the struck pass on the ball: passer window, lane census, cross
+    /// booking, offside snapshot and the restart origin that survives the
+    /// kick.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_pass_metadata(
+        field: &mut MatchField,
+        context: &MatchContext,
+        passer_id: u32,
+        passer_position: Vector3<f32>,
+        passer_team: u32,
+        pass_target: Vector3<f32>,
+        was_cross: bool,
+        booked_cross: bool,
+        declared_cross: Option<CrossType>,
+        snapshot: Option<OffsideSnapshot>,
+    ) {
+        // Tag the ball with the passer for pass-accuracy
+        // accounting. Lives for a short window (150 ticks)
+        // and is cleared on opponent touch — see ball.rs
+        // `pending_pass_passer` docs.
+        #[cfg(feature = "match-logs")]
+        {
+            use crate::r#match::engine::ball::ball::ownership::reception_diag;
+            reception_diag::EMITTED.fetch_add(1, Ordering::Relaxed);
+            if field.ball.pending_pass_passer.is_some() {
+                reception_diag::SUPERSEDED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        field.ball.pending_pass_passer = Some(passer_id);
+        field.ball.pending_pass_set_tick = context.current_tick();
+        #[cfg(feature = "match-logs")]
+        Self::note_pass_lane(
+            field,
+            context,
+            passer_id,
+            passer_position,
+            passer_team,
+            pass_target,
+            was_cross,
+        );
+        let _ = declared_cross;
+        field.ball.pending_pass_origin = Some(passer_position);
+        field.ball.pending_pass_target = Some(pass_target);
+        field.ball.pending_pass_was_cross = was_cross;
+        if booked_cross {
+            if let Some(passer) = field.get_player_mut(passer_id) {
+                passer.statistics.add_cross_attempt();
+            }
+            if !MatchContext::cross_booking_off() {
+                field.ball.on_cross_struck(passer_id, passer_team);
+            }
+        }
+        field.ball.offside_snapshot = snapshot;
+        // After the kick, restart context decays back to OpenPlay —
+        // EXCEPT a corner cross, which keeps its Corner origin through
+        // the flight. That keeps the pushed-up centre-backs in
+        // AttackingCorner (is_team_attacking_corner) and lets the
+        // discrete corner aerial contest fire on the in-flight
+        // delivery (engine `resolve_corner_contest`); the origin
+        // decays to OpenPlay on the next touch / interception as usual.
+        if !(was_cross && field.ball.pass_origin_restart == PassOriginRestart::Corner) {
+            field.ball.pass_origin_restart = PassOriginRestart::OpenPlay;
+        }
+    }
+
+    /// The crosser's closest marker, the state he was in and whether he
+    /// stood on the delivery's line. Diagnostic only.
+    #[cfg(feature = "match-logs")]
+    fn note_cross_price(
+        field: &MatchField,
+        context: &MatchContext,
+        passer_id: u32,
+        passer_position: Vector3<f32>,
+        passer_team: u32,
+        pass_target: Vector3<f32>,
+        declared_cross: Option<CrossType>,
+        passer_side: Option<PlayerSide>,
+    ) {
+        if let Some(cross_type) = declared_cross
+            && field.ball.pass_origin_restart == PassOriginRestart::OpenPlay
+            && field.get_player(passer_id).is_some()
+            && let Some(side) = passer_side
+        {
+            use crate::r#match::engine::ball::ball::block_diag::CrossPriceCensus;
+            use crate::r#match::engine::ball::ball::contest::pass_block::{PassBlock, StrikeLine};
+            let minute = sc::minute_from_ticks(context.current_tick());
+            let across = Vector3::new(
+                pass_target.x - passer_position.x,
+                pass_target.y - passer_position.y,
+                0.0,
+            );
+            if let Some(direction) = across.try_normalize(1.0e-4) {
+                let (pace, lift) = cross_type.launch(across.norm(), &context.conditions);
+                let line = StrikeLine {
+                    from: passer_position,
+                    direction,
+                    pace,
+                    lift,
+                    delivery: PassBlock::technique(
+                        field.get_player(passer_id).expect("checked above"),
+                        minute,
+                        true,
+                    ),
+                    defending_side: side.opposite(),
+                };
+                let field_width = context.field_size.width as f32;
+                let closer = field
+                    .players
+                    .iter()
+                    .filter(|p| {
+                        p.team_id != passer_team
+                            && !p.tactical_position.current_position.is_goalkeeper()
+                    })
+                    .map(|p| (p, (p.position - passer_position).magnitude()))
+                    .filter(|(_, gap)| *gap < CrossPriceCensus::CLOSER_RADIUS)
+                    .min_by(|a, b| a.1.total_cmp(&b.1));
+                match closer {
+                    Some((p, _)) => {
+                        let on_line = PassBlock::reaches(&line, p.position, field_width);
+                        CrossPriceCensus::note_strike(p.state.compact_id() as usize, on_line);
+                    }
+                    None => CrossPriceCensus::note_strike(CrossPriceCensus::NO_CLOSER, false),
+                }
+            }
+        }
+    }
+
+    /// The lane census at the strike: who could intercept, and how the
+    /// block price puts the passer's state on this exact pass.
+    #[cfg(feature = "match-logs")]
+    fn note_pass_lane(
+        field: &mut MatchField,
+        context: &MatchContext,
+        passer_id: u32,
+        passer_position: Vector3<f32>,
+        passer_team: u32,
+        pass_target: Vector3<f32>,
+        was_cross: bool,
+    ) {
+        use crate::r#match::engine::ball::ball::CONTROL_DISTANCE;
+        use crate::r#match::engine::ball::ball::contest::interception::InterceptionContest;
+        let lane = pass_target - passer_position;
+        let length = (lane.x * lane.x + lane.y * lane.y).sqrt().max(1.0e-3);
+        let (dx, dy) = (lane.x / length, lane.y / length);
+        // The passer's own pricing of this lane, as
+        // `PassEvaluator::calculate_interception_risk` does it.
+        let minute = sc::minute_from_ticks(context.current_tick());
+        let pace = Ball::pass_pace(length, &context.conditions);
+        let delivery = field
+            .get_player(passer_id)
+            .map_or(0.5, |p| sc::passing_execution(p, minute));
+        let mut risk = 0.0_f32;
+        let mut at_strike: Vec<(u32, f32)> = Vec::new();
+        for p in field.players.iter().filter(|p| p.team_id != passer_team) {
+            let ox = p.position.x - passer_position.x;
+            let oy = p.position.y - passer_position.y;
+            let along = ox * dx + oy * dy;
+            let perp = if along > 0.0 && along < length {
+                (ox - along * dx).hypot(oy - along * dy)
+            } else {
+                f32::MAX
+            };
+            at_strike.push((p.id, perp));
+            if along <= 0.0 || along >= length - CONTROL_DISTANCE {
+                continue;
+            }
+            let read = sc::interception(p, minute);
+            let arrives = along / pace;
+            let miss = InterceptionContest::closing_miss(
+                perp,
+                arrives,
+                read,
+                p.max_speed_with_condition_cached(),
+            );
+            if miss < InterceptionContest::REACH {
+                risk = risk.max(InterceptionContest::chance(
+                    miss,
+                    pace,
+                    arrives,
+                    1.0,
+                    read,
+                    delivery,
+                    InterceptionContest::is_set_for_it(perp),
+                ));
+            }
+        }
+        let mut census = crate::lane_diag::LaneCensus::open(passer_team, risk);
+        for (id, perp) in at_strike {
+            census.note_at_strike(id, perp);
+        }
+        field.ball.lane_census = Some(census);
+        // The block price the striker's lane price puts on this
+        // exact pass, and the state he struck it from.
+        if let Some(passer) = field.get_player(passer_id)
+            && let Some(side) = passer.side
+        {
+            use crate::r#match::MatchPlayerLite;
+            use crate::r#match::engine::ball::ball::block_diag::StrikeOrigin;
+            use crate::r#match::engine::ball::ball::contest::pass_block::{PassBlock, StrikeLine};
+            let line = StrikeLine {
+                from: passer_position,
+                direction: Vector3::new(dx, dy, 0.0),
+                pace,
+                lift: 0.0,
+                delivery: PassBlock::technique(passer, minute, was_cross),
+                defending_side: side.opposite(),
+            };
+            let field_width = context.field_size.width as f32;
+            let price = field
+                .players
+                .iter()
+                .filter(|p| p.team_id != passer_team)
+                .map(|p| {
+                    let lite = MatchPlayerLite {
+                        id: p.id,
+                        position: p.position,
+                        tactical_positions: p.tactical_position.current_position,
+                    };
+                    PassBlock::priced(&line, &lite, p, minute, field_width)
+                })
+                .fold(0.0_f32, f32::max);
+            field.ball.strike_origin = Some(StrikeOrigin::pass(
+                passer.state.compact_id() as usize,
+                price,
+            ));
+        }
+    }
+
+    /// The shot strike: reach, offside, key-pass linking, the giveaway
+    /// and failed-claim ledgers, then the shot itself.
+    fn dispatch_shoot(
+        shoot_event_model: ShootingEventContext,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        match_data: &mut ResultMatchPositionData,
+        refusal: &mut Option<&'static str>,
+        _remaining_events: &mut Vec<Event>,
+    ) {
+        // **The guard this handler never had.** `PassTo` has
+        // carried a reach check for a long time and `Shoot` had
+        // none at all — any player in a shooting state rewrote
+        // the ball's velocity from wherever he stood, at whatever
+        // height the ball was, including out of the air over his
+        // own head. Everything below this line credits a shot, so
+        // it has to come first.
+        if !Self::strike_in_reach(
+            StrikeKind::Shot,
+            shoot_event_model.from_player_id,
+            // The shot says what it is: a header is a header
+            // whatever state the emitter has already moved on to.
+            shoot_event_model.shot_type == ShotType::Header,
+            field,
+            context.current_tick(),
+        ) {
+            *refusal = Some(StrikeKind::Shot.refusal());
+            return;
+        }
+        if Self::offside_on_strike(
+            shoot_event_model.from_player_id,
+            field,
+            context,
+            _remaining_events,
+        ) {
+            return;
+        }
+        // Capture field dimensions up-front so the log block
+        // below (which runs under &Player borrow) doesn't try
+        // to re-borrow field.size. Feature-gated so the capture
+        // compiles away when logs are off.
+        #[cfg(feature = "match-logs")]
+        let field_w = field.size.width as f32;
+        #[cfg(feature = "match-logs")]
+        let field_h = field.size.height as f32;
+
+        // Record shot at team level for cooldown. Log reason +
+        // source context only when `match-logs` feature is
+        // enabled (see `core/src/match/logs.rs`).
+        if let Some(player) = field.get_player(shoot_event_model.from_player_id) {
+            let team_id = player.team_id;
+            let tick = context.current_tick();
+            #[cfg(feature = "match-logs")]
+            {
+                let pos = player.position;
+                let goal_dist = if let Some(side) = player.side {
+                    let goal_x = match side {
+                        PlayerSide::Left => field_w,
+                        PlayerSide::Right => 0.0,
+                    };
+                    let goal_y = field_h / 2.0;
+                    ((pos.x - goal_x).powi(2) + (pos.y - goal_y).powi(2)).sqrt()
+                } else {
+                    0.0
+                };
+                let pos_tag = match player.tactical_position.current_position.position_group() {
+                    PlayerFieldPositionGroup::Goalkeeper => "GK",
+                    PlayerFieldPositionGroup::Defender => "DEF",
+                    PlayerFieldPositionGroup::Midfielder => "MID",
+                    PlayerFieldPositionGroup::Forward => "FWD",
+                };
+                match_log_info!(
+                    "SHOT team={} pos={} player={} state={} reason={} dist={:.1} tick={}",
+                    team_id,
+                    pos_tag,
+                    shoot_event_model.from_player_id,
+                    player.state,
+                    shoot_event_model.reason,
+                    goal_dist,
+                    tick
+                );
+            }
+            context.coach_for_team_mut(team_id).record_shot(tick);
+        }
+        if let Some(player) = field.get_player_mut(shoot_event_model.from_player_id) {
+            player.pending_shot_reason = None;
+        }
+        let shooter_id = shoot_event_model.from_player_id;
+        let now_tick = context.current_tick();
+        let shooter_team = field.get_player(shooter_id).map(|p| p.team_id);
+        let direct_assister_id = Self::credit_key_pass(shooter_id, shooter_team, field, context);
+        Self::charge_giveaway_on_shot(shooter_team, now_tick, field, context);
+        Self::charge_failed_claim_to_shot(shooter_team, now_tick, field, context);
+        Self::handle_shoot_event(
+            shoot_event_model,
+            field,
+            context,
+            match_data,
+            direct_assister_id,
+        );
+    }
+
+    /// Opta's key pass: the last completed pass before a shot, with no
+    /// time window beyond one possession phase. Returns the direct
+    /// assister when the link credits.
+    fn credit_key_pass(
+        shooter_id: u32,
+        shooter_team: Option<u32>,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) -> Option<u32> {
+        // ── Key-pass linking ──────────────────────────────────
+        // The shooter just received a completed pass within the
+        // key-pass window — the passer earns a key pass. Reads
+        // `last_completed_pass_*` (populated by
+        // `credit_completed_pass` when the receiver claimed the
+        // ball) rather than `pending_pass_*` (which the
+        // completion path already cleared). Without the
+        // separate snapshot the receive-then-shoot sequence
+        // would silently drop the assist link.
+        //
+        // To avoid double-credit when the same passer also
+        // appears as `pending_pass_passer` (can happen if the
+        // shooter intercepted a NEW outgoing pass and shot in
+        // the same tick), null `last_completed_pass_*` after
+        // crediting.
+        //
+        // Capture the direct assister BEFORE clearing — the xG
+        // buildup distribution in `handle_shoot_event` needs it
+        // to exclude the assister from buildup credit. Without
+        // this snapshot, the clear below races the buildup read.
+        let now_tick = context.current_tick();
+        // Opta's key-pass definition has NO time window: it is simply
+        // the last pass before a shot. A 3s cap excluded every
+        // receive-turn-carry-shoot sequence — the engine's
+        // dominant chance shape — so only ~1.2 key passes per
+        // TEAM were tagged against a real ~9, starving the
+        // creative credit that keeps forwards and midfielders in
+        // their rating bands. 12s still bounds it to one
+        // possession phase; the possession-change nulls below do
+        // the real work.
+        const KEY_PASS_WINDOW_TICKS: u64 = 1200;
+        let mut direct_assister_id: Option<u32> = None;
+        #[cfg(feature = "match-logs")]
+        {
+            key_pass_diag::SHOTS.fetch_add(1, Ordering::Relaxed);
+            if field.ball.last_completed_pass_receiver_id.is_none() {
+                key_pass_diag::NO_LINK.fetch_add(1, Ordering::Relaxed);
+            }
+            // How the shooter came by the ball. The key-pass
+            // counter says a pass DIDN'T feed this shot; this
+            // says what did instead.
+            key_pass_diag::SUPPLY[field.ball.possession_source.index()]
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        if let (Some(passer_id), Some(receiver_id)) = (
+            field.ball.last_completed_pass_passer_id,
+            field.ball.last_completed_pass_receiver_id,
+        ) {
+            let elapsed = now_tick.saturating_sub(field.ball.last_completed_pass_tick);
+            let in_window = elapsed <= KEY_PASS_WINDOW_TICKS;
+            let receiver_is_shooter = receiver_id == shooter_id;
+            let passer_not_shooter = passer_id != shooter_id;
+            let passer_team = field.get_player(passer_id).map(|p| p.team_id);
+            let same_team = passer_team.is_some() && passer_team == shooter_team;
+            if in_window && receiver_is_shooter && passer_not_shooter && same_team {
+                if let Some(passer) = field.get_player_mut(passer_id) {
+                    passer.statistics.add_key_pass();
+                }
+                direct_assister_id = Some(passer_id);
+                #[cfg(feature = "match-logs")]
+                key_pass_diag::CREDITED.fetch_add(1, Ordering::Relaxed);
+            }
+            #[cfg(feature = "match-logs")]
+            {
+                if !receiver_is_shooter {
+                    key_pass_diag::WRONG_RECEIVER.fetch_add(1, Ordering::Relaxed);
+                } else if !in_window {
+                    key_pass_diag::STALE_WINDOW.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            // Single-credit guarantee: even if the shot resolves
+            // into a goal that fires another event, the link is
+            // gone after the first read. Only clear on a SUCCESSFUL
+            // credit — clearing after a failed test meant one
+            // rebound or blocked effort destroyed the link for the
+            // genuine next attempt in the same phase.
+            if direct_assister_id.is_some() {
+                field.ball.last_completed_pass_passer_id = None;
+                field.ball.last_completed_pass_receiver_id = None;
+            }
+        }
+        direct_assister_id
+    }
+
+    /// A keeper who has just flapped a cross is charged the moment the
+    /// attacking side gets a shot away from it. Held on the ball (not
+    /// promoted into the error lanes) so the rating bills this incident
+    /// exactly once.
+    fn charge_failed_claim_to_shot(
+        shooter_team: Option<u32>,
+        now_tick: u64,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) {
+        // ── Failed claim leading to shot ──────────────────────
+        const FAILED_CLAIM_WINDOW_TICKS: u64 = 600; // ~6s
+        if let Some(gk_id) = field.ball.pending_failed_claim_gk_id {
+            #[cfg(feature = "match-logs")]
+            gk_claim_diag::FLAP_SHOTS_SEEN.fetch_add(1, Ordering::Relaxed);
+            let in_window = now_tick.saturating_sub(field.ball.pending_failed_claim_tick)
+                <= FAILED_CLAIM_WINDOW_TICKS;
+            let gk_team = field.get_player(gk_id).map(|p| p.team_id);
+            if in_window && gk_team.is_some() && gk_team != shooter_team {
+                if !field.ball.pending_failed_claim_charged {
+                    if let Some(gk) = field.get_player_mut(gk_id) {
+                        gk.statistics.note_gk_failed_claim_to_shot();
+                    }
+                    context.psychology.record_negative(
+                        gk_id,
+                        NegativeEvent::ErrorLeadingToShot,
+                        now_tick,
+                    );
+                    #[cfg(feature = "match-logs")]
+                    gk_claim_diag::FLAP_TO_SHOT.fetch_add(1, Ordering::Relaxed);
+                    field.ball.pending_failed_claim_charged = true;
+                }
+            } else {
+                #[cfg(feature = "match-logs")]
+                gk_claim_diag::FLAP_DROPPED.fetch_add(1, Ordering::Relaxed);
+                field.ball.pending_failed_claim_gk_id = None;
+                field.ball.pending_failed_claim_charged = false;
+            }
+        }
+    }
+
     /// A man who was offside when a team-mate last played the ball plays
     /// it now without ever having had it — a header, a volley, a touch on.
     /// The flag goes up instead of the strike. A man who owns the ball was
@@ -1389,6 +2281,18 @@ impl PlayerEventDispatcher {
         false
     }
 
+    /// The four ball-away events share one strike path; classified here
+    /// so the dispatcher can route them before the main event table.
+    fn is_clearance_event(event: &PlayerEvent) -> bool {
+        matches!(
+            event,
+            PlayerEvent::ClearBall(_, _)
+                | PlayerEvent::MiscuedClearance(_, _)
+                | PlayerEvent::KnockDown(_, _)
+                | PlayerEvent::PutOut(_, _)
+        )
+    }
+
     fn dispatch_one(
         event: PlayerEvent,
         field: &mut MatchField,
@@ -1397,806 +2301,235 @@ impl PlayerEventDispatcher {
         refusal: &mut Option<&'static str>,
     ) -> Vec<Event> {
         let mut remaining_events = Vec::new();
-
         if context.logging_enabled {
             match event {
                 PlayerEvent::TakeBall(_) | PlayerEvent::ClaimBall(_) => {}
                 _ => debug!("Player event: {:?}, tick = {}", event, context.time.time),
             }
         }
-
-        // The ball is in the net: the whistle has gone and nothing anybody
-        // does with it counts.
-        //
-        // This is a one-tick window — `handle_goal_reset` freezes the world
-        // at the end of the same tick the goal is scored in — but the events
-        // queued during that tick are still waiting to be dispatched, and
-        // several of them WRITE the ball: a keeper beaten on his line is
-        // within `KICKABLE_DISTANCE` of a ball that has just crossed it, so a
-        // pass or a clearance he asked for a moment earlier would drag it
-        // straight back out of the goal. (The old engine hid this by
-        // teleporting everybody into formation mid-dispatch, so the reach
-        // check failed by accident.)
-        //
-        // Allow-list rather than deny-list: `Goal` and `Assist` ARE the goal
-        // — they are queued by the goal handler itself and credit it — and
-        // the rest are bookkeeping the goal does not invalidate.
-        if field.ball.in_net.is_some() {
-            let touches_the_ball = matches!(
-                event,
-                PlayerEvent::PassTo(_)
-                    | PlayerEvent::Shoot(_)
-                    | PlayerEvent::ClearBall(_, _)
-                    | PlayerEvent::MiscuedClearance(_, _)
-                    | PlayerEvent::KnockDown(_, _)
-                    | PlayerEvent::PutOut(_, _)
-                    | PlayerEvent::MoveBall(_, _)
-                    | PlayerEvent::ClaimBall(_)
-                    | PlayerEvent::GainBall(_)
-                    | PlayerEvent::CaughtBall(_)
-                    | PlayerEvent::TakeBall(_)
-                    | PlayerEvent::TacklingBall(_)
-                    | PlayerEvent::BallCollision(_)
-                    | PlayerEvent::BallOwnerChange(_)
-                    | PlayerEvent::RequestHeading(_, _)
-                    | PlayerEvent::RequestShot(_, _)
-                    | PlayerEvent::RequestBallReceive(_)
-            );
-            if touches_the_ball {
-                *refusal = Some("the ball is in the net");
-                return remaining_events;
-            }
+        if let Some(why) = Self::dead_ball_refusal(&event, field) {
+            *refusal = Some(why);
+            return remaining_events;
         }
-
-        // The ball is OUT OF PLAY, waiting for its restart taker to walk to
-        // it. Nobody may touch it — see [`DeadBall`], which owns the whole
-        // argument and the trace behind it.
-        //
-        // Same shape as the `in_net` guard above and for the same reason:
-        // the ball's own update pins a dead ball and strips its owner every
-        // tick, then returns, so the ONLY way one can move is a player
-        // event dispatched afterwards. `secure_ball_for` snaps the ball to
-        // the player's feet, so each of those is a visible 1-2 m jump and a
-        // jump back on the next tick.
-        //
-        // `TakeBall` is deliberately not on the list: it sets no ball state
-        // at all (`run_for_ball`), and it is how `tick_awaited_restart`
-        // keeps sending the taker. It is still refused for everybody else,
-        // because twenty-one players converging on a ball they may not
-        // touch is the other half of the same artefact.
-        if let Some(taker) = field.ball.awaiting_restart.map(|r| r.taker_id) {
-            let touches_the_ball = matches!(
-                event,
-                PlayerEvent::PassTo(_)
-                    | PlayerEvent::Shoot(_)
-                    | PlayerEvent::ClearBall(_, _)
-                    | PlayerEvent::MiscuedClearance(_, _)
-                    | PlayerEvent::KnockDown(_, _)
-                    | PlayerEvent::PutOut(_, _)
-                    | PlayerEvent::MoveBall(_, _)
-                    | PlayerEvent::ClaimBall(_)
-                    | PlayerEvent::GainBall(_)
-                    | PlayerEvent::CaughtBall(_)
-                    | PlayerEvent::TacklingBall(_)
-                    | PlayerEvent::BallCollision(_)
-                    | PlayerEvent::BallOwnerChange(_)
-                    | PlayerEvent::RequestHeading(_, _)
-                    | PlayerEvent::RequestShot(_, _)
-                    | PlayerEvent::RequestBallReceive(_)
-            ) || matches!(event, PlayerEvent::TakeBall(id) if id != taker);
-            if touches_the_ball {
-                // Counted BEFORE the arm is consulted, so `OF_DEAD_BALL=off`
-                // reports the same pressure it then goes on to apply.
-                #[cfg(feature = "match-logs")]
-                {
-                    let from_goalkeeper = Self::actor_of(&event).is_some_and(|id| {
-                        field.players.iter().any(|p| {
-                            p.id == id && p.tactical_position.current_position.is_goalkeeper()
-                        })
-                    });
-                    crate::mid_run_diag::RestartCensus::note_dead_ball_event(from_goalkeeper);
-                }
-                if DeadBall::armed() {
-                    *refusal = Some("the ball is dead, waiting for its restart");
-                    return remaining_events;
-                }
-            }
+        if Self::is_clearance_event(&event) {
+            Self::dispatch_clearance_event(event, field, context, refusal, &mut remaining_events);
+            return remaining_events;
         }
-
         match event {
-            PlayerEvent::Goal(player_id, is_auto_goal) => {
-                Self::handle_goal_event(player_id, is_auto_goal, field, context);
-            }
-            PlayerEvent::Assist(player_id) => {
-                Self::handle_assist_event(player_id, field, context);
-            }
-            PlayerEvent::BallCollision(player_id) => {
-                Self::handle_ball_collision_event(player_id, field);
-            }
-            PlayerEvent::TacklingBall(player_id) => {
-                Self::record_team_possession_if_switch(player_id, field, context);
-                Self::handle_tackling_ball_event(player_id, field, context);
-            }
-            PlayerEvent::BallOwnerChange(player_id) => {
-                Self::handle_ball_owner_change_event(player_id, field, context);
-            }
-            PlayerEvent::PassTo(pass_event_model) => {
-                #[cfg(feature = "match-logs")]
-                GoalKickCensus::note_intent(
-                    &mut field.ball.goal_kick_track,
-                    pass_event_model.from_player_id,
-                    GoalKickRelease::intent_of(pass_event_model.reason),
-                );
-                // You can only kick a ball you can reach — across the
-                // grass, and up the vertical axis. Without the first, a
-                // player in a passing state rewrote the ball's velocity
-                // from anywhere on the pitch (see `KICKABLE_DISTANCE`);
-                // without the second, a Running-state midfielder passed
-                // it off the top of his own head. Ownership isn't
-                // required: a first-time pass off a ball arriving at your
-                // feet is legal, and the ball settles to its owner
-                // anyway, so reach covers both.
-                if !Self::strike_in_reach(
-                    StrikeKind::Pass,
-                    pass_event_model.from_player_id,
-                    false,
-                    field,
-                    context.current_tick(),
-                ) {
-                    *refusal = Some(StrikeKind::Pass.refusal());
-                    return remaining_events;
-                }
-                if Self::offside_on_strike(pass_event_model.from_player_id, field, context, &mut remaining_events) {
-                    return remaining_events;
-                }
-                #[cfg(feature = "match-logs")]
-                context
-                    .forward_census
-                    .borrow_mut()
-                    .note_pass_struck(pass_event_model.from_player_id);
-                // Build (but don't yet fire) the offside snapshot. The
-                // resolver fires only when the receiver becomes active —
-                // touches the ball, claims, or actively challenges. This
-                // matches how offside is judged in real football: the
-                // referee waits to see if the receiver gets involved
-                // before raising the flag.
-                //
-                // Set-piece restarts (goal kicks, corners, throw-ins)
-                // are exempt by rule. Normal goalkeeper open-play passes
-                // are NOT exempt — the previous "exempt all GK passes"
-                // shortcut hid genuine offsides on long GK clearances.
-                let snapshot = Self::build_offside_snapshot(
-                    pass_event_model.from_player_id,
-                    field.ball.pass_origin_restart,
-                    field,
-                    context.current_tick(),
-                );
-                Self::note_offside_trap(
-                    pass_event_model.from_player_id,
-                    pass_event_model.to_player_id,
-                    snapshot.as_ref(),
-                    field,
-                    context,
-                );
-
-                if match_data.is_tracking_events() {
-                    match_data.add_pass_event(
-                        context.total_match_time,
-                        pass_event_model.from_player_id,
-                        pass_event_model.to_player_id,
-                    );
-                }
-                let passer_id = pass_event_model.from_player_id;
-                let pass_target = pass_event_model.pass_target;
-                let (passer_position, passer_side, passer_team) = field
-                    .get_player(passer_id)
-                    .map(|p| (p.position, p.side, p.team_id))
-                    .unwrap_or((Vector3::zeros(), None, 0));
-                // ── Pressure producer ─────────────────────────────────
-                // Opponents within the pressing radius (~8u) of the
-                // passer at emit time are credited with a pressure
-                // event. Per-player cooldown prevents a single
-                // shadowing defender from generating one pressure per
-                // tick across a multi-second press burst. Pressers are
-                // stashed on the ball so the interception handler can
-                // promote them to "successful pressure" if the same
-                // pass is intercepted within the response window.
-                Self::credit_pressures_on_pass(
-                    passer_id,
-                    passer_position,
-                    passer_team,
-                    field,
-                    context,
-                );
-                // A delivery the crossing model built declares itself. Any
-                // OTHER pass is still geometry-classified at emit time —
-                // passer in a wide channel delivering toward the box — so
-                // it picks up the dedicated crossing-skill error term (a
-                // low-crossing player's cross sails harder off-target than
-                // their open-play pass would).
-                let declared_cross = pass_event_model.cross_type;
-                let was_cross = declared_cross.is_some()
-                    || passer_side.is_some_and(|side| {
-                        CrossModel::is_cross(passer_position, pass_target, side, context)
-                    });
-                let lofted =
-                    Self::handle_pass_to_event(pass_event_model, field, context, was_cross);
-                // **Booked** as a cross by what it is, once its shape is known:
-                // a delivery the model built, a corner, or a ball lofted — or
-                // driven or pulled back — into the box from wide. The flag
-                // above stays what the strike and the keeper read.
-                let booked_cross = if MatchContext::cross_booking_off() {
-                    was_cross
-                } else {
-                    declared_cross.is_some()
-                        || passer_side.is_some_and(|side| {
-                            CrossModel::books_as_cross(
-                                passer_position,
-                                pass_target,
-                                lofted,
-                                side,
-                                context,
-                            )
-                        })
-                };
-                #[cfg(feature = "match-logs")]
-                DeliveryCensus::on_strike(
-                    field,
-                    context,
-                    passer_id,
-                    declared_cross,
-                    booked_cross,
-                    lofted,
-                    pass_target,
-                );
-                // A modelled cross arms the open-play aerial contest: the
-                // delivery is aimed at a patch of the box, so it must be
-                // contestable rather than reserved for one named receiver
-                // (see `resolve_cross_contest`). Ground deliveries resolve
-                // through the normal reception path and stay disarmed.
-                field.ball.cross_contest_resolved =
-                    !declared_cross.map(|ct| ct.is_lofted()).unwrap_or(false);
-                field.ball.pending_cross_type = declared_cross;
-                // Who closed the crosser, in which state, and whether he
-                // stood on the delivery's line — `CrossPriceCensus`.
-                #[cfg(feature = "match-logs")]
-                if let Some(cross_type) = declared_cross
-                    && field.ball.pass_origin_restart == PassOriginRestart::OpenPlay
-                    && let Some(passer) = field.get_player(passer_id)
-                    && let Some(side) = passer.side
-                {
-                    use crate::r#match::engine::ball::ball::block_diag::CrossPriceCensus;
-                    use crate::r#match::engine::ball::ball::contest::pass_block::{
-                        PassBlock, StrikeLine,
-                    };
-                    let minute = sc::minute_from_ticks(context.current_tick());
-                    let across = Vector3::new(
-                        pass_target.x - passer_position.x,
-                        pass_target.y - passer_position.y,
-                        0.0,
-                    );
-                    if let Some(direction) = across.try_normalize(1.0e-4) {
-                        let (pace, lift) = cross_type.launch(across.norm(), &context.conditions);
-                        let line = StrikeLine {
-                            from: passer_position,
-                            direction,
-                            pace,
-                            lift,
-                            delivery: PassBlock::technique(passer, minute, true),
-                            defending_side: side.opposite(),
-                        };
-                        let field_width = context.field_size.width as f32;
-                        let closer = field
-                            .players
-                            .iter()
-                            .filter(|p| {
-                                p.team_id != passer_team
-                                    && !p.tactical_position.current_position.is_goalkeeper()
-                            })
-                            .map(|p| (p, (p.position - passer_position).magnitude()))
-                            .filter(|(_, gap)| *gap < CrossPriceCensus::CLOSER_RADIUS)
-                            .min_by(|a, b| a.1.total_cmp(&b.1));
-                        match closer {
-                            Some((p, _)) => {
-                                let on_line = PassBlock::reaches(&line, p.position, field_width);
-                                CrossPriceCensus::note_strike(
-                                    p.state.compact_id() as usize,
-                                    on_line,
-                                );
-                            }
-                            None => {
-                                CrossPriceCensus::note_strike(CrossPriceCensus::NO_CLOSER, false)
-                            }
-                        }
-                    }
-                }
-                // Tag the ball with the passer for pass-accuracy
-                // accounting. Lives for a short window (150 ticks)
-                // and is cleared on opponent touch — see ball.rs
-                // `pending_pass_passer` docs.
-                #[cfg(feature = "match-logs")]
-                {
-                    use crate::r#match::engine::ball::ball::ownership::reception_diag;
-                    reception_diag::EMITTED.fetch_add(1, Ordering::Relaxed);
-                    if field.ball.pending_pass_passer.is_some() {
-                        reception_diag::SUPERSEDED.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-                field.ball.pending_pass_passer = Some(passer_id);
-                field.ball.pending_pass_set_tick = context.current_tick();
-                #[cfg(feature = "match-logs")]
-                {
-                    use crate::r#match::engine::ball::ball::CONTROL_DISTANCE;
-                    use crate::r#match::engine::ball::ball::contest::interception::InterceptionContest;
-                    let lane = pass_target - passer_position;
-                    let length = (lane.x * lane.x + lane.y * lane.y).sqrt().max(1.0e-3);
-                    let (dx, dy) = (lane.x / length, lane.y / length);
-                    // The passer's own pricing of this lane, as
-                    // `PassEvaluator::calculate_interception_risk` does it.
-                    let minute = sc::minute_from_ticks(context.current_tick());
-                    let pace = Ball::pass_pace(length, &context.conditions);
-                    let delivery = field
-                        .get_player(passer_id)
-                        .map_or(0.5, |p| sc::passing_execution(p, minute));
-                    let mut risk = 0.0_f32;
-                    let mut at_strike: Vec<(u32, f32)> = Vec::new();
-                    for p in field.players.iter().filter(|p| p.team_id != passer_team) {
-                        let ox = p.position.x - passer_position.x;
-                        let oy = p.position.y - passer_position.y;
-                        let along = ox * dx + oy * dy;
-                        let perp = if along > 0.0 && along < length {
-                            (ox - along * dx).hypot(oy - along * dy)
-                        } else {
-                            f32::MAX
-                        };
-                        at_strike.push((p.id, perp));
-                        if along <= 0.0 || along >= length - CONTROL_DISTANCE {
-                            continue;
-                        }
-                        let read = sc::interception(p, minute);
-                        let arrives = along / pace;
-                        let miss = InterceptionContest::closing_miss(
-                            perp,
-                            arrives,
-                            read,
-                            p.max_speed_with_condition_cached(),
-                        );
-                        if miss < InterceptionContest::REACH {
-                            risk = risk.max(InterceptionContest::chance(
-                                miss,
-                                pace,
-                                arrives,
-                                1.0,
-                                read,
-                                delivery,
-                                InterceptionContest::is_set_for_it(perp),
-                            ));
-                        }
-                    }
-                    let mut census = crate::lane_diag::LaneCensus::open(passer_team, risk);
-                    for (id, perp) in at_strike {
-                        census.note_at_strike(id, perp);
-                    }
-                    field.ball.lane_census = Some(census);
-                    // The block price the striker's lane price puts on this
-                    // exact pass, and the state he struck it from.
-                    if let Some(passer) = field.get_player(passer_id)
-                        && let Some(side) = passer.side
-                    {
-                        use crate::r#match::MatchPlayerLite;
-                        use crate::r#match::engine::ball::ball::block_diag::StrikeOrigin;
-                        use crate::r#match::engine::ball::ball::contest::pass_block::{
-                            PassBlock, StrikeLine,
-                        };
-                        let line = StrikeLine {
-                            from: passer_position,
-                            direction: Vector3::new(dx, dy, 0.0),
-                            pace,
-                            lift: 0.0,
-                            delivery: PassBlock::technique(passer, minute, was_cross),
-                            defending_side: side.opposite(),
-                        };
-                        let field_width = context.field_size.width as f32;
-                        let price = field
-                            .players
-                            .iter()
-                            .filter(|p| p.team_id != passer_team)
-                            .map(|p| {
-                                let lite = MatchPlayerLite {
-                                    id: p.id,
-                                    position: p.position,
-                                    tactical_positions: p.tactical_position.current_position,
-                                };
-                                PassBlock::priced(&line, &lite, p, minute, field_width)
-                            })
-                            .fold(0.0_f32, f32::max);
-                        field.ball.strike_origin = Some(StrikeOrigin::pass(
-                            passer.state.compact_id() as usize,
-                            price,
-                        ));
-                    }
-                }
-                field.ball.pending_pass_origin = Some(passer_position);
-                field.ball.pending_pass_target = Some(pass_target);
-                field.ball.pending_pass_was_cross = was_cross;
-                if booked_cross {
-                    if let Some(passer) = field.get_player_mut(passer_id) {
-                        passer.statistics.add_cross_attempt();
-                    }
-                    if !MatchContext::cross_booking_off() {
-                        field.ball.on_cross_struck(passer_id, passer_team);
-                    }
-                }
-                field.ball.offside_snapshot = snapshot;
-                // After the kick, restart context decays back to OpenPlay —
-                // EXCEPT a corner cross, which keeps its Corner origin through
-                // the flight. That keeps the pushed-up centre-backs in
-                // AttackingCorner (is_team_attacking_corner) and lets the
-                // discrete corner aerial contest fire on the in-flight
-                // delivery (engine `resolve_corner_contest`); the origin
-                // decays to OpenPlay on the next touch / interception as usual.
-                if !(was_cross && field.ball.pass_origin_restart == PassOriginRestart::Corner) {
-                    field.ball.pass_origin_restart = PassOriginRestart::OpenPlay;
-                }
-            }
-            PlayerEvent::ClaimBall(player_id) => {
-                Self::record_team_possession_if_switch(player_id, field, context);
-                Self::handle_claim_ball_event(player_id, field, context);
-            }
-            PlayerEvent::MoveBall(player_id, ball_velocity) => {
-                // A dribbling touch writes a velocity onto the ball, so
-                // it answers to the strike rule as well as to the
-                // possession one: nobody dribbles a ball at head height.
-                if !Self::strike_in_reach(
-                    StrikeKind::Carry,
-                    player_id,
-                    false,
-                    field,
-                    context.current_tick(),
-                ) {
-                    *refusal = Some(StrikeKind::Carry.refusal());
-                    return remaining_events;
-                }
-                Self::handle_move_ball_event(player_id, ball_velocity, field, context);
-            }
-            PlayerEvent::GainBall(player_id) => {
-                Self::handle_gain_ball_event(player_id, field, context);
-            }
-            PlayerEvent::Shoot(shoot_event_model) => {
-                // **The guard this handler never had.** `PassTo` has
-                // carried a reach check for a long time and `Shoot` had
-                // none at all — any player in a shooting state rewrote
-                // the ball's velocity from wherever he stood, at whatever
-                // height the ball was, including out of the air over his
-                // own head. Everything below this line credits a shot, so
-                // it has to come first.
-                if !Self::strike_in_reach(
-                    StrikeKind::Shot,
-                    shoot_event_model.from_player_id,
-                    // The shot says what it is: a header is a header
-                    // whatever state the emitter has already moved on to.
-                    shoot_event_model.shot_type == ShotType::Header,
-                    field,
-                    context.current_tick(),
-                ) {
-                    *refusal = Some(StrikeKind::Shot.refusal());
-                    return remaining_events;
-                }
-                if Self::offside_on_strike(shoot_event_model.from_player_id, field, context, &mut remaining_events) {
-                    return remaining_events;
-                }
-                // Capture field dimensions up-front so the log block
-                // below (which runs under &Player borrow) doesn't try
-                // to re-borrow field.size. Feature-gated so the capture
-                // compiles away when logs are off.
-                #[cfg(feature = "match-logs")]
-                let field_w = field.size.width as f32;
-                #[cfg(feature = "match-logs")]
-                let field_h = field.size.height as f32;
-
-                // Record shot at team level for cooldown. Log reason +
-                // source context only when `match-logs` feature is
-                // enabled (see `core/src/match/logs.rs`).
-                if let Some(player) = field.get_player(shoot_event_model.from_player_id) {
-                    let team_id = player.team_id;
-                    let tick = context.current_tick();
-                    #[cfg(feature = "match-logs")]
-                    {
-                        let pos = player.position;
-                        let goal_dist = if let Some(side) = player.side {
-                            let goal_x = match side {
-                                PlayerSide::Left => field_w,
-                                PlayerSide::Right => 0.0,
-                            };
-                            let goal_y = field_h / 2.0;
-                            ((pos.x - goal_x).powi(2) + (pos.y - goal_y).powi(2)).sqrt()
-                        } else {
-                            0.0
-                        };
-                        let pos_tag =
-                            match player.tactical_position.current_position.position_group() {
-                                PlayerFieldPositionGroup::Goalkeeper => "GK",
-                                PlayerFieldPositionGroup::Defender => "DEF",
-                                PlayerFieldPositionGroup::Midfielder => "MID",
-                                PlayerFieldPositionGroup::Forward => "FWD",
-                            };
-                        match_log_info!(
-                            "SHOT team={} pos={} player={} state={} reason={} dist={:.1} tick={}",
-                            team_id,
-                            pos_tag,
-                            shoot_event_model.from_player_id,
-                            player.state,
-                            shoot_event_model.reason,
-                            goal_dist,
-                            tick
-                        );
-                    }
-                    context.coach_for_team_mut(team_id).record_shot(tick);
-                }
-                if let Some(player) = field.get_player_mut(shoot_event_model.from_player_id) {
-                    player.pending_shot_reason = None;
-                }
-                // ── Key-pass linking ──────────────────────────────────
-                // The shooter just received a completed pass within the
-                // key-pass window — the passer earns a key pass. Reads
-                // `last_completed_pass_*` (populated by
-                // `credit_completed_pass` when the receiver claimed the
-                // ball) rather than `pending_pass_*` (which the
-                // completion path already cleared). Without the
-                // separate snapshot the receive-then-shoot sequence
-                // would silently drop the assist link.
-                //
-                // To avoid double-credit when the same passer also
-                // appears as `pending_pass_passer` (can happen if the
-                // shooter intercepted a NEW outgoing pass and shot in
-                // the same tick), null `last_completed_pass_*` after
-                // crediting.
-                //
-                // Capture the direct assister BEFORE clearing — the xG
-                // buildup distribution in `handle_shoot_event` needs it
-                // to exclude the assister from buildup credit. Without
-                // this snapshot, the clear below races the buildup read.
-                let shooter_id = shoot_event_model.from_player_id;
-                let now_tick = context.current_tick();
-                // Opta's key-pass definition has NO time window: it is simply
-                // the last pass before a shot. A 3s cap excluded every
-                // receive-turn-carry-shoot sequence — the engine's
-                // dominant chance shape — so only ~1.2 key passes per
-                // TEAM were tagged against a real ~9, starving the
-                // creative credit that keeps forwards and midfielders in
-                // their rating bands. 12s still bounds it to one
-                // possession phase; the possession-change nulls below do
-                // the real work.
-                const KEY_PASS_WINDOW_TICKS: u64 = 1200;
-                let shooter_team = field.get_player(shooter_id).map(|p| p.team_id);
-                let mut direct_assister_id: Option<u32> = None;
-                #[cfg(feature = "match-logs")]
-                {
-                    key_pass_diag::SHOTS.fetch_add(1, Ordering::Relaxed);
-                    if field.ball.last_completed_pass_receiver_id.is_none() {
-                        key_pass_diag::NO_LINK.fetch_add(1, Ordering::Relaxed);
-                    }
-                    // How the shooter came by the ball. The key-pass
-                    // counter says a pass DIDN'T feed this shot; this
-                    // says what did instead.
-                    key_pass_diag::SUPPLY[field.ball.possession_source.index()]
-                        .fetch_add(1, Ordering::Relaxed);
-                }
-                if let (Some(passer_id), Some(receiver_id)) = (
-                    field.ball.last_completed_pass_passer_id,
-                    field.ball.last_completed_pass_receiver_id,
-                ) {
-                    let elapsed = now_tick.saturating_sub(field.ball.last_completed_pass_tick);
-                    let in_window = elapsed <= KEY_PASS_WINDOW_TICKS;
-                    let receiver_is_shooter = receiver_id == shooter_id;
-                    let passer_not_shooter = passer_id != shooter_id;
-                    let passer_team = field.get_player(passer_id).map(|p| p.team_id);
-                    let same_team = passer_team.is_some() && passer_team == shooter_team;
-                    if in_window && receiver_is_shooter && passer_not_shooter && same_team {
-                        if let Some(passer) = field.get_player_mut(passer_id) {
-                            passer.statistics.add_key_pass();
-                        }
-                        direct_assister_id = Some(passer_id);
-                        #[cfg(feature = "match-logs")]
-                        key_pass_diag::CREDITED.fetch_add(1, Ordering::Relaxed);
-                    }
-                    #[cfg(feature = "match-logs")]
-                    {
-                        if !receiver_is_shooter {
-                            key_pass_diag::WRONG_RECEIVER.fetch_add(1, Ordering::Relaxed);
-                        } else if !in_window {
-                            key_pass_diag::STALE_WINDOW.fetch_add(1, Ordering::Relaxed);
-                        }
-                    }
-                    // Single-credit guarantee: even if the shot resolves
-                    // into a goal that fires another event, the link is
-                    // gone after the first read. Only clear on a SUCCESSFUL
-                    // credit — clearing after a failed test meant one
-                    // rebound or blocked effort destroyed the link for the
-                    // genuine next attempt in the same phase.
-                    if direct_assister_id.is_some() {
-                        field.ball.last_completed_pass_passer_id = None;
-                        field.ball.last_completed_pass_receiver_id = None;
-                    }
-                }
-                Self::charge_giveaway_on_shot(shooter_team, now_tick, field, context);
-                // ── Failed claim leading to shot ──────────────────────
-                // A keeper who has just flapped a cross is charged the
-                // moment the attacking side gets a shot away from it.
-                // Held on the ball (not promoted into the error lanes)
-                // so the rating bills this incident exactly once.
-                const FAILED_CLAIM_WINDOW_TICKS: u64 = 600; // ~6s
-                if let Some(gk_id) = field.ball.pending_failed_claim_gk_id {
-                    #[cfg(feature = "match-logs")]
-                    gk_claim_diag::FLAP_SHOTS_SEEN.fetch_add(1, Ordering::Relaxed);
-                    let in_window = now_tick.saturating_sub(field.ball.pending_failed_claim_tick)
-                        <= FAILED_CLAIM_WINDOW_TICKS;
-                    let gk_team = field.get_player(gk_id).map(|p| p.team_id);
-                    if in_window && gk_team.is_some() && gk_team != shooter_team {
-                        if !field.ball.pending_failed_claim_charged {
-                            if let Some(gk) = field.get_player_mut(gk_id) {
-                                gk.statistics.note_gk_failed_claim_to_shot();
-                            }
-                            context.psychology.record_negative(
-                                gk_id,
-                                NegativeEvent::ErrorLeadingToShot,
-                                now_tick,
-                            );
-                            #[cfg(feature = "match-logs")]
-                            gk_claim_diag::FLAP_TO_SHOT.fetch_add(1, Ordering::Relaxed);
-                            field.ball.pending_failed_claim_charged = true;
-                        }
-                    } else {
-                        #[cfg(feature = "match-logs")]
-                        gk_claim_diag::FLAP_DROPPED.fetch_add(1, Ordering::Relaxed);
-                        field.ball.pending_failed_claim_gk_id = None;
-                        field.ball.pending_failed_claim_charged = false;
-                    }
-                }
-                Self::handle_shoot_event(
-                    shoot_event_model,
+            PlayerEvent::PassTo(model) => {
+                Self::dispatch_pass_to(
+                    model,
                     field,
                     context,
                     match_data,
-                    direct_assister_id,
+                    refusal,
+                    &mut remaining_events,
                 );
             }
-            PlayerEvent::CaughtBall(player_id) => {
-                Self::handle_caught_ball_event(player_id, field, context);
+            PlayerEvent::Shoot(model) => {
+                Self::dispatch_shoot(
+                    model,
+                    field,
+                    context,
+                    match_data,
+                    refusal,
+                    &mut remaining_events,
+                );
             }
-            PlayerEvent::MovePlayer(player_id, position) => {
-                Self::handle_move_player_event(player_id, position, field);
+            PlayerEvent::Goal(id, auto) => Self::handle_goal_event(id, auto, field, context),
+            PlayerEvent::Assist(id) => Self::handle_assist_event(id, field, context),
+            PlayerEvent::BallCollision(id) => Self::handle_ball_collision_event(id, field),
+            PlayerEvent::TacklingBall(id) => {
+                Self::record_team_possession_if_switch(id, field, context);
+                Self::handle_tackling_ball_event(id, field, context);
             }
-            PlayerEvent::Leap(player_id, apex) => {
-                Self::handle_leap_event(player_id, apex, field);
+            PlayerEvent::BallOwnerChange(id) => {
+                Self::handle_ball_owner_change_event(id, field, context)
             }
-            PlayerEvent::ChallengeSpent(player_id, missed) => {
-                if let Some(player) = field.get_player_mut(player_id) {
+            PlayerEvent::ClaimBall(id) => Self::dispatch_claim_ball(id, field, context),
+            PlayerEvent::MoveBall(id, velocity) => {
+                if !Self::dispatch_move_ball(id, velocity, field, context) {
+                    *refusal = Some(StrikeKind::Carry.refusal());
+                    return remaining_events;
+                }
+            }
+            PlayerEvent::GainBall(id) => Self::handle_gain_ball_event(id, field, context),
+            PlayerEvent::CaughtBall(id) => Self::handle_caught_ball_event(id, field, context),
+            PlayerEvent::MovePlayer(id, position) => {
+                Self::handle_move_player_event(id, position, field)
+            }
+            PlayerEvent::Leap(id, apex) => Self::handle_leap_event(id, apex, field),
+            PlayerEvent::ChallengeSpent(id, missed) => {
+                if let Some(player) = field.get_player_mut(id) {
                     player.on_challenge_spent(missed);
                 }
             }
-            PlayerEvent::Dispossessed(player_id, taker) => {
-                field.on_dispossessed(player_id, context.current_tick());
-                Self::credit_take(taker, Some(player_id), field, context);
+            PlayerEvent::Dispossessed(id, taker) => {
+                Self::dispatch_dispossessed(id, taker, field, context)
             }
-            PlayerEvent::Howler(keeper_id) => {
-                let Some(keeper_team) = field.get_player_mut(keeper_id).map(|keeper| {
-                    keeper.statistics.add_error_leading_to_shot();
-                    keeper.team_id
-                }) else {
+            PlayerEvent::Howler(id) => {
+                if !Self::handle_howler(id, field, context) {
                     return remaining_events;
-                };
-                // The shot goes on through him: a giveaway already charged,
-                // so the ledger closes on the same terms as any other.
-                let tick = context.current_tick();
-                field
-                    .ball
-                    .stamp_giveaway(keeper_id, keeper_team, tick, true, LapseFamily::Save);
-                field.ball.giveaway_charged = true;
-                field.ball.pending_error_to_shot_player_id = Some(keeper_id);
-                #[cfg(feature = "match-logs")]
-                lapse_diag::note_charge(LapseFamily::Save, (tick / 6_000) as u32);
-                context.psychology.record_negative(
-                    keeper_id,
-                    NegativeEvent::ErrorLeadingToShot,
-                    context.current_tick(),
-                );
-            }
-            PlayerEvent::TakeBall(player_id) => {
-                Self::handle_take_ball_event(player_id, field);
-            }
-            PlayerEvent::ClearBall(clearer_id, velocity) => {
-                #[cfg(feature = "match-logs")]
-                GoalKickCensus::note_intent(
-                    &mut field.ball.goal_kick_track,
-                    clearer_id,
-                    GoalKickRelease::Clearance,
-                );
-                Self::strike_clearance(
-                    clearer_id,
-                    velocity,
-                    false,
-                    true,
-                    field,
-                    context,
-                    refusal,
-                    &mut remaining_events,
-                );
-            }
-            PlayerEvent::MiscuedClearance(clearer_id, velocity) => {
-                Self::strike_clearance(
-                    clearer_id,
-                    velocity,
-                    true,
-                    true,
-                    field,
-                    context,
-                    refusal,
-                    &mut remaining_events,
-                );
-            }
-            PlayerEvent::KnockDown(header_id, velocity) => {
-                Self::strike_clearance(
-                    header_id,
-                    velocity,
-                    false,
-                    false,
-                    field,
-                    context,
-                    refusal,
-                    &mut remaining_events,
-                );
-            }
-            PlayerEvent::PutOut(player_id, velocity) => {
-                Self::strike_clearance(
-                    player_id,
-                    velocity,
-                    false,
-                    true,
-                    field,
-                    context,
-                    refusal,
-                    &mut remaining_events,
-                );
-                #[cfg(feature = "match-logs")]
-                if field.ball.last_touch_player_id == Some(player_id) {
-                    field.ball.last_touch_kind = TouchKind::PutOut;
                 }
             }
-            PlayerEvent::RequestBallReceive(player_id) => {
-                Self::handle_request_ball_receive(player_id, field, context);
+            PlayerEvent::TakeBall(id) => Self::handle_take_ball_event(id, field),
+            PlayerEvent::RequestBallReceive(id) => {
+                Self::handle_request_ball_receive(id, field, context)
             }
-            PlayerEvent::CommitFoul(foul) => {
-                Self::handle_commit_foul_event(foul, field, context);
+            PlayerEvent::CommitFoul(foul) => Self::handle_commit_foul_event(foul, field, context),
+            PlayerEvent::Offside(id, _) => Self::handle_offside_event(id, field),
+            PlayerEvent::Handball(id, goal_bound) => {
+                Self::whistle_handball(id, goal_bound, field, context)
             }
-            PlayerEvent::Offside(player_id, _spot) => {
-                Self::handle_offside_event(player_id, field);
+            PlayerEvent::HeldTooLong(id) => {
+                Self::dispatch_held_too_long(id, field, context, &mut remaining_events)
             }
-            PlayerEvent::Handball(player_id, goal_bound) => {
-                Self::whistle_handball(player_id, goal_bound, field, context);
-            }
-            PlayerEvent::HeldTooLong(keeper_id) => {
-                let mut corner = EventCollection::with_capacity(2);
-                field
-                    .ball
-                    .concede_corner_for_holding(keeper_id, context, &field.players, &mut corner);
-                remaining_events.extend(corner.drain());
-            }
-            PlayerEvent::Caution(player_id, source) => {
-                Self::apply_card_decision(
-                    player_id,
-                    FoulSeverity::Normal,
-                    source,
-                    1.0,
-                    0.0,
-                    field,
-                    context,
-                );
-            }
+            PlayerEvent::Caution(id, source) => Self::dispatch_caution(id, source, field, context),
             _ => {} // Ignore unsupported events
         }
-
         remaining_events
+    }
+
+    /// A dispossession records the change and credits the taker in one
+    /// place.
+    fn dispatch_dispossessed(
+        player_id: u32,
+        taker: u32,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) {
+        field.on_dispossessed(player_id, context.current_tick());
+        Self::credit_take(taker, Some(player_id), field, context);
+    }
+
+    /// A booking that came from outside a foul challenge still runs the
+    /// normal card path.
+    fn dispatch_caution(
+        player_id: u32,
+        source: FoulSource,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) {
+        Self::apply_card_decision(
+            player_id,
+            FoulSeverity::Normal,
+            source,
+            1.0,
+            0.0,
+            field,
+            context,
+        );
+    }
+
+    /// A clearance-family event, unpacked into the shared strike path.
+    #[cfg_attr(not(feature = "match-logs"), allow(unused_variables))]
+    fn dispatch_clearance_event(
+        event: PlayerEvent,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        refusal: &mut Option<&'static str>,
+        remaining_events: &mut Vec<Event>,
+    ) {
+        let (clearer_id, velocity, miscued, credited, put_out, goal_kick_intent) = match event {
+            PlayerEvent::ClearBall(id, velocity) => (id, velocity, false, true, false, true),
+            PlayerEvent::MiscuedClearance(id, velocity) => (id, velocity, true, true, false, false),
+            PlayerEvent::KnockDown(id, velocity) => (id, velocity, false, false, false, false),
+            PlayerEvent::PutOut(id, velocity) => (id, velocity, false, true, true, false),
+            _ => return,
+        };
+        #[cfg(feature = "match-logs")]
+        if goal_kick_intent {
+            GoalKickCensus::note_intent(
+                &mut field.ball.goal_kick_track,
+                clearer_id,
+                GoalKickRelease::Clearance,
+            );
+        }
+        Self::strike_clearance(
+            clearer_id,
+            velocity,
+            miscued,
+            credited,
+            field,
+            context,
+            refusal,
+            remaining_events,
+        );
+        #[cfg(feature = "match-logs")]
+        if put_out && field.ball.last_touch_player_id == Some(clearer_id) {
+            field.ball.last_touch_kind = TouchKind::PutOut;
+        }
+    }
+
+    /// Claiming possession also records a team possession switch.
+    fn dispatch_claim_ball(player_id: u32, field: &mut MatchField, context: &mut MatchContext) {
+        Self::record_team_possession_if_switch(player_id, field, context);
+        Self::handle_claim_ball_event(player_id, field, context);
+    }
+
+    /// A dribbling touch writes a velocity onto the ball, so it answers
+    /// to the strike rule as well as to the possession one: nobody
+    /// dribbles a ball at head height.
+    fn dispatch_move_ball(
+        player_id: u32,
+        ball_velocity: Vector3<f32>,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) -> bool {
+        if !Self::strike_in_reach(
+            StrikeKind::Carry,
+            player_id,
+            false,
+            field,
+            context.current_tick(),
+        ) {
+            return false;
+        }
+        Self::handle_move_ball_event(player_id, ball_velocity, field, context);
+        true
+    }
+
+    /// A keeper howler: the shot goes on through him, with a giveaway
+    /// already charged so the ledger closes on the same terms as any
+    /// other. Returns whether the keeper still exists.
+    fn handle_howler(keeper_id: u32, field: &mut MatchField, context: &mut MatchContext) -> bool {
+        let Some(keeper_team) = field.get_player_mut(keeper_id).map(|keeper| {
+            keeper.statistics.add_error_leading_to_shot();
+            keeper.team_id
+        }) else {
+            return false;
+        };
+        // The shot goes on through him: a giveaway already charged,
+        // so the ledger closes on the same terms as any other.
+        let tick = context.current_tick();
+        field
+            .ball
+            .stamp_giveaway(keeper_id, keeper_team, tick, true, LapseFamily::Save);
+        field.ball.giveaway_charged = true;
+        field.ball.pending_error_to_shot_player_id = Some(keeper_id);
+        #[cfg(feature = "match-logs")]
+        lapse_diag::note_charge(LapseFamily::Save, (tick / 6_000) as u32);
+        context.psychology.record_negative(
+            keeper_id,
+            NegativeEvent::ErrorLeadingToShot,
+            context.current_tick(),
+        );
+        true
+    }
+
+    /// A keeper holding the ball too long concedes a corner through the
+    /// ball's own holding rule.
+    fn dispatch_held_too_long(
+        keeper_id: u32,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        remaining_events: &mut Vec<Event>,
+    ) {
+        let mut corner = EventCollection::with_capacity(2);
+        field
+            .ball
+            .concede_corner_for_holding(keeper_id, context, &field.players, &mut corner);
+        remaining_events.extend(corner.drain());
     }
 
     fn handle_goal_event(
@@ -2221,10 +2554,49 @@ impl PlayerEventDispatcher {
         // Stale scorer id (sent off / subbed between shot and goal
         // resolution) — no goal recorded for the player, but the score
         // line and ball-state cleanup downstream still need to run.
-        let Some(player) = field.get_player_mut(player_id) else {
+        if !Self::record_goal_statistics(player_id, is_auto_goal, origin, field, context) {
             return;
-        };
+        }
 
+        if !is_auto_goal {
+            Self::credit_conceded_goal(scorer_team_id, is_auto_goal, field, context);
+        }
+        field.ball.clear_shot_metadata();
+        field.ball.pending_failed_claim_gk_id = None;
+        field.ball.pending_failed_claim_charged = false;
+        field.ball.close_giveaway();
+
+        context.score.add_goal_detail(GoalDetail {
+            player_id,
+            stat_type: MatchStatisticType::Goal,
+            is_auto_goal,
+            time: context.total_match_time,
+            origin,
+        });
+
+        Self::record_goal_psychology(player_id, is_auto_goal, scorer_team_id, field, context);
+        // The restart used to happen here — formation rebuild, ball back on
+        // the centre spot — as well as in the ball-event handler and again in
+        // `handle_goal_reset`, three times on the tick the ball crossed the
+        // line. It now belongs solely to the end of the post-goal window (see
+        // `GoalCelebration`), because putting the ball on the centre spot the
+        // instant it goes in is exactly what left it looking like it stopped
+        // dead on the goal line. `Ball::enter_net` has already dropped the
+        // ownership and pass state this used to clear by hand.
+    }
+
+    /// The scorer's own line: goal, on-target credit and the finishing
+    /// diagnostics. Returns whether the scorer still exists.
+    fn record_goal_statistics(
+        player_id: u32,
+        is_auto_goal: bool,
+        origin: GoalOrigin,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) -> bool {
+        let Some(player) = field.get_player_mut(player_id) else {
+            return false;
+        };
         player
             .statistics
             .add_goal(context.total_match_time, is_auto_goal, origin);
@@ -2242,91 +2614,85 @@ impl PlayerEventDispatcher {
                 time_band_diag::GOALS_BY_BAND[band].fetch_add(1, Ordering::Relaxed);
             }
         }
+        true
+    }
 
-        // Credit the conceding goalkeeper's `shots_faced` so the rating
-        // helper has the right denominator for save percentage. Auto-
-        // goals (own-goals) don't count — those aren't shots the GK got
-        // beaten by, they're defensive errors. While we're here, debit
-        // the GK's xg_prevented by the shot's xG: a 0.7 xG goal beats
-        // the keeper, but a 0.05 xG worldie barely dents the keeper's
-        // rating because there's nothing to prevent.
-        if !is_auto_goal {
-            let shot_xg = field.ball.last_shot_xgot;
-            if let Some(scoring_team) = scorer_team_id {
-                let conceding_gk_id = field
-                    .players
-                    .iter()
-                    .find(|p| {
-                        p.team_id != scoring_team
-                            && p.tactical_position.current_position.position_group()
-                                == PlayerFieldPositionGroup::Goalkeeper
-                    })
-                    .map(|p| p.id);
-                if let Some(gk_id) = conceding_gk_id
-                    && let Some(gk) = field.get_player_mut(gk_id)
-                {
-                    gk.statistics.note_shot_faced(shot_xg, false);
+    /// What the goal costs the conceding side: the keeper's shot faced,
+    /// the giveaway promoted to an error, and a flapped claim billed.
+    fn credit_conceded_goal(
+        scorer_team_id: Option<u32>,
+        is_auto_goal: bool,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) {
+        let shot_xg = field.ball.last_shot_xgot;
+        if let Some(scoring_team) = scorer_team_id {
+            let conceding_gk_id = field
+                .players
+                .iter()
+                .find(|p| {
+                    p.team_id != scoring_team
+                        && p.tactical_position.current_position.position_group()
+                            == PlayerFieldPositionGroup::Goalkeeper
+                })
+                .map(|p| p.id);
+            if let Some(gk_id) = conceding_gk_id
+                && let Some(gk) = field.get_player_mut(gk_id)
+            {
+                gk.statistics.note_shot_faced(shot_xg, false);
+            }
+        }
+        // Promote a pending error-to-shot into an error-to-goal.
+        // Layer the own-box-extra zone counter when the original
+        // giveaway happened inside the giver's own box — the rating
+        // helper applies an extra penalty on top of the base
+        // errors_leading_to_goal hit.
+        let giver_conceded = (scorer_team_id == field.ball.last_giveaway_team_id) == is_auto_goal;
+        if let Some(giver_id) = field.ball.pending_error_to_shot_player_id
+            && giver_conceded
+        {
+            let was_own_box = field.ball.last_giveaway_was_own_box;
+            if let Some(giver) = field.get_player_mut(giver_id) {
+                giver.statistics.add_error_leading_to_goal();
+                if was_own_box {
+                    giver.statistics.note_error_to_goal_own_box();
                 }
             }
-            // Promote a pending error-to-shot into an error-to-goal.
-            // Layer the own-box-extra zone counter when the original
-            // giveaway happened inside the giver's own box — the rating
-            // helper applies an extra penalty on top of the base
-            // errors_leading_to_goal hit.
-            let giver_conceded =
-                (scorer_team_id == field.ball.last_giveaway_team_id) == is_auto_goal;
-            if let Some(giver_id) = field.ball.pending_error_to_shot_player_id
-                && giver_conceded
-            {
-                let was_own_box = field.ball.last_giveaway_was_own_box;
-                if let Some(giver) = field.get_player_mut(giver_id) {
-                    giver.statistics.add_error_leading_to_goal();
-                    if was_own_box {
-                        giver.statistics.note_error_to_goal_own_box();
-                    }
-                }
+            context.psychology.record_negative(
+                giver_id,
+                NegativeEvent::ErrorLeadingToGoal,
+                context.current_tick(),
+            );
+        }
+        // Promote a pending failed claim into a failed-claim-to-goal.
+        // NB deliberately NOT also stamping `errors_leading_to_goal`:
+        // the rating de-dups nested mistake counters, and billing one
+        // flapped cross through both lanes is the triple-counting bug
+        // that once buried a one-conceded keeper in the disaster band.
+        if let Some(gk_id) = field.ball.pending_failed_claim_gk_id {
+            let conceding_side = scorer_team_id
+                .and_then(|t| field.get_player(gk_id).map(|p| p.team_id != t))
+                .unwrap_or(false);
+            if conceding_side && let Some(gk) = field.get_player_mut(gk_id) {
+                gk.statistics.note_gk_failed_claim_to_goal();
                 context.psychology.record_negative(
-                    giver_id,
+                    gk_id,
                     NegativeEvent::ErrorLeadingToGoal,
                     context.current_tick(),
                 );
             }
-            // Promote a pending failed claim into a failed-claim-to-goal.
-            // NB deliberately NOT also stamping `errors_leading_to_goal`:
-            // the rating de-dups nested mistake counters, and billing one
-            // flapped cross through both lanes is the triple-counting bug
-            // that once buried a one-conceded keeper in the disaster band.
-            if let Some(gk_id) = field.ball.pending_failed_claim_gk_id {
-                let conceding_side = scorer_team_id
-                    .and_then(|t| field.get_player(gk_id).map(|p| p.team_id != t))
-                    .unwrap_or(false);
-                if conceding_side && let Some(gk) = field.get_player_mut(gk_id) {
-                    gk.statistics.note_gk_failed_claim_to_goal();
-                    context.psychology.record_negative(
-                        gk_id,
-                        NegativeEvent::ErrorLeadingToGoal,
-                        context.current_tick(),
-                    );
-                }
-            }
         }
-        field.ball.clear_shot_metadata();
-        field.ball.pending_failed_claim_gk_id = None;
-        field.ball.pending_failed_claim_charged = false;
-        field.ball.close_giveaway();
+    }
 
-        context.score.add_goal_detail(GoalDetail {
-            player_id,
-            stat_type: MatchStatisticType::Goal,
-            is_auto_goal,
-            time: context.total_match_time,
-            origin,
-        });
-
-        // Psychology nudges: scorer gains confidence; conceding GK takes
-        // a hit. Own goals route the confidence penalty to the auto-
-        // scorer instead of any reward path. Team momentum swings to
-        // the scoring side. Cheap — single hashmap lookups.
+    /// Psychology nudges: scorer gains confidence; conceding GK takes a
+    /// hit, and momentum swings to the scoring side.
+    fn record_goal_psychology(
+        player_id: u32,
+        is_auto_goal: bool,
+        scorer_team_id: Option<u32>,
+        field: &MatchField,
+        context: &mut MatchContext,
+    ) {
         let tick = context.current_tick();
         if !is_auto_goal {
             context
@@ -2365,15 +2731,6 @@ impl PlayerEventDispatcher {
                     .record_negative(gk_id, NegativeEvent::GoalConceded, tick);
             }
         }
-
-        // The restart used to happen here — formation rebuild, ball back on
-        // the centre spot — as well as in the ball-event handler and again in
-        // `handle_goal_reset`, three times on the tick the ball crossed the
-        // line. It now belongs solely to the end of the post-goal window (see
-        // `GoalCelebration`), because putting the ball on the centre spot the
-        // instant it goes in is exactly what left it looking like it stopped
-        // dead on the goal line. `Ball::enter_net` has already dropped the
-        // ownership and pass state this used to clear by hand.
     }
 
     fn handle_assist_event(player_id: u32, field: &mut MatchField, context: &mut MatchContext) {
@@ -2480,7 +2837,11 @@ impl PlayerEventDispatcher {
         }
     }
 
-    fn handle_ball_owner_change_event(player_id: u32, field: &mut MatchField, context: &MatchContext) {
+    fn handle_ball_owner_change_event(
+        player_id: u32,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
         let carrier = field.ball.current_owner;
         if Self::secure_ball_for(player_id, field) {
             Self::credit_take(player_id, carrier, field, context);
@@ -3325,10 +3686,33 @@ impl PlayerEventDispatcher {
         context: &MatchContext,
         was_cross: bool,
     ) -> bool {
-        let total_match_time_ms = context.total_match_time;
+        let minute = sc::minute_from_ms(context.total_match_time);
         let rng = &context.rng;
-        let minute = sc::minute_from_ms(total_match_time_ms);
+        let aim = Self::pass_strike_aim(&event_model, field, minute);
+        let max_position_error =
+            Self::pass_error_budget(&event_model, &aim, field, context, minute, was_cross);
+        let placement =
+            Self::pass_placed_target(&event_model, &aim, max_position_error, field, context, rng);
+        let launch = Self::pass_launch(&event_model, &aim, &placement, field, context, rng);
+        Self::apply_pass_strike(
+            &event_model,
+            &aim,
+            &placement,
+            &launch,
+            field,
+            context,
+            was_cross,
+        );
+        launch.trajectory_type.is_ballistic()
+    }
 
+    /// The passer's aim point, leading the receiver by a skill-scaled
+    /// slice of the estimated flight.
+    fn pass_strike_aim(
+        event_model: &PassingEventContext,
+        field: &mut MatchField,
+        minute: u32,
+    ) -> PassAim {
         // Only increment attempts here. `passes_completed` is bumped when
         // the intended receiver actually claims the ball (see
         // `handle_claim_ball_event`). Previously both were bumped at
@@ -3396,6 +3780,30 @@ impl PlayerEventDispatcher {
         let ideal_pass_vector = ideal_target - pass_origin;
         let horizontal_distance = Self::calculate_horizontal_distance(&ideal_pass_vector);
 
+        PassAim {
+            passer_position,
+            passer_side,
+            passer_team_id,
+            skills,
+            overall_quality,
+            ideal_target,
+            pass_origin,
+            horizontal_distance,
+        }
+    }
+
+    /// How far off the ideal point the ball may be struck: the skill
+    /// budget, the distance and delivery shape, and the man closing him
+    /// down.
+    fn pass_error_budget(
+        event_model: &PassingEventContext,
+        aim: &PassAim,
+        field: &MatchField,
+        context: &MatchContext,
+        minute: u32,
+        was_cross: bool,
+    ) -> f32 {
+        let skills = &aim.skills;
         // Skill-based targeting error.
         //
         // Concentration MODULATES the passing composite rather than
@@ -3408,14 +3816,14 @@ impl PlayerEventDispatcher {
         // 30% of your accuracy) without collapsing the scale everyone
         // else is measured on.
         let accuracy_factor =
-            (overall_quality * (0.70 + 0.30 * skills.concentration)).clamp(0.0, 1.0);
+            (aim.overall_quality * (0.70 + 0.30 * skills.concentration)).clamp(0.0, 1.0);
 
         // Distance-based error, with the square of the distance: a long
         // ball is struck harder and in the air for longer, and real
         // completion falls away much faster than its length. Linear, a
         // 40 m ball missed by barely more than a 30 m one and long passes
         // completed 82% against a real 50-60%.
-        let distance_error_factor = (horizontal_distance / 250.0).powi(2).clamp(0.05, 4.0);
+        let distance_error_factor = (aim.horizontal_distance / 250.0).powi(2).clamp(0.05, 4.0);
 
         // **The error has to be able to miss.**
         //
@@ -3484,7 +3892,9 @@ impl PlayerEventDispatcher {
             let delivery = if field.ball.pass_origin_restart == PassOriginRestart::Corner {
                 field
                     .get_player(event_model.from_player_id)
-                    .map_or(skills.crossing, |taker| sc::set_piece_delivery(taker, minute))
+                    .map_or(skills.crossing, |taker| {
+                        sc::set_piece_delivery(taker, minute)
+                    })
             } else {
                 skills.crossing
             };
@@ -3547,45 +3957,52 @@ impl PlayerEventDispatcher {
         // sprays. A corner or free-kick taker is unpressed by geometry
         // (opponents retreat), so dead balls pay nothing without
         // needing a special case.
-        let max_position_error = {
-            let press01 = Self::pass_press01(&field.players, passer_team_id, passer_position);
-            if press01 > 0.0 {
-                // A leader within earshot talks the man on the ball
-                // through the press — "time", "man on", "turn". The
-                // voice reduces how much of the pressure reaches the
-                // strike, not the pressure itself. This is
-                // `leadership`'s one on-pitch execution channel: its
-                // other hosts (shape organisation ±15%, chaos damp) are
-                // deliberately narrow team-level bands, and a 6:18 pin
-                // across a side measured +0.25 — null. The attribute's
-                // heavyweight usage is out-of-match by design
-                // (chemistry, dressing room, captaincy); this term is
-                // the honest in-match complement, not a scoreline dial.
-                // `OF_VOICE_DAMP_OFF=1` disables exactly.
-                let press01 = press01
-                    * (1.0
-                        - Self::voice_damp(
-                            field,
-                            passer_team_id,
-                            event_model.from_player_id,
-                            passer_position,
-                            minute,
-                        ));
-                // The press is beaten in the head first, so his head
-                // decides how much of it reaches the strike too.
-                let transmission =
-                    Self::press_transmission(skills.composure, skills.technique, skills.passing)
-                        * ActionLapse::factor(
-                            LapseFamily::Press,
-                            context.psychology.get(event_model.from_player_id),
-                        );
-                max_position_error + press01 * transmission * skill_budget * Self::pass_press_gain()
-            } else {
-                max_position_error
-            }
-        };
+        let press01 = Self::pass_press01(&field.players, aim.passer_team_id, aim.passer_position);
+        if press01 <= 0.0 {
+            return max_position_error;
+        }
+        // A leader within earshot talks the man on the ball
+        // through the press — "time", "man on", "turn". The
+        // voice reduces how much of the pressure reaches the
+        // strike, not the pressure itself. This is
+        // `leadership`'s one on-pitch execution channel: its
+        // other hosts (shape organisation ±15%, chaos damp) are
+        // deliberately narrow team-level bands, and a 6:18 pin
+        // across a side measured +0.25 — null. The attribute's
+        // heavyweight usage is out-of-match by design
+        // (chemistry, dressing room, captaincy); this term is
+        // the honest in-match complement, not a scoreline dial.
+        // `OF_VOICE_DAMP_OFF=1` disables exactly.
+        let press01 = press01
+            * (1.0
+                - Self::voice_damp(
+                    field,
+                    aim.passer_team_id,
+                    event_model.from_player_id,
+                    aim.passer_position,
+                    minute,
+                ));
+        // The press is beaten in the head first, so his head
+        // decides how much of it reaches the strike too.
+        let transmission =
+            Self::press_transmission(skills.composure, skills.technique, skills.passing)
+                * ActionLapse::factor(
+                    LapseFamily::Press,
+                    context.psychology.get(event_model.from_player_id),
+                );
+        max_position_error + press01 * transmission * skill_budget * Self::pass_press_gain()
+    }
 
-        // Add random targeting error
+    /// Add the skill and mishit error draws, keep the target in play, and
+    /// bend a lofted delivery back onto it.
+    fn pass_placed_target(
+        event_model: &PassingEventContext,
+        aim: &PassAim,
+        max_position_error: f32,
+        field: &mut MatchField,
+        context: &MatchContext,
+        rng: &MatchRng,
+    ) -> PassPlacement {
         let mut target_error_x = rng.jitter(0.0, max_position_error);
         let mut target_error_y = rng.jitter(0.0, max_position_error);
 
@@ -3594,7 +4011,7 @@ impl PlayerEventDispatcher {
         // of the time (5th-power curve concentrates miskicks among
         // genuinely unskilled players). Previous cubic curve produced
         // ~5% even for average players, which muddied the skill signal.
-        let miskick_chance = (1.0 - skills.technique).powi(5) * 0.25;
+        let miskick_chance = (1.0 - aim.skills.technique).powi(5) * 0.25;
         if rng.random_range(0.0f32..1.0) < miskick_chance {
             target_error_x += rng.random_range(-8.0f32..8.0);
             target_error_y += rng.random_range(-8.0f32..8.0);
@@ -3605,7 +4022,8 @@ impl PlayerEventDispatcher {
         // the man is on him. The draw is taken whatever the switch says,
         // so the seeded stream stays aligned between the A/B arms.
         if let Some(passer) = field.get_player(event_model.from_player_id) {
-            let press01 = Self::pass_press01(&field.players, passer_team_id, passer_position);
+            let press01 =
+                Self::pass_press01(&field.players, aim.passer_team_id, aim.passer_position);
             let lapse =
                 Self::pressed_snatch_chance(passer, context.psychology.get(passer.id), press01);
             let snatched = rng.random_range(0.0f32..1.0) < lapse;
@@ -3632,51 +4050,19 @@ impl PlayerEventDispatcher {
         // misses for reasons the targeting jitter never sees — a
         // mis-weighted strike dies short or runs through, and that is
         // as much a bad pass as a sprayed one.
-        field.ball.pending_pass_aim = Some(ideal_target);
+        field.ball.pending_pass_aim = Some(aim.ideal_target);
 
-        // Calculate actual target with error
         let mut actual_target = Vector3::new(
-            ideal_target.x + target_error_x,
-            ideal_target.y + target_error_y,
+            aim.ideal_target.x + target_error_x,
+            aim.ideal_target.y + target_error_y,
             0.0,
         );
-
-        // SAFETY: keep pass target away from BOTH goals.
-        // Own goal: obvious — no one passes into their own net.
-        // Opposing goal: a pass aimed within a few yards of the opponent
-        // goal line with even a small error scoots straight into the net
-        // as an unowned ball → `check_goal` credits the passer → logged
-        // as a "goal" that never involved a Shoot event. Logs showed
-        // 10-15 of these per team per match, which was the primary
-        // source of 20+ goal scorelines. Passes should always land in
-        // playable space — clearances and shots have their own explicit
-        // paths for getting the ball across a goal line.
-        {
-            use crate::r#match::PlayerSide;
-            let field_width = field.size.width as f32;
-            let goal_safety_margin = 20.0;
-            match passer_side {
-                Some(PlayerSide::Left) => {
-                    // Own goal at x ≈ 0; opposing goal at x ≈ field_width.
-                    if actual_target.x < goal_safety_margin {
-                        actual_target.x = passer_position.x.max(goal_safety_margin);
-                    }
-                    if actual_target.x > field_width - goal_safety_margin {
-                        actual_target.x = field_width - goal_safety_margin;
-                    }
-                }
-                Some(PlayerSide::Right) => {
-                    // Own goal at x ≈ field_width; opposing goal at x ≈ 0.
-                    if actual_target.x > field_width - goal_safety_margin {
-                        actual_target.x = passer_position.x.min(field_width - goal_safety_margin);
-                    }
-                    if actual_target.x < goal_safety_margin {
-                        actual_target.x = goal_safety_margin;
-                    }
-                }
-                _ => {}
-            }
-        }
+        Self::keep_pass_target_in_play(
+            &mut actual_target,
+            aim.passer_position,
+            aim.passer_side,
+            field.size.width as f32,
+        );
 
         // ── SWING ────────────────────────────────────────────────────
         // An aerial cross is whipped, and whether it swings in toward
@@ -3697,14 +4083,14 @@ impl PlayerEventDispatcher {
                 };
                 // Up to ~2 m of swing for an elite crosser; a poor one
                 // barely bends it because he cannot get across the ball.
-                sign * rng.random_range(0.25f32..1.0) * 16.0 * skills.crossing
+                sign * rng.random_range(0.25f32..1.0) * 16.0 * aim.skills.crossing
             }
             _ => 0.0,
         };
         let swing_perp = if swing_units.abs() > f32::EPSILON {
             Vector3::new(
-                actual_target.x - pass_origin.x,
-                actual_target.y - pass_origin.y,
+                actual_target.x - aim.pass_origin.x,
+                actual_target.y - aim.pass_origin.y,
                 0.0,
             )
             .try_normalize(1.0e-4)
@@ -3716,22 +4102,80 @@ impl PlayerEventDispatcher {
             actual_target -= perp * swing_units;
         }
 
-        let actual_pass_vector = actual_target - pass_origin;
+        let actual_pass_vector = actual_target - aim.pass_origin;
         let actual_horizontal_distance = Self::calculate_horizontal_distance(&actual_pass_vector);
+
+        PassPlacement {
+            actual_target,
+            swing_units,
+            actual_horizontal_distance,
+        }
+    }
+
+    /// SAFETY: keep pass target away from BOTH goals.
+    /// Own goal: obvious — no one passes into their own net.
+    /// Opposing goal: a pass aimed within a few yards of the opponent
+    /// goal line with even a small error scoots straight into the net
+    /// as an unowned ball → `check_goal` credits the passer → logged
+    /// as a "goal" that never involved a Shoot event. Logs showed
+    /// 10-15 of these per team per match, which was the primary
+    /// source of 20+ goal scorelines. Passes should always land in
+    /// playable space — clearances and shots have their own explicit
+    /// paths for getting the ball across a goal line.
+    fn keep_pass_target_in_play(
+        actual_target: &mut Vector3<f32>,
+        passer_position: Vector3<f32>,
+        passer_side: Option<PlayerSide>,
+        field_width: f32,
+    ) {
+        let goal_safety_margin = 20.0;
+        match passer_side {
+            Some(PlayerSide::Left) => {
+                // Own goal at x ≈ 0; opposing goal at x ≈ field_width.
+                if actual_target.x < goal_safety_margin {
+                    actual_target.x = passer_position.x.max(goal_safety_margin);
+                }
+                if actual_target.x > field_width - goal_safety_margin {
+                    actual_target.x = field_width - goal_safety_margin;
+                }
+            }
+            Some(PlayerSide::Right) => {
+                // Own goal at x ≈ field_width; opposing goal at x ≈ 0.
+                if actual_target.x > field_width - goal_safety_margin {
+                    actual_target.x = passer_position.x.min(field_width - goal_safety_margin);
+                }
+                if actual_target.x < goal_safety_margin {
+                    actual_target.x = goal_safety_margin;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Solve the launch: ground pace, or a ballistic arc when the shape
+    /// calls for it, then the weight of the strike.
+    fn pass_launch(
+        event_model: &PassingEventContext,
+        aim: &PassAim,
+        placement: &PassPlacement,
+        field: &MatchField,
+        context: &MatchContext,
+        rng: &MatchRng,
+    ) -> PassLaunch {
+        let actual_pass_vector = placement.actual_target - aim.pass_origin;
 
         // Rolling delivery speed — the pace a ground pass has to leave the
         // foot at to arrive. The trajectory solver below either uses this
         // as-is (driven / ground balls) or replaces it with a ballistic
         // solution (lofted balls).
-        let rolling_velocity =
-            Self::calculate_horizontal_velocity(
-                &actual_pass_vector,
-                event_model.pass_force,
-                &context.conditions,
-            );
+        let rolling_velocity = Self::calculate_horizontal_velocity(
+            &actual_pass_vector,
+            event_model.pass_force,
+            &context.conditions,
+        );
 
         // Determine trajectory type based on context, not just distance
-        let passer = field.get_player_mut(event_model.from_player_id).unwrap();
+        let passer = field.get_player(event_model.from_player_id).unwrap();
         let passer_team_id = passer.team_id;
         let passer_is_goalkeeper = passer.tactical_position.current_position.is_goalkeeper();
 
@@ -3741,11 +4185,11 @@ impl PlayerEventDispatcher {
         let trajectory_type = match event_model.cross_type {
             Some(ct) => TrajectoryType::Cross(ct),
             None => Self::select_trajectory_type_contextual(
-                actual_horizontal_distance,
-                &skills,
+                placement.actual_horizontal_distance,
+                &aim.skills,
                 rng,
-                &passer_position,
-                &actual_target,
+                &aim.passer_position,
+                &placement.actual_target,
                 passer_team_id,
                 &field.players,
             ),
@@ -3760,11 +4204,12 @@ impl PlayerEventDispatcher {
         // of the height model — the solver now derives the height from the
         // range, and if the range is beyond what the gravity constant
         // permits it drives the ball instead (see `calculate_pass_velocity`).
-        let trajectory_type = if passer_is_goalkeeper && actual_horizontal_distance > 240.0 {
-            TrajectoryType::HighArc
-        } else {
-            trajectory_type
-        };
+        let trajectory_type =
+            if passer_is_goalkeeper && placement.actual_horizontal_distance > 240.0 {
+                TrajectoryType::HighArc
+            } else {
+                trajectory_type
+            };
 
         // Solve the whole launch vector at once — see
         // `calculate_pass_velocity` for why the z-component can never be
@@ -3773,7 +4218,7 @@ impl PlayerEventDispatcher {
             &actual_pass_vector,
             &rolling_velocity,
             trajectory_type,
-            &skills,
+            &aim.skills,
             rng,
         );
 
@@ -3801,7 +4246,10 @@ impl PlayerEventDispatcher {
         // It used to be drawn into `pass_force`, which the pace model folds
         // into a ±10% fine-tune, so it moved the delivery by a percent or
         // two and every pass in the match arrived perfectly weighted.
-        let weight = rng.jitter(1.0, (1.0 - overall_quality) * Self::pass_weight_spread());
+        let weight = rng.jitter(
+            1.0,
+            (1.0 - aim.overall_quality) * Self::pass_weight_spread(),
+        );
         final_velocity.x *= weight;
         final_velocity.y *= weight;
 
@@ -3826,47 +4274,87 @@ impl PlayerEventDispatcher {
         }
 
         #[cfg(feature = "match-logs")]
-        {
-            let traffic = Self::scan_passing_lane(
-                &passer_position,
-                &actual_target,
-                passer_team_id,
-                &field.players,
-            );
-            let traffic_lifted = event_model.cross_type.is_none()
-                && traffic.nearest <= Self::LIFT_TRIGGER_DISTANCE
-                && !matches!(
-                    trajectory_type,
-                    TrajectoryType::Ground | TrajectoryType::LowDriven
-                );
-            let backward = passer_side
-                .is_some_and(|s| s.forward_delta(passer_position.x, actual_target.x) < -8.0);
-            let field_w = field.size.width as f32;
-            let field_h = field.size.height as f32;
-            let centre_y = field_h * 0.5;
-            let wide = (actual_target.y - centre_y).abs() > field_h * 0.30;
-            let in_opp_box = |p: &Vector3<f32>| {
-                let depth = match passer_side {
-                    Some(PlayerSide::Left) => field_w - p.x,
-                    Some(PlayerSide::Right) => p.x,
-                    None => f32::MAX,
-                };
-                depth < 132.0 && (p.y - centre_y).abs() < 161.0
-            };
-            let into_box = event_model.cross_type.is_none()
-                && in_opp_box(&actual_target)
-                && !in_opp_box(&passer_position);
-            FlightDiag::note_pass(
-                actual_horizontal_distance,
-                trajectory_type.diag_index(),
-                traffic_lifted,
-                Ball::apex_for_launch(final_velocity.z.max(0.0)),
-                backward,
-                wide,
-                into_box,
-            );
-        }
+        Self::note_pass_flight(
+            event_model,
+            aim,
+            placement,
+            final_velocity,
+            trajectory_type,
+            field,
+        );
 
+        PassLaunch {
+            velocity: final_velocity,
+            trajectory_type,
+        }
+    }
+
+    /// The delivery-shape census for one struck pass. Diagnostic only.
+    #[cfg(feature = "match-logs")]
+    fn note_pass_flight(
+        event_model: &PassingEventContext,
+        aim: &PassAim,
+        placement: &PassPlacement,
+        final_velocity: Vector3<f32>,
+        trajectory_type: TrajectoryType,
+        field: &MatchField,
+    ) {
+        let traffic = Self::scan_passing_lane(
+            &aim.passer_position,
+            &placement.actual_target,
+            aim.passer_team_id,
+            &field.players,
+        );
+        let traffic_lifted = event_model.cross_type.is_none()
+            && traffic.nearest <= Self::LIFT_TRIGGER_DISTANCE
+            && !matches!(
+                trajectory_type,
+                TrajectoryType::Ground | TrajectoryType::LowDriven
+            );
+        let backward = aim.passer_side.is_some_and(|s| {
+            s.forward_delta(aim.passer_position.x, placement.actual_target.x) < -8.0
+        });
+        let field_w = field.size.width as f32;
+        let field_h = field.size.height as f32;
+        let centre_y = field_h * 0.5;
+        let wide = (placement.actual_target.y - centre_y).abs() > field_h * 0.30;
+        let in_opp_box = |p: &Vector3<f32>| {
+            let depth = match aim.passer_side {
+                Some(PlayerSide::Left) => field_w - p.x,
+                Some(PlayerSide::Right) => p.x,
+                None => f32::MAX,
+            };
+            depth < 132.0 && (p.y - centre_y).abs() < 161.0
+        };
+        let into_box = event_model.cross_type.is_none()
+            && in_opp_box(&placement.actual_target)
+            && !in_opp_box(&aim.passer_position);
+        FlightDiag::note_pass(
+            placement.actual_horizontal_distance,
+            trajectory_type.diag_index(),
+            traffic_lifted,
+            Ball::apex_for_launch(final_velocity.z.max(0.0)),
+            backward,
+            wide,
+            into_box,
+        );
+    }
+
+    /// Apply the strike to the ball: velocity, swing spin, release and
+    /// the receiver's in-flight protection.
+    #[cfg_attr(not(feature = "match-logs"), allow(unused_variables))]
+    fn apply_pass_strike(
+        event_model: &PassingEventContext,
+        aim: &PassAim,
+        placement: &PassPlacement,
+        launch: &PassLaunch,
+        field: &mut MatchField,
+        context: &MatchContext,
+        was_cross: bool,
+    ) {
+        let final_velocity = launch.velocity;
+        let passer = field.get_player(event_model.from_player_id).unwrap();
+        let passer_is_goalkeeper = passer.tactical_position.current_position.is_goalkeeper();
         // Apply ball physics
         field.ball.velocity = final_velocity;
 
@@ -3880,17 +4368,17 @@ impl PlayerEventDispatcher {
         // delivery asked to swing asks for a physically impossible
         // rotation, and an unclamped Magnus force is a catapult. See
         // `SpinModel::clamped`.
-        field.ball.spin = if swing_units.abs() > f32::EPSILON {
+        field.ball.spin = if placement.swing_units.abs() > f32::EPSILON {
             let speed =
                 (final_velocity.x * final_velocity.x + final_velocity.y * final_velocity.y).sqrt();
-            if speed > 0.05 && actual_horizontal_distance > 1.0 {
+            if speed > 0.05 && placement.actual_horizontal_distance > 1.0 {
                 SpinModel::clamped(Vector3::new(
                     0.0,
                     0.0,
-                    2.0 * swing_units * speed
+                    2.0 * placement.swing_units * speed
                         / (SpinModel::MAGNUS_COEFF
-                            * actual_horizontal_distance
-                            * actual_horizontal_distance),
+                            * placement.actual_horizontal_distance
+                            * placement.actual_horizontal_distance),
                 ))
             } else {
                 Vector3::zeros()
@@ -3904,7 +4392,7 @@ impl PlayerEventDispatcher {
         // and, when the releaser is a keeper, Law 12's second-touch bar.
         field.ball.note_release(
             event_model.from_player_id,
-            passer_position,
+            aim.passer_position,
             context.current_tick(),
         );
         // A deliberate kick by a field player arms the back-pass
@@ -3922,7 +4410,7 @@ impl PlayerEventDispatcher {
             }
             field.ball.note_deliberate_kick(
                 event_model.from_player_id,
-                passer_team_id,
+                aim.passer_team_id,
                 context.current_tick(),
             );
         }
@@ -3933,7 +4421,7 @@ impl PlayerEventDispatcher {
         // from a stale one.
         field.ball.record_passer(
             event_model.from_player_id,
-            passer_team_id,
+            aim.passer_team_id,
             context.current_tick(),
         );
 
@@ -3981,8 +4469,7 @@ impl PlayerEventDispatcher {
         // a flat 40-tick literal that expired two and a half seconds
         // before the ball came down.
         field.ball.flags.in_flight_state =
-            FlightProtection::for_pass(final_velocity, actual_horizontal_distance);
-        trajectory_type.is_ballistic()
+            FlightProtection::for_pass(final_velocity, placement.actual_horizontal_distance);
     }
 
     fn calculate_horizontal_distance(ball_pass_vector: &Vector3<f32>) -> f32 {
@@ -4413,10 +4900,11 @@ impl PlayerEventDispatcher {
 
             // Allow claim with escalated cooldown
             #[cfg(feature = "match-logs")]
-            context
-                .defender_census
-                .borrow_mut()
-                .tag_take(TakeRule::ClaimOwned, player_id, context.current_tick());
+            context.defender_census.borrow_mut().tag_take(
+                TakeRule::ClaimOwned,
+                player_id,
+                context.current_tick(),
+            );
             field.ball.previous_owner = Some(current_owner);
             field.ball.current_owner = Some(player_id);
             Self::touch_on_taking(player_id, field, context.current_tick());
@@ -4569,9 +5057,10 @@ impl PlayerEventDispatcher {
         context: &mut MatchContext,
     ) {
         const ERROR_TO_SHOT_WINDOW_TICKS: u64 = 600; // ~6s
-        let (Some(giver_id), Some(giver_team)) =
-            (field.ball.last_giveaway_player_id, field.ball.last_giveaway_team_id)
-        else {
+        let (Some(giver_id), Some(giver_team)) = (
+            field.ball.last_giveaway_player_id,
+            field.ball.last_giveaway_team_id,
+        ) else {
             return;
         };
         let in_window =
@@ -4717,7 +5206,8 @@ impl PlayerEventDispatcher {
         field: &mut MatchField,
         context: &mut MatchContext,
     ) -> bool {
-        let (Some(challenger), Some(owner)) = (field.get_player(claimer), field.get_player(carrier))
+        let (Some(challenger), Some(owner)) =
+            (field.get_player(claimer), field.get_player(carrier))
         else {
             return false;
         };
@@ -4833,7 +5323,9 @@ impl PlayerEventDispatcher {
         field.ball.current_owner = Some(player_id);
         Self::touch_on_taking(player_id, field, tick);
         if let Some(loser) = field.ball.previous_owner.filter(|&id| id != player_id)
-            && field.get_player(loser).is_some_and(|p| Some(p.team_id) != team_id)
+            && field
+                .get_player(loser)
+                .is_some_and(|p| Some(p.team_id) != team_id)
         {
             field.on_dispossessed(loser, tick);
         }
@@ -4923,108 +5415,20 @@ impl PlayerEventDispatcher {
         (apex - from_height) / ticks + 0.5 * GRAVITY_PER_TICK * ticks
     }
 
-    fn handle_shoot_event(
-        shoot_event_model: ShootingEventContext,
+    /// The strike before it is aimed: shooter profile, goal frame,
+    /// pressure and the wall. `None` means the ball is already on the
+    /// line and merely needs the gentle push.
+    fn shot_setup(
+        shoot_event_model: &ShootingEventContext,
         field: &mut MatchField,
         context: &mut MatchContext,
-        match_data: &mut ResultMatchPositionData,
-        direct_assister_id: Option<u32>,
-    ) {
+    ) -> Option<ShotSetup> {
         // Half-width of the goal in game units — the engine's own
         // constant, not a copy of it, so the strike model and the
         // goal-line test can never disagree about where the posts are.
         const GOAL_WIDTH: f32 = GOAL_MOUTH_HALF_WIDTH;
-        // Shot velocity cap. Field is 840u = 105m, so 1u = 0.125m, and at
-        // 100-tick/s simulation a cap of 5.6 u/tick meant 70 m/s (~252 km/h)
-        // — about 2× the real-world top shot speed (~35 m/s = 2.8 u/tick).
-        // Keepers covering 1.16 u/tick laterally had only 9 ticks of shot
-        // flight from 50u out (~10u of coverage) against a 29u half-goal:
-        // any shot aimed outside the central 15u bypassed the save check.
-        // Calibrated to real-world peak shot speed — elite piledrivers now
-        // arrive in ~18 ticks instead of ~9, matching the ~3.75× shot/player
-        // speed ratio observed in real football (vs. the engine's prior ~10×).
-        const MAX_SHOT_VELOCITY: f32 = 3.2;
-        /// How far off the true crossing point a keeper's committed line
-        /// can be, in game units, before the flight-time scaling. 18u is
-        /// 2.25 m — the width a placed shot beats a set keeper by.
-        const KEEPER_PLACEMENT_READ: f32 = 18.0;
-        /// Population mean of `execution_skill` AT THE MOMENT OF A STRIKE
-        /// — not over all players, because who shoots is itself selected.
-        ///
-        /// Both forced-miss rolls are centred here, so the population's
-        /// on-target rate is untouched and only the spread around it is
-        /// new. **That holds only while this equals the blend's actual
-        /// mean**, and `dev_match stats` now prints that mean on its own
-        /// line (`mean execution ← set POPULATION_EXECUTION to this`).
-        /// Re-derive it there after anything that moves the blend.
-        ///
-        /// ⚠ **It had drifted, and it was charging everybody.** The
-        /// constant read 0.622 against a measured **0.550** — the
-        /// `execution_skill` blend has moved since (every band is read
-        /// against the standard of the match, and headers execute on
-        /// `header_finish`). The harness did print the mean, but three
-        /// lines down inside the finishing-tier block's `if` and worded
-        /// as advice to a future change ("centre any accuracy quality
-        /// term here") rather than as a check on the constant that
-        /// already existed, so nobody read one against the other. It has
-        /// been lifted out, made unconditional, and named after this
-        /// constant.
-        ///
-        /// 0.072 of edge is not a rounding error at this scale. It runs
-        /// through `wide_miss_chance` and `over_bar_chance` as
-        /// `base * (1 + edge) + edge * ACCURACY_SCUFF`, so the AVERAGE
-        /// shooter in the game carried about a 6.5% multiplicative and a
-        /// 0.9-point additive miss penalty that the centring exists to
-        /// make exactly zero. Measured identically (0.547-0.550 open
-        /// play) across every arm of the route work, including untouched
-        /// `master`, so it is drift rather than anything that change did.
-        ///
-        /// Correcting it, `dev_match stats 400 14 14`: on-target
-        /// **30.4% → 33.6%** against a real ~33%, and goals **2.32 →
-        /// 2.47** against a real ~2.5.
-        ///
-        /// 0.550 → 0.533 once crosses came down to a real volume: fewer
-        /// headers off deliveries and more shots from the box's edge moved
-        /// the blend's mean, and the average shooter was again charged
-        /// the edge (on-target 30.4%).
-        const POPULATION_EXECUTION: f32 = 0.533;
-        // How far the forced-miss rolls swing either side of the anchor
-        // is `Self::shot_accuracy_spread()` — centred, so widening it
-        // cannot move the population's on-target rate, only how far a
-        // good and a bad finisher sit from it. Env-tunable because the
-        // 2026-08-31 sweep measured the whole finishing axis at
-        // Δ −0.14 goals for a 6:18 side-wide pin — real, but a fraction
-        // of what the marquee finishing attribute should carry.
-        /// The scuffed tap-in: how much of a miss chance the worst
-        /// finisher carries at ANY range, and the best one is spared.
-        /// Distance-independent by design — see the note at
-        /// `wide_miss_chance`. 0.14 puts about seven points of extra
-        /// wide-miss on a 1/20 finisher from six yards, where the
-        /// multiplicative half is worth almost nothing.
-        const ACCURACY_SCUFF: f32 = 0.14;
-        /// How much of the miss axis a fully spent player carries. At the
-        /// 0.55 ceiling of `low_condition_penalty` this is worth 0.30 of
-        /// edge — about the same as dropping four points of finishing, so
-        /// an exhausted striker shoots like an ordinary one and an
-        /// exhausted ordinary player like a poor one.
-        const CONDITION_DRAG: f32 = 0.55;
-        /// Half-width of the lane a defender must be inside to be credited
-        /// with covering a shot, in game units (60u = 7.5m). Wide enough to
-        /// mean "in front of goal in the danger zone" rather than "literally
-        /// on the ball line" — a defender two yards off the strike still
-        /// narrowed the angle it had to beat.
-        const COVER_LANE_HALF_WIDTH: f32 = 60.0;
-
         const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from normalization
 
-        let rng = &context.rng;
-
-        // Build the unified shot profile from the same inputs the
-        // pre-shot decision saw — the post-hoc xG, the trajectory error
-        // budget, the on-target probability and the miskick odds all
-        // come from this single object. Replaces the prior
-        // (compress_high + raw skill) reads that let a 5/20 player
-        // inherit elite conversion through linear blends.
         let minute = sc::minute_from_ticks(shoot_event_model.tick);
         let pre_distance = (shoot_event_model.target - field.ball.position).magnitude();
 
@@ -5044,156 +5448,36 @@ impl PlayerEventDispatcher {
             None
         };
 
-        // Snapshot the bits of state we need from `field` so we can
-        // build the profile without juggling overlapping borrows.
-        let (
-            condition_pct,
-            shooter_position,
+        let shooter = Self::shot_shooter_snapshot(field, shoot_event_model.from_player_id);
+        let condition_pct = shooter.condition_pct;
+        let shooter_position = shooter.position;
+        let shooter_side = shooter.side;
+        let technique_skill = shooter.technique_skill;
+        let finishing_skill = shooter.finishing_skill;
+        let long_shot_skill = shooter.long_shot_skill;
+        let shooter_team_id = shooter.team_id;
+        let composure01 = shooter.composure01;
+
+        let desperation = Self::shot_desperation(context, shooter_team_id, composure01, minute);
+
+        let pressure = Self::shot_pressure(
+            field,
+            shoot_event_model.from_player_id,
             shooter_side,
-            technique_skill,
-            finishing_skill,
-            long_shot_skill,
-            shooter_team_id,
-            composure01,
-        ) = {
-            let player = field.get_player(shoot_event_model.from_player_id).unwrap();
-            (
-                (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0),
-                player.position,
-                player.side,
-                (player.skills.technical.technique / 20.0).clamp(0.1, 1.0),
-                (player.skills.technical.finishing / 20.0).clamp(0.1, 1.0),
-                (player.skills.technical.long_shots / 20.0).clamp(0.1, 1.0),
-                player.team_id,
-                (player.skills.mental.composure / 20.0).clamp(0.0, 1.0),
-            )
-        };
+            shooter_position,
+        );
+        let pressure_5u = pressure.close_5u;
+        let pressure_10u = pressure.close_10u;
+        let pressure_24u = pressure.ring_24u;
 
-        // Desperation factor — the missing half of the chasing dynamic.
-        // The tactical layer already makes trailing teams shoot MORE
-        // (risk lift, PushForward/AllOutAttack); real football's
-        // counterweight is that they convert WORSE — snatched first-time
-        // finishes, shots through traffic, hero-ball from bad angles.
-        // (Documented as systematic xG underperformance when chasing.)
-        // Without the counterweight, the trailer's volume push converts
-        // at full quality, which manufactures equalizers and is one of
-        // the levers behind the measured +18pp draw-correlation surplus
-        // at equal strength. Continuous in deficit and clock; calm
-        // finishers (composure) shed up to half the penalty.
-        let desperation = if !context.behavioral_score_visible() {
-            0.0
-        } else {
-            let home_goals = context.score.home_team.get() as i16;
-            let away_goals = context.score.away_team.get() as i16;
-            let own_diff = if shooter_team_id == context.field_home_team_id {
-                home_goals - away_goals
-            } else {
-                away_goals - home_goals
-            };
-            let deficit01 = ((-own_diff).max(0) as f32 / 2.0).min(1.0);
-            // Onset aligned with the coach's PushForward window (55')
-            // so every minute of elevated chasing VOLUME carries the
-            // conversion counterweight. Score-blind A/B measurement
-            // showed the score-reactive regime alone carries the whole
-            // +17pp draw-correlation surplus — the volume half of the
-            // chase was modeled without the quality half.
-            let late01 = ((minute as f32 - 55.0) / 30.0).clamp(0.0, 1.0);
-            // Scaled with the regime's gain, and it MUST be — this is the
-            // conversion counterweight to the chasing VOLUME lift in
-            // `compute_risk_appetite`. Leave it at full strength while the
-            // volume half is turned down and the pairing inverts: a
-            // trailing side would shoot no more than usual and convert
-            // worse. See `MatchContext::SCORE_REACTION_GAIN`.
-            deficit01 * late01 * (1.0 - composure01 * 0.5) * MatchContext::score_reaction_gain()
-        };
-
-        // Pressure counts: scan opposing-side players close to the
-        // shooter. We don't have the StateProcessingContext grid here,
-        // so a small linear scan is used; the population of opponents
-        // is bounded (<=11) so the cost is negligible.
-        let mut pressure_5u: u32 = 0;
-        let mut pressure_10u: u32 = 0;
-        // Wider band for the recorded xG's pressure discount. 5u and 10u
-        // are 0.63m and 1.25m — close enough to be standing on the
-        // shooter's foot, and measured they are almost always zero, so a
-        // discount built on them moved population xG by 2%. A defender
-        // closing to ~3m is what a real xG model reads as pressure, and
-        // it is what actually separates a free strike from a hurried
-        // one. Kept separate rather than widening the two above, which
-        // the shot-accuracy error model is calibrated against.
-        let mut pressure_24u: u32 = 0;
-        if let Some(side) = shooter_side {
-            for other in field.players.iter() {
-                if other.id == shoot_event_model.from_player_id {
-                    continue;
-                }
-                if other.side == Some(side) {
-                    continue;
-                }
-                let d = (other.position - shooter_position).magnitude();
-                if d <= 5.0 {
-                    pressure_5u += 1;
-                }
-                if d <= 10.0 {
-                    pressure_10u += 1;
-                }
-                if d <= 24.0 {
-                    pressure_24u += 1;
-                }
-            }
-        }
-
-        // Distance to opposing GK (any opponent goalkeeper).
-        let gk_distance = field
-            .players
-            .iter()
-            .filter(|p| p.side != shooter_side)
-            .find(|p| {
-                matches!(
-                    p.tactical_position.current_position.position_group(),
-                    PlayerFieldPositionGroup::Goalkeeper
-                )
-            })
-            .map(|gk| (gk.position - shooter_position).magnitude());
-
-        let inputs = ShotSkillInputs {
-            distance: pre_distance,
+        let profile = Self::shot_skill_profile(
+            shoot_event_model,
+            field,
             minute,
+            pre_distance,
+            &pressure,
             condition_pct,
-            pressure_count_5u: pressure_5u,
-            pressure_count_10u: pressure_10u,
-            // We don't have shot_clarity here, but `has_clear_shot` is
-            // the gating signal the pre-shot xG used too.
-            shot_clarity: 1.0,
-            has_clear_shot: true,
-            gk_distance,
-            is_sprinting_or_recent_sprint: false,
-            // Classified once, on the event, by `ShootingEventBuilder`.
-            //
-            // Passed through WHOLE. It used to be narrowed to the two
-            // dead balls and everything else flattened to open play,
-            // which is why `ShotType::Header` — set at five call sites
-            // and resolved by the builder — reached the profile as a foot
-            // shot: `heading` won the aerial duel and then `finishing`
-            // struck the ball.
-            shot_type: shoot_event_model.shot_type,
-        };
-        let profile = {
-            let player = field.get_player(shoot_event_model.from_player_id).unwrap();
-            ShotSkillProfile::from_player(player, &inputs)
-        };
-
-        // Skill bands derived from the unified profile.
-        let execution_skill = profile.execution_skill;
-        let placement_skill = profile.placement_skill;
-        let body_control = profile.body_control;
-        let poor_penalty = profile.poor_penalty;
-        let low_condition_penalty = profile.low_condition_penalty;
-        let pressure_penalty = profile.pressure_penalty;
-        let on_target_skill_multiplier = profile.on_target_skill_multiplier;
-        let random_error_scale = profile.random_error_scale;
-        let miskick_probability = profile.miskick_probability;
-        let power_skill = profile.power_skill;
+        );
 
         // The goal frame comes from the PITCH, never from the event.
         let goal_center = Self::resolve_goal_frame(
@@ -5212,20 +5496,223 @@ impl PlayerEventDispatcher {
             + ball_to_goal_vector.y * ball_to_goal_vector.y)
             .sqrt();
 
-        // Safety check: if ball is already at/very near the goal, just give it a gentle push
         if horizontal_distance < MIN_SHOT_DISTANCE {
-            let direction = if ball_to_goal_vector.x.abs() > 0.01 {
-                Vector3::new(ball_to_goal_vector.x.signum(), 0.0, 0.0)
-            } else {
-                Vector3::new(1.0, 0.0, 0.0) // Default direction
-            };
-            field.ball.previous_owner = Some(shoot_event_model.from_player_id);
-            field.ball.current_owner = None;
-            field.ball.velocity = direction * 2.0; // Gentle push
-            field.ball.flags.in_flight_state = 20;
-            return;
+            Self::shot_too_close_push(field, shoot_event_model, ball_to_goal_vector);
+            return None;
         }
 
+        let finisher_head = context
+            .psychology
+            .get(shoot_event_model.from_player_id)
+            .copied();
+
+        Some(ShotSetup {
+            minute,
+            shot_type: shoot_event_model.shot_type,
+            force: shoot_event_model.force as f32,
+            wall_stopper,
+            shooter_position,
+            shooter_side,
+            shooter_team_id,
+            technique_skill,
+            finishing_skill,
+            long_shot_skill,
+            profile,
+            goal_center,
+            goal_left_post,
+            goal_right_post,
+            ball_to_goal_vector,
+            horizontal_distance,
+            pressure_5u,
+            pressure_10u,
+            pressure_24u,
+            desperation,
+            finisher_head,
+        })
+    }
+
+    /// Snapshot the bits of shooter state the profile is built from, so
+    /// the setup can read them without juggling overlapping borrows.
+    fn shot_shooter_snapshot(field: &MatchField, shooter_id: u32) -> ShotShooter {
+        let player = field.get_player(shooter_id).unwrap();
+        ShotShooter {
+            condition_pct: (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0),
+            position: player.position,
+            side: player.side,
+            technique_skill: (player.skills.technical.technique / 20.0).clamp(0.1, 1.0),
+            finishing_skill: (player.skills.technical.finishing / 20.0).clamp(0.1, 1.0),
+            long_shot_skill: (player.skills.technical.long_shots / 20.0).clamp(0.1, 1.0),
+            team_id: player.team_id,
+            composure01: (player.skills.mental.composure / 20.0).clamp(0.0, 1.0),
+        }
+    }
+
+    /// The ball is already at the goal: give it a gentle push rather than
+    /// asking a normalisation to divide by nothing.
+    fn shot_too_close_push(
+        field: &mut MatchField,
+        shoot_event_model: &ShootingEventContext,
+        ball_to_goal_vector: Vector3<f32>,
+    ) {
+        let direction = if ball_to_goal_vector.x.abs() > 0.01 {
+            Vector3::new(ball_to_goal_vector.x.signum(), 0.0, 0.0)
+        } else {
+            Vector3::new(1.0, 0.0, 0.0) // Default direction
+        };
+        field.ball.previous_owner = Some(shoot_event_model.from_player_id);
+        field.ball.current_owner = None;
+        field.ball.velocity = direction * 2.0; // Gentle push
+        field.ball.flags.in_flight_state = 20;
+    }
+
+    /// Build the unified shot profile from the same inputs the pre-shot
+    /// decision saw.
+    fn shot_skill_profile(
+        shoot_event_model: &ShootingEventContext,
+        field: &MatchField,
+        minute: u32,
+        pre_distance: f32,
+        pressure: &ShotPressure,
+        condition_pct: f32,
+    ) -> ShotSkillProfile {
+        let inputs = ShotSkillInputs {
+            distance: pre_distance,
+            minute,
+            condition_pct,
+            pressure_count_5u: pressure.close_5u,
+            pressure_count_10u: pressure.close_10u,
+            // We don't have shot_clarity here, but `has_clear_shot` is
+            // the gating signal the pre-shot xG used too.
+            shot_clarity: 1.0,
+            has_clear_shot: true,
+            gk_distance: pressure.gk_distance,
+            is_sprinting_or_recent_sprint: false,
+            // Classified once, on the event, by `ShootingEventBuilder`.
+            //
+            // Passed through WHOLE. It used to be narrowed to the two
+            // dead balls and everything else flattened to open play,
+            // which is why `ShotType::Header` — set at five call sites
+            // and resolved by the builder — reached the profile as a foot
+            // shot: `heading` won the aerial duel and then `finishing`
+            // struck the ball.
+            shot_type: shoot_event_model.shot_type,
+        };
+        let player = field.get_player(shoot_event_model.from_player_id).unwrap();
+        ShotSkillProfile::from_player(player, &inputs)
+    }
+
+    /// Desperation factor — the missing half of the chasing dynamic.
+    /// The tactical layer already makes trailing teams shoot MORE
+    /// (risk lift, PushForward/AllOutAttack); real football's
+    /// counterweight is that they convert WORSE — snatched first-time
+    /// finishes, shots through traffic, hero-ball from bad angles.
+    /// (Documented as systematic xG underperformance when chasing.)
+    /// Without the counterweight, the trailer's volume push converts
+    /// at full quality, which manufactures equalizers and is one of
+    /// the levers behind the measured +18pp draw-correlation surplus
+    /// at equal strength. Continuous in deficit and clock; calm
+    /// finishers (composure) shed up to half the penalty.
+    fn shot_desperation(
+        context: &MatchContext,
+        shooter_team_id: u32,
+        composure01: f32,
+        minute: u32,
+    ) -> f32 {
+        if !context.behavioral_score_visible() {
+            return 0.0;
+        }
+        let home_goals = context.score.home_team.get() as i16;
+        let away_goals = context.score.away_team.get() as i16;
+        let own_diff = if shooter_team_id == context.field_home_team_id {
+            home_goals - away_goals
+        } else {
+            away_goals - home_goals
+        };
+        let deficit01 = ((-own_diff).max(0) as f32 / 2.0).min(1.0);
+        // Onset aligned with the coach's PushForward window (55')
+        // so every minute of elevated chasing VOLUME carries the
+        // conversion counterweight. Score-blind A/B measurement
+        // showed the score-reactive regime alone carries the whole
+        // +17pp draw-correlation surplus — the volume half of the
+        // chase was modeled without the quality half.
+        let late01 = ((minute as f32 - 55.0) / 30.0).clamp(0.0, 1.0);
+        // Scaled with the regime's gain, and it MUST be — this is the
+        // conversion counterweight to the chasing VOLUME lift in
+        // `compute_risk_appetite`. Leave it at full strength while the
+        // volume half is turned down and the pairing inverts: a
+        // trailing side would shoot no more than usual and convert
+        // worse. See `MatchContext::SCORE_REACTION_GAIN`.
+        deficit01 * late01 * (1.0 - composure01 * 0.5) * MatchContext::score_reaction_gain()
+    }
+
+    /// Pressure counts: scan opposing-side players close to the
+    /// shooter. We don't have the StateProcessingContext grid here,
+    /// so a small linear scan is used; the population of opponents
+    /// is bounded (<=11) so the cost is negligible.
+    fn shot_pressure(
+        field: &MatchField,
+        shooter_id: u32,
+        shooter_side: Option<PlayerSide>,
+        shooter_position: Vector3<f32>,
+    ) -> ShotPressure {
+        let mut pressure_5u: u32 = 0;
+        let mut pressure_10u: u32 = 0;
+        // Wider band for the recorded xG's pressure discount. 5u and 10u
+        // are 0.63m and 1.25m — close enough to be standing on the
+        // shooter's foot, and measured they are almost always zero, so a
+        // discount built on them moved population xG by 2%. A defender
+        // closing to ~3m is what a real xG model reads as pressure, and
+        // it is what actually separates a free strike from a hurried
+        // one. Kept separate rather than widening the two above, which
+        // the shot-accuracy error model is calibrated against.
+        let mut pressure_24u: u32 = 0;
+        if let Some(side) = shooter_side {
+            for other in field.players.iter() {
+                if other.id == shooter_id {
+                    continue;
+                }
+                if other.side == Some(side) {
+                    continue;
+                }
+                let d = (other.position - shooter_position).magnitude();
+                if d <= 5.0 {
+                    pressure_5u += 1;
+                }
+                if d <= 10.0 {
+                    pressure_10u += 1;
+                }
+                if d <= 24.0 {
+                    pressure_24u += 1;
+                }
+            }
+        }
+        // Distance to opposing GK (any opponent goalkeeper).
+        let gk_distance = field
+            .players
+            .iter()
+            .filter(|p| p.side != shooter_side)
+            .find(|p| {
+                matches!(
+                    p.tactical_position.current_position.position_group(),
+                    PlayerFieldPositionGroup::Goalkeeper
+                )
+            })
+            .map(|gk| (gk.position - shooter_position).magnitude());
+        ShotPressure {
+            close_5u: pressure_5u,
+            close_10u: pressure_10u,
+            ring_24u: pressure_24u,
+            gk_distance,
+        }
+    }
+
+    /// The aim band: how far off centre a shot may be struck, from the
+    /// profile's random error scale and the pressure, body and distance
+    /// multipliers.
+    fn shot_error_budget(setup: &ShotSetup, context: &MatchContext) -> f32 {
+        let profile = &setup.profile;
+        let horizontal_distance = setup.horizontal_distance;
+        let execution_skill = profile.execution_skill;
         // Overall shot accuracy now flows from the unified profile —
         // execution_skill is already skill-curved, fatigue-aware, and
         // pressure-discounted, so a 5/20 finisher tops out around
@@ -5233,7 +5720,7 @@ impl PlayerEventDispatcher {
         // blends. `on_target_skill_multiplier` adds the smoothstep
         // poor/elite shaping (poor_penalty knocks 20% off, elite_lift
         // adds 5%).
-        let base_accuracy = on_target_skill_multiplier * execution_skill;
+        let base_accuracy = profile.on_target_skill_multiplier * execution_skill;
 
         // Distance penalty multiplier for base_accuracy — close range should be very accurate
         let distance_penalty = if horizontal_distance > 200.0 {
@@ -5276,9 +5763,10 @@ impl PlayerEventDispatcher {
         // calibrated band from 60u outwards untouched and lets it fall
         // away properly underneath.
         let distance_error = (horizontal_distance / 80.0).clamp(0.75, 3.0);
-        let pressure_error = 1.0 + pressure_penalty * 0.55 + (pressure_5u as f32) * 0.04;
-        let body_error = 1.0 + (1.0 - body_control) * 0.30;
-        let condition_error = 1.0 + low_condition_penalty * 0.45;
+        let pressure_error =
+            1.0 + profile.pressure_penalty * 0.55 + (setup.pressure_5u as f32) * 0.04;
+        let body_error = 1.0 + (1.0 - profile.body_control) * 0.30;
+        let condition_error = 1.0 + profile.low_condition_penalty * 0.45;
         // Base y-error tightened progressively: 34 → 22 → 16. Goal
         // half-width 29u. With pressure / body / distance multipliers
         // stacking up to ~2.5×, even 22u resolved to a 35-50u random
@@ -5298,20 +5786,31 @@ impl PlayerEventDispatcher {
             * pressure_error
             * body_error
             * condition_error
-            * random_error_scale
-            * (1.0 + desperation * 0.38)
+            * profile.random_error_scale
+            * (1.0 + setup.desperation * 0.38)
             * (1.0 - adjusted_accuracy * 0.55);
         let min_error = if horizontal_distance < 18.0 {
-            3.0 + poor_penalty * 3.0
+            3.0 + profile.poor_penalty * 3.0
         } else if horizontal_distance < 30.0 {
-            4.0 + poor_penalty * 4.0
+            4.0 + profile.poor_penalty * 4.0
         } else if horizontal_distance < 60.0 {
-            6.0 + poor_penalty * 5.5
+            6.0 + profile.poor_penalty * 5.5
         } else {
-            8.5 + poor_penalty * 7.5
+            8.5 + profile.poor_penalty * 7.5
         };
-        let max_y_error = max_y_error_raw.clamp(min_error, 60.0);
+        max_y_error_raw.clamp(min_error, 60.0)
+    }
 
+    /// The dead-ball strike, when this is a penalty or a direct free
+    /// kick: its placement, apex, pace and dip are decided by the kick
+    /// model rather than the open-play aim.
+    fn shot_dead_ball(
+        shoot_event_model: &ShootingEventContext,
+        setup: &ShotSetup,
+        field: &MatchField,
+        context: &mut MatchContext,
+    ) -> Option<DeadBallStrike> {
+        let rng = &context.rng;
         // Target placement — driven by `placement_skill`, and bounded by
         // the frame the shooter is aiming into (see
         // `intended_corner_reach`). Spec for the corner/centre split:
@@ -5321,44 +5820,56 @@ impl PlayerEventDispatcher {
         // by it.
         // A penalty is a miss until it goes in as one — the goal handler
         // takes it off again.
+        let execution_skill = setup.profile.execution_skill;
         if shoot_event_model.shot_type == ShotType::Penalty {
-            context.penalty_misses.push(shoot_event_model.from_player_id);
+            context
+                .penalty_misses
+                .push(shoot_event_model.from_player_id);
         }
-        let dead_ball = match shoot_event_model.shot_type {
+        match shoot_event_model.shot_type {
             ShotType::Penalty => Some(PenaltyKick::strike(execution_skill, rng)),
             ShotType::DirectFreeKick => Some(FreeKickShot::strike(
                 execution_skill,
-                horizontal_distance,
-                (FreeKickBand::from_distance(horizontal_distance) != FreeKickBand::Far)
+                setup.horizontal_distance,
+                (FreeKickBand::from_distance(setup.horizontal_distance) != FreeKickBand::Far)
                     .then_some(RestartShape::WALL_DISTANCE),
                 // The line from the ball through the man it hits, carried
                 // on to the goal line.
-                wall_stopper
+                setup
+                    .wall_stopper
                     .and_then(|id| field.get_player(id))
                     .filter(|man| (man.position.x - field.ball.position.x).abs() > 1.0)
                     .map(|man| {
                         let ball = field.ball.position;
-                        let reach = (goal_center.x - ball.x) / (man.position.x - ball.x);
-                        ball.y + (man.position.y - ball.y) * reach - goal_center.y
+                        let reach = (setup.goal_center.x - ball.x) / (man.position.x - ball.x);
+                        ball.y + (man.position.y - ball.y) * reach - setup.goal_center.y
                     }),
                 rng,
             )),
             _ => None,
-        };
-        let central_rate = (0.68 - placement_skill * 0.58).clamp(0.10, 0.68);
-        let side_rate = (1.0 - central_rate) * 0.5;
-        let target_preference = rng.random_range(0.0..1.0);
-        let corner_reach = GOAL_WIDTH * (0.42 + placement_skill * 0.48);
-        let _ = max_y_error;
-        let ideal_y_target = if let Some(kick) = dead_ball {
-            goal_center.y + kick.offset
-        } else if target_preference < side_rate {
-            goal_center.y - corner_reach
-        } else if target_preference < side_rate * 2.0 {
-            goal_center.y + corner_reach
-        } else {
-            goal_center.y + rng.random_range(-GOAL_WIDTH * 0.3..GOAL_WIDTH * 0.3)
-        };
+        }
+    }
+
+    /// Where the shot is aimed: the preferred corner, the skill error, the
+    /// forced wide/miskick rolls, a deflection, the clamp and the curl.
+    fn shot_placement(
+        shoot_event_model: &ShootingEventContext,
+        setup: &ShotSetup,
+        field: &MatchField,
+        context: &mut MatchContext,
+    ) -> ShotPlacement {
+        let dead_ball = Self::shot_dead_ball(shoot_event_model, setup, field, context);
+        let rng = &context.rng;
+        const GOAL_WIDTH: f32 = GOAL_MOUTH_HALF_WIDTH;
+        let goal_center = setup.goal_center;
+        let goal_left_post = setup.goal_left_post;
+        let goal_right_post = setup.goal_right_post;
+        let horizontal_distance = setup.horizontal_distance;
+        let max_y_error = Self::shot_error_budget(setup, context);
+        let placement_skill = setup.profile.placement_skill;
+        let pressure_penalty = setup.profile.pressure_penalty;
+        let ideal_y_target =
+            Self::shot_ideal_y_target(dead_ball, placement_skill, goal_center.y, rng);
 
         // A dead ball's placement already carries its own error.
         let y_error = if dead_ball.is_some() {
@@ -5366,7 +5877,7 @@ impl PlayerEventDispatcher {
         } else {
             rng.random_range(-max_y_error..max_y_error)
         };
-        let mut actual_y_target = ideal_y_target + y_error;
+        let actual_y_target = ideal_y_target + y_error;
 
         // Wide-miss chance now leans on the unified profile so a
         // 5/20 finisher pulls shots wide far more often than an elite.
@@ -5419,15 +5930,7 @@ impl PlayerEventDispatcher {
         // survived — and those were the short ones. With shots now
         // living their full flight, on-frame-at-strike measured 63%
         // against a real ~52% (Opta: ~33% on target plus ~19% blocked).
-        let wide_base = if horizontal_distance < 30.0 {
-            0.132
-        } else if horizontal_distance < 60.0 {
-            0.247
-        } else if horizontal_distance < 100.0 {
-            0.357
-        } else {
-            0.483
-        };
+        let wide_base = Self::shot_wide_base(horizontal_distance);
         // ── WHO STRUCK IT ─────────────────────────────────────────────
         //
         // The two forced-miss rolls set the population on-target rate
@@ -5487,37 +5990,358 @@ impl PlayerEventDispatcher {
         // exactly as he did and a tired one worse, so the population mean
         // moves by however much of the match is played on empty — which is
         // the real effect and the one worth having.
-        let accuracy_edge = ((POPULATION_EXECUTION - execution_skill)
-            * Self::shot_accuracy_spread()
-            + low_condition_penalty * CONDITION_DRAG
-            + profile.contact_drag)
-            .clamp(-0.40, 0.80);
-        // His head scales the forced misses, not the aim: a nervous
-        // finisher snatches more of the same chances, and the chance's own
-        // xG reading is untouched.
-        let finisher_head = context.psychology.get(shoot_event_model.from_player_id).copied();
-        let wide_miss_chance = ActionLapse::scaled(
+        let accuracy_edge = Self::shot_accuracy_edge(setup);
+        let finisher_head = setup.finisher_head;
+        let wide_miss_chance = Self::shot_wide_chance(
+            setup,
+            wide_base,
+            accuracy_edge,
+            pressure_penalty,
+            finisher_head,
+        );
+        #[cfg(feature = "match-logs")]
+        Self::note_shot_edge(
+            shoot_event_model,
+            accuracy_edge,
+            setup.profile.low_condition_penalty,
+            setup.profile.execution_skill,
+        );
+
+        let (actual_y_target, forced_wide, miskicked) = Self::shot_forced_miss(
+            shoot_event_model,
+            setup,
+            dead_ball,
+            actual_y_target,
+            wide_miss_chance,
+            accuracy_edge,
+            finisher_head,
+            goal_left_post,
+            goal_right_post,
+            goal_center.y,
+            rng,
+        );
+        let (actual_y_target, original_y_target, deflected) = Self::shot_deflection(
+            shoot_event_model,
+            setup,
+            actual_y_target,
+            goal_left_post,
+            goal_right_post,
+            goal_center.y,
+            field,
+            rng,
+        );
+        let y_target_unclamped = actual_y_target;
+        // Clamp to reasonable bounds — allow shots to miss by up to 3x goal width
+        let max_miss_distance = GOAL_WIDTH * 3.0;
+        let clamped_y_target = actual_y_target.clamp(
+            goal_left_post - max_miss_distance,
+            goal_right_post + max_miss_distance,
+        );
+
+        let curl_units = Self::shot_curl(shoot_event_model, setup, field, rng);
+        // Calculate final shot direction. The keeper's projection further
+        // down reads this LAUNCH line, so he is genuinely beaten by the
+        // part of the bend he doesn't read — see `KEEPER_CURL_READ`.
+        let launch_y_target = clamped_y_target - curl_units;
+        let actual_target = Vector3::new(goal_center.x, launch_y_target, 0.0);
+
+        ShotPlacement {
+            dead_ball,
+            y_target_unclamped,
+            actual_target,
+            clamped_y_target,
+            original_y_target,
+            deflected,
+            curl_units,
+            accuracy_edge,
+            finisher_head,
+            forced_wide,
+            miskicked,
+        }
+    }
+
+    /// The distance ladder for the wide-miss roll: close shots rarely
+    /// miss the frame, long ones often do.
+    fn shot_wide_base(horizontal_distance: f32) -> f32 {
+        if horizontal_distance < 30.0 {
+            0.132
+        } else if horizontal_distance < 60.0 {
+            0.247
+        } else if horizontal_distance < 100.0 {
+            0.357
+        } else {
+            0.483
+        }
+    }
+
+    /// The finishing-quality diagnostic split at the strike. Diagnostic
+    /// only, but it is what the accuracy calibration is read from.
+    #[cfg(feature = "match-logs")]
+    fn note_shot_edge(
+        shoot_event_model: &ShootingEventContext,
+        accuracy_edge: f32,
+        low_condition_penalty: f32,
+        execution_skill: f32,
+    ) {
+        const CONDITION_DRAG: f32 = 0.55;
+        shot_accuracy_diag::SHOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        shot_accuracy_diag::EXECUTION_SUM.fetch_add(
+            (execution_skill * 1000.0).max(0.0) as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        shot_accuracy_diag::note_edge(accuracy_edge, low_condition_penalty * CONDITION_DRAG);
+        shot_accuracy_diag::FORCE_SUM.fetch_add(
+            (shoot_event_model.force as f32 * 1000.0).max(0.0) as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// Shot height as the APEX of the strike in metres: headers steer
+    /// down or flat, long shots rise, close shots stay low. Returns the
+    /// apex and the environmental height variation still to apply.
+    fn shot_apex(
+        setup: &ShotSetup,
+        horizontal_distance: f32,
+        technique_skill: f32,
+        finishing_skill: f32,
+        long_shot_skill: f32,
+        rng: &MatchRng,
+    ) -> (f32, f32, f32) {
+        // Calculate z-velocity based on shot style and player skills
+        let shot_style: f32 = rng.random_range(0.0..1.0);
+        let height_variation: f32 = rng.random_range(0.85..1.15);
+        // Shot height, expressed as the APEX of the strike in metres and
+        // converted to a launch speed by the shared ballistics helper.
+        //
+        // These used to be raw z velocities on a vertical axis whose
+        // gravity was 160× too strong in metres, so the bands were fitted
+        // to that: a "rising shot" at 3.0 climbed 3 m and was back on the
+        // deck 25 units later, and every shot bounced its way to goal.
+        // Restated as apexes they say what they mean, and the ball now
+        // FLIES to the target — a 1.5 m apex from 25 m arrives at about
+        // waist height, a 2.2 m one at the top corner.
+        let apex_metres = if HeaderStrike::armed() && setup.shot_type.is_header() {
+            // A header is met at head height and steered from there: down
+            // in front of the line, flat at the frame or up under the bar.
+            // It is never rolled along the deck, which is what the foot
+            // bands below aim six in ten close shots at — and headed into
+            // the turf at the goal line, those bounced up into the
+            // keeper's gloves.
+            if shot_style < 0.35 {
+                rng.random_range(0.15..0.50)
+            } else if shot_style < 0.8 {
+                rng.random_range(0.50..1.60)
+            } else {
+                rng.random_range(1.60..2.30)
+            }
+        } else if horizontal_distance > 100.0 {
+            // Long-range shot - varied heights (technique matters more)
+            if shot_style < 0.4 {
+                rng.random_range(0.15..0.60) * technique_skill // Low driven (40%)
+            } else if shot_style < 0.8 {
+                rng.random_range(0.60..1.60) * technique_skill // Normal (40%)
+            } else {
+                rng.random_range(1.60..2.60) * long_shot_skill // Rising shot (20%)
+            }
+        } else if horizontal_distance > 50.0 {
+            // Medium-range shot - mostly low (finishing matters more)
+            if shot_style < 0.6 {
+                rng.random_range(0.05..0.35) * finishing_skill // Very low (60%)
+            } else if shot_style < 0.9 {
+                rng.random_range(0.35..1.00) * technique_skill // Medium (30%)
+            } else {
+                rng.random_range(1.00..2.00) * technique_skill // High (10%)
+            }
+        } else {
+            // Close-range shot - very low and varied (finishing is key)
+            if shot_style < 0.7 {
+                rng.random_range(0.02..0.20) * finishing_skill // Ground shot (70%)
+            } else if shot_style < 0.95 {
+                rng.random_range(0.7..1.3) * finishing_skill // Rising (25%)
+            } else {
+                rng.random_range(1.3..2.0) * technique_skill // Chip (5%)
+            }
+        };
+        // Add spin/environmental variation to height
+        let vertical_spin_variation = rng.random_range(0.90..1.10);
+        (apex_metres, height_variation, vertical_spin_variation)
+    }
+
+    /// Over-the-bar miss chance: distance-dependent, on the same centred
+    /// accuracy axis as the wide-miss roll.
+    fn shot_goes_over_bar(
+        setup: &ShotSetup,
+        placement: &ShotPlacement,
+        accuracy_edge: f32,
+        finisher_head: Option<PsychState>,
+        rng: &MatchRng,
+    ) -> bool {
+        const ACCURACY_SCUFF: f32 = 0.14;
+        let horizontal_distance = setup.horizontal_distance;
+        // Over-the-bar miss chance: distance-dependent. Real football
+        // data: close-range shots go over ~5%, long range ~20%. Earlier
+        // 0.04/0.08/0.14/0.20 bases + 0.20 accuracy scaling were OK when
+        // over-bar shots were silently counted on-target (the counting
+        // bug just fixed). Now that over-bar shots correctly do nothing,
+        // the same bases produce too many accuracy-less misses. Cut
+        // bases ~40% and scaling 0.20 → 0.12 so the on-target rate can
+        // recover toward the real ~33%.
+        // Bases cut ~40% (0.015/0.030/0.055/0.080) 2026-08-08, alongside
+        // `wide_base` — the two forced-miss rolls are the same class and
+        // together they, not the aim band, set the population on-target
+        // rate.
+        // Re-raised 2026-08-11 alongside `wide_base`, same reasoning and
+        // the same ratio — the two forced-miss rolls are one lever and
+        // must move together or the wide/over split distorts.
+        let over_bar_base = if horizontal_distance < 30.0 {
+            0.067
+        } else if horizontal_distance < 60.0 {
+            0.132
+        } else if horizontal_distance < 100.0 {
+            0.178
+        } else {
+            0.253
+        };
+        // Same centred quality term as `wide_miss_chance` — one accuracy
+        // axis for both rolls rather than two half-axes, and the same
+        // reason the additive pair it replaces (0.025 + 0.025, reading
+        // technique rather than finishing) could not move the outcome.
+        let over_bar_chance = ActionLapse::scaled(
+            LapseFamily::Finish,
+            over_bar_base * (1.0 + accuracy_edge) + accuracy_edge * ACCURACY_SCUFF * 0.6,
+            finisher_head.as_ref(),
+        );
+        let shot_goes_over_bar = match placement.dead_ball {
+            Some(kick) => kick.over,
+            None => rng.random_range(0.0f32..1.0) < over_bar_chance,
+        };
+        #[cfg(feature = "match-logs")]
+        if placement.dead_ball.is_none() {
+            lapse_diag::note(
+                LapseFamily::Finish,
+                placement.forced_wide || placement.miskicked || shot_goes_over_bar,
+            );
+        }
+        shot_goes_over_bar
+    }
+
+    /// The on-frame diagnostic split by finishing tier and shot type.
+    #[cfg(feature = "match-logs")]
+    fn note_shot_frame_outcome(
+        setup: &ShotSetup,
+        placement: &ShotPlacement,
+        shot_goes_over_bar: bool,
+        finishing_skill: f32,
+    ) {
+        const GOAL_WIDTH: f32 = GOAL_MOUTH_HALF_WIDTH;
+        use std::sync::atomic::Ordering as AtomicOrdering;
+        let on_frame = !shot_goes_over_bar
+            && (placement.y_target_unclamped - setup.goal_center.y).abs() <= GOAL_WIDTH;
+        if shot_goes_over_bar {
+            shot_accuracy_diag::OVER_FIRED.fetch_add(1, AtomicOrdering::Relaxed);
+        } else if on_frame {
+            shot_accuracy_diag::AIM_ON_FRAME.fetch_add(1, AtomicOrdering::Relaxed);
+        }
+        // …and the same outcome split by the man who struck it. See
+        // `shot_accuracy_diag::BY_FINISHING`.
+        shot_accuracy_diag::note_finishing(
+            shot_accuracy_diag::finishing_tier(finishing_skill * 20.0),
+            on_frame,
+        );
+        // …and by what KIND of shot it was, which is the axis the
+        // taxonomy exists for and the one nothing measured. See
+        // `shot_accuracy_diag::BY_SHOT_TYPE`.
+        shot_accuracy_diag::note_shot_type(
+            match setup.shot_type {
+                ShotType::FootOpenPlay => 0,
+                ShotType::Header => 1,
+                ShotType::Volley => 2,
+                ShotType::OneVOne => 3,
+                ShotType::Cutback => 4,
+                ShotType::SetPieceHeader => 5,
+                ShotType::LongShot => 6,
+                ShotType::Rebound => 7,
+                ShotType::Penalty => 8,
+                ShotType::DirectFreeKick => 9,
+            },
+            on_frame,
+            setup.profile.execution_skill,
+        );
+    }
+
+    /// The striker's preferred point inside the frame: a corner for a
+    /// placed finish, centre for a safe one, or the dead ball's own line.
+    fn shot_ideal_y_target(
+        dead_ball: Option<DeadBallStrike>,
+        placement_skill: f32,
+        goal_center_y: f32,
+        rng: &MatchRng,
+    ) -> f32 {
+        const GOAL_WIDTH: f32 = GOAL_MOUTH_HALF_WIDTH;
+        if let Some(kick) = dead_ball {
+            return goal_center_y + kick.offset;
+        }
+        let central_rate = (0.68 - placement_skill * 0.58).clamp(0.10, 0.68);
+        let side_rate = (1.0 - central_rate) * 0.5;
+        let target_preference = rng.random_range(0.0..1.0);
+        let corner_reach = GOAL_WIDTH * (0.42 + placement_skill * 0.48);
+        if target_preference < side_rate {
+            goal_center_y - corner_reach
+        } else if target_preference < side_rate * 2.0 {
+            goal_center_y + corner_reach
+        } else {
+            goal_center_y + rng.random_range(-GOAL_WIDTH * 0.3..GOAL_WIDTH * 0.3)
+        }
+    }
+
+    /// The centred finishing-quality edge on the miss axis.
+    fn shot_accuracy_edge(setup: &ShotSetup) -> f32 {
+        const POPULATION_EXECUTION: f32 = 0.533;
+        const CONDITION_DRAG: f32 = 0.55;
+        ((POPULATION_EXECUTION - setup.profile.execution_skill) * Self::shot_accuracy_spread()
+            + setup.profile.low_condition_penalty * CONDITION_DRAG
+            + setup.profile.contact_drag)
+            .clamp(-0.40, 0.80)
+    }
+
+    /// The wide-miss probability for this strike, on the same centred
+    /// finishing-quality axis as the over-the-bar roll.
+    fn shot_wide_chance(
+        setup: &ShotSetup,
+        wide_base: f32,
+        accuracy_edge: f32,
+        pressure_penalty: f32,
+        finisher_head: Option<PsychState>,
+    ) -> f32 {
+        const ACCURACY_SCUFF: f32 = 0.14;
+        ActionLapse::scaled(
             LapseFamily::Finish,
             wide_base * (1.0 + accuracy_edge)
                 + accuracy_edge * ACCURACY_SCUFF
                 + pressure_penalty * 0.04
-                + desperation * 0.08,
+                + setup.desperation * 0.08,
             finisher_head.as_ref(),
-        );
-        #[cfg(feature = "match-logs")]
-        {
-            shot_accuracy_diag::SHOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            shot_accuracy_diag::EXECUTION_SUM.fetch_add(
-                (execution_skill * 1000.0).max(0.0) as u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            shot_accuracy_diag::note_edge(accuracy_edge, low_condition_penalty * CONDITION_DRAG);
-            shot_accuracy_diag::FORCE_SUM.fetch_add(
-                (shoot_event_model.force as f32 * 1000.0).max(0.0) as u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-        }
+        )
+    }
 
+    /// The two forced-miss rolls: struck wide, then a miskick that moves
+    /// the aim again. Returns the new aim and which rolls fired.
+    #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(not(feature = "match-logs"), allow(unused_variables))]
+    fn shot_forced_miss(
+        shoot_event_model: &ShootingEventContext,
+        setup: &ShotSetup,
+        dead_ball: Option<DeadBallStrike>,
+        mut actual_y_target: f32,
+        wide_miss_chance: f32,
+        accuracy_edge: f32,
+        finisher_head: Option<PsychState>,
+        goal_left_post: f32,
+        goal_right_post: f32,
+        goal_center_y: f32,
+        rng: &MatchRng,
+    ) -> (f32, bool, bool) {
+        const GOAL_WIDTH: f32 = GOAL_MOUTH_HALF_WIDTH;
         let forced_wide = dead_ball.is_none() && rng.random_range(0.0f32..1.0) < wide_miss_chance;
         if forced_wide {
             #[cfg(feature = "match-logs")]
@@ -5537,7 +6361,7 @@ impl PlayerEventDispatcher {
             && rng.random_range(0.0f32..1.0)
                 < ActionLapse::scaled(
                     LapseFamily::Finish,
-                    miskick_probability,
+                    setup.profile.miskick_probability,
                     finisher_head.as_ref(),
                 );
         if miskicked {
@@ -5547,10 +6371,28 @@ impl PlayerEventDispatcher {
         }
 
         #[cfg(feature = "match-logs")]
-        if (actual_y_target - goal_center.y).abs() <= GOAL_WIDTH {
+        if (actual_y_target - goal_center_y).abs() <= GOAL_WIDTH {
             shot_accuracy_diag::AIM_INSIDE_POSTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
+        let _ = (shoot_event_model, accuracy_edge);
+        (actual_y_target, forced_wide, miskicked)
+    }
 
+    /// Deflection on the way to goal: only off-target shots are
+    /// candidates, and a body in the lane can put one back inside the
+    /// frame. Returns the new aim, the pre-deflection aim for the
+    /// keeper's read, and whether it deflected.
+    fn shot_deflection(
+        shoot_event_model: &ShootingEventContext,
+        setup: &ShotSetup,
+        actual_y_target: f32,
+        goal_left_post: f32,
+        goal_right_post: f32,
+        goal_center_y: f32,
+        field: &MatchField,
+        rng: &MatchRng,
+    ) -> (f32, f32, bool) {
+        const GOAL_WIDTH: f32 = GOAL_MOUTH_HALF_WIDTH;
         // ── Deflection on the way to goal ───────────────────────────────
         //
         // Real Opta data: 3-5% of all Premier League goals come from
@@ -5572,12 +6414,12 @@ impl PlayerEventDispatcher {
         // the deflection actively HURT weak teams (it redirected a
         // would-be-wide shot to on-target where the GK then saved it).
         let was_offtarget = actual_y_target < goal_left_post || actual_y_target > goal_right_post;
-        let goal_dir = (goal_center - shooter_position).normalize();
-        let shot_lane_distance = (goal_center - shooter_position).magnitude();
+        let goal_dir = (setup.goal_center - setup.shooter_position).normalize();
+        let shot_lane_distance = (setup.goal_center - setup.shooter_position).magnitude();
         let mut defenders_in_lane: u32 = 0;
         if was_offtarget
             && shot_lane_distance > 10.0
-            && let Some(side) = shooter_side
+            && let Some(side) = setup.shooter_side
         {
             for other in field.players.iter() {
                 if other.id == shoot_event_model.from_player_id {
@@ -5586,12 +6428,12 @@ impl PlayerEventDispatcher {
                 if other.side == Some(side) {
                     continue;
                 }
-                let to_other = other.position - shooter_position;
+                let to_other = other.position - setup.shooter_position;
                 let along = to_other.dot(&goal_dir);
                 if along < 3.0 || along > shot_lane_distance - 3.0 {
                     continue;
                 }
-                let proj = shooter_position + goal_dir * along;
+                let proj = setup.shooter_position + goal_dir * along;
                 let perp = (other.position - proj).magnitude();
                 // Lane half-width 12u (~1.5m) — defenders within
                 // sliding / outstretched-leg / chest-block range of
@@ -5639,7 +6481,7 @@ impl PlayerEventDispatcher {
         // corner. Without this the GK would just reposition mid-flight
         // and reach the deflected target with no penalty.
         let original_y_target = actual_y_target;
-        if deflected {
+        let actual_y_target = if deflected {
             // Bias to the FAR corner (|offset| 0.78..0.97 of goal half-
             // width = 22.6u..28.1u from centre). Beyond the strong
             // keeper's lateral reach (~19u) but inside the 29u post.
@@ -5649,16 +6491,21 @@ impl PlayerEventDispatcher {
                 1.0
             };
             let corner_offset = rng.random_range(0.78f32..0.97);
-            actual_y_target = goal_center.y + side_sign * corner_offset * GOAL_WIDTH;
-        }
+            goal_center_y + side_sign * corner_offset * GOAL_WIDTH
+        } else {
+            actual_y_target
+        };
+        (actual_y_target, original_y_target, deflected)
+    }
 
-        // Clamp to reasonable bounds — allow shots to miss by up to 3x goal width
-        let max_miss_distance = GOAL_WIDTH * 3.0;
-        let clamped_y_target = actual_y_target.clamp(
-            goal_left_post - max_miss_distance,
-            goal_right_post + max_miss_distance,
-        );
-
+    /// The bend of the strike: technique first, then the `CurlsBall`
+    /// trait, applied to the launch line and solved back by the spin.
+    fn shot_curl(
+        shoot_event_model: &ShootingEventContext,
+        setup: &ShotSetup,
+        field: &MatchField,
+        rng: &MatchRng,
+    ) -> f32 {
         // ── CURL ─────────────────────────────────────────────────────
         // A curled shot is not aimed at where it ends up: the striker
         // aims OUTSIDE the target and bends the ball back onto it. So the
@@ -5673,183 +6520,80 @@ impl PlayerEventDispatcher {
         let curls_ball = field
             .get_player(shoot_event_model.from_player_id)
             .is_some_and(|p| p.has_trait(PlayerTrait::CurlsBall));
-        let curl_units = {
-            // Most strikes are hit through the ball and barely bend.
-            // 1.4 m of bend over a 25 m shot is a genuine whipped effort;
-            // a specialist gets close to twice that.
-            let ceiling = if curls_ball { 20.0 } else { 11.0 };
-            let side_sign: f32 = if rng.random_range(0.0f32..1.0) < 0.5 {
-                -1.0
-            } else {
-                1.0
-            };
-            // Skewed low: `u²` keeps the median bend small so the
-            // straight-struck shot stays the norm.
-            let u: f32 = rng.random_range(0.0f32..1.0);
-            side_sign * u * u * ceiling * technique_skill
+        // Most strikes are hit through the ball and barely bend.
+        // 1.4 m of bend over a 25 m shot is a genuine whipped effort;
+        // a specialist gets close to twice that.
+        let ceiling = if curls_ball { 20.0 } else { 11.0 };
+        let side_sign: f32 = if rng.random_range(0.0f32..1.0) < 0.5 {
+            -1.0
+        } else {
+            1.0
         };
+        // Skewed low: `u²` keeps the median bend small so the
+        // straight-struck shot stays the norm.
+        let u: f32 = rng.random_range(0.0f32..1.0);
+        side_sign * u * u * ceiling * setup.technique_skill
+    }
 
-        // Calculate final shot direction. The keeper's projection further
-        // down reads this LAUNCH line, so he is genuinely beaten by the
-        // part of the bend he doesn't read — see `KEEPER_CURL_READ`.
-        let launch_y_target = clamped_y_target - curl_units;
-        let actual_target = Vector3::new(goal_center.x, launch_y_target, 0.0);
-        let shot_vector = actual_target - field.ball.position;
+    /// The struck ball: power, flight height, the over-the-bar roll and
+    /// the velocity clamp.
+    fn shot_launch(
+        setup: &ShotSetup,
+        placement: &ShotPlacement,
+        field: &MatchField,
+        rng: &MatchRng,
+    ) -> ShotLaunch {
+        // Shot velocity cap. Field is 840u = 105m, so 1u = 0.125m, and at
+        // 100-tick/s simulation a cap of 5.6 u/tick meant 70 m/s (~252 km/h)
+        // — about 2× the real-world top shot speed (~35 m/s = 2.8 u/tick).
+        // Keepers covering 1.16 u/tick laterally had only 9 ticks of shot
+        // flight from 50u out (~10u of coverage) against a 29u half-goal:
+        // any shot aimed outside the central 15u bypassed the save check.
+        // Calibrated to real-world peak shot speed — elite piledrivers now
+        // arrive in ~18 ticks instead of ~9, matching the ~3.75× shot/player
+        // speed ratio observed in real football (vs. the engine's prior ~10×).
+        const MAX_SHOT_VELOCITY: f32 = 3.2;
+        let profile = &setup.profile;
+        let dead_ball = placement.dead_ball;
+        let actual_target = placement.actual_target;
+        let horizontal_distance = setup.horizontal_distance;
+        let technique_skill = setup.technique_skill;
+        let finishing_skill = setup.finishing_skill;
+        let long_shot_skill = setup.long_shot_skill;
+        let accuracy_edge = placement.accuracy_edge;
+        let finisher_head = placement.finisher_head;
 
         // Skill-based power multiplier — sourced from the unified
         // profile's `power_skill` so a low-strength / low-technique
         // shot can't accidentally inherit the same power as an elite.
-        let power_multiplier = 0.95 + (power_skill * 0.35); // Range: 0.95 to 1.30
+        let power_multiplier = 0.95 + (profile.power_skill * 0.35); // Range: 0.95 to 1.30
 
         // Calculate horizontal velocity with skill-based power
+        let shot_vector = actual_target - field.ball.position;
         let horizontal_direction = Vector3::new(shot_vector.x, shot_vector.y, 0.0).normalize();
-        let base_horizontal_velocity = shoot_event_model.force as f32 * power_multiplier * 1.6;
+        let base_horizontal_velocity = setup.force * power_multiplier * 1.6;
 
         // Add power randomness (better players have more consistent power)
         let power_consistency = 0.96 + (technique_skill * 0.08); // 0.96 to 1.04
         let power_random = rng.random_range(power_consistency - 0.04..power_consistency + 0.04);
-        let horizontal_velocity = match dead_ball.and_then(|kick| kick.pace) {
+        let horizontal_velocity = match placement.dead_ball.and_then(|kick| kick.pace) {
             Some(pace) => horizontal_direction * pace,
             None => horizontal_direction * base_horizontal_velocity * power_random,
         };
 
-        // Calculate z-velocity based on shot style and player skills
-        let shot_style: f32 = rng.random_range(0.0..1.0);
-        let height_variation: f32 = rng.random_range(0.85..1.15);
-
-        // Shot height, expressed as the APEX of the strike in metres and
-        // converted to a launch speed by the shared ballistics helper.
-        //
-        // These used to be raw z velocities on a vertical axis whose
-        // gravity was 160× too strong in metres, so the bands were fitted
-        // to that: a "rising shot" at 3.0 climbed 3 m and was back on the
-        // deck 25 units later, and every shot bounced its way to goal.
-        // Restated as apexes they say what they mean, and the ball now
-        // FLIES to the target — a 1.5 m apex from 25 m arrives at about
-        // waist height, a 2.2 m one at the top corner.
-        let apex_metres = if HeaderStrike::armed() && shoot_event_model.shot_type.is_header() {
-            // A header is met at head height and steered from there: down
-            // in front of the line, flat at the frame or up under the bar.
-            // It is never rolled along the deck, which is what the foot
-            // bands below aim six in ten close shots at — and headed into
-            // the turf at the goal line, those bounced up into the
-            // keeper's gloves.
-            if shot_style < 0.35 {
-                rng.random_range(0.15..0.50)
-            } else if shot_style < 0.8 {
-                rng.random_range(0.50..1.60)
-            } else {
-                rng.random_range(1.60..2.30)
-            }
-        } else if horizontal_distance > 100.0 {
-            // Long-range shot - varied heights (technique matters more)
-            if shot_style < 0.4 {
-                rng.random_range(0.15..0.60) * technique_skill // Low driven (40%)
-            } else if shot_style < 0.8 {
-                rng.random_range(0.60..1.60) * technique_skill // Normal (40%)
-            } else {
-                rng.random_range(1.60..2.60) * long_shot_skill // Rising shot (20%)
-            }
-        } else if horizontal_distance > 50.0 {
-            // Medium-range shot - mostly low (finishing matters more)
-            if shot_style < 0.6 {
-                rng.random_range(0.05..0.35) * finishing_skill // Very low (60%)
-            } else if shot_style < 0.9 {
-                rng.random_range(0.35..1.00) * technique_skill // Medium (30%)
-            } else {
-                rng.random_range(1.00..2.00) * technique_skill // High (10%)
-            }
-        } else {
-            // Close-range shot - very low and varied (finishing is key)
-            if shot_style < 0.7 {
-                rng.random_range(0.02..0.20) * finishing_skill // Ground shot (70%)
-            } else if shot_style < 0.95 {
-                rng.random_range(0.7..1.3) * finishing_skill // Rising (25%)
-            } else {
-                rng.random_range(1.3..2.0) * technique_skill // Chip (5%)
-            }
-        };
-
-        // Add spin/environmental variation to height
-        let vertical_spin_variation = rng.random_range(0.90..1.10);
-
-        // Over-the-bar miss chance: distance-dependent. Real football
-        // data: close-range shots go over ~5%, long range ~20%. Earlier
-        // 0.04/0.08/0.14/0.20 bases + 0.20 accuracy scaling were OK when
-        // over-bar shots were silently counted on-target (the counting
-        // bug just fixed). Now that over-bar shots correctly do nothing,
-        // the same bases produce too many accuracy-less misses. Cut
-        // bases ~40% and scaling 0.20 → 0.12 so the on-target rate can
-        // recover toward the real ~33%.
-        // Bases cut ~40% (0.015/0.030/0.055/0.080) 2026-08-08, alongside
-        // `wide_base` — the two forced-miss rolls are the same class and
-        // together they, not the aim band, set the population on-target
-        // rate.
-        // Re-raised 2026-08-11 alongside `wide_base`, same reasoning and
-        // the same ratio — the two forced-miss rolls are one lever and
-        // must move together or the wide/over split distorts.
-        let over_bar_base = if horizontal_distance < 30.0 {
-            0.067
-        } else if horizontal_distance < 60.0 {
-            0.132
-        } else if horizontal_distance < 100.0 {
-            0.178
-        } else {
-            0.253
-        };
-        // Same centred quality term as `wide_miss_chance` — one accuracy
-        // axis for both rolls rather than two half-axes, and the same
-        // reason the additive pair it replaces (0.025 + 0.025, reading
-        // technique rather than finishing) could not move the outcome.
-        let over_bar_chance = ActionLapse::scaled(
-            LapseFamily::Finish,
-            over_bar_base * (1.0 + accuracy_edge) + accuracy_edge * ACCURACY_SCUFF * 0.6,
-            finisher_head.as_ref(),
+        let (apex_metres, height_variation, vertical_spin_variation) = Self::shot_apex(
+            setup,
+            horizontal_distance,
+            technique_skill,
+            finishing_skill,
+            long_shot_skill,
+            rng,
         );
-        let shot_goes_over_bar = match dead_ball {
-            Some(kick) => kick.over,
-            None => rng.random_range(0.0f32..1.0) < over_bar_chance,
-        };
+        let shot_goes_over_bar =
+            Self::shot_goes_over_bar(setup, placement, accuracy_edge, finisher_head, rng);
         #[cfg(feature = "match-logs")]
-        if dead_ball.is_none() {
-            lapse_diag::note(LapseFamily::Finish, forced_wide || miskicked || shot_goes_over_bar);
-        }
-        #[cfg(feature = "match-logs")]
-        {
-            use std::sync::atomic::Ordering as AtomicOrdering;
-            let on_frame =
-                !shot_goes_over_bar && (actual_y_target - goal_center.y).abs() <= GOAL_WIDTH;
-            if shot_goes_over_bar {
-                shot_accuracy_diag::OVER_FIRED.fetch_add(1, AtomicOrdering::Relaxed);
-            } else if on_frame {
-                shot_accuracy_diag::AIM_ON_FRAME.fetch_add(1, AtomicOrdering::Relaxed);
-            }
-            // …and the same outcome split by the man who struck it. See
-            // `shot_accuracy_diag::BY_FINISHING`.
-            shot_accuracy_diag::note_finishing(
-                shot_accuracy_diag::finishing_tier(finishing_skill * 20.0),
-                on_frame,
-            );
-            // …and by what KIND of shot it was, which is the axis the
-            // taxonomy exists for and the one nothing measured. See
-            // `shot_accuracy_diag::BY_SHOT_TYPE`.
-            shot_accuracy_diag::note_shot_type(
-                match shoot_event_model.shot_type {
-                    ShotType::FootOpenPlay => 0,
-                    ShotType::Header => 1,
-                    ShotType::Volley => 2,
-                    ShotType::OneVOne => 3,
-                    ShotType::Cutback => 4,
-                    ShotType::SetPieceHeader => 5,
-                    ShotType::LongShot => 6,
-                    ShotType::Rebound => 7,
-                    ShotType::Penalty => 8,
-                    ShotType::DirectFreeKick => 9,
-                },
-                on_frame,
-                execution_skill,
-            );
-        }
+        Self::note_shot_frame_outcome(setup, placement, shot_goes_over_bar, finishing_skill);
+
         let struck_apex = if let Some(kick) = dead_ball {
             kick.apex
         } else if shot_goes_over_bar {
@@ -5884,7 +6628,7 @@ impl PlayerEventDispatcher {
             // Fallback to a safe default velocity toward the goal. Both
             // components were pre-metric: 5.0 u/tick is 62 m/s and a `z`
             // of 1.0 is a 510 m apex.
-            let safe_direction = (goal_center - field.ball.position).normalize();
+            let safe_direction = (setup.goal_center - field.ball.position).normalize();
             final_velocity = Vector3::new(
                 safe_direction.x * 2.4,
                 safe_direction.y * 2.4,
@@ -5906,125 +6650,158 @@ impl PlayerEventDispatcher {
         // this check, `on_target` counted them because it only looked at y,
         // producing a ~49% conversion leak where on-target shots were
         // neither saved nor scored — they just sailed over, off-screen.
-        let on_target = clamped_y_target >= goal_left_post
-            && clamped_y_target <= goal_right_post
+        let on_target = placement.clamped_y_target >= setup.goal_left_post
+            && placement.clamped_y_target <= setup.goal_right_post
             && !shot_goes_over_bar;
-        // xG is a location-based chance value (Opta convention), so the
-        // shooter's per-shot xG records the BASE chance regardless of
-        // whether the strike actually threatened the goal — a skied
-        // 0.78xG penalty still counts as 0.78 xG. Earlier code scaled
-        // this by 0.15 for off-target shots, which collapsed
-        // population xG to 0.2/team (real Opta ~1.3) and inflated
-        // goals-vs-xG dramatically because actual conversion ran on
-        // the unweighted shot count.
-        //
-        // The keeper's ledger is a different concept entirely and no
-        // longer derives from this number at all: a GK is measured on
-        // what a league-average keeper would have conceded from the
-        // strike that actually arrived, which is stamped separately as
-        // `last_shot_xgot` once the shot's crossing point is projected.
-        // Convert to REAL xG units for recording. The decision-time curve
-        // deliberately runs ~3x hot (every gameplay gate — min_xg floors,
-        // the willingness quality pull, the Tier bars — is calibrated
-        // against it), but the RECORDED stat feeds player pages, the
-        // rating model and the calibration harness, all of which expect
-        // real Opta units where population xG/shot is ~0.11 and xG
-        // tracks actual conversion. Scaling here keeps gameplay bit-for
-        // bit identical while making every reported figure honest.
-        // 0.41 makes recorded xG track ACTUAL conversion per position
-        // (FWD 0.113 xG vs 10.2% conv, MID 0.066 vs 6.6%) — the property
-        // that defines a calibrated xG model, and what stops the rating
-        // layer charging forwards for chances they did not really have.
-        //
-        // ⚠ 0.45 → 0.97, 2026-09-06, BECAUSE THAT PROPERTY HAD BROKEN.
-        //
-        // The invariant this constant exists to hold is the sentence
-        // above: recorded xG tracks actual conversion. Re-measured over
-        // 600 fixtures at level 14 it did not, by more than a factor of
-        // two — **population xG/shot 0.048 against goals/shot 0.104**,
-        // `xG per team 0.72` against a real ~1.3, and a goals-vs-xG delta
-        // of **+1.60** against a real ~0.0. Per line: FWD 0.044 xG
-        // against 9.8% conversion, MID 0.066 against 12.3%.
-        //
-        // Nothing moved the SCALE; the two discounts stacked underneath
-        // it did. The angle factor and the pressure factor were each
-        // added later, each correctly, and each multiplies this product —
-        // and the pressure one bites hard now that the box actually has
-        // bodies in it (49% of shots are struck with a defender inside
-        // 1 m). Two correct terms and one stale constant.
-        //
-        // The direction matters for the rating layer, and it is the
-        // opposite of the failure the note above describes.
-        // `RatingVolume::XG_TO_REAL` is identity precisely because this
-        // site is supposed to deliver real units, so an xG that is half
-        // of conversion means the clinical (goals-over-xG) bonus pays on
-        // every forward in the game while the wasted-xG drag can never
-        // fire — the mirror image of the bug 0.41 was chosen to fix.
-        //
-        // 0.97 is 0.45 scaled by the measured ratio (0.104 / 0.048). It
-        // is a pure multiplier, so the population lands where the
-        // arithmetic says. `HighlightSelector::MIN_XG` is scaled by the
-        // same factor in the same change — its own doc says it is
-        // calibrated against this scale and against a population mean,
-        // and both move together or the chance shortlist changes meaning.
-        const XG_REPORT_SCALE: f32 = 0.97;
-        // Angle discrimination. The profile at this site is built with
-        // `shot_clarity: 1.0, has_clear_shot: true`, so the recorded xG
-        // was pure DISTANCE — a byline effort from 6m priced identically
-        // to a central one. Real xG falls off hard with the shooting
-        // angle, and without it forwards (who take the tight-angle
-        // chances) read as permanently wasteful while central arriving
-        // midfielders read as clinical. Pure geometry, available here:
-        // the share of the goal mouth actually visible from the ball.
-        let angle_factor = {
-            let x_dist = ball_to_goal_vector.x.abs().max(1.0);
-            let y_off = ball_to_goal_vector.y.abs();
-            const HALF_GOAL: f32 = 29.0;
-            let near = (y_off - HALF_GOAL).max(0.0);
-            let far = y_off + HALF_GOAL;
-            let visible = (far / x_dist).atan() - (near / x_dist).atan();
-            let central = 2.0 * (HALF_GOAL / x_dist).atan();
-            if central > 1e-4 {
-                (visible / central).clamp(0.0, 1.0).powf(0.7)
-            } else {
-                1.0
-            }
+
+        ShotLaunch {
+            final_velocity,
+            struck_apex,
+            on_target,
+        }
+    }
+
+    /// The shot's recorded xG: location, angle and pressure, in real Opta
+    /// units, credited to the shooter's memory.
+    fn record_shot_xg(
+        setup: &ShotSetup,
+        shoot_event_model: &ShootingEventContext,
+        field: &mut MatchField,
+    ) -> f32 {
+        let xg = {
+            // xG is a location-based chance value (Opta convention), so the
+            // shooter's per-shot xG records the BASE chance regardless of
+            // whether the strike actually threatened the goal — a skied
+            // 0.78xG penalty still counts as 0.78 xG. Earlier code scaled
+            // this by 0.15 for off-target shots, which collapsed
+            // population xG to 0.2/team (real Opta ~1.3) and inflated
+            // goals-vs-xG dramatically because actual conversion ran on
+            // the unweighted shot count.
+            //
+            // The keeper's ledger is a different concept entirely and no
+            // longer derives from this number at all: a GK is measured on
+            // what a league-average keeper would have conceded from the
+            // strike that actually arrived, which is stamped separately as
+            // `last_shot_xgot` once the shot's crossing point is projected.
+            // Convert to REAL xG units for recording. The decision-time curve
+            // deliberately runs ~3x hot (every gameplay gate — min_xg floors,
+            // the willingness quality pull, the Tier bars — is calibrated
+            // against it), but the RECORDED stat feeds player pages, the
+            // rating model and the calibration harness, all of which expect
+            // real Opta units where population xG/shot is ~0.11 and xG
+            // tracks actual conversion. Scaling here keeps gameplay bit-for
+            // bit identical while making every reported figure honest.
+            // 0.41 makes recorded xG track ACTUAL conversion per position
+            // (FWD 0.113 xG vs 10.2% conv, MID 0.066 vs 6.6%) — the property
+            // that defines a calibrated xG model, and what stops the rating
+            // layer charging forwards for chances they did not really have.
+            //
+            // ⚠ 0.45 → 0.97, 2026-09-06, BECAUSE THAT PROPERTY HAD BROKEN.
+            //
+            // The invariant this constant exists to hold is the sentence
+            // above: recorded xG tracks actual conversion. Re-measured over
+            // 600 fixtures at level 14 it did not, by more than a factor of
+            // two — **population xG/shot 0.048 against goals/shot 0.104**,
+            // `xG per team 0.72` against a real ~1.3, and a goals-vs-xG delta
+            // of **+1.60** against a real ~0.0. Per line: FWD 0.044 xG
+            // against 9.8% conversion, MID 0.066 against 12.3%.
+            //
+            // Nothing moved the SCALE; the two discounts stacked underneath
+            // it did. The angle factor and the pressure factor were each
+            // added later, each correctly, and each multiplies this product —
+            // and the pressure one bites hard now that the box actually has
+            // bodies in it (49% of shots are struck with a defender inside
+            // 1 m). Two correct terms and one stale constant.
+            //
+            // The direction matters for the rating layer, and it is the
+            // opposite of the failure the note above describes.
+            // `RatingVolume::XG_TO_REAL` is identity precisely because this
+            // site is supposed to deliver real units, so an xG that is half
+            // of conversion means the clinical (goals-over-xG) bonus pays on
+            // every forward in the game while the wasted-xG drag can never
+            // fire — the mirror image of the bug 0.41 was chosen to fix.
+            //
+            // 0.97 is 0.45 scaled by the measured ratio (0.104 / 0.048). It
+            // is a pure multiplier, so the population lands where the
+            // arithmetic says. `HighlightSelector::MIN_XG` is scaled by the
+            // same factor in the same change — its own doc says it is
+            // calibrated against this scale and against a population mean,
+            // and both move together or the chance shortlist changes meaning.
+            const XG_REPORT_SCALE: f32 = 0.97;
+            // Angle discrimination. The profile at this site is built with
+            // `shot_clarity: 1.0, has_clear_shot: true`, so the recorded xG
+            // was pure DISTANCE — a byline effort from 6m priced identically
+            // to a central one. Real xG falls off hard with the shooting
+            // angle, and without it forwards (who take the tight-angle
+            // chances) read as permanently wasteful while central arriving
+            // midfielders read as clinical. Pure geometry, available here:
+            // the share of the goal mouth actually visible from the ball.
+            let angle_factor = {
+                let x_dist = setup.ball_to_goal_vector.x.abs().max(1.0);
+                let y_off = setup.ball_to_goal_vector.y.abs();
+                const HALF_GOAL: f32 = 29.0;
+                let near = (y_off - HALF_GOAL).max(0.0);
+                let far = y_off + HALF_GOAL;
+                let visible = (far / x_dist).atan() - (near / x_dist).atan();
+                let central = 2.0 * (HALF_GOAL / x_dist).atan();
+                if central > 1e-4 {
+                    (visible / central).clamp(0.0, 1.0).powf(0.7)
+                } else {
+                    1.0
+                }
+            };
+            // Pressure discount. The recorded xG was a function of DISTANCE
+            // and ANGLE only — a strike with a defender's leg across it
+            // priced identically to a free one from the same spot. Real xG
+            // models all read the closing defender, and its absence here was
+            // measurable: across 4 runs of `stats 300 14 14` the engine
+            // scored **2.21 against its own 2.60 xG**, underperforming its
+            // chance model by 15% in a way real teams do not, and the
+            // per-line conversion-to-xG ratios came apart — MID 0.78-0.88 and
+            // FWD 0.78-0.89 (open-play shots, pressured, over-priced).
+            //
+            // It also got worse the moment `DefensiveRecovery` put bodies
+            // back in the box: a pressure-blind curve overstates a pressured
+            // shot by more, so the better the defending got, the more the
+            // recorded xG drifted above the goals it was supposed to predict.
+            // That is why every shot-volume lever failed to move goals — the
+            // extra shots were pressured ones being priced as free.
+            //
+            // `pressure_24u` (3m) is inclusive of `pressure_10u`, so the
+            // 1.25-3m ring is their difference and carries about half the
+            // weight of a body genuinely on top of the shot.
+            let close_pressure = setup.pressure_10u as f32;
+            let ring_pressure = setup.pressure_24u.saturating_sub(setup.pressure_10u) as f32;
+            let pressure_factor =
+                (1.0 - close_pressure * 0.20 - ring_pressure * 0.10).clamp(0.35, 1.0);
+            setup
+                .profile
+                .expected_xg(setup.horizontal_distance, true)
+                .clamp(0.0, 0.82)
+                * angle_factor
+                * pressure_factor
+                * XG_REPORT_SCALE
         };
-        // Pressure discount. The recorded xG was a function of DISTANCE
-        // and ANGLE only — a strike with a defender's leg across it
-        // priced identically to a free one from the same spot. Real xG
-        // models all read the closing defender, and its absence here was
-        // measurable: across 4 runs of `stats 300 14 14` the engine
-        // scored **2.21 against its own 2.60 xG**, underperforming its
-        // chance model by 15% in a way real teams do not, and the
-        // per-line conversion-to-xG ratios came apart — MID 0.78-0.88 and
-        // FWD 0.78-0.89 (open-play shots, pressured, over-priced).
-        //
-        // It also got worse the moment `DefensiveRecovery` put bodies
-        // back in the box: a pressure-blind curve overstates a pressured
-        // shot by more, so the better the defending got, the more the
-        // recorded xG drifted above the goals it was supposed to predict.
-        // That is why every shot-volume lever failed to move goals — the
-        // extra shots were pressured ones being priced as free.
-        //
-        // `pressure_24u` (3m) is inclusive of `pressure_10u`, so the
-        // 1.25-3m ring is their difference and carries about half the
-        // weight of a body genuinely on top of the shot.
-        let close_pressure = pressure_10u as f32;
-        let ring_pressure = pressure_24u.saturating_sub(pressure_10u) as f32;
-        let pressure_factor = (1.0 - close_pressure * 0.20 - ring_pressure * 0.10).clamp(0.35, 1.0);
-        let base_xg = profile
-            .expected_xg(horizontal_distance, true)
-            .clamp(0.0, 0.82)
-            * angle_factor
-            * pressure_factor
-            * XG_REPORT_SCALE;
-        let xg = base_xg;
         if let Some(shooter) = field.get_player_mut(shoot_event_model.from_player_id) {
             shooter.memory.record_shot(shoot_event_model.tick);
             shooter.memory.record_shot_xg(shoot_event_model.tick, xg);
         }
+        xg
+    }
 
+    /// The chance shortlist and xG-chain distribution for one shot.
+    #[cfg_attr(not(feature = "match-logs"), allow(unused_variables))]
+    fn record_shot_chance(
+        shoot_event_model: &ShootingEventContext,
+        setup: &ShotSetup,
+        launch: &ShotLaunch,
+        xg: f32,
+        direct_assister_id: Option<u32>,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        match_data: &mut ResultMatchPositionData,
+    ) {
+        let on_target = launch.on_target;
         // ── Chance candidate ─────────────────────────────────────────
         // A strike good enough to be worth watching again if it doesn't go
         // in. Whether it WAS one is decided at full time — this shot has
@@ -6055,6 +6832,8 @@ impl PlayerEventDispatcher {
         #[cfg(feature = "match-logs")]
         {
             use std::sync::atomic::Ordering;
+            let minute = setup.minute;
+            let horizontal_distance = setup.horizontal_distance;
             let band = time_band_diag::band_for_minute(minute);
             time_band_diag::SHOTS_BY_BAND[band].fetch_add(1, Ordering::Relaxed);
             if on_target {
@@ -6144,7 +6923,573 @@ impl PlayerEventDispatcher {
                 }
             }
         }
+    }
 
+    /// Arm the shot-lifecycle census (diagnostic only). See
+    /// `Ball::census_shot_fate`.
+    #[cfg(feature = "match-logs")]
+    fn note_shot_strike_census(
+        setup: &ShotSetup,
+        shoot_event_model: &ShootingEventContext,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) {
+        use std::sync::atomic::Ordering;
+        crate::r#match::engine::ball::ball::ownership::reception_diag::FATE_STRUCK
+            .fetch_add(1, Ordering::Relaxed);
+        crate::r#match::engine::ball::ball::ownership::reception_diag::FATE_STRUCK_DIST_X100
+            .fetch_add(
+                (setup.horizontal_distance * 100.0) as u64,
+                Ordering::Relaxed,
+            );
+        field.ball.census_shot_live = true;
+        field.ball.census_shot_dist = setup.horizontal_distance;
+        field.ball.census_shot_side = setup.shooter_side;
+        if let Some(side) = setup.shooter_side {
+            let tick = context.current_tick();
+            context
+                .keeper_census
+                .get_mut()
+                .note_strike(field, side.opposite(), tick);
+        }
+        let _ = shoot_event_model;
+    }
+
+    /// Project where the ball crosses the goal line and commit the
+    /// keeper's intercept target, or clear it when the shot is not going
+    /// there.
+    fn cache_shot_target(
+        setup: &ShotSetup,
+        placement: &ShotPlacement,
+        shoot_event_model: &ShootingEventContext,
+        launch: &ShotLaunch,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) {
+        let Some(crossing) =
+            Self::shot_crossing(setup, placement, shoot_event_model, launch, field, context)
+        else {
+            #[cfg(feature = "match-logs")]
+            crate::r#match::engine::ball::ball::ownership::reception_diag::SHOT_NO_TARGET
+                .fetch_add(1, Ordering::Relaxed);
+            field.ball.cached_shot_target = None;
+            return;
+        };
+        // Keep the strike live for its whole flight.
+        //
+        // The flat 40 ticks set above is shorter than most shots
+        // take to reach the line: at typical struck speeds a
+        // 92u (11.5 m) effort is 45-60 ticks in the air. Once
+        // the window lapsed, `check_ball_ownership` resumed and
+        // any player within 5u simply picked the shot out of the
+        // air in open play — no save, no block, no goal, no shot
+        // going out. Measured: only 23% of shots ever resolved
+        // as a save or a goal, against ~80% that were struck
+        // between the posts, and the missing ~58% left no trace
+        // in any outcome counter.
+        //
+        // A struck ball has to resolve AS a shot: saved, blocked,
+        // in, or out of play. The 1.3 margin covers the drag and
+        // gravity the constant-velocity projection ignores; the
+        // floor keeps tap-ins protected and the ceiling stops a
+        // mishit dribbling toward goal from freezing possession.
+        field.ball.flags.in_flight_state = ((crossing.ticks_to_goal * 1.8) as usize).clamp(40, 320);
+        field.ball.last_shot_xgot = SaveModel::expected_goal_on_target(
+            crossing.true_goal_line_y - field.size.height as f32 * 0.5,
+            launch.final_velocity.norm(),
+            crossing.goal_line_z,
+            setup.horizontal_distance,
+        );
+        // Positional-defending credit. Every other defensive
+        // counter in the model is an EVENT — a tackle, an
+        // interception, a clearance — and a defender who defends
+        // by being in the right place produces none of them.
+        // This is the one that pays for the position itself:
+        // goal-side of the ball and inside the lane the shot is
+        // travelling down, measured at the moment it is struck.
+        // See `ZoneStats::shots_covered_in_position`.
+        Self::credit_shot_coverage(
+            field,
+            crossing.defending_side,
+            crossing.goal_line_x,
+            crossing.goal_line_y,
+        );
+        #[cfg(feature = "match-logs")]
+        Self::note_shot_defensive_census(
+            field,
+            context,
+            shoot_event_model,
+            crossing.defending_side,
+            crossing.goal_line_x,
+            crossing.goal_line_y,
+        );
+        let target = ShotTarget {
+            goal_line_y: crossing.goal_line_y,
+            goal_line_z: crossing.goal_line_z,
+            defending_side: crossing.defending_side,
+            deflected: placement.deflected,
+            save_rolled: false,
+            block_rolled: setup.wall_stopper.is_some(),
+            blocked_by: setup.wall_stopper.map(|id| (id, context.rng.unit_f32())),
+            shooter_threat: crossing.shooter_threat,
+            struck_from: field.ball.position,
+            seen_from: crossing.seen_from,
+        };
+        field.ball.last_shot_on_frame = target.struck_on_frame(&context.goal_positions);
+        field.ball.cached_shot_target = Some(target);
+    }
+
+    /// The crossing point and the keeper's read of it. `None` means the
+    /// strike is not heading toward the goal line inside the projection
+    /// window.
+    fn shot_crossing(
+        setup: &ShotSetup,
+        placement: &ShotPlacement,
+        shoot_event_model: &ShootingEventContext,
+        launch: &ShotLaunch,
+        field: &MatchField,
+        context: &MatchContext,
+    ) -> Option<ShotCrossing> {
+        let shooter_side = setup.shooter_side?;
+        let field_width = field.size.width as f32;
+        let defending_side = match shooter_side {
+            PlayerSide::Left => PlayerSide::Right,
+            PlayerSide::Right => PlayerSide::Left,
+        };
+        let goal_line_x = match defending_side {
+            PlayerSide::Left => 0.0,
+            PlayerSide::Right => field_width,
+        };
+        let dx = goal_line_x - field.ball.position.x;
+        let vx = launch.final_velocity.x;
+        // Only cache if the shot is actually heading toward that
+        // goal — otherwise projection time is negative or infinite
+        // and the cache would mislead the keeper.
+        if !((dx > 0.0 && vx > 0.1) || (dx < 0.0 && vx < -0.1)) {
+            return None;
+        }
+        let ticks_to_goal = (dx / vx).abs();
+        let goal_line_y = if placement.deflected {
+            // GK reads the ORIGINAL trajectory until the
+            // deflection happens; the redirect arrives after
+            // they've committed to the line. By storing the
+            // pre-deflection y here, the keeper's velocity()
+            // arrives at the wrong spot and the actual ball
+            // (which uses the deflected `final_velocity` below)
+            // sails past into the far corner.
+            placement.original_y_target
+        } else {
+            // Straight-line projection of the LAUNCH velocity —
+            // which, on a curled shot, is not where the ball ends
+            // up. A keeper does read spin, but late and
+            // incompletely: he sets for most of the bend and the
+            // rest beats him. That residual is what makes a curled
+            // finish worth striking, and it is bounded so curl
+            // can't quietly rewrite the save calibration.
+            const KEEPER_CURL_READ: f32 = 0.65;
+            field.ball.position.y
+                + launch.final_velocity.y * ticks_to_goal
+                + placement.curl_units * KEEPER_CURL_READ
+        };
+        // ── The keeper does not know where it is going ────────
+        //
+        // This cache is what the goalkeeper states steer onto, so
+        // whatever it says is where he will be standing when the
+        // ball arrives. Handing him the exact crossing point
+        // means `lateral_error` collapses to ~0, `reach_ratio`
+        // with it, and every save resolves at `CENTRED_BASE` —
+        // the 0.88 "keeper is standing where the ball is going"
+        // ceiling. Measured consequence: an 82% population save
+        // rate against a real 67%, and it was not the save
+        // model's calibration at fault, it was that the model's
+        // hardest case never occurred.
+        //
+        // A keeper reads the striker's body and commits; he is
+        // beaten by placement inside a couple of metres all the
+        // time. The error shrinks with flight time, because a
+        // ball he can watch for longer is one he reads better —
+        // so a close-range piledriver beats him more often than a
+        // 25-yard effort, which is the right way round.
+        // …and HOW BADLY he reads it is a property of the keeper.
+        //
+        // This term had no keeper in it. The error was a constant
+        // scaled only by flight time, so the one quantity that
+        // decides whether a set keeper is standing in the right
+        // place was identical for an international and a youth
+        // third choice — all keeper quality lived downstream in
+        // the save roll. Reading the striker's body is exactly
+        // what `positioning` / `anticipation` / `decisions` /
+        // `concentration` are for, and the profile already blends
+        // them into one number.
+        //
+        // CENTRED on the population, not widened: an average
+        // keeper (0.5) gets 1.0× and the population save rate is
+        // untouched, while the band opens ±30% around it. The same
+        // discipline `SaveModel::strike_power` documents — an
+        // uncentred quality term does not add a skill axis, it
+        // silently recalibrates the whole model.
+        let (goal_line_y, true_goal_line_y, seen_from) = Self::keeper_read_line(
+            field,
+            context,
+            setup,
+            shoot_event_model,
+            defending_side,
+            goal_line_y,
+            dx,
+            ticks_to_goal,
+            launch.final_velocity.x,
+            launch.final_velocity.y,
+            placement.dead_ball,
+        );
+        // **The arrival height, integrated rather than solved.**
+        //
+        // This was a drag-free arc — `z + vz·t − ½g·t²` over
+        // `t = dx/vx` — and both halves of that are the launch
+        // state, so it assumed the ball keeps its launch speed all
+        // the way to the line. It does not (see `AIR_DRAG_PER_TICK`,
+        // which documents a 26% shortfall at keeper kicking
+        // speeds), the real flight takes longer, and gravity acts
+        // for all of it: measured over 250 matches the prediction
+        // ran **+0.37 m high**, so shots arriving in the top corner
+        // were read as going over the bar and
+        // `KeeperShotDive::should_launch` declined to move for
+        // them. See [`Ball::ballistic_crossing`].
+        //
+        // The lateral projection above is deliberately left alone —
+        // drag is isotropic, so `vy/vx` and therefore the crossing
+        // `y` survive it exactly. Only the vertical axis was biased.
+        let goal_line_z = Ball::ballistic_crossing(
+            field.ball.position,
+            launch.final_velocity,
+            field.ball.spin,
+            goal_line_x,
+        )
+        .map(|(_, z, _)| z)
+        .unwrap_or_else(|| {
+            (field.ball.position.z + launch.final_velocity.z * ticks_to_goal
+                - 0.5 * GRAVITY_PER_TICK * ticks_to_goal * ticks_to_goal)
+                .max(0.0)
+        });
+        // Stamp who struck it, in the units the save contest
+        // scores. Read here rather than at save time: the save
+        // resolves several ticks downstream, where the shooter
+        // is no longer the ball's `previous_owner` on every
+        // path and his fatigue bands have already moved on.
+        let shooter_threat = field
+            .get_player(shoot_event_model.from_player_id)
+            .map(|p| sc::shot_threat(p, setup.minute))
+            .unwrap_or(SaveModel::NEUTRAL_THREAT);
+        Some(ShotCrossing {
+            defending_side,
+            goal_line_x,
+            goal_line_y,
+            goal_line_z,
+            true_goal_line_y,
+            shooter_threat,
+            seen_from,
+            ticks_to_goal,
+        })
+    }
+
+    /// Where the keeper believes the ball will cross, and how far his read
+    /// is from the truth. Returns both lines and the point he sees it from.
+    #[allow(clippy::too_many_arguments)]
+    fn keeper_read_line(
+        field: &MatchField,
+        context: &MatchContext,
+        setup: &ShotSetup,
+        shoot_event_model: &ShootingEventContext,
+        defending_side: PlayerSide,
+        goal_line_y: f32,
+        dx: f32,
+        ticks_to_goal: f32,
+        vx: f32,
+        vy: f32,
+        dead_ball: Option<DeadBallStrike>,
+    ) -> (f32, f32, Vector3<f32>) {
+        /// How far off the true crossing point a keeper's committed line
+        /// can be, in game units, before the flight-time scaling. 18u is
+        /// 2.25 m — the width a placed shot beats a set keeper by.
+        const KEEPER_PLACEMENT_READ: f32 = 18.0;
+        // ── The keeper does not know where it is going ────────
+        //
+        // This cache is what the goalkeeper states steer onto, so
+        // whatever it says is where he will be standing when the
+        // ball arrives. Handing him the exact crossing point
+        // means `lateral_error` collapses to ~0, `reach_ratio`
+        // with it, and every save resolves at `CENTRED_BASE` —
+        // the 0.88 "keeper is standing where the ball is going"
+        // ceiling. Measured consequence: an 82% population save
+        // rate against a real 67%, and it was not the save
+        // model's calibration at fault, it was that the model's
+        // hardest case never occurred.
+        //
+        // A keeper reads the striker's body and commits; he is
+        // beaten by placement inside a couple of metres all the
+        // time. The error shrinks with flight time, because a
+        // ball he can watch for longer is one he reads better —
+        // so a close-range piledriver beats him more often than a
+        // 25-yard effort, which is the right way round.
+        // …and HOW BADLY he reads it is a property of the keeper.
+        //
+        // This term had no keeper in it. The error was a constant
+        // scaled only by flight time, so the one quantity that
+        // decides whether a set keeper is standing in the right
+        // place was identical for an international and a youth
+        // third choice — all keeper quality lived downstream in
+        // the save roll. Reading the striker's body is exactly
+        // what `positioning` / `anticipation` / `decisions` /
+        // `concentration` are for, and the profile already blends
+        // them into one number.
+        //
+        // CENTRED on the population, not widened: an average
+        // keeper (0.5) gets 1.0× and the population save rate is
+        // untouched, while the band opens ±30% around it. The same
+        // discipline `SaveModel::strike_power` documents — an
+        // uncentred quality term does not add a skill axis, it
+        // silently recalibrates the whole model.
+        let keeper_read = field
+            .players
+            .iter()
+            .find(|p| {
+                p.side == Some(defending_side)
+                    && p.tactical_position.current_position.position_group()
+                        == PlayerFieldPositionGroup::Goalkeeper
+                    && !p.off_pitch
+            })
+            .map(|k| {
+                GoalkeeperSkillProfile::from_player(
+                    k,
+                    &GoalkeeperSkillInputs {
+                        minute: sc::minute_from_ms(context.total_match_time),
+                        condition_pct: k.player_attributes.condition_percentage() as f32,
+                    },
+                )
+                .positioning
+            })
+            .unwrap_or(0.5);
+        // A free kick is hidden behind its wall until it is over it,
+        // so the keeper reads the flight he sees, from the wall on.
+        let to_line = Vector3::new(dx, vy * ticks_to_goal, 0.0);
+        let seen_from = match dead_ball {
+            Some(_)
+                if shoot_event_model.shot_type == ShotType::DirectFreeKick
+                    && setup.wall_stopper.is_none()
+                    && FreeKickBand::from_distance(setup.horizontal_distance)
+                        != FreeKickBand::Far =>
+            {
+                field.ball.position
+                    + to_line.normalize() * RestartShape::WALL_DISTANCE.min(to_line.norm())
+            }
+            _ => field.ball.position,
+        };
+        let hidden = (seen_from - field.ball.position).xy().norm() / vx.abs();
+        let read_error = {
+            let seen = ((ticks_to_goal - hidden) / 120.0).clamp(0.0, 1.0);
+            KEEPER_PLACEMENT_READ
+                * (1.0 - seen * 0.55)
+                * (1.0 + (GoalkeeperSkillProfile::POPULATION_READ - keeper_read) * 0.60)
+        };
+        // Diagnostic switch: with `OF_GK_READ_OFF` set, the keeper
+        // reads the crossing point exactly. The A/B control for the
+        // placement read — it moves the population save rate, so
+        // "what does the read error cost?" cannot be answered by
+        // reading the diff. The draw is taken either way so the
+        // seeded RNG stream stays phase-aligned between the arms;
+        // same pattern as `SaveModel::save_when_beaten`.
+        let drawn = context.rng.jitter(0.0, read_error);
+        static READ_OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        // Kept unshadowed: the post-shot expectation below is a
+        // property of the STRIKE and must not carry the keeper's
+        // mistake — the same rule its own note states about
+        // reading where he was standing.
+        let true_goal_line_y = goal_line_y;
+        let goal_line_y = if *READ_OFF.get_or_init(|| std::env::var("OF_GK_READ_OFF").is_ok()) {
+            true_goal_line_y
+        } else {
+            true_goal_line_y + drawn
+        };
+        (goal_line_y, true_goal_line_y, seen_from)
+    }
+
+    /// The positional-defending credit: goal-side of the ball and inside
+    /// the lane the shot is travelling, at the instant of the strike.
+    fn credit_shot_coverage(
+        field: &mut MatchField,
+        defending_side: PlayerSide,
+        goal_line_x: f32,
+        goal_line_y: f32,
+    ) {
+        let ball_x = field.ball.position.x;
+        let ball_y = field.ball.position.y;
+        let span_x = goal_line_x - ball_x;
+        let span_y = goal_line_y - ball_y;
+        let span = (span_x * span_x + span_y * span_y).sqrt().max(1.0);
+        for p in field.players.iter_mut() {
+            if p.side != Some(defending_side)
+                || p.tactical_position.current_position.position_group()
+                    == PlayerFieldPositionGroup::Goalkeeper
+            {
+                continue;
+            }
+            let goal_side = match defending_side {
+                PlayerSide::Left => p.position.x < ball_x,
+                PlayerSide::Right => p.position.x > ball_x,
+            };
+            if !goal_side {
+                continue;
+            }
+            let cross = ((p.position.x - ball_x) * span_y - (p.position.y - ball_y) * span_x).abs();
+            if cross / span <= 60.0 {
+                p.statistics.note_shot_covered_in_position();
+            }
+        }
+    }
+
+    /// Defensive picture at the strike — see `block_diag`.
+    #[cfg(feature = "match-logs")]
+    fn note_shot_defensive_census(
+        field: &MatchField,
+        context: &mut MatchContext,
+        shoot_event_model: &ShootingEventContext,
+        defending_side: PlayerSide,
+        goal_line_x: f32,
+        goal_line_y: f32,
+    ) {
+        let ball_x = field.ball.position.x;
+        let ball_y = field.ball.position.y;
+        let ball_to_goal = (goal_line_x - ball_x).abs();
+        let (mut goalside, mut near_line) = (0u64, 0u64);
+        let (mut def_seen, mut def_depth_sum) = (0u64, 0.0f32);
+        // How much space the shooter actually had. Measured
+        // from the BALL rather than from the shooter's body:
+        // it is the ball a defender has to reach, and the
+        // shot models read their pressure counts around the
+        // striking player at the same instant.
+        let mut nearest_def = f32::MAX;
+        for p in &field.players {
+            if p.side != Some(defending_side)
+                || p.tactical_position.current_position.position_group()
+                    == PlayerFieldPositionGroup::Goalkeeper
+            {
+                continue;
+            }
+            // How deep the BACK LINE actually is, whether or
+            // not it is goal-side of the ball — this is what
+            // says "the line never dropped" as opposed to
+            // "the line dropped but scattered". Defender
+            // group only: averaging all ten outfielders lets
+            // their forwards, camped on the halfway line,
+            // dominate the mean and hide the back four
+            // entirely.
+            if p.tactical_position.current_position.position_group()
+                == PlayerFieldPositionGroup::Defender
+            {
+                def_seen += 1;
+                def_depth_sum += (goal_line_x - p.position.x).abs();
+                if let PlayerState::Defender(ds) = p.state {
+                    BlockDiag::note_defender_state(ds as usize);
+                }
+            }
+            nearest_def = nearest_def.min((p.position.x - ball_x).hypot(p.position.y - ball_y));
+            let is_goalside = match defending_side {
+                PlayerSide::Left => p.position.x < ball_x,
+                PlayerSide::Right => p.position.x > ball_x,
+            };
+            if !is_goalside {
+                continue;
+            }
+            goalside += 1;
+            // Perpendicular offset from the straight line the
+            // ball is taking to its target.
+            let span_x = goal_line_x - ball_x;
+            let span_y = goal_line_y - ball_y;
+            let span = (span_x * span_x + span_y * span_y).sqrt().max(1.0);
+            let cross = ((p.position.x - ball_x) * span_y - (p.position.y - ball_y) * span_x).abs();
+            if cross / span <= 30.0 {
+                near_line += 1;
+            }
+        }
+        if nearest_def < f32::MAX {
+            BlockDiag::note_shot_pressure(nearest_def);
+        }
+        MidfielderCensus::note_strike(
+            field,
+            shoot_event_model.from_player_id,
+            &context.penalty_area(defending_side == PlayerSide::Left),
+        );
+        context
+            .forward_census
+            .get_mut()
+            .note_shot_struck(shoot_event_model.from_player_id);
+        BlockDiag::note_strike(
+            goalside,
+            near_line,
+            ball_to_goal,
+            if def_seen == 0 {
+                0.0
+            } else {
+                def_depth_sum / def_seen as f32
+            },
+        );
+    }
+
+    fn handle_shoot_event(
+        shoot_event_model: ShootingEventContext,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        match_data: &mut ResultMatchPositionData,
+        direct_assister_id: Option<u32>,
+    ) {
+        let Some(setup) = Self::shot_setup(&shoot_event_model, field, context) else {
+            return;
+        };
+        let placement = Self::shot_placement(&shoot_event_model, &setup, field, context);
+        let launch = Self::shot_launch(&setup, &placement, field, &context.rng);
+        let xg = Self::record_shot_xg(&setup, &shoot_event_model, field);
+        Self::record_shot_chance(
+            &shoot_event_model,
+            &setup,
+            &launch,
+            xg,
+            direct_assister_id,
+            field,
+            context,
+            match_data,
+        );
+        Self::apply_shot_release(
+            &setup,
+            &placement,
+            &launch,
+            &shoot_event_model,
+            field,
+            context,
+        );
+        Self::apply_shot_spin(&setup, &placement, &launch, field);
+        // Shorter flight protection for shots — allows defenders/GK to claim sooner
+        field.ball.flags.in_flight_state = 40;
+        #[cfg(feature = "match-logs")]
+        Self::note_shot_strike_census(&setup, &shoot_event_model, field, context);
+        Self::cache_shot_target(
+            &setup,
+            &placement,
+            &shoot_event_model,
+            &launch,
+            field,
+            context,
+        );
+    }
+
+    /// Hand the struck ball to the world: the shooter's touch, the
+    /// offside snapshot, the ownership reset and the launch velocity.
+    fn apply_shot_release(
+        setup: &ShotSetup,
+        placement: &ShotPlacement,
+        launch: &ShotLaunch,
+        shoot_event_model: &ShootingEventContext,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
         // Stash the shooter so the GK ledger hooks (save / catch / parry
         // / goal handlers) can resolve him without re-deriving. The
         // per-shot expectation itself is stamped below, once the shot's
@@ -6178,7 +7523,7 @@ impl PlayerEventDispatcher {
         }
         field.ball.record_touch(
             shoot_event_model.from_player_id,
-            shooter_team_id,
+            setup.shooter_team_id,
             context.current_tick(),
             false,
         );
@@ -6193,7 +7538,7 @@ impl PlayerEventDispatcher {
         );
         #[cfg(feature = "match-logs")]
         {
-            field.ball.last_shot_struck_dist = horizontal_distance;
+            field.ball.last_shot_struck_dist = setup.horizontal_distance;
         }
         // Cleared here so a shot whose target cannot be projected (the
         // `else` arm below) can never leave the previous shot's value on
@@ -6211,8 +7556,18 @@ impl PlayerEventDispatcher {
         // window and the receiver-becomes-shooter case has already
         // been credited by the dispatch site above.
         field.ball.clear_pending_pass_metadata();
-        field.ball.velocity = final_velocity;
+        field.ball.velocity = launch.final_velocity;
+        let _ = placement;
+    }
 
+    /// Rotation to match the strike: sidespin solved from the curl offset
+    /// and topspin on a rising effort.
+    fn apply_shot_spin(
+        setup: &ShotSetup,
+        placement: &ShotPlacement,
+        launch: &ShotLaunch,
+        field: &mut MatchField,
+    ) {
         // Rotation to match the strike. Two axes, both of them real:
         //
         // * SIDESPIN, solved so the Magnus force bends the ball back by
@@ -6223,438 +7578,39 @@ impl PlayerEventDispatcher {
         // * TOPSPIN on a rising strike, which is what makes a long-range
         //   effort dip back under the bar. The apex-solved parabola is
         //   symmetric and can never dip on its own.
-        {
-            let vx = final_velocity.x;
-            let vy = final_velocity.y;
-            let speed = (vx * vx + vy * vy).sqrt();
-            let mut spin = Vector3::zeros();
-            if speed > 0.05 && vx.abs() > 0.05 && horizontal_distance > 1.0 {
-                let ticks = horizontal_distance / speed;
-                if ticks > 1.0 {
-                    let accel_y = 2.0 * curl_units / (ticks * ticks);
-                    spin.z = accel_y / (SpinModel::MAGNUS_COEFF * vx);
-                }
-                // A shot struck to rise is struck with the laces over the
-                // top of the ball. Scaled by how high the strike was
-                // aimed, so a low drive carries none — unless the kick has
-                // already decided its topspin, which its flight was solved
-                // with.
-                let dir = Vector3::new(vx / speed, vy / speed, 0.0);
-                match dead_ball.and_then(|kick| kick.dip) {
-                    Some(dip) => spin += SpinModel::from_strike(dir, 0.0, -dip, 1.0),
-                    None => {
-                        let rise = (struck_apex - 0.8).max(0.0) / 3.0;
-                        if rise > 0.0 {
-                            spin += SpinModel::from_strike(dir, 0.0, -rise * 0.55, technique_skill);
-                        }
+        let final_velocity = launch.final_velocity;
+        let vx = final_velocity.x;
+        let vy = final_velocity.y;
+        let speed = (vx * vx + vy * vy).sqrt();
+        let mut spin = Vector3::zeros();
+        if speed > 0.05 && vx.abs() > 0.05 && setup.horizontal_distance > 1.0 {
+            let ticks = setup.horizontal_distance / speed;
+            if ticks > 1.0 {
+                let accel_y = 2.0 * placement.curl_units / (ticks * ticks);
+                spin.z = accel_y / (SpinModel::MAGNUS_COEFF * vx);
+            }
+            // A shot struck to rise is struck with the laces over the
+            // top of the ball. Scaled by how high the strike was
+            // aimed, so a low drive carries none — unless the kick has
+            // already decided its topspin, which its flight was solved
+            // with.
+            let dir = Vector3::new(vx / speed, vy / speed, 0.0);
+            match placement.dead_ball.and_then(|kick| kick.dip) {
+                Some(dip) => spin += SpinModel::from_strike(dir, 0.0, -dip, 1.0),
+                None => {
+                    let rise = (launch.struck_apex - 0.8).max(0.0) / 3.0;
+                    if rise > 0.0 {
+                        spin +=
+                            SpinModel::from_strike(dir, 0.0, -rise * 0.55, setup.technique_skill);
                     }
                 }
             }
-            // The curl term above is solved by division (`accel_y / vx`),
-            // so a shot struck slowly across the face of goal can ask for
-            // a rotation no human generates. Clamped for the same reason
-            // the cross path is — see `SpinModel::clamped`.
-            field.ball.spin = SpinModel::clamped(spin);
         }
-
-        // Shorter flight protection for shots — allows defenders/GK to claim sooner
-        field.ball.flags.in_flight_state = 40;
-
-        // Arm the shot-lifecycle census (diagnostic only). See
-        // `Ball::census_shot_fate`.
-        #[cfg(feature = "match-logs")]
-        {
-            use std::sync::atomic::Ordering;
-            crate::r#match::engine::ball::ball::ownership::reception_diag::FATE_STRUCK
-                .fetch_add(1, Ordering::Relaxed);
-            crate::r#match::engine::ball::ball::ownership::reception_diag::FATE_STRUCK_DIST_X100
-                .fetch_add((horizontal_distance * 100.0) as u64, Ordering::Relaxed);
-            field.ball.census_shot_live = true;
-            field.ball.census_shot_dist = horizontal_distance;
-            field.ball.census_shot_side = shooter_side;
-            if let Some(side) = shooter_side {
-                let tick = context.current_tick();
-                context
-                    .keeper_census
-                    .get_mut()
-                    .note_strike(field, side.opposite(), tick);
-            }
-        }
-
-        // Project where the ball will cross the goal line so the
-        // defending keeper can commit to an intercept line rather than
-        // chasing the ball's current position every tick. Uses
-        // constant-velocity projection (close enough over the ~10-20
-        // ticks of shot flight; drag and gravity effects are small
-        // relative to the error the goalkeeper's own reaction
-        // introduces). Without this cache the GK loses ground to the
-        // 5.6 u/tick shot and never catches anything — the primary
-        // reason saves/on-target sat below 1% in benchmarks.
-        let shooter_side = field
-            .get_player(shoot_event_model.from_player_id)
-            .and_then(|p| p.side);
-        if let Some(shooter_side) = shooter_side {
-            let field_width = field.size.width as f32;
-            let defending_side = match shooter_side {
-                PlayerSide::Left => PlayerSide::Right,
-                PlayerSide::Right => PlayerSide::Left,
-            };
-            let goal_line_x = match defending_side {
-                PlayerSide::Left => 0.0,
-                PlayerSide::Right => field_width,
-            };
-            let dx = goal_line_x - field.ball.position.x;
-            let vx = final_velocity.x;
-            // Only cache if the shot is actually heading toward that
-            // goal — otherwise projection time is negative or infinite
-            // and the cache would mislead the keeper.
-            if (dx > 0.0 && vx > 0.1) || (dx < 0.0 && vx < -0.1) {
-                let ticks_to_goal = (dx / vx).abs();
-                // Keep the strike live for its whole flight.
-                //
-                // The flat 40 ticks set above is shorter than most shots
-                // take to reach the line: at typical struck speeds a
-                // 92u (11.5 m) effort is 45-60 ticks in the air. Once
-                // the window lapsed, `check_ball_ownership` resumed and
-                // any player within 5u simply picked the shot out of the
-                // air in open play — no save, no block, no goal, no shot
-                // going out. Measured: only 23% of shots ever resolved
-                // as a save or a goal, against ~80% that were struck
-                // between the posts, and the missing ~58% left no trace
-                // in any outcome counter.
-                //
-                // A struck ball has to resolve AS a shot: saved, blocked,
-                // in, or out of play. The 1.3 margin covers the drag and
-                // gravity the constant-velocity projection ignores; the
-                // floor keeps tap-ins protected and the ceiling stops a
-                // mishit dribbling toward goal from freezing possession.
-                field.ball.flags.in_flight_state = ((ticks_to_goal * 1.8) as usize).clamp(40, 320);
-                let goal_line_y = if deflected {
-                    // GK reads the ORIGINAL trajectory until the
-                    // deflection happens; the redirect arrives after
-                    // they've committed to the line. By storing the
-                    // pre-deflection y here, the keeper's velocity()
-                    // arrives at the wrong spot and the actual ball
-                    // (which uses the deflected `final_velocity` below)
-                    // sails past into the far corner.
-                    original_y_target
-                } else {
-                    // Straight-line projection of the LAUNCH velocity —
-                    // which, on a curled shot, is not where the ball ends
-                    // up. A keeper does read spin, but late and
-                    // incompletely: he sets for most of the bend and the
-                    // rest beats him. That residual is what makes a curled
-                    // finish worth striking, and it is bounded so curl
-                    // can't quietly rewrite the save calibration.
-                    const KEEPER_CURL_READ: f32 = 0.65;
-                    field.ball.position.y
-                        + final_velocity.y * ticks_to_goal
-                        + curl_units * KEEPER_CURL_READ
-                };
-                // ── The keeper does not know where it is going ────────
-                //
-                // This cache is what the goalkeeper states steer onto, so
-                // whatever it says is where he will be standing when the
-                // ball arrives. Handing him the exact crossing point
-                // means `lateral_error` collapses to ~0, `reach_ratio`
-                // with it, and every save resolves at `CENTRED_BASE` —
-                // the 0.88 "keeper is standing where the ball is going"
-                // ceiling. Measured consequence: an 82% population save
-                // rate against a real 67%, and it was not the save
-                // model's calibration at fault, it was that the model's
-                // hardest case never occurred.
-                //
-                // A keeper reads the striker's body and commits; he is
-                // beaten by placement inside a couple of metres all the
-                // time. The error shrinks with flight time, because a
-                // ball he can watch for longer is one he reads better —
-                // so a close-range piledriver beats him more often than a
-                // 25-yard effort, which is the right way round.
-                // …and HOW BADLY he reads it is a property of the keeper.
-                //
-                // This term had no keeper in it. The error was a constant
-                // scaled only by flight time, so the one quantity that
-                // decides whether a set keeper is standing in the right
-                // place was identical for an international and a youth
-                // third choice — all keeper quality lived downstream in
-                // the save roll. Reading the striker's body is exactly
-                // what `positioning` / `anticipation` / `decisions` /
-                // `concentration` are for, and the profile already blends
-                // them into one number.
-                //
-                // CENTRED on the population, not widened: an average
-                // keeper (0.5) gets 1.0× and the population save rate is
-                // untouched, while the band opens ±30% around it. The same
-                // discipline `SaveModel::strike_power` documents — an
-                // uncentred quality term does not add a skill axis, it
-                // silently recalibrates the whole model.
-                let keeper_read = field
-                    .players
-                    .iter()
-                    .find(|p| {
-                        p.side == Some(defending_side)
-                            && p.tactical_position.current_position.position_group()
-                                == PlayerFieldPositionGroup::Goalkeeper
-                            && !p.off_pitch
-                    })
-                    .map(|k| {
-                        GoalkeeperSkillProfile::from_player(
-                            k,
-                            &GoalkeeperSkillInputs {
-                                minute: sc::minute_from_ms(context.total_match_time),
-                                condition_pct: k.player_attributes.condition_percentage() as f32,
-                            },
-                        )
-                        .positioning
-                    })
-                    .unwrap_or(0.5);
-                // A free kick is hidden behind its wall until it is over it,
-                // so the keeper reads the flight he sees, from the wall on.
-                let to_line = Vector3::new(dx, final_velocity.y * ticks_to_goal, 0.0);
-                let seen_from = match dead_ball {
-                    Some(_)
-                        if shoot_event_model.shot_type == ShotType::DirectFreeKick
-                            && wall_stopper.is_none()
-                            && FreeKickBand::from_distance(horizontal_distance)
-                                != FreeKickBand::Far =>
-                    {
-                        field.ball.position
-                            + to_line.normalize()
-                                * RestartShape::WALL_DISTANCE.min(to_line.norm())
-                    }
-                    _ => field.ball.position,
-                };
-                let hidden = (seen_from - field.ball.position).xy().norm() / vx.abs();
-                let read_error = {
-                    let seen = ((ticks_to_goal - hidden) / 120.0).clamp(0.0, 1.0);
-                    KEEPER_PLACEMENT_READ
-                        * (1.0 - seen * 0.55)
-                        * (1.0 + (GoalkeeperSkillProfile::POPULATION_READ - keeper_read) * 0.60)
-                };
-                // Diagnostic switch: with `OF_GK_READ_OFF` set, the keeper
-                // reads the crossing point exactly. The A/B control for the
-                // placement read — it moves the population save rate, so
-                // "what does the read error cost?" cannot be answered by
-                // reading the diff. The draw is taken either way so the
-                // seeded RNG stream stays phase-aligned between the arms;
-                // same pattern as `SaveModel::save_when_beaten`.
-                let drawn = rng.jitter(0.0, read_error);
-                static READ_OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-                // Kept unshadowed: the post-shot expectation below is a
-                // property of the STRIKE and must not carry the keeper's
-                // mistake — the same rule its own note states about
-                // reading where he was standing.
-                let true_goal_line_y = goal_line_y;
-                let goal_line_y =
-                    if *READ_OFF.get_or_init(|| std::env::var("OF_GK_READ_OFF").is_ok()) {
-                        goal_line_y
-                    } else {
-                        goal_line_y + drawn
-                    };
-                // **The arrival height, integrated rather than solved.**
-                //
-                // This was a drag-free arc — `z + vz·t − ½g·t²` over
-                // `t = dx/vx` — and both halves of that are the launch
-                // state, so it assumed the ball keeps its launch speed all
-                // the way to the line. It does not (see `AIR_DRAG_PER_TICK`,
-                // which documents a 26% shortfall at keeper kicking
-                // speeds), the real flight takes longer, and gravity acts
-                // for all of it: measured over 250 matches the prediction
-                // ran **+0.37 m high**, so shots arriving in the top corner
-                // were read as going over the bar and
-                // `KeeperShotDive::should_launch` declined to move for
-                // them. See [`Ball::ballistic_crossing`].
-                //
-                // The lateral projection above is deliberately left alone —
-                // drag is isotropic, so `vy/vx` and therefore the crossing
-                // `y` survive it exactly. Only the vertical axis was biased.
-                let goal_line_z = Ball::ballistic_crossing(
-                    field.ball.position,
-                    final_velocity,
-                    field.ball.spin,
-                    goal_line_x,
-                )
-                .map(|(_, z, _)| z)
-                .unwrap_or_else(|| {
-                    (field.ball.position.z + final_velocity.z * ticks_to_goal
-                        - 0.5 * GRAVITY_PER_TICK * ticks_to_goal * ticks_to_goal)
-                        .max(0.0)
-                });
-                // Stamp who struck it, in the units the save contest
-                // scores. Read here rather than at save time: the save
-                // resolves several ticks downstream, where the shooter
-                // is no longer the ball's `previous_owner` on every
-                // path and his fatigue bands have already moved on.
-                let shooter_threat = field
-                    .get_player(shoot_event_model.from_player_id)
-                    .map(|p| sc::shot_threat(p, minute))
-                    .unwrap_or(SaveModel::NEUTRAL_THREAT);
-                // Post-shot expectation for the keeper ledger: what a
-                // league-average keeper concedes from THIS strike. Built
-                // from the projected crossing point, the ball's speed and
-                // its height — the strike, not the man in goal — so the
-                // rating can ask "how many did he keep out that an
-                // ordinary keeper wouldn't have" instead of assuming
-                // every shot on target was worth a league-average chance.
-                // Placement is measured from the goal CENTRE, never from
-                // the keeper's own position: reading where he stood would
-                // let good positioning shrink his own expectation and
-                // cancel the advantage it earned him.
-                // …and never from his READ of it either: `goal_line_y` above
-                // carries the placement jitter, the unread share of the
-                // curl and, on a deflection, the whole pre-deflection line.
-                // An expectation built on the keeper's mistake is not a
-                // property of the strike. See `true_goal_line_y`.
-                field.ball.last_shot_xgot = SaveModel::expected_goal_on_target(
-                    true_goal_line_y - field.size.height as f32 * 0.5,
-                    final_velocity.norm(),
-                    goal_line_z,
-                    horizontal_distance,
-                );
-                // Positional-defending credit. Every other defensive
-                // counter in the model is an EVENT — a tackle, an
-                // interception, a clearance — and a defender who defends
-                // by being in the right place produces none of them.
-                // This is the one that pays for the position itself:
-                // goal-side of the ball and inside the lane the shot is
-                // travelling down, measured at the moment it is struck.
-                // See `ZoneStats::shots_covered_in_position`.
-                {
-                    let ball_x = field.ball.position.x;
-                    let ball_y = field.ball.position.y;
-                    let span_x = goal_line_x - ball_x;
-                    let span_y = goal_line_y - ball_y;
-                    let span = (span_x * span_x + span_y * span_y).sqrt().max(1.0);
-                    for p in field.players.iter_mut() {
-                        if p.side != Some(defending_side)
-                            || p.tactical_position.current_position.position_group()
-                                == PlayerFieldPositionGroup::Goalkeeper
-                        {
-                            continue;
-                        }
-                        let goal_side = match defending_side {
-                            PlayerSide::Left => p.position.x < ball_x,
-                            PlayerSide::Right => p.position.x > ball_x,
-                        };
-                        if !goal_side {
-                            continue;
-                        }
-                        let cross = ((p.position.x - ball_x) * span_y
-                            - (p.position.y - ball_y) * span_x)
-                            .abs();
-                        if cross / span <= COVER_LANE_HALF_WIDTH {
-                            p.statistics.note_shot_covered_in_position();
-                        }
-                    }
-                }
-                #[cfg(feature = "match-logs")]
-                {
-                    // Defensive picture at the strike — see `block_diag`.
-                    let ball_x = field.ball.position.x;
-                    let ball_y = field.ball.position.y;
-                    let ball_to_goal = (goal_line_x - ball_x).abs();
-                    let (mut goalside, mut near_line) = (0u64, 0u64);
-                    let (mut def_seen, mut def_depth_sum) = (0u64, 0.0f32);
-                    // How much space the shooter actually had. Measured
-                    // from the BALL rather than from the shooter's body:
-                    // it is the ball a defender has to reach, and the
-                    // shot models read their pressure counts around the
-                    // striking player at the same instant.
-                    let mut nearest_def = f32::MAX;
-                    for p in &field.players {
-                        if p.side != Some(defending_side)
-                            || p.tactical_position.current_position.position_group()
-                                == PlayerFieldPositionGroup::Goalkeeper
-                        {
-                            continue;
-                        }
-                        // How deep the BACK LINE actually is, whether or
-                        // not it is goal-side of the ball — this is what
-                        // says "the line never dropped" as opposed to
-                        // "the line dropped but scattered". Defender
-                        // group only: averaging all ten outfielders lets
-                        // their forwards, camped on the halfway line,
-                        // dominate the mean and hide the back four
-                        // entirely.
-                        if p.tactical_position.current_position.position_group()
-                            == PlayerFieldPositionGroup::Defender
-                        {
-                            def_seen += 1;
-                            def_depth_sum += (goal_line_x - p.position.x).abs();
-                            if let PlayerState::Defender(ds) = p.state {
-                                BlockDiag::note_defender_state(ds as usize);
-                            }
-                        }
-                        nearest_def =
-                            nearest_def.min((p.position.x - ball_x).hypot(p.position.y - ball_y));
-                        let is_goalside = match defending_side {
-                            PlayerSide::Left => p.position.x < ball_x,
-                            PlayerSide::Right => p.position.x > ball_x,
-                        };
-                        if !is_goalside {
-                            continue;
-                        }
-                        goalside += 1;
-                        // Perpendicular offset from the straight line the
-                        // ball is taking to its target.
-                        let span_x = goal_line_x - ball_x;
-                        let span_y = goal_line_y - ball_y;
-                        let span = (span_x * span_x + span_y * span_y).sqrt().max(1.0);
-                        let cross = ((p.position.x - ball_x) * span_y
-                            - (p.position.y - ball_y) * span_x)
-                            .abs();
-                        if cross / span <= 30.0 {
-                            near_line += 1;
-                        }
-                    }
-                    if nearest_def < f32::MAX {
-                        BlockDiag::note_shot_pressure(nearest_def);
-                    }
-                    MidfielderCensus::note_strike(
-                        field,
-                        shoot_event_model.from_player_id,
-                        &context.penalty_area(defending_side == PlayerSide::Left),
-                    );
-                    context
-                        .forward_census
-                        .get_mut()
-                        .note_shot_struck(shoot_event_model.from_player_id);
-                    BlockDiag::note_strike(
-                        goalside,
-                        near_line,
-                        ball_to_goal,
-                        if def_seen == 0 {
-                            0.0
-                        } else {
-                            def_depth_sum / def_seen as f32
-                        },
-                    );
-                }
-                let target = ShotTarget {
-                    goal_line_y,
-                    goal_line_z,
-                    defending_side,
-                    deflected,
-                    save_rolled: false,
-                    block_rolled: wall_stopper.is_some(),
-                    blocked_by: wall_stopper.map(|id| (id, rng.unit_f32())),
-                    shooter_threat,
-                    struck_from: field.ball.position,
-                    seen_from,
-                };
-                field.ball.last_shot_on_frame = target.struck_on_frame(&context.goal_positions);
-                field.ball.cached_shot_target = Some(target);
-            } else {
-                #[cfg(feature = "match-logs")]
-                crate::r#match::engine::ball::ball::ownership::reception_diag::SHOT_NO_TARGET
-                    .fetch_add(1, Ordering::Relaxed);
-                field.ball.cached_shot_target = None;
-            }
-        } else {
-            #[cfg(feature = "match-logs")]
-            crate::r#match::engine::ball::ball::ownership::reception_diag::SHOT_NO_TARGET
-                .fetch_add(1, Ordering::Relaxed);
-        }
+        // The curl term above is solved by division (`accel_y / vx`),
+        // so a shot struck slowly across the face of goal can ask for
+        // a rotation no human generates. Clamped for the same reason
+        // the cross path is — see `SpinModel::clamped`.
+        field.ball.spin = SpinModel::clamped(spin);
     }
 
     /// Book a save credited outside the physics path under its
@@ -6979,7 +7935,7 @@ impl PlayerEventDispatcher {
                 victim,
                 InjuryRisk::foul_impulse(foul.severity),
             )
-                .map(|hurt| (victim, hurt))
+            .map(|hurt| (victim, hurt))
         });
         let stops_play = injury.is_some_and(|(_, hurt)| hurt > InjuryGrade::Knock);
         Self::whistle_foul(foul, spot, stops_play, field, context);
@@ -7006,7 +7962,11 @@ impl PlayerEventDispatcher {
             p.fouls_committed = p.fouls_committed.saturating_add(1);
             p.statistics.add_foul(now);
         }
-        let (yellow, red) = if goal_bound { (0.35, 0.15) } else { (0.15, 0.0) };
+        let (yellow, red) = if goal_bound {
+            (0.35, 0.15)
+        } else {
+            (0.15, 0.0)
+        };
         Self::apply_card_decision(
             player_id,
             FoulSeverity::Normal,
@@ -7017,7 +7977,6 @@ impl PlayerEventDispatcher {
             context,
         );
     }
-
 
     fn whistle_foul(
         foul: FoulCommitted,
@@ -7032,6 +7991,7 @@ impl PlayerEventDispatcher {
             source,
             ..
         } = foul;
+        Self::note_foul_census(fouler_id, field, context);
         // Referee marginal-call gate. The tackling code emits a foul
         // whenever a contact passes its `committed_foul` roll; the
         // referee then decides whether to actually blow the whistle.
@@ -7040,29 +8000,6 @@ impl PlayerEventDispatcher {
         // calls more, a lenient one waves play on). The card decision
         // is computed only when the whistle goes — a missed call costs
         // nobody a yellow.
-        // Foul-source census: which STATE decided this contact, and was
-        // the ball in the fouler's own box at the time (i.e. is this a
-        // penalty candidate). Recorded before the referee gate so the
-        // emitted rate and the whistled rate can be told apart. Restraining
-        // the tackle model cut tackles 22.4 → 18.3 and moved the penalty
-        // rate by nothing at all, which means the box fouls are being
-        // emitted somewhere else — this says where.
-        #[cfg(feature = "match-logs")]
-        if let Some(f) = field.players.iter().find(|p| p.id == fouler_id) {
-            let in_box = f
-                .side
-                .map(|s| {
-                    context
-                        .penalty_area(s == PlayerSide::Left)
-                        .contains(&field.ball.position)
-                })
-                .unwrap_or(false);
-            FoulCensus::note(
-                f.motion_trace.decided_in.unwrap_or(f.state).compact_id(),
-                in_box,
-            );
-        }
-
         let call_ctx =
             FoulResolver::build_call_context(fouler_id, severity, source, spot, field, context);
         let call_prob = context
@@ -7094,11 +8031,69 @@ impl PlayerEventDispatcher {
             );
         }
 
-        // Compute card probabilities up front — used either to record
-        // the card immediately or to stash on a pending advantage.
+        let Some((card_yellow_prob, card_red_prob)) = Self::foul_cards(foul, spot, field, context)
+        else {
+            return;
+        };
+
+        if Self::play_advantage(
+            foul,
+            spot,
+            injury_stops_play,
+            card_yellow_prob,
+            card_red_prob,
+            field,
+            context,
+        ) {
+            return;
+        }
+
+        Self::stop_play_for_foul(foul, spot, card_yellow_prob, card_red_prob, field, context);
+    }
+
+    /// Foul-source census: which STATE decided this contact, and was the
+    /// ball in the fouler's own box at the time (i.e. is this a penalty
+    /// candidate). Recorded before the referee gate so the emitted rate
+    /// and the whistled rate can be told apart. Restraining the tackle
+    /// model cut tackles 22.4 → 18.3 and moved the penalty rate by
+    /// nothing at all, which means the box fouls are being emitted
+    /// somewhere else — this says where.
+    #[cfg_attr(not(feature = "match-logs"), allow(unused_variables))]
+    fn note_foul_census(fouler_id: u32, field: &MatchField, context: &MatchContext) {
+        #[cfg(feature = "match-logs")]
+        if let Some(f) = field.players.iter().find(|p| p.id == fouler_id) {
+            let in_box = f
+                .side
+                .map(|s| {
+                    context
+                        .penalty_area(s == PlayerSide::Left)
+                        .contains(&field.ball.position)
+                })
+                .unwrap_or(false);
+            FoulCensus::note(
+                f.motion_trace.decided_in.unwrap_or(f.state).compact_id(),
+                in_box,
+            );
+        }
+    }
+
+    /// Card probabilities for this contact, computed only once the
+    /// whistle has gone.
+    fn foul_cards(
+        foul: FoulCommitted,
+        spot: Vector3<f32>,
+        field: &MatchField,
+        context: &MatchContext,
+    ) -> Option<(f32, f32)> {
+        let FoulCommitted {
+            fouler: fouler_id,
+            severity,
+            source,
+            ..
+        } = foul;
         let match_second = context.total_match_time;
         let card_modifier = context.referee.card_modifier(&context.environment);
-        let cards = match source {
+        match source {
             FoulSource::ProfessionalFoul => {
                 Self::professional_foul_cards(fouler_id, spot, field, context)
             }
@@ -7114,17 +8109,30 @@ impl PlayerEventDispatcher {
                 })
             }
             _ => Self::compute_card_probs(fouler_id, severity, field, match_second, card_modifier),
-        };
-        let Some((card_yellow_prob, card_red_prob)) = cards else {
-            return;
-        };
+        }
+    }
 
-        // Advantage: if the fouled team kept possession, the ball is in
-        // a good attacking position, and the foul wasn't violent, the
-        // referee waves play on. The pending advantage is stashed on
-        // context; the per-tick advantage check resolves it later.
-        // Violent fouls always stop play — `should_play_advantage`
-        // hard-blocks them on severity >= 0.85.
+    /// Advantage: if the fouled team kept possession, the ball is in a
+    /// good attacking position, and the foul wasn't violent, the referee
+    /// waves play on. The pending advantage is stashed on context; the
+    /// per-tick advantage check resolves it later. Violent fouls always
+    /// stop play — `should_play_advantage` hard-blocks them on
+    /// severity >= 0.85. Returns whether the advantage was played.
+    fn play_advantage(
+        foul: FoulCommitted,
+        spot: Vector3<f32>,
+        injury_stops_play: bool,
+        card_yellow_prob: f32,
+        card_red_prob: f32,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) -> bool {
+        let FoulCommitted {
+            fouler: fouler_id,
+            severity,
+            source,
+            ..
+        } = foul;
         let severity_score = match severity {
             FoulSeverity::Normal => 0.20,
             FoulSeverity::Reckless => 0.60,
@@ -7134,39 +8142,56 @@ impl PlayerEventDispatcher {
             Self::estimate_advantage_inputs(fouler_id, field);
         // No advantage over a man who cannot go on: he was hurt, or he was
         // brought down precisely so that he could not.
-        if let Some(fouled_team_id) = fouled_team_id
+        if !(fouled_team_id.is_some()
             && !injury_stops_play
             && source != FoulSource::ProfessionalFoul
             && context.referee.should_play_advantage(
                 attack_value,
                 possession_retained,
                 severity_score,
-            )
+            ))
         {
-            let start_tick = context.current_tick();
-            let window = context.referee.advantage_window_ticks() as u64;
-            context.pending_advantage = Some(PendingAdvantage {
-                fouler_id,
-                start_tick,
-                expire_tick: start_tick + window,
-                fouled_team_id,
-                severity,
-                source,
-                spot,
-                yellow_prob: card_yellow_prob,
-                red_prob: card_red_prob,
-            });
-            // Foul still counts for the player's fouls_committed
-            // tally even though play continues.
-            if let Some(p) = field.get_player_mut(fouler_id) {
-                p.fouls_committed = p.fouls_committed.saturating_add(1);
-                p.statistics.add_foul(match_second);
-                p.on_foul_played_on(foul.challenge);
-            }
-            return;
+            return false;
         }
+        let fouled_team_id = fouled_team_id.expect("checked above");
+        let start_tick = context.current_tick();
+        let window = context.referee.advantage_window_ticks() as u64;
+        context.pending_advantage = Some(PendingAdvantage {
+            fouler_id,
+            start_tick,
+            expire_tick: start_tick + window,
+            fouled_team_id,
+            severity,
+            source,
+            spot,
+            yellow_prob: card_yellow_prob,
+            red_prob: card_red_prob,
+        });
+        // Foul still counts for the player's fouls_committed
+        // tally even though play continues.
+        if let Some(p) = field.get_player_mut(fouler_id) {
+            p.fouls_committed = p.fouls_committed.saturating_add(1);
+            p.statistics.add_foul(context.total_match_time);
+            p.on_foul_played_on(foul.challenge);
+        }
+        true
+    }
 
-        // No advantage — proceed to the immediate restart / card path.
+    /// No advantage — proceed to the immediate restart / card path.
+    fn stop_play_for_foul(
+        foul: FoulCommitted,
+        spot: Vector3<f32>,
+        card_yellow_prob: f32,
+        card_red_prob: f32,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) {
+        let FoulCommitted {
+            fouler: fouler_id,
+            severity,
+            source,
+            ..
+        } = foul;
         // Free-kick protection: the victim gets time without being challenged.
         if field.ball.current_owner.is_some() {
             field.ball.claim_cooldown = 150; // ~2.5 seconds of protection
@@ -7178,7 +8203,7 @@ impl PlayerEventDispatcher {
         // Count the foul for the player (advantage path counted it above).
         if let Some(p) = field.get_player_mut(fouler_id) {
             p.fouls_committed = p.fouls_committed.saturating_add(1);
-            p.statistics.add_foul(match_second);
+            p.statistics.add_foul(context.total_match_time);
         }
 
         Self::apply_card_decision(
@@ -7230,7 +8255,12 @@ impl PlayerEventDispatcher {
                 .players
                 .iter()
                 .filter(|p| p.team_id == fouler.team_id && p.id != fouler_id && !p.off_pitch)
-                .map(|p| (p.position, p.tactical_position.current_position.is_goalkeeper())),
+                .map(|p| {
+                    (
+                        p.position,
+                        p.tactical_position.current_position.is_goalkeeper(),
+                    )
+                }),
         );
         Some((1.0, ProfessionalFoul::red_card_prob(threat)))
     }
@@ -7514,9 +8544,7 @@ impl PlayerEventDispatcher {
             .psychology
             .record_negative(fouler_id, NegativeEvent::YellowCard, psych_tick);
 
-        if ends_with_red
-            && let Some(team_id) = field.get_player(fouler_id).map(|p| p.team_id)
-        {
+        if ends_with_red && let Some(team_id) = field.get_player(fouler_id).map(|p| p.team_id) {
             field.take_off(fouler_id, context.coach_for_team(team_id).spare_line());
             context.on_sending_off(team_id);
             // Roster effectively changed (one fewer active player) —
@@ -7876,28 +8904,7 @@ impl PlayerEventDispatcher {
         if field.ball.last_touch_player_id == Some(clearer_id) {
             field.ball.last_touch_kind = kind;
         }
-        if let Some(gk_id) = gk_save_id {
-            // Capture shooter BEFORE we mutate the field — the previous
-            // owner is the player whose shot the GK is now clearing.
-            let shooter_id = field.ball.previous_owner.filter(|&sid| sid != gk_id);
-            if let Some(gk) = field.get_player_mut(gk_id) {
-                gk.statistics.saves += 1;
-                gk.statistics.shots_faced += 1;
-            }
-            let mut shooter_found = false;
-            if let Some(sid) = shooter_id
-                && let Some(shooter) = field.get_player_mut(sid)
-            {
-                shooter.memory.credit_shot_on_target();
-                shooter_found = true;
-            }
-            #[cfg(feature = "match-logs")]
-            Self::dbg_save_credit(2, shooter_id.is_some(), shooter_id.is_none(), shooter_found);
-            let _ = shooter_found;
-        }
-        if gk_shot_id.is_some() {
-            field.ball.cached_shot_target = None;
-        }
+        Self::credit_clearing_save(field, gk_shot_id, gk_save_id);
 
         // Clearance cap, HORIZONTAL only — the vertical axis is in metres
         // and shares no scale with it, so there is no total magnitude worth
@@ -7907,7 +8914,7 @@ impl PlayerEventDispatcher {
         // systems and (b) rescaled, so a big hoof lost forward travel to
         // stay inside the budget — the same defect the pass path had.
         let horizontal_speed = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
-        let mut capped_velocity = if horizontal_speed > Ball::MAX_CLEARANCE_SPEED {
+        let capped_velocity = if horizontal_speed > Ball::MAX_CLEARANCE_SPEED {
             let scale = Ball::MAX_CLEARANCE_SPEED / horizontal_speed;
             Vector3::new(velocity.x * scale, velocity.y * scale, velocity.z)
         } else {
@@ -7933,29 +8940,13 @@ impl PlayerEventDispatcher {
                 (Some(p.team_id), own_half)
             })
             .unwrap_or((None, false));
-
-        // SAFETY: Prevent clearances from going toward own goal
-        // A clearance should always go AWAY from own goal, never toward it
-        // — unless he miscued it, which is the one that can.
-        if !miscued && clears_own_half {
-            use crate::r#match::PlayerSide;
-            if let Some(clearer) = field.get_player(clearer_id) {
-                match clearer.side {
-                        Some(PlayerSide::Left) => {
-                            // Own goal at x ≈ 0 — clearance must go forward (positive x)
-                            if capped_velocity.x < 0.0 {
-                                capped_velocity.x = capped_velocity.x.abs();
-                            }
-                        }
-                        Some(PlayerSide::Right)
-                            // Own goal at x ≈ field_width — clearance must go backward (negative x)
-                            if capped_velocity.x > 0.0 => {
-                                capped_velocity.x = -capped_velocity.x.abs();
-                            }
-                        _ => {}
-                    }
-            }
-        }
+        let capped_velocity = Self::steer_clearance_upfield(
+            clearer_id,
+            capped_velocity,
+            !miscued,
+            clears_own_half,
+            field,
+        );
 
         // **Was this ball in a goalkeeper's hands a moment ago?**
         //
@@ -7983,40 +8974,132 @@ impl PlayerEventDispatcher {
             field.ball.strike_origin =
                 Some(crate::r#match::engine::ball::ball::block_diag::StrikeOrigin::clearance());
         }
+        Self::credit_clearance(
+            field,
+            clearer_id,
+            credited,
+            is_gk_shot_save,
+            from_the_gloves,
+            clears_own_half,
+            context,
+        );
+        Self::release_cleared_ball(field, capped_velocity, clearer_team_id);
+    }
 
-        // Clearance credit. A GK who just deflected a real shot away
-        // (handled at the top of this fn) is already getting the save —
-        // crediting a clearance on top would double-stamp the action,
-        // so the shot-save branch is excluded here. Outfielders and a
-        // GK doing routine sweeper work both get clearance credit + the
-        // zone classification.
-        if credited && !is_gk_shot_save && !from_the_gloves && clears_own_half {
-            let ball_pos = field.ball.position;
-            if let Some(clearer) = field.get_player_mut(clearer_id) {
-                clearer.statistics.add_clearance();
-                let zone = Self::zone_for_player(clearer, ball_pos, context);
-                if let Some(zone) = zone {
-                    clearer.statistics.note_clearance_zone(zone);
+    /// Book a punched or parried shot as the save the catching path would
+    /// have booked, and pair it with the shooter's on-target credit.
+    fn credit_clearing_save(
+        field: &mut MatchField,
+        gk_shot_id: Option<u32>,
+        gk_save_id: Option<u32>,
+    ) {
+        if let Some(gk_id) = gk_save_id {
+            // Capture shooter BEFORE we mutate the field — the previous
+            // owner is the player whose shot the GK is now clearing.
+            let shooter_id = field.ball.previous_owner.filter(|&sid| sid != gk_id);
+            if let Some(gk) = field.get_player_mut(gk_id) {
+                gk.statistics.saves += 1;
+                gk.statistics.shots_faced += 1;
+            }
+            let mut shooter_found = false;
+            if let Some(sid) = shooter_id
+                && let Some(shooter) = field.get_player_mut(sid)
+            {
+                shooter.memory.credit_shot_on_target();
+                shooter_found = true;
+            }
+            #[cfg(feature = "match-logs")]
+            Self::dbg_save_credit(2, shooter_id.is_some(), shooter_id.is_none(), shooter_found);
+            let _ = shooter_found;
+        }
+        if gk_shot_id.is_some() {
+            field.ball.cached_shot_target = None;
+        }
+    }
+
+    /// SAFETY: Prevent clearances from going toward own goal. A clearance
+    /// should always go AWAY from own goal, never toward it — unless he
+    /// miscued it, which is the one that can.
+    fn steer_clearance_upfield(
+        clearer_id: u32,
+        mut capped_velocity: Vector3<f32>,
+        not_miscued: bool,
+        clears_own_half: bool,
+        field: &MatchField,
+    ) -> Vector3<f32> {
+        if not_miscued
+            && clears_own_half
+            && let Some(clearer) = field.get_player(clearer_id)
+        {
+            match clearer.side {
+                Some(PlayerSide::Left) => {
+                    // Own goal at x ≈ 0 — clearance must go forward (positive x)
+                    if capped_velocity.x < 0.0 {
+                        capped_velocity.x = capped_velocity.x.abs();
+                    }
                 }
-                // Sweeper credit: a keeper who clears the ball from
-                // OUTSIDE his own box has come out to sweep, which is
-                // command of the area. A clearance from inside the box
-                // is not — that is a keeper using his feet, and it was
-                // the dominant producer of `gk_command_actions`
-                // (~12/match against a real-football 1-3). It mattered
-                // well beyond its own small credit: `>= 3` promotes the
-                // keeper to the `GkBusy` evidence tier and `>= 2` to the
-                // top clean-sheet tier, so every keeper cleared both
-                // bars every week no matter how he played.
-                if zone.is_some_and(|z| !z.is_own_box())
-                    && clearer.tactical_position.current_position.position_group()
-                        == PlayerFieldPositionGroup::Goalkeeper
-                {
-                    clearer.statistics.note_gk_command_action();
+                Some(PlayerSide::Right) => {
+                    // Own goal at x ≈ field_width — clearance must go backward (negative x)
+                    if capped_velocity.x > 0.0 {
+                        capped_velocity.x = -capped_velocity.x.abs();
+                    }
                 }
+                _ => {}
             }
         }
+        capped_velocity
+    }
 
+    /// Clearance credit. A GK who just deflected a real shot away is
+    /// already getting the save — crediting a clearance on top would
+    /// double-stamp the action, so the shot-save branch is excluded here.
+    /// Outfielders and a GK doing routine sweeper work both get clearance
+    /// credit + the zone classification.
+    fn credit_clearance(
+        field: &mut MatchField,
+        clearer_id: u32,
+        credited: bool,
+        is_gk_shot_save: bool,
+        from_the_gloves: bool,
+        clears_own_half: bool,
+        context: &MatchContext,
+    ) {
+        if !credited || is_gk_shot_save || from_the_gloves || !clears_own_half {
+            return;
+        }
+        let ball_pos = field.ball.position;
+        if let Some(clearer) = field.get_player_mut(clearer_id) {
+            clearer.statistics.add_clearance();
+            let zone = Self::zone_for_player(clearer, ball_pos, context);
+            if let Some(zone) = zone {
+                clearer.statistics.note_clearance_zone(zone);
+            }
+            // Sweeper credit: a keeper who clears the ball from
+            // OUTSIDE his own box has come out to sweep, which is
+            // command of the area. A clearance from inside the box
+            // is not — that is a keeper using his feet, and it was
+            // the dominant producer of `gk_command_actions`
+            // (~12/match against a real-football 1-3). It mattered
+            // well beyond its own small credit: `>= 3` promotes the
+            // keeper to the `GkBusy` evidence tier and `>= 2` to the
+            // top clean-sheet tier, so every keeper cleared both
+            // bars every week no matter how he played.
+            if zone.is_some_and(|z| !z.is_own_box())
+                && clearer.tactical_position.current_position.position_group()
+                    == PlayerFieldPositionGroup::Goalkeeper
+            {
+                clearer.statistics.note_gk_command_action();
+            }
+        }
+    }
+
+    /// Put the cleared ball into play: loose, owned by nobody, and
+    /// protected for the whole of its flight.
+    fn release_cleared_ball(
+        field: &mut MatchField,
+        capped_velocity: Vector3<f32>,
+        clearer_team_id: Option<u32>,
+    ) {
         // Apply the clearing velocity to the ball
         field.ball.velocity = capped_velocity;
 
@@ -8083,14 +9166,13 @@ impl PlayerEventDispatcher {
             return;
         }
         // Resolve fouler + side; the victim is everyone on the OTHER side.
-        let (fouler_side, fouler_team_id) = match field
+        let Some(fouler_side) = field
             .players
             .iter()
             .find(|p| p.id == fouler_id)
-            .and_then(|p| p.side.map(|s| (s, p.team_id)))
-        {
-            Some(x) => x,
-            None => return,
+            .and_then(|p| p.side)
+        else {
+            return;
         };
         let victim_side = match fouler_side {
             PlayerSide::Left => PlayerSide::Right,
@@ -8114,58 +9196,24 @@ impl PlayerEventDispatcher {
                 mid_run_diag::DIRECT_FK_AWARDED.fetch_add(1, Ordering::Relaxed);
             }
         }
+        Self::stamp_foul_zone(
+            fouler_id,
+            fouler_side,
+            foul_pos,
+            in_penalty_area,
+            field,
+            context,
+        );
 
-        // Tag the fouler's stats with the zone-aware bumps the rating
-        // helper consumes. Penalty-conceded fouls and DEF/GK fouls in
-        // the team's own third both carry extra rating penalties on
-        // top of the per-foul base.
-        {
-            let field_w = context.field_size.width as f32;
-            let foul_progress = fouler_side.attacking_progress_x(foul_pos.x, field_w);
-            let in_own_third = foul_progress < 1.0 / 3.0;
-            if let Some(fouler) = field.get_player_mut(fouler_id) {
-                if in_penalty_area {
-                    fouler.statistics.note_penalty_foul_conceded();
-                }
-                if in_own_third {
-                    let pos_group = fouler.tactical_position.current_position.position_group();
-                    if matches!(
-                        pos_group,
-                        PlayerFieldPositionGroup::Defender | PlayerFieldPositionGroup::Goalkeeper
-                    ) {
-                        fouler.statistics.note_own_third_def_foul();
-                    }
-                }
-            }
-        }
-
-        // Restart position: penalty spot vs foul spot. Penalty spot is
-        // 88u from the defending goal line on the centre y axis.
-        let field_w = context.field_size.width as f32;
-        let field_h = context.field_size.height as f32;
-        let restart_pos = if in_penalty_area {
-            let px = match fouler_side {
-                PlayerSide::Left => 88.0_f32.min(field_w * 0.5),
-                PlayerSide::Right => (field_w - 88.0_f32).max(field_w * 0.5),
-            };
-            Vector3::new(px, field_h * 0.5, 0.0)
-        } else {
-            // Tiny inset so the ball isn't sitting on a boundary.
-            let x = foul_pos.x.clamp(2.0, field_w - 2.0);
-            let y = foul_pos.y.clamp(2.0, field_h - 2.0);
-            Vector3::new(x, y, 0.0)
-        };
-
-        // Pick a taker from the victim's on-field players. Penalty uses
-        // penalty-taking composite; FK uses free-kick composite.
-        let taker_id = if in_penalty_area {
-            Self::pick_penalty_taker(field, victim_side)
-        } else {
-            Self::pick_free_kick_taker(field, victim_side, restart_pos)
-        };
-        let taker_id = match taker_id {
-            Some(id) => id,
-            None => return, // Whole team off the field — nothing to do.
+        let Some((restart_pos, taker_id)) = Self::choose_foul_restart(
+            fouler_side,
+            victim_side,
+            in_penalty_area,
+            foul_pos,
+            field,
+            context,
+        ) else {
+            return;
         };
         // Measure the taker's penalty composite ONCE per awarded penalty.
         // Noting it where the profile is built instead would weight the
@@ -8182,7 +9230,111 @@ impl PlayerEventDispatcher {
             }
         }
 
-        // Tell the engine to teleport the taker onto the ball next tick.
+        let origin = if in_penalty_area {
+            PassOriginRestart::Penalty
+        } else {
+            PassOriginRestart::DirectFreeKick
+        };
+        let walked = Self::place_foul_ball(
+            field,
+            context,
+            taker_id,
+            restart_pos,
+            in_penalty_area,
+            origin,
+        );
+        field.ball.pending_restart_stations = RestartShape::plan(
+            origin,
+            &field.players,
+            taker_id,
+            restart_pos,
+            field.size.width as f32,
+            field.size.height as f32,
+        );
+        if !walked {
+            // `OF_FOUL_WALK=off`: he is handed the ball and placed on it.
+            field.ball.pending_set_piece_teleport = Some((taker_id, restart_pos));
+            return;
+        }
+        Self::stage_foul_restart(field, context, taker_id, restart_pos, origin);
+    }
+
+    /// Tag the fouler's stats with the zone-aware bumps the rating helper
+    /// consumes. Penalty-conceded fouls and DEF/GK fouls in the team's own
+    /// third both carry extra rating penalties on top of the per-foul base.
+    fn stamp_foul_zone(
+        fouler_id: u32,
+        fouler_side: PlayerSide,
+        foul_pos: Vector3<f32>,
+        in_penalty_area: bool,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
+        let field_w = context.field_size.width as f32;
+        let foul_progress = fouler_side.attacking_progress_x(foul_pos.x, field_w);
+        let in_own_third = foul_progress < 1.0 / 3.0;
+        if let Some(fouler) = field.get_player_mut(fouler_id) {
+            if in_penalty_area {
+                fouler.statistics.note_penalty_foul_conceded();
+            }
+            if in_own_third {
+                let pos_group = fouler.tactical_position.current_position.position_group();
+                if matches!(
+                    pos_group,
+                    PlayerFieldPositionGroup::Defender | PlayerFieldPositionGroup::Goalkeeper
+                ) {
+                    fouler.statistics.note_own_third_def_foul();
+                }
+            }
+        }
+    }
+
+    /// Restart position: penalty spot vs foul spot. Penalty spot is 88u
+    /// from the defending goal line on the centre y axis. Picks a taker
+    /// from the victim's on-field players — penalty uses the penalty-taking
+    /// composite, a free kick the free-kick composite.
+    fn choose_foul_restart(
+        fouler_side: PlayerSide,
+        victim_side: PlayerSide,
+        in_penalty_area: bool,
+        foul_pos: Vector3<f32>,
+        field: &MatchField,
+        context: &MatchContext,
+    ) -> Option<(Vector3<f32>, u32)> {
+        let field_w = context.field_size.width as f32;
+        let field_h = context.field_size.height as f32;
+        let restart_pos = if in_penalty_area {
+            let px = match fouler_side {
+                PlayerSide::Left => 88.0_f32.min(field_w * 0.5),
+                PlayerSide::Right => (field_w - 88.0_f32).max(field_w * 0.5),
+            };
+            Vector3::new(px, field_h * 0.5, 0.0)
+        } else {
+            // Tiny inset so the ball isn't sitting on a boundary.
+            let x = foul_pos.x.clamp(2.0, field_w - 2.0);
+            let y = foul_pos.y.clamp(2.0, field_h - 2.0);
+            Vector3::new(x, y, 0.0)
+        };
+
+        let taker_id = if in_penalty_area {
+            Self::pick_penalty_taker(field, victim_side)
+        } else {
+            Self::pick_free_kick_taker(field, victim_side, restart_pos)
+        }?;
+        Some((restart_pos, taker_id))
+    }
+
+    /// Put the ball on the restart spot and hand the taker his touch.
+    /// Returns whether the taker walks to it (the live path) rather than
+    /// being placed on it (`OF_FOUL_WALK=off`).
+    fn place_foul_ball(
+        field: &mut MatchField,
+        context: &MatchContext,
+        taker_id: u32,
+        restart_pos: Vector3<f32>,
+        in_penalty_area: bool,
+        origin: PassOriginRestart,
+    ) -> bool {
         let ball = &mut field.ball;
         // ⚠ **x and y only.** `restart_pos.z` is 0, and a foul is
         // whistled on a ball that is very often in the air — so writing
@@ -8242,11 +9394,6 @@ impl PlayerEventDispatcher {
         // Play has stopped: whatever giveaway set this attack going is
         // over, and a goal from the set piece is not its error.
         ball.close_giveaway();
-        let origin = if in_penalty_area {
-            PassOriginRestart::Penalty
-        } else {
-            PassOriginRestart::DirectFreeKick
-        };
         ball.pass_origin_restart = origin;
         let team_id = field
             .players
@@ -8254,23 +9401,21 @@ impl PlayerEventDispatcher {
             .find(|p| p.id == taker_id)
             .map(|p| p.team_id)
             .unwrap_or(0);
-        let _ = fouler_team_id; // Kept for future calibration hooks.
         field
             .ball
             .record_touch(taker_id, team_id, context.current_tick(), true);
-        field.ball.pending_restart_stations = RestartShape::plan(
-            origin,
-            &field.players,
-            taker_id,
-            restart_pos,
-            field.size.width as f32,
-            field.size.height as f32,
-        );
-        if !walked {
-            // `OF_FOUL_WALK=off`: he is handed the ball and placed on it.
-            field.ball.pending_set_piece_teleport = Some((taker_id, restart_pos));
-            return;
-        }
+        walked
+    }
+
+    /// Send the taker to the ball under ordinary AI: the awaited restart
+    /// carries the spot, the origin and the patience sized off the walk.
+    fn stage_foul_restart(
+        field: &mut MatchField,
+        context: &MatchContext,
+        taker_id: u32,
+        restart_pos: Vector3<f32>,
+        origin: PassOriginRestart,
+    ) {
         field.ball.awaiting_restart = Some(AwaitedRestart {
             take_from: None,
             settled: true,

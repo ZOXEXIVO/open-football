@@ -36,6 +36,7 @@
 #![allow(dead_code)]
 
 use crate::PathwayStage;
+use crate::PlayerPreferredFoot;
 use crate::club::academy::ClubAcademy;
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::language::LanguageProfile;
@@ -49,7 +50,6 @@ use crate::transfers::gate::{AppraisalConfig, PlayerOfferAppraisal, PlayerStance
 use crate::transfers::pipeline::{PlayerSummary, SellerPlausibilityContext};
 use crate::transfers::squad::standing::CareerRecordSnapshot;
 use crate::transfers::view::player::PlayerSummaryBuilder;
-use crate::PlayerPreferredFoot;
 use crate::{
     Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes, Player,
     PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerFieldPositionGroup,

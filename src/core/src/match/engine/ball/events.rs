@@ -1,9 +1,9 @@
 use crate::r#match::engine::ball::ball::PossessionSource;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::delivery_diag::TouchKind;
-use crate::r#match::engine::psychology::LapseFamily;
 use crate::r#match::engine::ball::ball::frame::FramePart;
 use crate::r#match::engine::player::events::players::{FoulSource, PlayerEventDispatcher};
+use crate::r#match::engine::psychology::LapseFamily;
 use crate::r#match::engine::zones::Progression;
 use crate::r#match::events::{Event, EventCollection};
 use crate::r#match::player::events::PlayerEvent;
@@ -118,6 +118,20 @@ pub struct BallGoalEventMetadata {
 
 pub struct BallEventDispatcher;
 
+/// A carry's contribution to progression and the dribble ledger, read once
+/// when the carry ends.
+struct CarryProgress {
+    carrier_id: u32,
+    carrier_team_id: u32,
+    forward_progress: f32,
+    end_in_final_third: bool,
+    start_in_final_third: bool,
+    is_progressive: bool,
+    started_outside_box: bool,
+    ended_in_box: bool,
+    dispossessed_by_opponent: bool,
+}
+
 impl BallEventDispatcher {
     /// Dispatch one ball event, appending any follow-up events to `out`.
     /// Out-parameter instead of a returned `Vec`: nearly every event
@@ -148,6 +162,100 @@ impl BallEventDispatcher {
         // new carrier got it without threading a reason through the ~20
         // sites that assign `current_owner`. `Tackle` is stamped in the
         // player dispatcher, the only acquisition that isn't a ball event.
+        Self::note_possession_source(event, field);
+
+        match event {
+            BallEvent::Goal(metadata) => {
+                Self::dispatch_goal(metadata, field, context, remaining_events);
+            }
+            BallEvent::Claimed(player_id) => {
+                // Settle the pass window HERE rather than leaving it to
+                // the `ClaimBall` handler. The ball has already assigned
+                // `current_owner` by the time this event is dispatched,
+                // but the handler bails out early in several situations
+                // (ball still flagged in-flight, a different player is
+                // the nominated target). When it bailed, the claimant
+                // ended up on the ball with the previous pass still
+                // marked live — and the next pass they played
+                // overwrote it, so the delivery that actually reached
+                // them was booked as a failure. That accounted for 58%
+                // of all passes.
+                PlayerEventDispatcher::resolve_pending_pass_on_control(player_id, field, context);
+                remaining_events.add(Event::PlayerEvent(PlayerEvent::ClaimBall(player_id)));
+            }
+            BallEvent::PassCompleted(receiver_id, passer_id) => {
+                Self::dispatch_pass_completed(
+                    receiver_id,
+                    passer_id,
+                    field,
+                    context,
+                    remaining_events,
+                );
+            }
+            BallEvent::Intercepted(interceptor_id, passer_id, was_live_shot) => {
+                Self::dispatch_intercepted(
+                    interceptor_id,
+                    passer_id,
+                    was_live_shot,
+                    field,
+                    context,
+                    remaining_events,
+                );
+            }
+            BallEvent::Blocked(blocker_id, position) => {
+                Self::dispatch_blocked(blocker_id, position, field, context);
+            }
+            BallEvent::HeadedClear(clearer_id, position) => {
+                Self::dispatch_headed_clear(clearer_id, position, field, context);
+            }
+            BallEvent::Gained(player_id) => {
+                // Same reasoning as `Claimed` above.
+                PlayerEventDispatcher::resolve_pending_pass_on_control(player_id, field, context);
+                remaining_events.add(Event::PlayerEvent(PlayerEvent::GainBall(player_id)));
+            }
+            BallEvent::TakeMe(player_id) => {
+                remaining_events.add(Event::PlayerEvent(PlayerEvent::TakeBall(player_id)));
+            }
+            BallEvent::Handball(player_id, goal_bound) => {
+                remaining_events.add(Event::PlayerEvent(PlayerEvent::Handball(
+                    player_id, goal_bound,
+                )));
+            }
+            BallEvent::Caution(player_id, source) => {
+                remaining_events.add(Event::PlayerEvent(PlayerEvent::Caution(player_id, source)));
+            }
+            BallEvent::Offside(receiver_id, position) => {
+                field.ball.clear_pending_pass_metadata();
+                remaining_events.add(Event::PlayerEvent(PlayerEvent::Offside(
+                    receiver_id,
+                    position,
+                )));
+            }
+            BallEvent::CarryEnded(carrier_id, start, end) => {
+                Self::credit_carry(carrier_id, start, end, field, context);
+            }
+            BallEvent::FirstTouchFailed(receiver_id, passer_id, is_miscontrol) => {
+                Self::dispatch_first_touch_failed(
+                    receiver_id,
+                    passer_id,
+                    is_miscontrol,
+                    field,
+                    context,
+                );
+            }
+            BallEvent::HitFrame(..) => {
+                // Nobody touched it, so there is nobody to credit: the
+                // physics has already turned the ball round and retired the
+                // shot (see `Ball::check_frame_rebound`). The event is
+                // carried so the recorded stream — which the replay and the
+                // match report read — says the woodwork was struck.
+            }
+        }
+    }
+
+    /// Label HOW the new carrier got the ball, at the one point every
+    /// acquisition passes through.
+    fn note_possession_source(event: BallEvent, field: &mut MatchField) {
         match event {
             BallEvent::PassCompleted(receiver_id, _) => {
                 field
@@ -169,242 +277,219 @@ impl BallEventDispatcher {
             }
             _ => {}
         }
+    }
 
-        match event {
-            BallEvent::Goal(metadata) => {
-                // Determine which team scored based on the goalscorer's team, not goal position.
-                // Goal position (GoalSide) is unreliable after halftime side swap.
-                if let Some(scorer) = field
-                    .players
-                    .iter()
-                    .find(|p| p.id == metadata.goalscorer_player_id)
-                {
-                    let is_home_scorer = scorer.team_id == context.score.home_team.team_id;
+    fn dispatch_goal(
+        metadata: BallGoalEventMetadata,
+        field: &mut MatchField,
+        context: &MatchContext,
+        out: &mut EventCollection,
+    ) {
+        // Determine which team scored based on the goalscorer's team, not goal position.
+        // Goal position (GoalSide) is unreliable after halftime side swap.
+        if let Some(scorer) = field
+            .players
+            .iter()
+            .find(|p| p.id == metadata.goalscorer_player_id)
+        {
+            let is_home_scorer = scorer.team_id == context.score.home_team.team_id;
 
-                    if metadata.auto_goal {
-                        // Own goal — credit the opposing team
-                        if is_home_scorer {
-                            context.score.increment_away_goals();
-                        } else {
-                            context.score.increment_home_goals();
-                        }
-                    } else {
-                        // Normal goal — credit the scorer's team
-                        if is_home_scorer {
-                            context.score.increment_home_goals();
-                        } else {
-                            context.score.increment_away_goals();
-                        }
-                    }
-                }
-
-                remaining_events.add(Event::PlayerEvent(PlayerEvent::Goal(
-                    metadata.goalscorer_player_id,
-                    metadata.auto_goal,
-                )));
-
-                if let Some(assist_id) = metadata.assist_player_id {
-                    remaining_events.add(Event::PlayerEvent(PlayerEvent::Assist(assist_id)));
-                }
-
-                // The formation rebuild used to happen here as well as in
-                // `handle_goal_reset` — the same call, twice, on the same
-                // tick. It now belongs solely to the restart at the END of
-                // the post-goal window, because teleporting everybody onto
-                // their formation spot the instant the ball crosses the line
-                // is precisely what left nobody to celebrate.
-            }
-            BallEvent::Claimed(player_id) => {
-                // Settle the pass window HERE rather than leaving it to
-                // the `ClaimBall` handler. The ball has already assigned
-                // `current_owner` by the time this event is dispatched,
-                // but the handler bails out early in several situations
-                // (ball still flagged in-flight, a different player is
-                // the nominated target). When it bailed, the claimant
-                // ended up on the ball with the previous pass still
-                // marked live — and the next pass they played
-                // overwrote it, so the delivery that actually reached
-                // them was booked as a failure. That accounted for 58%
-                // of all passes.
-                PlayerEventDispatcher::resolve_pending_pass_on_control(player_id, field, context);
-                remaining_events.add(Event::PlayerEvent(PlayerEvent::ClaimBall(player_id)));
-            }
-            BallEvent::PassCompleted(receiver_id, passer_id) => {
-                // Single completion path — `credit_completed_pass`
-                // increments `passes_completed`, classifies progressive
-                // / box-entry / cross-completed, and clears the
-                // pending-pass metadata. The downstream ClaimBall
-                // handler sees an empty pass window and won't double-
-                // credit.
-                #[cfg(feature = "match-logs")]
-                crate::r#match::engine::ball::ball::ownership::reception_diag::CREDIT_TARGET
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                PlayerEventDispatcher::credit_completed_pass(
-                    receiver_id,
-                    passer_id,
-                    field,
-                    context,
-                );
-                PlayerEventDispatcher::maybe_record_first_touch_loss(receiver_id, field, context);
-                remaining_events.add(Event::PlayerEvent(PlayerEvent::ClaimBall(receiver_id)));
-            }
-            BallEvent::Intercepted(interceptor_id, passer_id, was_live_shot) => {
-                // Credit the interceptor. Opponent touch ends the pass
-                // window — accuracy was NOT earned.
-                let ball_pos = field.ball.position;
-                let pending_passer = field.ball.pending_pass_passer;
-                let astray = field.ball.pass_went_astray();
-                field.ball.clear_pending_pass_metadata();
-
-                // Stamp the giveaway tracker only for genuine pass
-                // interceptions (the ball was on a live pass when the
-                // opponent picked it off). Shot-block interceptions
-                // (try_block_shot also fires Intercepted) don't have a
-                // pending pass and shouldn't charge the shooter as
-                // having "given the ball away".
-                if let Some(passer) = pending_passer {
-                    if astray {
-                        PlayerEventDispatcher::lose_ball(passer, LapseFamily::Pass, field, context);
-                    } else {
-                        PlayerEventDispatcher::note_turnover(passer, field, context);
-                    }
-                    // Successful pressure: opponents who were within
-                    // the pressing radius at pass-emit time get
-                    // promoted from raw `pressures` to
-                    // `successful_pressures` because their close
-                    // presence forced the turnover. Final-third wins
-                    // also tag the press-zone counter.
-                    let press_count = field.ball.pressers_at_pass_count as usize;
-                    let pressers = field.ball.pressers_at_pass;
-                    for &pid in pressers.iter().take(press_count) {
-                        if let Some(presser) = field.get_player_mut(pid) {
-                            presser.statistics.add_successful_pressure();
-                            if let Some(zone) =
-                                PlayerEventDispatcher::zone_for_player(presser, ball_pos, context)
-                            {
-                                presser.statistics.note_pressure_won_zone(zone);
-                            }
-                        }
-                    }
-                } else if let Some(prev_id) = passer_id {
-                    let _ = prev_id; // shot-block path; no giveaway stamp
-                }
-                // Pressure snapshot consumed — clear so a later
-                // unrelated interception doesn't reuse it.
-                field.ball.pressers_at_pass_count = 0;
-
-                if let Some(player) = field.get_player_mut(interceptor_id) {
-                    let zone = PlayerEventDispatcher::zone_for_player(player, ball_pos, context);
-                    if was_live_shot {
-                        player.statistics.add_block();
-                        if let Some(zone) = zone {
-                            player.statistics.note_block_zone(zone);
-                        }
-                    } else {
-                        player.statistics.interceptions += 1;
-                        if let Some(zone) = zone {
-                            player.statistics.note_interception_zone(zone);
-                        }
-                    }
-                }
-                remaining_events.add(Event::PlayerEvent(PlayerEvent::ClaimBall(interceptor_id)));
-            }
-            BallEvent::Blocked(blocker_id, position) => {
-                if let Some(player) = field.get_player_mut(blocker_id) {
-                    player.statistics.add_block();
-                    if let Some(zone) =
-                        PlayerEventDispatcher::zone_for_player(player, position, context)
-                    {
-                        player.statistics.note_block_zone(zone);
-                    }
-                }
-            }
-            BallEvent::HeadedClear(clearer_id, position) => {
-                // His touch is the ball's last: headed behind, it is his
-                // side that concedes the corner. Left on the crosser, every
-                // cross a defender put over his own line was a goal kick.
-                if let Some(team_id) = field.get_player(clearer_id).map(|p| p.team_id) {
-                    #[cfg(feature = "match-logs")]
-                    {
-                        field.ball.touch_kind_hint = Some(TouchKind::Head);
-                    }
-                    field
-                        .ball
-                        .record_touch(clearer_id, team_id, context.current_tick(), false);
-                }
-                // The same credit `handle_clear_ball_event` gives a man who
-                // clears a ball he owns, for the same action taken in the
-                // air. No `blocks` credit beside it: a block is a body put
-                // in the way of a strike, and this is a defender winning a
-                // duel and heading the ball away.
-                if let Some(player) = field.get_player_mut(clearer_id) {
-                    player.statistics.add_clearance();
-                    if let Some(zone) =
-                        PlayerEventDispatcher::zone_for_player(player, position, context)
-                    {
-                        player.statistics.note_clearance_zone(zone);
-                    }
-                }
-            }
-            BallEvent::Gained(player_id) => {
-                // Same reasoning as `Claimed` above.
-                PlayerEventDispatcher::resolve_pending_pass_on_control(player_id, field, context);
-                remaining_events.add(Event::PlayerEvent(PlayerEvent::GainBall(player_id)));
-            }
-            BallEvent::TakeMe(player_id) => {
-                remaining_events.add(Event::PlayerEvent(PlayerEvent::TakeBall(player_id)));
-            }
-            BallEvent::Handball(player_id, goal_bound) => {
-                remaining_events.add(Event::PlayerEvent(PlayerEvent::Handball(player_id, goal_bound)));
-            }
-            BallEvent::Caution(player_id, source) => {
-                remaining_events.add(Event::PlayerEvent(PlayerEvent::Caution(player_id, source)));
-            }
-            BallEvent::Offside(receiver_id, position) => {
-                field.ball.clear_pending_pass_metadata();
-                remaining_events.add(Event::PlayerEvent(PlayerEvent::Offside(
-                    receiver_id,
-                    position,
-                )));
-            }
-            BallEvent::CarryEnded(carrier_id, start, end) => {
-                Self::credit_carry(carrier_id, start, end, field, context);
-            }
-            BallEvent::FirstTouchFailed(receiver_id, passer_id, is_miscontrol) => {
-                // The pass found its man — credit the completion to the
-                // passer (and clear the pending-pass window so the
-                // loose-ball aftermath can't morph into an interception
-                // charged against the passer).
-                PlayerEventDispatcher::credit_completed_pass(
-                    receiver_id,
-                    passer_id,
-                    field,
-                    context,
-                );
-                if is_miscontrol {
-                    // A genuine loss of control: stamp the giveaway
-                    // tracker on the RECEIVER so the error-to-shot /
-                    // error-to-goal pipeline charges the right player
-                    // if the opposition converts the loose ball.
-                    PlayerEventDispatcher::lose_ball(receiver_id, LapseFamily::Touch, field, context);
-                    if let Some(receiver) = field.get_player_mut(receiver_id) {
-                        receiver.statistics.add_miscontrol();
-                    }
+            if metadata.auto_goal {
+                // Own goal — credit the opposing team
+                if is_home_scorer {
+                    context.score.increment_away_goals();
                 } else {
-                    // Knocked too far: his if he gets back to it first,
-                    // the giver's error if an opponent does and scores.
-                    PlayerEventDispatcher::give_away(receiver_id, LapseFamily::Touch, field, context);
-                    if let Some(receiver) = field.get_player_mut(receiver_id) {
-                        receiver.statistics.add_heavy_touch();
+                    context.score.increment_home_goals();
+                }
+            } else {
+                // Normal goal — credit the scorer's team
+                if is_home_scorer {
+                    context.score.increment_home_goals();
+                } else {
+                    context.score.increment_away_goals();
+                }
+            }
+        }
+
+        out.add(Event::PlayerEvent(PlayerEvent::Goal(
+            metadata.goalscorer_player_id,
+            metadata.auto_goal,
+        )));
+
+        if let Some(assist_id) = metadata.assist_player_id {
+            out.add(Event::PlayerEvent(PlayerEvent::Assist(assist_id)));
+        }
+
+        // The formation rebuild used to happen here as well as in
+        // `handle_goal_reset` — the same call, twice, on the same
+        // tick. It now belongs solely to the restart at the END of
+        // the post-goal window, because teleporting everybody onto
+        // their formation spot the instant the ball crosses the line
+        // is precisely what left nobody to celebrate.
+    }
+
+    fn dispatch_pass_completed(
+        receiver_id: u32,
+        passer_id: u32,
+        field: &mut MatchField,
+        context: &MatchContext,
+        out: &mut EventCollection,
+    ) {
+        // Single completion path — `credit_completed_pass`
+        // increments `passes_completed`, classifies progressive
+        // / box-entry / cross-completed, and clears the
+        // pending-pass metadata. The downstream ClaimBall
+        // handler sees an empty pass window and won't double-
+        // credit.
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::ball::ball::ownership::reception_diag::CREDIT_TARGET
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        PlayerEventDispatcher::credit_completed_pass(receiver_id, passer_id, field, context);
+        PlayerEventDispatcher::maybe_record_first_touch_loss(receiver_id, field, context);
+        out.add(Event::PlayerEvent(PlayerEvent::ClaimBall(receiver_id)));
+    }
+
+    fn dispatch_intercepted(
+        interceptor_id: u32,
+        passer_id: Option<u32>,
+        was_live_shot: bool,
+        field: &mut MatchField,
+        context: &MatchContext,
+        out: &mut EventCollection,
+    ) {
+        // Credit the interceptor. Opponent touch ends the pass
+        // window — accuracy was NOT earned.
+        let ball_pos = field.ball.position;
+        let pending_passer = field.ball.pending_pass_passer;
+        let astray = field.ball.pass_went_astray();
+        field.ball.clear_pending_pass_metadata();
+
+        // Stamp the giveaway tracker only for genuine pass
+        // interceptions (the ball was on a live pass when the
+        // opponent picked it off). Shot-block interceptions
+        // (try_block_shot also fires Intercepted) don't have a
+        // pending pass and shouldn't charge the shooter as
+        // having "given the ball away".
+        if let Some(passer) = pending_passer {
+            if astray {
+                PlayerEventDispatcher::lose_ball(passer, LapseFamily::Pass, field, context);
+            } else {
+                PlayerEventDispatcher::note_turnover(passer, field, context);
+            }
+            // Successful pressure: opponents who were within
+            // the pressing radius at pass-emit time get
+            // promoted from raw `pressures` to
+            // `successful_pressures` because their close
+            // presence forced the turnover. Final-third wins
+            // also tag the press-zone counter.
+            let press_count = field.ball.pressers_at_pass_count as usize;
+            let pressers = field.ball.pressers_at_pass;
+            for &pid in pressers.iter().take(press_count) {
+                if let Some(presser) = field.get_player_mut(pid) {
+                    presser.statistics.add_successful_pressure();
+                    if let Some(zone) =
+                        PlayerEventDispatcher::zone_for_player(presser, ball_pos, context)
+                    {
+                        presser.statistics.note_pressure_won_zone(zone);
                     }
                 }
             }
-            BallEvent::HitFrame(..) => {
-                // Nobody touched it, so there is nobody to credit: the
-                // physics has already turned the ball round and retired the
-                // shot (see `Ball::check_frame_rebound`). The event is
-                // carried so the recorded stream — which the replay and the
-                // match report read — says the woodwork was struck.
+        } else if let Some(prev_id) = passer_id {
+            let _ = prev_id; // shot-block path; no giveaway stamp
+        }
+        // Pressure snapshot consumed — clear so a later
+        // unrelated interception doesn't reuse it.
+        field.ball.pressers_at_pass_count = 0;
+
+        if let Some(player) = field.get_player_mut(interceptor_id) {
+            let zone = PlayerEventDispatcher::zone_for_player(player, ball_pos, context);
+            if was_live_shot {
+                player.statistics.add_block();
+                if let Some(zone) = zone {
+                    player.statistics.note_block_zone(zone);
+                }
+            } else {
+                player.statistics.interceptions += 1;
+                if let Some(zone) = zone {
+                    player.statistics.note_interception_zone(zone);
+                }
+            }
+        }
+        out.add(Event::PlayerEvent(PlayerEvent::ClaimBall(interceptor_id)));
+    }
+
+    fn dispatch_blocked(
+        blocker_id: u32,
+        position: Vector3<f32>,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
+        if let Some(player) = field.get_player_mut(blocker_id) {
+            player.statistics.add_block();
+            if let Some(zone) = PlayerEventDispatcher::zone_for_player(player, position, context) {
+                player.statistics.note_block_zone(zone);
+            }
+        }
+    }
+
+    fn dispatch_headed_clear(
+        clearer_id: u32,
+        position: Vector3<f32>,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
+        // His touch is the ball's last: headed behind, it is his
+        // side that concedes the corner. Left on the crosser, every
+        // cross a defender put over his own line was a goal kick.
+        if let Some(team_id) = field.get_player(clearer_id).map(|p| p.team_id) {
+            #[cfg(feature = "match-logs")]
+            {
+                field.ball.touch_kind_hint = Some(TouchKind::Head);
+            }
+            field
+                .ball
+                .record_touch(clearer_id, team_id, context.current_tick(), false);
+        }
+        // The same credit `handle_clear_ball_event` gives a man who
+        // clears a ball he owns, for the same action taken in the
+        // air. No `blocks` credit beside it: a block is a body put
+        // in the way of a strike, and this is a defender winning a
+        // duel and heading the ball away.
+        if let Some(player) = field.get_player_mut(clearer_id) {
+            player.statistics.add_clearance();
+            if let Some(zone) = PlayerEventDispatcher::zone_for_player(player, position, context) {
+                player.statistics.note_clearance_zone(zone);
+            }
+        }
+    }
+
+    fn dispatch_first_touch_failed(
+        receiver_id: u32,
+        passer_id: u32,
+        is_miscontrol: bool,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
+        // The pass found its man — credit the completion to the
+        // passer (and clear the pending-pass window so the
+        // loose-ball aftermath can't morph into an interception
+        // charged against the passer).
+        PlayerEventDispatcher::credit_completed_pass(receiver_id, passer_id, field, context);
+        if is_miscontrol {
+            // A genuine loss of control: stamp the giveaway
+            // tracker on the RECEIVER so the error-to-shot /
+            // error-to-goal pipeline charges the right player
+            // if the opposition converts the loose ball.
+            PlayerEventDispatcher::lose_ball(receiver_id, LapseFamily::Touch, field, context);
+            if let Some(receiver) = field.get_player_mut(receiver_id) {
+                receiver.statistics.add_miscontrol();
+            }
+        } else {
+            // Knocked too far: his if he gets back to it first,
+            // the giver's error if an opponent does and scores.
+            PlayerEventDispatcher::give_away(receiver_id, LapseFamily::Touch, field, context);
+            if let Some(receiver) = field.get_player_mut(receiver_id) {
+                receiver.statistics.add_heavy_touch();
             }
         }
     }
@@ -424,17 +509,33 @@ impl BallEventDispatcher {
         field: &mut MatchField,
         context: &MatchContext,
     ) {
+        let Some(carry) = Self::carry_progress(carrier_id, start, end, field, context) else {
+            return;
+        };
+        let (credited_beats, failed_beats) = Self::carry_beats(&carry, start, end, field, context);
+        Self::credit_carry_stats(&carry, credited_beats, failed_beats, field);
+    }
+
+    /// What the carry was worth on the pitch: forward progress, thirds,
+    /// boxes, and whether an opponent ended it.
+    fn carry_progress(
+        carrier_id: u32,
+        start: Vector3<f32>,
+        end: Vector3<f32>,
+        field: &MatchField,
+        context: &MatchContext,
+    ) -> Option<CarryProgress> {
         let (side, carrier_team_id) = match field.get_player(carrier_id) {
             Some(p) => match p.side {
                 Some(s) => (s, p.team_id),
-                None => return,
+                None => return None,
             },
-            None => return,
+            None => return None,
         };
         let field_w = context.field_size.width as f32;
         let forward_progress = side.forward_delta(start.x, end.x);
         if forward_progress <= 0.0 {
-            return;
+            return None;
         }
         let end_in_final_third = side.attacking_progress_x(end.x, field_w) >= 2.0 / 3.0;
         let start_in_final_third = side.attacking_progress_x(start.x, field_w) >= 2.0 / 3.0;
@@ -459,12 +560,33 @@ impl BallEventDispatcher {
         let dispossessed_by_opponent = new_owner_team
             .map(|nt| nt != carrier_team_id)
             .unwrap_or(false);
+        Some(CarryProgress {
+            carrier_id,
+            carrier_team_id,
+            forward_progress,
+            end_in_final_third,
+            start_in_final_third,
+            is_progressive,
+            started_outside_box,
+            ended_in_box,
+            dispossessed_by_opponent,
+        })
+    }
 
+    /// Resolve each man the carrier physically ran past as a real 1v1 duel,
+    /// and say how many beats he won and lost.
+    fn carry_beats(
+        carry: &CarryProgress,
+        start: Vector3<f32>,
+        end: Vector3<f32>,
+        field: &MatchField,
+        context: &MatchContext,
+    ) -> (u16, u16) {
         // Successful-dribble producer: find opponents who were on the
         // carry line between start and end (carrier physically ran past
         // their pressure cone). Defenders sitting right at the start or
         // right at the end are excluded — neither was "beaten".
-        let beaten_ids = if !dispossessed_by_opponent && forward_progress >= 12.0 {
+        let beaten_ids = if !carry.dispossessed_by_opponent && carry.forward_progress >= 12.0 {
             Self::beaten_ids_on_carry_path(
                 start,
                 end,
@@ -474,7 +596,7 @@ impl BallEventDispatcher {
                 field
                     .players
                     .iter()
-                    .filter(|p| p.team_id != carrier_team_id && p.state.is_challenging())
+                    .filter(|p| p.team_id != carry.carrier_team_id && p.state.is_challenging())
                     .map(|p| (p.id, p.position)),
             )
         } else {
@@ -504,7 +626,7 @@ impl BallEventDispatcher {
         let carry_seed = context.current_tick();
         let mut credited_beats: u16 = 0;
         let mut failed_beats: u16 = 0;
-        if let Some(carrier) = field.players.iter().find(|p| p.id == carrier_id) {
+        if let Some(carrier) = field.players.iter().find(|p| p.id == carry.carrier_id) {
             // Deterministic per-beat roll: same carry must produce the
             // same dribble credit on re-simulation. Each beat gets its
             // own sub-seed mixed from (tick × carrier × beat-index) so
@@ -514,7 +636,7 @@ impl BallEventDispatcher {
                     continue;
                 };
                 let second_defender_cover = field.players.iter().any(|p| {
-                    p.team_id != carrier_team_id
+                    p.team_id != carry.carrier_team_id
                         && p.id != *defender_id
                         && (p.position - defender.position).magnitude() < 8.0
                 });
@@ -522,7 +644,7 @@ impl BallEventDispatcher {
                 let isolated_wide =
                     !second_defender_cover && (y < wide_margin || y > field_h - wide_margin);
                 let duel_ctx = DuelContext {
-                    attacker_running_at_speed: forward_progress >= 40.0,
+                    attacker_running_at_speed: carry.forward_progress >= 40.0,
                     defender_squared_up: false,
                     isolated_wide,
                     second_defender_cover,
@@ -532,7 +654,7 @@ impl BallEventDispatcher {
                     pitch_control: context.conditions.dribble_control,
                 };
                 let seed = carry_seed.wrapping_mul(0x9E3779B97F4A7C15)
-                    ^ (carrier_id as u64).wrapping_mul(0xBF58476D1CE4E5B9)
+                    ^ (carry.carrier_id as u64).wrapping_mul(0xBF58476D1CE4E5B9)
                     ^ (beat_idx as u64).wrapping_mul(0x94D049BB133111EB);
                 let roll = ((seed >> 11) & 0xFFFFFF) as f32 / 16_777_215.0;
                 let resolution = DribbleDuelResolver::resolve(carrier, defender, duel_ctx, roll);
@@ -547,20 +669,29 @@ impl BallEventDispatcher {
                 }
             }
         }
+        (credited_beats, failed_beats)
+    }
 
-        if let Some(carrier) = field.get_player_mut(carrier_id) {
+    /// Write the carry and its beats onto the carrier's statistics.
+    fn credit_carry_stats(
+        carry: &CarryProgress,
+        credited_beats: u16,
+        failed_beats: u16,
+        field: &mut MatchField,
+    ) {
+        if let Some(carrier) = field.get_player_mut(carry.carrier_id) {
             carrier.statistics.carry_distance = carrier
                 .statistics
                 .carry_distance
-                .saturating_add(forward_progress as u32);
-            if is_progressive {
+                .saturating_add(carry.forward_progress as u32);
+            if carry.is_progressive {
                 carrier.statistics.progressive_carries =
                     carrier.statistics.progressive_carries.saturating_add(1);
-                if end_in_final_third && !start_in_final_third {
+                if carry.end_in_final_third && !carry.start_in_final_third {
                     carrier.statistics.note_progressive_carry_into_final_third();
                 }
             }
-            if started_outside_box && ended_in_box {
+            if carry.started_outside_box && carry.ended_in_box {
                 carrier.statistics.note_carry_into_box();
             }
             for _ in 0..credited_beats {

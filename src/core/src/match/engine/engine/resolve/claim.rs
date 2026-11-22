@@ -9,7 +9,7 @@
 use crate::r#match::engine::ball::ball::KeeperClaimCall;
 use crate::r#match::engine::engine::*;
 use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
-use crate::r#match::goalkeepers::states::common::KeeperAerialClaim;
+use crate::r#match::goalkeepers::states::shared::KeeperAerialClaim;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::keeper_census::{ClaimEnd, ClaimSite};
 use crate::r#match::player::events::gk_claim::GkClaimContest;

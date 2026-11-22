@@ -11,7 +11,10 @@
 
 use super::*;
 use crate::StaffKnowledge;
-use crate::transfers::gate::{MoveTerms, PursuitAction, TransferMovePlausibility};
+use crate::transfers::gate::{
+    MoveTerms, PursuitAction, TransferMoveAssessment, TransferMovePlausibility,
+};
+use crate::transfers::pipeline::ReportRiskFlag;
 use crate::transfers::scouting::ScoutingPass;
 use crate::transfers::scouting::judgement::ScoutJudgement;
 use crate::transfers::view::club::ClubView;
@@ -41,6 +44,14 @@ struct TargetAssessment {
     target_region: ScoutingRegion,
     assessed_ability: u8,
     assessed_potential: u8,
+}
+
+/// What the club made of one watched target on this pool viewing.
+struct PoolVerdict {
+    confidence: f32,
+    recommendation: ScoutingRecommendation,
+    role_fit: f32,
+    risk_flags: Vec<ReportRiskFlag>,
 }
 
 impl<'a> ClubScan<'a> {
@@ -537,24 +548,16 @@ impl<'a> ClubScan<'a> {
         assessed: &TargetAssessment,
     ) {
         let club = self.club;
-        let config = self.config;
-        let country_id = self.country_id;
-        let market_map = self.market_map;
-        let suitor = &self.suitor;
-        let obs_count = assessed.obs_count;
-        let target_region = assessed.target_region;
-        let assessed_ability = assessed.assessed_ability;
-        let assessed_potential = assessed.assessed_potential;
         let observations = &mut self.staged.observations;
-        let reports = &mut self.staged.reports;
         let familiarity_events = &mut self.staged.familiarity_events;
-        let rejected_events = &mut self.staged.rejected_events;
-        let wanted_targets = &mut self.staged.wanted_targets;
-        let monitoring_updates = &mut self.staged.monitoring_updates;
 
         let is_new = !assignment.has_observation_for(target.player_id);
-        let assessment =
-            TransferMovePlausibility::read(suitor, target, MoveTerms::purchase(true), market_map);
+        let assessment = TransferMovePlausibility::read(
+            &self.suitor,
+            target,
+            MoveTerms::purchase(true),
+            self.market_map,
+        );
 
         // Skip if we already queued an observation for this player this round
         if observations.iter().any(|o| {
@@ -569,70 +572,110 @@ impl<'a> ClubScan<'a> {
             club_id: club.id,
             assignment_id: assignment.id,
             player_id: target.player_id,
-            assessed_ability,
-            assessed_potential,
+            assessed_ability: assessed.assessed_ability,
+            assessed_potential: assessed.assessed_potential,
             is_new,
         });
 
         if let Some(scout_id) = assignment.scout_staff_id
-            && target.country_id != country_id
+            && target.country_id != self.country_id
         {
-            familiarity_events.push((club.id, scout_id, target_region, target.country_id));
+            familiarity_events.push((club.id, scout_id, assessed.target_region, target.country_id));
         }
 
-        let final_obs_count = obs_count + 1;
+        let verdict = self.read_pool_target(assignment, target, assessed);
+        self.stage_pool_verdict(assignment, target, assessed, &assessment, &verdict);
+    }
+
+    /// What the club's judgement makes of one pool viewing: the confidence
+    /// its sample supports, its recommendation, and the risk/role reads the
+    /// report carries.
+    fn read_pool_target(
+        &self,
+        assignment: &ScoutingAssignment,
+        target: &PlayerSummary,
+        assessed: &TargetAssessment,
+    ) -> PoolVerdict {
+        let config = self.config;
+        let final_obs_count = assessed.obs_count + 1;
         let confidence = config.pool_report_confidence(final_obs_count as u8);
-        let youth_bonus = config.youth_bonus(target.age, assessed_ability, assessed_potential);
+        let youth_bonus = config.youth_bonus(
+            target.age,
+            assessed.assessed_ability,
+            assessed.assessed_potential,
+        );
         let stats_bonus = config.stats_bonus(target.appearances, target.average_rating);
-        let effective_ability = assessed_ability as i16 + youth_bonus + stats_bonus;
+        let effective_ability = assessed.assessed_ability as i16 + youth_bonus + stats_bonus;
         let recommendation = config.recommendation_for(
             effective_ability,
-            assessed_ability,
-            assessed_potential,
+            assessed.assessed_ability,
+            assessed.assessed_potential,
             assignment.min_ability,
         );
 
-        let role_fit_now = assignment.role_profile.fit(
+        let role_fit = assignment.role_profile.fit(
             target.technical_avg,
             target.mental_avg,
             target.physical_avg,
         );
-        let risk_flags_now = ScoutJudgement::evaluate_risk_flags(
+        let risk_flags = ScoutJudgement::evaluate_risk_flags(
             target.is_injured,
             target.determination,
             target.age,
             target.contract_months_remaining,
             target.world_reputation,
-            ClubView::club_world_reputation(club),
+            ClubView::club_world_reputation(self.club),
         );
 
-        // Always update the monitoring row when a real scout
-        // is on this assignment — even if the recommendation
-        // is Pass, the scout has formed an opinion that the
-        // recruitment meeting will see.
+        PoolVerdict {
+            confidence,
+            recommendation,
+            role_fit,
+            risk_flags,
+        }
+    }
+
+    /// File the monitoring row and the report (or the rejection memory) the
+    /// verdict calls for. Always update the monitoring row when a real scout
+    /// is on this assignment — even if the recommendation is Pass, the scout
+    /// has formed an opinion that the recruitment meeting will see.
+    fn stage_pool_verdict(
+        &mut self,
+        assignment: &ScoutingAssignment,
+        target: &PlayerSummary,
+        assessed: &TargetAssessment,
+        assessment: &TransferMoveAssessment,
+        verdict: &PoolVerdict,
+    ) {
+        let club = self.club;
+        let rejected_events = &mut self.staged.rejected_events;
+        let wanted_targets = &mut self.staged.wanted_targets;
+        let monitoring_updates = &mut self.staged.monitoring_updates;
+        let reports = &mut self.staged.reports;
+
         if let Some(scout_id) = assignment.scout_staff_id {
             monitoring_updates.push(MonitoringUpdate {
                 club_id: club.id,
-                reading: FileReading::of(&assessment, self.date),
+                reading: FileReading::of(assessment, self.date),
                 seen: FileObservation {
                     scout_staff_id: scout_id,
                     player_id: target.player_id,
                     source: ScoutMonitoringSource::TransferRequest,
                     transfer_request_id: Some(assignment.transfer_request_id),
                     origin_assignment_id: Some(assignment.id),
-                    region: Some(target_region),
-                    assessed_ability,
-                    assessed_potential,
-                    confidence,
-                    role_fit: role_fit_now,
+                    region: Some(assessed.target_region),
+                    assessed_ability: assessed.assessed_ability,
+                    assessed_potential: assessed.assessed_potential,
+                    confidence: verdict.confidence,
+                    role_fit: verdict.role_fit,
                     estimated_value: target.estimated_value,
-                    risk_flags: risk_flags_now.clone(),
+                    risk_flags: verdict.risk_flags.clone(),
                     is_match: false,
                 },
             });
         }
 
-        if recommendation == ScoutingRecommendation::Pass {
+        if verdict.recommendation == ScoutingRecommendation::Pass {
             rejected_events.push((club.id, target.player_id));
         } else {
             // Public interest (`Wnt`) is separated from the
@@ -650,7 +693,7 @@ impl<'a> ClubScan<'a> {
             // first-team player at a bigger club without ever
             // setting `Wnt`.
             let buyable = matches!(
-                recommendation,
+                verdict.recommendation,
                 ScoutingRecommendation::StrongBuy | ScoutingRecommendation::Buy
             );
             let public_interest_ok = buyable && assessment.reaches(PursuitAction::GoPublic.needs());
@@ -676,13 +719,13 @@ impl<'a> ClubScan<'a> {
                 report: DetailedScoutingReport {
                     player_id: target.player_id,
                     assignment_id: assignment.id,
-                    assessed_ability,
-                    assessed_potential,
-                    confidence,
+                    assessed_ability: assessed.assessed_ability,
+                    assessed_potential: assessed.assessed_potential,
+                    confidence: verdict.confidence,
                     estimated_value: target.estimated_value,
-                    recommendation,
-                    role_fit: role_fit_now,
-                    risk_flags: risk_flags_now,
+                    recommendation: verdict.recommendation.clone(),
+                    role_fit: verdict.role_fit,
+                    risk_flags: verdict.risk_flags.clone(),
                 },
                 assignment_id: assignment.id,
             });

@@ -1,13 +1,14 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::views::{self, MenuSection, SubTitleFlag};
+use crate::countries::{CountryLookup, CountryMenu};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::views::{MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use chrono::Datelike;
-use core::{Country, NationalTeamLevel};
+use core::{Country, NationalTeam, NationalTeamLevel};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -50,144 +51,121 @@ pub struct NationalStaffDto {
     pub age: u8,
 }
 
-pub async fn country_staff_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<CountryStaffRequest>,
-) -> ApiResult<impl IntoResponse> {
-    render_country_staff(state, route_params, NationalTeamLevel::Senior).await
+impl NationalStaffDto {
+    fn rows(
+        data: &core::SimulatorData,
+        team: &NationalTeam,
+        now: chrono::NaiveDate,
+    ) -> Vec<NationalStaffDto> {
+        team.staff
+            .iter()
+            .map(|s| {
+                let staff_country = data.country(s.country_id);
+                let age = (now.year() - s.birth_year) as u8;
+
+                NationalStaffDto {
+                    first_name: s.first_name.clone(),
+                    last_name: s.last_name.clone(),
+                    role_key: s.role.as_i18n_key().to_string(),
+                    country_slug: staff_country.map(|c| c.slug.clone()).unwrap_or_default(),
+                    country_code: staff_country.map(|c| c.code.clone()).unwrap_or_default(),
+                    country_name: staff_country.map(|c| c.name.clone()).unwrap_or_default(),
+                    age,
+                }
+            })
+            .collect()
+    }
 }
 
-pub async fn country_u21_staff_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<CountryStaffRequest>,
-) -> ApiResult<impl IntoResponse> {
-    render_country_staff(state, route_params, NationalTeamLevel::Under21).await
-}
+pub struct CountryStaffPage;
 
-async fn render_country_staff(
-    state: GameAppData,
-    route_params: CountryStaffRequest,
-    level: NationalTeamLevel,
-) -> ApiResult<impl IntoResponse> {
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let guard = state.data.read().await;
+impl CountryStaffPage {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<CountryStaffRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        Self::render(state, route_params, NationalTeamLevel::Senior).await
+    }
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+    pub async fn u21(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<CountryStaffRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        Self::render(state, route_params, NationalTeamLevel::Under21).await
+    }
 
-    let indexes = simulator_data
-        .indexes
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Indexes not available".to_string()))?;
+    async fn render(
+        state: GameAppData,
+        route_params: CountryStaffRequest,
+        level: NationalTeamLevel,
+    ) -> ApiResult<impl IntoResponse> {
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let guard = state.data.read().await;
 
-    let country_id = indexes
-        .slug_indexes
-        .get_country_by_slug(&route_params.country_slug)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("Country '{}' not found", route_params.country_slug))
-        })?;
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let country: &Country = simulator_data
-        .continents
-        .iter()
-        .flat_map(|c| &c.countries)
-        .find(|country| country.id == country_id)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!(
-                "Country with ID {} not found in continents",
-                country_id
-            ))
-        })?;
+        let (country, continent) =
+            CountryLookup::by_slug(simulator_data, &route_params.country_slug)?;
 
-    let continent = simulator_data
-        .continent(country.continent_id)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!(
-                "Continent with ID {} not found",
-                country.continent_id
-            ))
-        })?;
+        Ok(Self::template(
+            simulator_data,
+            country,
+            continent,
+            i18n,
+            &route_params,
+            level,
+        ))
+    }
 
-    let now = simulator_data.date.date();
+    fn template(
+        data: &core::SimulatorData,
+        country: &Country,
+        continent: &core::continent::Continent,
+        i18n: I18n,
+        route_params: &CountryStaffRequest,
+        level: NationalTeamLevel,
+    ) -> CountryStaffTemplate {
+        let now = data.date.date();
 
-    let (team, team_suffix) = match level {
-        NationalTeamLevel::Senior => (&country.national_team, ""),
-        NationalTeamLevel::Under21 => (&country.u21_national_team, "/u21"),
-    };
+        let (team, team_suffix) = match level {
+            NationalTeamLevel::Senior => (&country.national_team, ""),
+            NationalTeamLevel::Under21 => (&country.u21_national_team, "/u21"),
+        };
+        let staff = NationalStaffDto::rows(data, team, now);
 
-    let staff: Vec<NationalStaffDto> = team
-        .staff
-        .iter()
-        .map(|s| {
-            let staff_country = simulator_data.country(s.country_id);
-            let age = (now.year() - s.birth_year) as u8;
+        let current_path = format!(
+            "/{}/countries/{}{}/staff",
+            route_params.lang, route_params.country_slug, team_suffix
+        );
 
-            NationalStaffDto {
-                first_name: s.first_name.clone(),
-                last_name: s.last_name.clone(),
-                role_key: s.role.as_i18n_key().to_string(),
-                country_slug: staff_country.map(|c| c.slug.clone()).unwrap_or_default(),
-                country_code: staff_country.map(|c| c.code.clone()).unwrap_or_default(),
-                country_name: staff_country.map(|c| c.name.clone()).unwrap_or_default(),
-                age,
-            }
-        })
-        .collect();
-
-    let current_path = format!(
-        "/{}/countries/{}{}/staff",
-        route_params.lang, route_params.country_slug, team_suffix
-    );
-    let cl: Vec<(&str, &str)> = country
-        .leagues
-        .leagues
-        .iter()
-        .filter(|l| !l.friendly)
-        .map(|l| (l.name.as_str(), l.slug.as_str()))
-        .collect();
-
-    Ok(CountryStaffTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        title: country.name.clone(),
-        sub_title_prefix: String::new(),
-        sub_title_suffix: String::new(),
-        sub_title: continent.name.clone(),
-        sub_title_link: format!("/{}/countries", route_params.lang),
-        sub_title_flag: None,
-        header_color: country.background_color.clone(),
-        foreground_color: country.foreground_color.clone(),
-        menu_sections: {
-            let mp = views::MenuParams {
-                i18n: &i18n,
-                lang: &route_params.lang,
-                current_path: &current_path,
-                country_name: &country.name,
-                country_slug: &route_params.country_slug,
-            };
-            views::country_menu(
-                &mp,
-                &cl,
-                country
-                    .domestic_cup
-                    .as_ref()
-                    .map(|c| (c.league.name.as_str(), c.league.slug.as_str())),
-                &country
-                    .playoffs
-                    .iter()
-                    .map(|p| (p.league.name.as_str(), p.league.slug.as_str()))
-                    .collect::<Vec<_>>(),
-                country.continent_id,
-            )
-        },
-        lang: route_params.lang,
-        i18n,
-        active_tab: "staff",
-        country_slug: route_params.country_slug,
-        team_suffix,
-        staff,
-    })
+        CountryStaffTemplate {
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
+            cpu_brand: &CPU_BRAND,
+            cores_count: *CPU_CORES,
+            title: country.name.clone(),
+            sub_title_prefix: String::new(),
+            sub_title_suffix: String::new(),
+            sub_title: continent.name.clone(),
+            sub_title_link: format!("/{}/countries", route_params.lang),
+            sub_title_flag: None,
+            header_color: country.background_color.clone(),
+            foreground_color: country.foreground_color.clone(),
+            menu_sections: CountryMenu::sections(
+                country,
+                &i18n,
+                &route_params.lang,
+                &route_params.country_slug,
+                &current_path,
+            ),
+            lang: route_params.lang.clone(),
+            i18n,
+            active_tab: "staff",
+            country_slug: route_params.country_slug.clone(),
+            team_suffix,
+            staff,
+        }
+    }
 }

@@ -18,8 +18,8 @@ use super::situation::MindSituation;
 use super::submind::{MindOption, MindView, MoodContribution, ReasonSet, SubMind};
 use crate::club::player::player::Player;
 use crate::club::player::statistics::PlayerStatisticsHistoryItem;
-use crate::{PlayerFieldPositionGroup, PlayerSquadStatus};
 use crate::r#match::engine::teamplay::standard::MatchStandard;
+use crate::{PlayerFieldPositionGroup, PlayerSquadStatus};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
@@ -123,7 +123,10 @@ impl Player {
     ) -> bool {
         let mut seasons: Vec<&PlayerStatisticsHistoryItem> =
             self.statistics_history.items.iter().collect();
-        let Some(first) = seasons.iter().min_by_key(|i| (i.season.start_year, i.seq_id)) else {
+        let Some(first) = seasons
+            .iter()
+            .min_by_key(|i| (i.season.start_year, i.seq_id))
+        else {
             return false;
         };
         let start = standard_of(first) - CompetitiveMind::ROOKIE_GAP;
@@ -491,8 +494,43 @@ impl SubMind for CompetitiveMind {
         let today = view.today();
 
         self.fade_if_idle();
+        self.note_goal_drought(s, organs, today);
+        self.update_run_from_minutes(s);
+        self.refresh_frozen_block(s, organs);
 
-        // A goal drought, for the players it means anything to.
+        if s.playing_time_gap() >= 0.0 {
+            self.reward_playing_time(s, organs, today);
+            return;
+        }
+
+        // A settling-in period is not a grievance yet.
+        if !s.is_settled() {
+            return;
+        }
+
+        self.pursue_lost_place(s, organs, today);
+    }
+
+    fn weigh(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
+        self.weigh_option(option, organs)
+    }
+
+    fn appraise(&self, _organs: &MindOrgans) -> MoodContribution {
+        // Self-belief is the axis; the run gives the confidence, because
+        // a player who has not been near the side has less to go on than
+        // one in the middle of a run either way.
+        let evidence = (self.run.unsigned_abs() as f32 / 6.0).clamp(0.0, 1.0);
+        MoodContribution::new(
+            GoalDomain::Competitive,
+            self.self_belief() * 6.0,
+            evidence.max(0.3),
+        )
+    }
+}
+
+impl CompetitiveMind {
+    /// A goal drought, for the players it means anything to.
+    fn note_goal_drought(&mut self, s: &MindSituation, organs: &mut MindOrgans, today: EpochDay) {
         if s.apps_since_goal >= 8 {
             self.barren_weeks = self.barren_weeks.saturating_add(1);
             organs.goals.pursue(
@@ -503,53 +541,51 @@ impl SubMind for CompetitiveMind {
                 today,
             );
         }
+    }
 
-        // Playing less than the role he was given implies. The gap is
-        // measured against what he was told, so identical minutes are a
-        // grievance for a key player and nothing at all for a backup.
-        let gap = s.playing_time_gap();
-
-        // The run, kept honest against the rolling share.
-        //
-        // Episodes move it match to match, but ordinary rotation files
-        // none — being left out of one league game is not a memory, and
-        // tapping it would fill a 32-slot store with Tuesdays. So the
-        // weekly think, which is roughly one matchday, nudges it from
-        // where the minutes actually are. Without this a player nobody
-        // ever drops for a *big* match reads as though he were still in
-        // the side after a season on the bench, and both
-        // `is_out_of_the_side` and `is_frozen_out` are unreachable.
+    /// The run, kept honest against the rolling share.
+    ///
+    /// Episodes move it match to match, but ordinary rotation files
+    /// none — being left out of one league game is not a memory, and
+    /// tapping it would fill a 32-slot store with Tuesdays. So the
+    /// weekly think, which is roughly one matchday, nudges it from
+    /// where the minutes actually are. Without this a player nobody
+    /// ever drops for a *big* match reads as though he were still in
+    /// the side after a season on the bench, and both
+    /// `is_out_of_the_side` and `is_frozen_out` are unreachable.
+    fn update_run_from_minutes(&mut self, s: &MindSituation) {
         if s.starter_ratio < 0.15 {
             self.extend_run(false);
         } else if s.starter_ratio > 0.60 {
             self.extend_run(true);
         }
+    }
 
-        // Being frozen out is re-read every week, not remembered. The
-        // moment he is back in the manager's thinking the want is his
-        // to pursue again — and `weigh` stops reading it as the reason
-        // to go. The freeze itself is asserted further down, while it
-        // holds.
+    /// Being frozen out is re-read every week, not remembered. The
+    /// moment he is back in the manager's thinking the want is his
+    /// to pursue again — and `weigh` stops reading it as the reason
+    /// to go. The freeze itself is asserted further down, while it
+    /// holds.
+    fn refresh_frozen_block(&self, s: &MindSituation, organs: &mut MindOrgans) {
         if !self.is_frozen_out(s) {
             organs.goals.unblock(GoalBlocker::FrozenOut);
         }
+    }
 
-        if gap >= 0.0 {
-            // He is playing. Whatever he wanted about his place is
-            // answered, gradually.
-            organs.goals.advance(GoalKind::WinBackMyPlace, 0.15);
-            organs.goals.advance(GoalKind::PlayFirstTeamFootball, 0.10);
-            organs.goals.advance(GoalKind::HoldOntoMyPlace, 0.10);
-            self.guard_the_shirt(s, organs, today);
-            return;
-        }
+    /// Playing less than the role he was given implies: the gap is
+    /// measured against what he was told, so identical minutes are a
+    /// grievance for a key player and nothing at all for a backup.
+    fn reward_playing_time(&mut self, s: &MindSituation, organs: &mut MindOrgans, today: EpochDay) {
+        // He is playing. Whatever he wanted about his place is
+        // answered, gradually.
+        organs.goals.advance(GoalKind::WinBackMyPlace, 0.15);
+        organs.goals.advance(GoalKind::PlayFirstTeamFootball, 0.10);
+        organs.goals.advance(GoalKind::HoldOntoMyPlace, 0.10);
+        self.guard_the_shirt(s, organs, today);
+    }
 
-        // A settling-in period is not a grievance yet.
-        if !s.is_settled() {
-            return;
-        }
-
-        let shortfall = (-gap).clamp(0.0, 1.0);
+    fn pursue_lost_place(&mut self, s: &MindSituation, organs: &mut MindOrgans, today: EpochDay) {
+        let shortfall = (-s.playing_time_gap()).clamp(0.0, 1.0);
         let mut evidence = GoalEvidence::of(&[GoalEvidence::LOST_HIS_PLACE]);
         if self.is_out_of_the_side() {
             evidence.insert(GoalEvidence::NO_FIRST_TEAM_FOOTBALL);
@@ -642,24 +678,6 @@ impl SubMind for CompetitiveMind {
         }
     }
 
-    fn weigh(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
-        self.weigh_option(option, organs)
-    }
-
-    fn appraise(&self, _organs: &MindOrgans) -> MoodContribution {
-        // Self-belief is the axis; the run gives the confidence, because
-        // a player who has not been near the side has less to go on than
-        // one in the middle of a run either way.
-        let evidence = (self.run.unsigned_abs() as f32 / 6.0).clamp(0.0, 1.0);
-        MoodContribution::new(
-            GoalDomain::Competitive,
-            self.self_belief() * 6.0,
-            evidence.max(0.3),
-        )
-    }
-}
-
-impl CompetitiveMind {
     /// What the shirt says about a decision. The loudest voice a player
     /// has, and the one that decides most moves.
     pub(super) fn weigh_option(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {

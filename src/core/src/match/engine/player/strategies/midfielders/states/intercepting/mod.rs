@@ -1,4 +1,4 @@
-use crate::r#match::midfielders::states::common::{
+use crate::r#match::midfielders::states::shared::{
     ActivityIntensity, Interception, MidfielderCondition, MidfielderRead, ReadLevel,
 };
 use crate::r#match::{

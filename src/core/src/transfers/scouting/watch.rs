@@ -75,8 +75,8 @@ use crate::transfers::scouting::breakout::{
 };
 use crate::transfers::scouting::recruitment::{ScoutMonitoringSource, ScoutMonitoringStatus};
 use crate::transfers::squad::standing::{CareerRecordSnapshot, StandingInputs, StandingSignal};
-use crate::transfers::view::player::{PlayerSummaryBuilder, SummaryClubContext};
-use crate::{Club, Country, Person, PlayerFieldPositionGroup, PlayerPositionType};
+use crate::transfers::view::player::{ClubGroupRanks, PlayerSummaryBuilder, SummaryClubContext};
+use crate::{Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerPositionType, Team};
 
 /// One discovered player the watch may surface — his market summary, the few
 /// extra signals the listed-target view needs that the summary doesn't carry,
@@ -226,6 +226,176 @@ struct BuyerRead<'a> {
     market_map: &'a MarketMap,
 }
 
+/// One club's home read during the weekly sweep: the country, the roster the
+/// player belongs to, and the club-wide signals every candidate shares.
+struct DomesticBrowse<'a> {
+    country: &'a Country,
+    club: &'a Club,
+    date: NaiveDate,
+    performance_lookup: &'a LeaguePerformanceLookup,
+    parent_league_reputation: u16,
+}
+
+impl DomesticBrowse<'_> {
+    /// One home player, admitted on his output or his standing. The summary
+    /// is built only for a name that has already cleared the bar — it prices
+    /// a valuation and re-sorts the squad, and paying that for every player
+    /// in the country every Monday is the difference between a weekly pass
+    /// and a weekly stall.
+    fn candidate(
+        &self,
+        team: &Team,
+        player: &Player,
+        summary_ctx: &SummaryClubContext,
+        group_ranks: &ClubGroupRanks,
+    ) -> Option<BreakoutCandidate> {
+        if player.is_on_loan() {
+            return None;
+        }
+        let group = player.position().position_group();
+        let age = player.age(self.date);
+        let is_youth_squad = team.team_type.is_youth();
+        // Youth squads play friendly-classified age-group football, so
+        // a youngster's goals and rating live in the FRIENDLY bucket
+        // and his form is judged on the undiscounted signal — a scout
+        // watching the U18s rates the talent on what he sees, not on
+        // the (near-zero) standing of a youth league. Senior squads
+        // keep the official-stats, league-rep-discounted path.
+        let breakout = self.breakout(player, group, age, is_youth_squad);
+        let skill_ability = PlayerView::position_evaluation_ability(player);
+
+        // Standing: what a scout in the stands takes away
+        // rather than what the scoreline says. A youth-squad
+        // player has no senior standing to read, so the youth
+        // path stays purely output-driven.
+        //
+        // Computed from the cheap reads — the club's group ranks
+        // are snapshotted once per club below, and the ledger
+        // walk is bounded by his own career.
+        let standing = if is_youth_squad {
+            0.0
+        } else {
+            self.standing(player, group, age, skill_ability, group_ranks)
+        };
+
+        // A home candidate is corroborated, so he faces the full
+        // discovery bar on either signal: the pull relief below
+        // exists for the CROSS-BORDER read, where the evidence a
+        // scout has is thinner and the player's own wish to leave
+        // is what puts his name in front of anyone.
+        let admitted_on_standing =
+            standing >= BreakoutPerformanceSignal::BREAKOUT_THRESHOLD && standing > breakout.score;
+        if !breakout.is_breakout() && !admitted_on_standing {
+            return None;
+        }
+
+        let summary = PlayerSummaryBuilder::build(
+            self.country,
+            self.club,
+            summary_ctx,
+            team,
+            player,
+            self.date,
+        );
+
+        let estimated_potential = skill_ability
+            + ScoutJudgement::estimate_growth_potential(
+                age,
+                player.skills.mental.determination,
+                player.skills.mental.work_rate,
+                player.skills.mental.composure,
+                player.skills.mental.anticipation,
+                skill_ability,
+            );
+
+        if TransferTrace::is(player.id) {
+            TransferTrace::line(
+                player.id,
+                "discovery",
+                format!(
+                    "home country={} breakout={:.1} standing={:.1} bar={:.1} \
+                     pull={:.2} rank={} caps={} prior={:.2}/{} regular_seasons={}",
+                    self.country.code,
+                    breakout.score,
+                    standing,
+                    BreakoutPerformanceSignal::BREAKOUT_THRESHOLD,
+                    player.big_stage_inclination,
+                    summary.seller_ctx.position_group_rank,
+                    summary.international_apps,
+                    summary.career_record.prior_season_rating,
+                    summary.career_record.prior_season_appearances,
+                    summary.career_record.seasons_as_regular,
+                ),
+            );
+        }
+
+        Some(BreakoutCandidate {
+            summary,
+            estimated_potential,
+            ambition: player.attributes.ambition,
+            days_available: player.days_available(self.date),
+            recent_interest_count: player
+                .availability_market_state()
+                .map(|s| s.recent_interest(self.date))
+                .unwrap_or(0),
+            failed_scans: player
+                .availability_market_state()
+                .map(|s| s.failed_scans)
+                .unwrap_or(0),
+            breakout_score: breakout.score,
+            standing_score: standing,
+            admitted_on_standing,
+        })
+    }
+
+    fn breakout(
+        &self,
+        player: &Player,
+        group: PlayerFieldPositionGroup,
+        age: u8,
+        is_youth_squad: bool,
+    ) -> BreakoutPerformanceSignal {
+        if is_youth_squad {
+            let appearances = player.friendly_statistics.total_games();
+            let average_rating = player.friendly_statistics.average_rating_realistic(group);
+            self.performance_lookup
+                .breakout_for_youth(player, appearances, average_rating, age)
+        } else {
+            let appearances = player.statistics.total_games();
+            let average_rating = player.statistics.average_rating_realistic(group);
+            self.performance_lookup.breakout_for_player(
+                player,
+                appearances,
+                average_rating,
+                age,
+                self.parent_league_reputation,
+            )
+        }
+    }
+
+    fn standing(
+        &self,
+        player: &Player,
+        group: PlayerFieldPositionGroup,
+        age: u8,
+        skill_ability: u8,
+        group_ranks: &ClubGroupRanks,
+    ) -> f32 {
+        let record = CareerRecordSnapshot::read(player, group);
+        StandingSignal::compute(&StandingInputs {
+            position_group: group,
+            skill_ability,
+            age,
+            league_reputation: self.parent_league_reputation,
+            position_group_rank: group_ranks.rank(player.id),
+            international_apps: player.player_attributes.international_apps,
+            prior_season_rating: record.prior_season_rating,
+            prior_season_appearances: record.prior_season_appearances,
+            seasons_as_regular: record.seasons_as_regular,
+        })
+        .score
+    }
+}
 /// The year-round form sweep: who is playing above his level, anywhere.
 pub struct FormWatch;
 
@@ -391,145 +561,21 @@ impl FormWatch {
             // player sits in his own depth chart, and the summary of an
             // admitted candidate is projected against the same numbers.
             let summary_ctx = SummaryClubContext::of(country, club, date, false);
-            let group_ranks = summary_ctx.ranks();
+            let browse = DomesticBrowse {
+                country,
+                club,
+                date,
+                performance_lookup,
+                parent_league_reputation,
+            };
 
             for team in &club.teams.teams {
-                let is_youth_squad = team.team_type.is_youth();
                 for player in &team.players.players {
-                    if player.is_on_loan() {
-                        continue;
+                    if let Some(candidate) =
+                        browse.candidate(team, player, &summary_ctx, summary_ctx.ranks())
+                    {
+                        candidates.push(candidate);
                     }
-                    let group = player.position().position_group();
-                    let age = player.age(date);
-                    // Youth squads play friendly-classified age-group football, so
-                    // a youngster's goals and rating live in the FRIENDLY bucket
-                    // and his form is judged on the undiscounted signal — a scout
-                    // watching the U18s rates the talent on what he sees, not on
-                    // the (near-zero) standing of a youth league. Senior squads
-                    // keep the official-stats, league-rep-discounted path.
-                    let breakout = if is_youth_squad {
-                        let appearances = player.friendly_statistics.total_games();
-                        let average_rating =
-                            player.friendly_statistics.average_rating_realistic(group);
-                        performance_lookup.breakout_for_youth(
-                            player,
-                            appearances,
-                            average_rating,
-                            age,
-                        )
-                    } else {
-                        let appearances = player.statistics.total_games();
-                        let average_rating = player.statistics.average_rating_realistic(group);
-                        performance_lookup.breakout_for_player(
-                            player,
-                            appearances,
-                            average_rating,
-                            age,
-                            parent_league_reputation,
-                        )
-                    };
-                    let skill_ability = PlayerView::position_evaluation_ability(player);
-
-                    // Standing: what a scout in the stands takes away
-                    // rather than what the scoreline says. A youth-squad
-                    // player has no senior standing to read, so the youth
-                    // path stays purely output-driven.
-                    //
-                    // Computed from the cheap reads — the club's group ranks
-                    // are snapshotted once per club above, and the ledger
-                    // walk is bounded by his own career. The full market
-                    // summary is built only for a player who has already
-                    // been ADMITTED: it prices a valuation and re-sorts the
-                    // squad, and paying that for every player in the country
-                    // every Monday is the difference between a weekly pass
-                    // and a weekly stall.
-                    let standing = if is_youth_squad {
-                        0.0
-                    } else {
-                        let record = CareerRecordSnapshot::read(player, group);
-                        StandingSignal::compute(&StandingInputs {
-                            position_group: group,
-                            skill_ability,
-                            age,
-                            league_reputation: parent_league_reputation,
-                            position_group_rank: group_ranks.rank(player.id),
-                            international_apps: player.player_attributes.international_apps,
-                            prior_season_rating: record.prior_season_rating,
-                            prior_season_appearances: record.prior_season_appearances,
-                            seasons_as_regular: record.seasons_as_regular,
-                        })
-                        .score
-                    };
-
-                    // A home candidate is corroborated, so he faces the full
-                    // discovery bar on either signal: the pull relief below
-                    // exists for the CROSS-BORDER read, where the evidence a
-                    // scout has is thinner and the player's own wish to leave
-                    // is what puts his name in front of anyone.
-                    let admitted_on_standing = standing
-                        >= BreakoutPerformanceSignal::BREAKOUT_THRESHOLD
-                        && standing > breakout.score;
-                    if !breakout.is_breakout() && !admitted_on_standing {
-                        continue;
-                    }
-
-                    let summary = PlayerSummaryBuilder::build(
-                        country,
-                        club,
-                        &summary_ctx,
-                        team,
-                        player,
-                        date,
-                    );
-
-                    let estimated_potential = skill_ability
-                        + ScoutJudgement::estimate_growth_potential(
-                            age,
-                            player.skills.mental.determination,
-                            player.skills.mental.work_rate,
-                            player.skills.mental.composure,
-                            player.skills.mental.anticipation,
-                            skill_ability,
-                        );
-
-                    if TransferTrace::is(player.id) {
-                        TransferTrace::line(
-                            player.id,
-                            "discovery",
-                            format!(
-                                "home country={} breakout={:.1} standing={:.1} bar={:.1} \
-                                 pull={:.2} rank={} caps={} prior={:.2}/{} regular_seasons={}",
-                                country.code,
-                                breakout.score,
-                                standing,
-                                BreakoutPerformanceSignal::BREAKOUT_THRESHOLD,
-                                player.big_stage_inclination,
-                                summary.seller_ctx.position_group_rank,
-                                summary.international_apps,
-                                summary.career_record.prior_season_rating,
-                                summary.career_record.prior_season_appearances,
-                                summary.career_record.seasons_as_regular,
-                            ),
-                        );
-                    }
-
-                    candidates.push(BreakoutCandidate {
-                        summary,
-                        estimated_potential,
-                        ambition: player.attributes.ambition,
-                        days_available: player.days_available(date),
-                        recent_interest_count: player
-                            .availability_market_state()
-                            .map(|s| s.recent_interest(date))
-                            .unwrap_or(0),
-                        failed_scans: player
-                            .availability_market_state()
-                            .map(|s| s.failed_scans)
-                            .unwrap_or(0),
-                        breakout_score: breakout.score,
-                        standing_score: standing,
-                        admitted_on_standing,
-                    });
                 }
             }
         }
@@ -849,50 +895,70 @@ impl FormWatch {
             .enumerate()
             .map(|(i, (_, score))| (i as u32, *score))
             .collect();
-        let drawn = InterestDraw::pick_several(
-            &slate,
-            FormWatch::breakout_watch_per_pass(club_overall_score),
-        );
+        let drawn = Self::drawn_names(&slate, club_overall_score);
         for (cand, _score) in drawn.into_iter().map(|i| &scored[i as usize]) {
-            let s = &cand.summary;
-            let discovery = cand.breakout_score.max(cand.standing_score);
-            if TransferTrace::is(s.player_id) {
-                TransferTrace::line(
-                    s.player_id,
-                    "buyer",
-                    format!(
-                        "club={} ({}) FILED discovery={:.1} (breakout {:.1} / standing {:.1})",
-                        club.name, club.id, discovery, cand.breakout_score, cand.standing_score,
-                    ),
-                );
-            }
-            actions.push(WatchAction {
-                club_id: club.id,
-                recommender_staff_id: recommender_id,
-                player_id: s.player_id,
-                player_club_id: s.club_id,
-                player_country_id: s.country_id,
-                position: s.position,
-                position_group: s.position_group,
-                age: s.age,
-                appearances: s.appearances,
-                assessed_ability: s.skill_ability,
-                assessed_potential: cand.estimated_potential,
-                // Confidence scales with discovery strength so a clear
-                // find lands meeting-ready — the interest can flow
-                // straight into the shortlist when the window opens.
-                confidence: (0.5 + (discovery / 100.0) * 0.35).min(0.85),
-                estimated_value: s.estimated_value,
-                reading: FileReading::of(
-                    &TransferMovePlausibility::read(
-                        &suitor,
-                        s,
-                        MoveTerms::purchase(true),
-                        market_map,
-                    ),
-                    date,
+            actions.push(Self::watch_action(
+                club,
+                &suitor,
+                market_map,
+                date,
+                cand,
+                recommender_id,
+            ));
+        }
+    }
+
+    /// The names the board actually files this week, drawn rather than taken
+    /// from the top of the order.
+    fn drawn_names(slate: &[(u32, f32)], club_overall_score: f32) -> Vec<u32> {
+        InterestDraw::pick_several(
+            slate,
+            FormWatch::breakout_watch_per_pass(club_overall_score),
+        )
+    }
+
+    /// One accepted find, packaged for the apply pass.
+    fn watch_action(
+        club: &Club,
+        suitor: &Suitor<'_>,
+        market_map: &MarketMap,
+        date: NaiveDate,
+        cand: &BreakoutCandidate,
+        recommender_id: u32,
+    ) -> WatchAction {
+        let s = &cand.summary;
+        let discovery = cand.breakout_score.max(cand.standing_score);
+        if TransferTrace::is(s.player_id) {
+            TransferTrace::line(
+                s.player_id,
+                "buyer",
+                format!(
+                    "club={} ({}) FILED discovery={:.1} (breakout {:.1} / standing {:.1})",
+                    club.name, club.id, discovery, cand.breakout_score, cand.standing_score,
                 ),
-            });
+            );
+        }
+        WatchAction {
+            club_id: club.id,
+            recommender_staff_id: recommender_id,
+            player_id: s.player_id,
+            player_club_id: s.club_id,
+            player_country_id: s.country_id,
+            position: s.position,
+            position_group: s.position_group,
+            age: s.age,
+            appearances: s.appearances,
+            assessed_ability: s.skill_ability,
+            assessed_potential: cand.estimated_potential,
+            // Confidence scales with discovery strength so a clear
+            // find lands meeting-ready — the interest can flow
+            // straight into the shortlist when the window opens.
+            confidence: (0.5 + (discovery / 100.0) * 0.35).min(0.85),
+            estimated_value: s.estimated_value,
+            reading: FileReading::of(
+                &TransferMovePlausibility::read(suitor, s, MoveTerms::purchase(true), market_map),
+                date,
+            ),
         }
     }
 
@@ -1039,6 +1105,7 @@ impl FormWatch {
 mod breakout_watch_tests {
     use super::*;
     use crate::PathwayStage;
+    use crate::PlayerPreferredFoot;
     use crate::club::academy::ClubAcademy;
     use crate::club::player::LanguageProfile;
     use crate::club::player::builder::PlayerBuilder;
@@ -1053,7 +1120,6 @@ mod breakout_watch_tests {
     use crate::transfers::squad::bands::TierBands;
     use crate::transfers::squad::standing::CareerRecordSnapshot;
     use crate::transfers::view::world::{WorldPool, WorldPoolIndex};
-    use crate::PlayerPreferredFoot;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
         PlayerAttributes, PlayerCollection, PlayerFieldPositionGroup, PlayerPosition,

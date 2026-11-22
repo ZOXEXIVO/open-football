@@ -3,7 +3,7 @@
 //! `country_code`.
 
 use super::club::ClubEntity;
-use super::compiled::{compiled, country_id_for_code};
+use super::compiled::CompiledDatabase;
 use super::country::CountryEntity;
 use super::league::LeagueEntity;
 use super::names::NamesByCountryEntity;
@@ -24,7 +24,7 @@ impl DataTreeLoader {
     /// The `countries` parameter is accepted for backward compatibility but
     /// unused — id resolution uses the compiled doc's own country list.
     pub fn load(_countries: &[CountryEntity]) -> DataTreeResult {
-        let db = compiled();
+        let db = CompiledDatabase::get();
 
         let mut leagues: Vec<LeagueEntity> = db
             .leagues
@@ -32,7 +32,7 @@ impl DataTreeLoader {
             .filter(|l| l.enabled)
             .cloned()
             .map(|mut l| {
-                l.country_id = country_id_for_code(&l.country_code);
+                l.country_id = CompiledDatabase::country_id_for_code(&l.country_code);
                 l
             })
             .collect();
@@ -53,7 +53,7 @@ impl DataTreeLoader {
                     .and_then(|t| t.league_id);
                 match main_league_id {
                     Some(lid) if enabled_ids.contains(&lid) => {
-                        c.country_id = country_id_for_code(&c.country_code);
+                        c.country_id = CompiledDatabase::country_id_for_code(&c.country_code);
                         Some(c)
                     }
                     _ => None,
@@ -66,7 +66,7 @@ impl DataTreeLoader {
             .iter()
             .cloned()
             .map(|mut n| {
-                n.country_id = country_id_for_code(&n.country_code);
+                n.country_id = CompiledDatabase::country_id_for_code(&n.country_code);
                 n
             })
             .collect();
@@ -203,7 +203,7 @@ mod tests {
     /// not modelled — but it is where several modelled players spent seasons.
     #[test]
     fn unmodelled_history_clubs_still_have_names() {
-        let names = crate::loaders::history_club_names();
+        let names = CompiledDatabase::get().history_club_names();
         assert!(
             !names.is_empty(),
             "history_clubs section missing from database.db"
@@ -215,7 +215,7 @@ mod tests {
         let countries = CountryLoader::load();
         let tree = DataTreeLoader::load(&countries);
         // Sub-team ids count: a satellite folded into its parent is referenced
-        // by an id that survives only in teams[], and resolve_club_display looks
+        // by an id that survives only in teams[], and `DatabaseEntity::club_display` looks
         // those up before falling back to this table.
         for club in &tree.clubs {
             assert!(

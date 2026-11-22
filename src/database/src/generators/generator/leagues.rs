@@ -4,6 +4,7 @@ use core::league::{
     LeaguePlayoffConfig, LeagueSettings, PlayoffFormat, PlayoffStage,
 };
 use core::{Club, TeamType};
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use super::DatabaseGenerator;
@@ -20,27 +21,27 @@ const DOMESTIC_CUP_ID_BASE: u32 = 800_000_000;
 /// (`800_000_000+`) and continental cups (`900_000_001+`).
 const PLAYOFF_ID_BASE: u32 = 850_000_000;
 
-/// Lowercase, hyphenate, and strip non-alphanumerics from a string so a
-/// country slug like "czech republic" yields a URL-safe "czech-republic".
-fn slugify(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut prev_dash = false;
-    for ch in s.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-            prev_dash = false;
-        } else if !out.is_empty() && !prev_dash {
-            out.push('-');
-            prev_dash = true;
-        }
-    }
-    while out.ends_with('-') {
-        out.pop();
-    }
-    out
-}
-
 impl DatabaseGenerator {
+    /// Lowercase, hyphenate, and strip non-alphanumerics from a string so a
+    /// country slug like "czech republic" yields a URL-safe "czech-republic".
+    fn slugify(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut prev_dash = false;
+        for ch in s.chars() {
+            if ch.is_ascii_alphanumeric() {
+                out.push(ch.to_ascii_lowercase());
+                prev_dash = false;
+            } else if !out.is_empty() && !prev_dash {
+                out.push('-');
+                prev_dash = true;
+            }
+        }
+        while out.ends_with('-') {
+            out.pop();
+        }
+        out
+    }
+
     pub(super) fn generate_leagues(
         country_id: u32,
         country_reputation: u16,
@@ -122,20 +123,12 @@ impl DatabaseGenerator {
             .find(|l| l.settings.tier == 1)
             .or_else(|| leagues.first())?;
 
-        let settings = LeagueSettings {
-            season_starting_half: primary.settings.season_starting_half,
-            season_ending_half: primary.settings.season_ending_half,
-            tier: 0,
-            promotion_spots: 0,
-            relegation_spots: 0,
-            league_group: None,
-            split_season: false,
-        };
+        let settings = Self::knockout_settings(primary);
 
         let (slug, name, configured_rep) = match &country.domestic_cup {
             Some(cfg) => (cfg.slug.clone(), cfg.name.clone(), cfg.reputation),
             None => (
-                format!("{}-cup", slugify(&country.slug)),
+                format!("{}-cup", Self::slugify(&country.slug)),
                 format!("{} Cup", country.name),
                 None,
             ),
@@ -166,26 +159,9 @@ impl DatabaseGenerator {
         country: &CountryEntity,
         leagues: &[League],
     ) -> Vec<LeaguePlayoff> {
-        use std::collections::BTreeMap;
-
-        // Group the playoff-enabled leagues by competition name. BTreeMap
-        // keeps competitions in a stable (alphabetical) order so the
-        // synthetic ids below are deterministic across runs.
-        let mut by_competition: BTreeMap<String, Vec<&League>> = BTreeMap::new();
-        for league in leagues {
-            if let Some(group) = &league.settings.league_group
-                && group.playoff.is_some()
-            {
-                by_competition
-                    .entry(group.competition.clone())
-                    .or_default()
-                    .push(league);
-            }
-        }
-
         let mut playoffs = Vec::new();
         let mut id_offset: u32 = 0;
-        for (competition, mut members) in by_competition {
+        for (competition, mut members) in Self::playoff_competitions(leagues) {
             if members.len() < 2 {
                 continue; // a cross-group playoff needs at least two groups
             }
@@ -210,50 +186,18 @@ impl DatabaseGenerator {
                 .unwrap_or(PlayoffFormat::SingleElimination);
 
             let primary = members[0];
-            let settings = LeagueSettings {
-                season_starting_half: primary.settings.season_starting_half,
-                season_ending_half: primary.settings.season_ending_half,
-                tier: 0,
-                promotion_spots: 0,
-                relegation_spots: 0,
-                league_group: None,
-                split_season: false,
-            };
+            let settings = Self::knockout_settings(primary);
             let reputation = primary.reputation;
-
-            // Split-season competitions (Argentine Apertura/Clausura) run
-            // one playoff per tournament; everything else gets a single
-            // end-of-season playoff.
-            let split = primary.settings.split_season;
-            let editions: Vec<(PlayoffStage, String)> = if split {
-                let stage_names = playoff_cfg
-                    .as_ref()
-                    .map(|p| p.stage_names.clone())
-                    .unwrap_or_default();
-                let first = stage_names
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| format!("{} Apertura", competition));
-                let second = stage_names
-                    .get(1)
-                    .cloned()
-                    .unwrap_or_else(|| format!("{} Clausura", competition));
-                vec![
-                    (PlayoffStage::FirstStage, first),
-                    (PlayoffStage::SecondStage, second),
-                ]
-            } else {
-                let name = playoff_cfg
-                    .as_ref()
-                    .and_then(|p| p.name.clone())
-                    .unwrap_or_else(|| format!("{} Playoff", competition));
-                vec![(PlayoffStage::FullSeason, name)]
-            };
+            let editions = Self::playoff_editions(
+                &competition,
+                playoff_cfg.as_ref(),
+                primary.settings.split_season,
+            );
 
             for (stage, name) in editions {
                 let id = PLAYOFF_ID_BASE + country.id * 1000 + id_offset;
                 id_offset += 1;
-                let slug = slugify(&name);
+                let slug = Self::slugify(&name);
                 let mut league = League::new(
                     id,
                     name,
@@ -278,6 +222,70 @@ impl DatabaseGenerator {
         playoffs
     }
 
+    /// Group the playoff-enabled leagues by competition name. `BTreeMap`
+    /// keeps competitions in a stable (alphabetical) order so the synthetic
+    /// ids are deterministic across runs.
+    fn playoff_competitions(leagues: &[League]) -> BTreeMap<String, Vec<&League>> {
+        let mut by_competition: BTreeMap<String, Vec<&League>> = BTreeMap::new();
+        for league in leagues {
+            if let Some(group) = &league.settings.league_group
+                && group.playoff.is_some()
+            {
+                by_competition
+                    .entry(group.competition.clone())
+                    .or_default()
+                    .push(league);
+            }
+        }
+        by_competition
+    }
+
+    /// Split-season competitions (Argentine Apertura/Clausura) run one
+    /// playoff per tournament; everything else gets a single end-of-season
+    /// playoff.
+    fn playoff_editions(
+        competition: &str,
+        playoff_cfg: Option<&LeaguePlayoffConfig>,
+        split: bool,
+    ) -> Vec<(PlayoffStage, String)> {
+        if split {
+            let stage_names = playoff_cfg
+                .map(|p| p.stage_names.clone())
+                .unwrap_or_default();
+            let first = stage_names
+                .first()
+                .cloned()
+                .unwrap_or_else(|| format!("{competition} Apertura"));
+            let second = stage_names
+                .get(1)
+                .cloned()
+                .unwrap_or_else(|| format!("{competition} Clausura"));
+            vec![
+                (PlayoffStage::FirstStage, first),
+                (PlayoffStage::SecondStage, second),
+            ]
+        } else {
+            let name = playoff_cfg
+                .and_then(|p| p.name.clone())
+                .unwrap_or_else(|| format!("{competition} Playoff"));
+            vec![(PlayoffStage::FullSeason, name)]
+        }
+    }
+
+    /// Knockout competition settings mirror the primary league's season
+    /// window without carrying its tier or promotion/relegation slots.
+    fn knockout_settings(primary: &League) -> LeagueSettings {
+        LeagueSettings {
+            season_starting_half: primary.settings.season_starting_half,
+            season_ending_half: primary.settings.season_ending_half,
+            tier: 0,
+            promotion_spots: 0,
+            relegation_spots: 0,
+            league_group: None,
+            split_season: false,
+        }
+    }
+
     pub(super) fn create_subteams_leagues(
         country_id: u32,
         clubs: &mut [Club],
@@ -285,7 +293,54 @@ impl DatabaseGenerator {
         data: &DatabaseEntity,
     ) {
         // Build a map: club_id → parent league_id (from the club's Main team)
-        let club_league_map: Vec<(u32, u32)> = clubs
+        let club_league_map = Self::club_league_map(clubs);
+
+        // Snapshot parent leagues to create subleagues per configured team type
+        let parent_leagues = Self::parent_league_snapshots(leagues);
+
+        for parent in &parent_leagues {
+            // Find sub_leagues_competitions config from the league entity
+            for team_type in Self::sub_league_team_types(data, parent.id) {
+                // Check if any club in this parent league has this team type
+                if !Self::parent_has_team_type(clubs, &club_league_map, parent.id, team_type) {
+                    continue;
+                }
+
+                // Deterministic league ID offset per team type
+                let Some(type_offset) = Self::sub_league_offset(team_type) else {
+                    continue;
+                };
+
+                let youth_league_id = parent.id + type_offset;
+                let youth_reputation = (parent.reputation / 10).max(100);
+                let type_label = format!("{team_type}");
+                let type_slug = type_label.to_lowercase();
+
+                let youth_league = League::new(
+                    youth_league_id,
+                    format!("{} {}", parent.name, type_label),
+                    format!("{}-{}", parent.slug, type_slug),
+                    country_id,
+                    youth_reputation,
+                    Self::sub_league_settings(&parent.settings),
+                    true,
+                );
+
+                leagues.push(youth_league);
+
+                Self::assign_sub_league(
+                    clubs,
+                    &club_league_map,
+                    parent.id,
+                    team_type,
+                    youth_league_id,
+                );
+            }
+        }
+    }
+
+    fn club_league_map(clubs: &[Club]) -> Vec<(u32, u32)> {
+        clubs
             .iter()
             .filter_map(|club| {
                 let main_league_id = club
@@ -296,108 +351,107 @@ impl DatabaseGenerator {
                     .and_then(|t| t.league_id)?;
                 Some((club.id, main_league_id))
             })
-            .collect();
+            .collect()
+    }
 
-        // Snapshot parent leagues to create subleagues per configured team type
-        let parent_leagues: Vec<(u32, String, String, u16, LeagueSettings)> = leagues
+    fn parent_league_snapshots(leagues: &[League]) -> Vec<ParentLeagueSnapshot> {
+        leagues
             .iter()
-            .map(|l| {
-                (
-                    l.id,
-                    l.name.clone(),
-                    l.slug.clone(),
-                    l.reputation,
-                    l.settings.clone(),
-                )
+            .map(|l| ParentLeagueSnapshot {
+                id: l.id,
+                name: l.name.clone(),
+                slug: l.slug.clone(),
+                reputation: l.reputation,
+                settings: l.settings.clone(),
             })
-            .collect();
+            .collect()
+    }
 
-        for (parent_id, parent_name, parent_slug, parent_rep, parent_settings) in &parent_leagues {
-            // Find sub_leagues_competitions config from the league entity
-            let team_types: Vec<TeamType> = data
-                .leagues
+    fn sub_league_team_types(data: &DatabaseEntity, parent_id: u32) -> Vec<TeamType> {
+        data.leagues
+            .iter()
+            .find(|l| l.id == parent_id)
+            .map(|l| {
+                l.sub_leagues_competitions
+                    .iter()
+                    .filter_map(|s| TeamType::from_str(s).ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn parent_has_team_type(
+        clubs: &[Club],
+        club_league_map: &[(u32, u32)],
+        parent_id: u32,
+        team_type: TeamType,
+    ) -> bool {
+        clubs.iter().any(|club| {
+            club_league_map
                 .iter()
-                .find(|l| l.id == *parent_id)
-                .map(|l| {
-                    l.sub_leagues_competitions
-                        .iter()
-                        .filter_map(|s| TeamType::from_str(s).ok())
-                        .collect()
-                })
-                .unwrap_or_default();
+                .any(|(cid, lid)| *cid == club.id && *lid == parent_id)
+                && club.teams.teams.iter().any(|t| t.team_type == team_type)
+        })
+    }
 
-            for team_type in &team_types {
-                // Check if any club in this parent league has this team type
-                let has_type = clubs.iter().any(|club| {
-                    club_league_map
-                        .iter()
-                        .any(|(cid, lid)| *cid == club.id && lid == parent_id)
-                        && club.teams.teams.iter().any(|t| t.team_type == *team_type)
-                });
+    fn sub_league_offset(team_type: TeamType) -> Option<u32> {
+        match team_type {
+            TeamType::U18 => Some(100000),
+            TeamType::U19 => Some(110000),
+            TeamType::U20 => Some(120000),
+            TeamType::U21 => Some(130000),
+            TeamType::U23 => Some(140000),
+            _ => None,
+        }
+    }
 
-                if !has_type {
-                    continue;
-                }
+    fn sub_league_settings(parent: &LeagueSettings) -> LeagueSettings {
+        LeagueSettings {
+            season_starting_half: parent.season_starting_half,
+            season_ending_half: parent.season_ending_half,
+            tier: 99,
+            promotion_spots: 0,
+            relegation_spots: 0,
+            league_group: None,
+            split_season: false,
+        }
+    }
 
-                // Deterministic league ID offset per team type
-                let type_offset = match team_type {
-                    TeamType::U18 => 100000,
-                    TeamType::U19 => 110000,
-                    TeamType::U20 => 120000,
-                    TeamType::U21 => 130000,
-                    TeamType::U23 => 140000,
-                    _ => continue,
-                };
-
-                let youth_league_id = parent_id + type_offset;
-                let youth_reputation = (parent_rep / 10).max(100);
-                let type_label = format!("{}", team_type);
-                let type_slug = type_label.to_lowercase();
-
-                let youth_settings = LeagueSettings {
-                    season_starting_half: parent_settings.season_starting_half,
-                    season_ending_half: parent_settings.season_ending_half,
-                    tier: 99,
-                    promotion_spots: 0,
-                    relegation_spots: 0,
-                    league_group: None,
-                    split_season: false,
-                };
-
-                let youth_league = League::new(
-                    youth_league_id,
-                    format!("{} {}", parent_name, type_label),
-                    format!("{}-{}", parent_slug, type_slug),
-                    country_id,
-                    youth_reputation,
-                    youth_settings,
-                    true,
-                );
-
-                leagues.push(youth_league);
-
-                // Assign matching teams to this youth league
-                for club in clubs.iter_mut() {
-                    let is_in_parent = club_league_map
-                        .iter()
-                        .any(|(cid, lid)| *cid == club.id && lid == parent_id);
-                    if !is_in_parent {
-                        continue;
-                    }
-                    for team in &mut club.teams.teams {
-                        if team.team_type == *team_type {
-                            team.league_id = Some(youth_league_id);
-                        }
-                    }
+    fn assign_sub_league(
+        clubs: &mut [Club],
+        club_league_map: &[(u32, u32)],
+        parent_id: u32,
+        team_type: TeamType,
+        league_id: u32,
+    ) {
+        for club in clubs.iter_mut() {
+            let is_in_parent = club_league_map
+                .iter()
+                .any(|(cid, lid)| *cid == club.id && *lid == parent_id);
+            if !is_in_parent {
+                continue;
+            }
+            for team in &mut club.teams.teams {
+                if team.team_type == team_type {
+                    team.league_id = Some(league_id);
                 }
             }
         }
     }
 }
 
+/// Snapshot of a parent league taken before youth sub-leagues are appended.
+struct ParentLeagueSnapshot {
+    id: u32,
+    name: String,
+    slug: String,
+    reputation: u16,
+    settings: LeagueSettings,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DOMESTIC_CUP_ID_BASE, DatabaseGenerator, slugify};
+    use super::{DOMESTIC_CUP_ID_BASE, DatabaseGenerator};
     use crate::DomesticCupEntity;
     use crate::loaders::country::{
         CountryEntity, CountryPricingEntity, CountrySettingsEntity, SkinColorsEntity,
@@ -450,9 +504,15 @@ mod tests {
 
     #[test]
     fn slugify_handles_spaces_and_punctuation() {
-        assert_eq!(slugify("czech republic"), "czech-republic");
-        assert_eq!(slugify("United Arab Emirates"), "united-arab-emirates");
-        assert_eq!(slugify("USA"), "usa");
+        assert_eq!(
+            DatabaseGenerator::slugify("czech republic"),
+            "czech-republic"
+        );
+        assert_eq!(
+            DatabaseGenerator::slugify("United Arab Emirates"),
+            "united-arab-emirates"
+        );
+        assert_eq!(DatabaseGenerator::slugify("USA"), "usa");
     }
 
     #[test]

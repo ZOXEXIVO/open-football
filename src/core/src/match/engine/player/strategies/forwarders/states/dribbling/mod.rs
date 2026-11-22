@@ -1,8 +1,8 @@
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{
+use crate::r#match::forwarders::states::shared::{
     ActivityIntensity, ForwardCondition, ForwardRead, ForwardShot,
 };
-use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::BallCarry;
+use crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::BallCarry;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -15,7 +15,9 @@ pub struct ForwardDribblingState {}
 impl StateProcessingHandler for ForwardDribblingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if !ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_forward_state(ForwardRead::released(ctx)));
+            return Some(StateChangeResult::with_forward_state(
+                ForwardRead::released(ctx),
+            ));
         }
 
         // No opponents nearby — just run, dribbling is for beating defenders

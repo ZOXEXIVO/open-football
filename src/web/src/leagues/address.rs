@@ -96,36 +96,38 @@ pub struct LeagueMovedRequest {
 }
 
 /// Pre-country league URLs: `/{lang}/leagues/{league_slug}` and its tabs.
-pub async fn league_moved_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<LeagueMovedRequest>,
-    uri: Uri,
-) -> ApiResult<Response> {
-    let guard = state.data.read().await;
+impl LeagueAddress<'_> {
+    pub async fn moved_action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<LeagueMovedRequest>,
+        uri: Uri,
+    ) -> ApiResult<Response> {
+        let guard = state.data.read().await;
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let address =
-        LeagueAddress::by_slug(simulator_data, &route_params.league_slug).ok_or_else(|| {
-            ApiError::NotFound(format!("League '{}' not found", route_params.league_slug))
-        })?;
+        let address = LeagueAddress::by_slug(simulator_data, &route_params.league_slug)
+            .ok_or_else(|| {
+                ApiError::NotFound(format!("League '{}' not found", route_params.league_slug))
+            })?;
 
-    // Whatever followed the league segment — the tab and the query — carries
-    // over to the new address.
-    let tab = uri
-        .path()
-        .splitn(5, '/')
-        .nth(4)
-        .map(|tab| format!("/{}", tab))
-        .unwrap_or_default();
-    let query = uri
-        .query()
-        .map(|query| format!("?{}", query))
-        .unwrap_or_default();
+        // Whatever followed the league segment — the tab and the query — carries
+        // over to the new address.
+        let tab = uri
+            .path()
+            .splitn(5, '/')
+            .nth(4)
+            .map(|tab| format!("/{}", tab))
+            .unwrap_or_default();
+        let query = uri
+            .query()
+            .map(|query| format!("?{}", query))
+            .unwrap_or_default();
 
-    Ok(address.moved(&route_params.lang, &format!("{}{}", tab, query)))
+        Ok(address.moved(&route_params.lang, &format!("{}{}", tab, query)))
+    }
 }
 
 #[cfg(test)]

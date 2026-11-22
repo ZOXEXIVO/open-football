@@ -35,14 +35,13 @@
 use crate::Club;
 use crate::MatchRuntime;
 use crate::context::GlobalContext;
-use crate::league::core::PlayoffFormat;
-use crate::league::schedule::cup;
-use crate::league::schedule::cup::CupCalendar;
+use crate::league::model::PlayoffFormat;
+use crate::league::schedule::cup::{CupBracket, CupCalendar};
 use crate::league::simulation::matchday::MatchdayCommitments;
 use crate::league::{
     CompetitionLevel, CupHistoryEntry, KickoffClock, League, LeagueBuildOutput, LeagueMatch,
-    LeaguePendingState, LeagueResult, LeagueTableResult, MatchStorage, Schedule, ScheduleItem,
-    ScheduleTour,
+    LeaguePendingState, LeagueResult, LeagueTableResult, LeagueTableRow, MatchStorage, Schedule,
+    ScheduleItem, ScheduleTour,
 };
 use crate::r#match::{MatchResult, Score};
 use chrono::{Datelike, Duration, NaiveDate};
@@ -58,6 +57,19 @@ pub struct StandingRow {
     pub points: u16,
     pub wins: u8,
     pub goal_difference: i32,
+}
+
+impl StandingRow {
+    /// Project a league-table row into the standings shape the playoff
+    /// seeds from (points/wins/GD are enough for seeding and hosting).
+    pub fn from_table_row(row: &LeagueTableRow) -> Self {
+        StandingRow {
+            team_id: row.team_id,
+            points: row.effective_points() as u16,
+            wins: row.win,
+            goal_difference: row.goal_difference(),
+        }
+    }
 }
 
 /// A snapshot of one group's current standings, handed to the playoff by
@@ -152,6 +164,35 @@ impl PlayoffSeries {
     fn involves(&self, a: u32, b: u32) -> bool {
         (self.home_team_id == a && self.away_team_id == b)
             || (self.home_team_id == b && self.away_team_id == a)
+    }
+
+    /// Winner of one played game, penalty-aware, resolved by team id so it is
+    /// immune to home/away slot swaps between the schedule item and the stored
+    /// `Score`. `None` only for a truly level score with no shootout (which a
+    /// knockout game cannot produce).
+    fn game_winner(score: &Score, home_team_id: u32, away_team_id: u32) -> Option<u32> {
+        let (hg, ag) = if score.home_team.team_id == home_team_id {
+            (score.home_team.get(), score.away_team.get())
+        } else {
+            (score.away_team.get(), score.home_team.get())
+        };
+        if hg != ag {
+            return Some(if hg > ag { home_team_id } else { away_team_id });
+        }
+        let (hs, as_) = if score.home_team.team_id == home_team_id {
+            (score.home_shootout, score.away_shootout)
+        } else {
+            (score.away_shootout, score.home_shootout)
+        };
+        match hs.cmp(&as_) {
+            std::cmp::Ordering::Greater => Some(home_team_id),
+            std::cmp::Ordering::Less => Some(away_team_id),
+            // A knockout game can't truly end level (extra time + penalties
+            // decide); the host is an arbitrary but deterministic guard so a
+            // degenerate result (e.g. the 0-0 match stub) can't stall the
+            // bracket — mirrors `CupBracket::tie_winner`.
+            std::cmp::Ordering::Equal => Some(home_team_id),
+        }
     }
 }
 
@@ -511,7 +552,7 @@ impl LeaguePlayoff {
             ],
             _ => {
                 // Small fields: strongest-vs-weakest one round.
-                let (p, _) = cup::pair_knockout_round(qualified);
+                let (p, _) = CupBracket::pair_knockout_round(qualified);
                 p
             }
         };
@@ -552,7 +593,7 @@ impl LeaguePlayoff {
         // keeps the strongest lines apart until the semifinals.
         let mut by_strength: Vec<usize> = (0..lines.len()).collect();
         by_strength.sort_by_key(|&i| self.seed_key(lines[i].0));
-        let positions = bracket_positions(lines.len());
+        let positions = PlayoffBracket::positions(lines.len());
         for (slot, &strength_rank) in positions.iter().enumerate() {
             let (high, low) = lines[by_strength[strength_rank]];
             self.push_series(1, 0, slot, high, low, 1, false, current_date);
@@ -585,7 +626,7 @@ impl LeaguePlayoff {
             );
             return;
         }
-        let (pairings, _byes) = cup::pair_knockout_round(&field);
+        let (pairings, _byes) = CupBracket::pair_knockout_round(&field);
         for (slot, (high, low)) in pairings.into_iter().enumerate() {
             self.push_series(1, 0, slot, high, low, 1, false, current_date);
         }
@@ -703,7 +744,7 @@ impl LeaguePlayoff {
                     return; // champion decided
                 }
                 alive.sort_by_key(|&t| self.seed_key(t));
-                let (pairings, _byes) = cup::pair_knockout_round(&alive);
+                let (pairings, _byes) = CupBracket::pair_knockout_round(&alive);
                 for (slot, (h, l)) in pairings.into_iter().enumerate() {
                     self.push_series(next_round, bracket, slot, h, l, 1, false, draw_anchor);
                 }
@@ -787,7 +828,7 @@ impl LeaguePlayoff {
         // Opening round of a merged bracket reduces the field to a power
         // of two; each subsequent round halves it.
         let entrants: usize = self.seed_rank.len().max(first_round_series * 2);
-        Some(cup::total_rounds(entrants))
+        Some(CupBracket::total_rounds(entrants))
     }
 
     /// Draw the cross-conference final once every conference bracket has
@@ -877,7 +918,8 @@ impl LeaguePlayoff {
 
     /// Fold one played game back into its series' win tally.
     fn apply_game_result(&mut self, result: &MatchResult) {
-        let Some(winner) = game_winner(&result.score, result.home_team_id, result.away_team_id)
+        let Some(winner) =
+            PlayoffSeries::game_winner(&result.score, result.home_team_id, result.away_team_id)
         else {
             return;
         };
@@ -1044,52 +1086,28 @@ impl LeaguePlayoff {
     }
 }
 
-/// Winner of one played game, penalty-aware, resolved by team id so it is
-/// immune to home/away slot swaps between the schedule item and the stored
-/// `Score`. `None` only for a truly level score with no shootout (which a
-/// knockout game cannot produce).
-fn game_winner(score: &Score, home_team_id: u32, away_team_id: u32) -> Option<u32> {
-    let (hg, ag) = if score.home_team.team_id == home_team_id {
-        (score.home_team.get(), score.away_team.get())
-    } else {
-        (score.away_team.get(), score.home_team.get())
-    };
-    if hg != ag {
-        return Some(if hg > ag { home_team_id } else { away_team_id });
-    }
-    let (hs, as_) = if score.home_team.team_id == home_team_id {
-        (score.home_shootout, score.away_shootout)
-    } else {
-        (score.away_shootout, score.home_shootout)
-    };
-    match hs.cmp(&as_) {
-        std::cmp::Ordering::Greater => Some(home_team_id),
-        std::cmp::Ordering::Less => Some(away_team_id),
-        // A knockout game can't truly end level (extra time + penalties
-        // decide); the host is an arbitrary but deterministic guard so a
-        // degenerate result (e.g. the 0-0 match stub) can't stall the
-        // bracket — mirrors `cup::tie_winner`.
-        std::cmp::Ordering::Equal => Some(home_team_id),
-    }
-}
+/// Seeded bracket layout arithmetic for the merged knockout brackets.
+struct PlayoffBracket;
 
-/// Standard seeded bracket position order for `n` lines (n a power of
-/// two): position i holds line `order[i]`, so slot-adjacent pairing puts
-/// line 0 against the weakest line and keeps the strongest lines apart
-/// until the last rounds. E.g. n=8 → [0, 7, 3, 4, 1, 6, 2, 5].
-fn bracket_positions(n: usize) -> Vec<usize> {
-    let mut order = vec![0usize];
-    let mut size = 1;
-    while size < n {
-        size *= 2;
-        let mut next = Vec::with_capacity(size);
-        for &s in &order {
-            next.push(s);
-            next.push(size - 1 - s);
+impl PlayoffBracket {
+    /// Standard seeded bracket position order for `n` lines (n a power of
+    /// two): position i holds line `order[i]`, so slot-adjacent pairing puts
+    /// line 0 against the weakest line and keeps the strongest lines apart
+    /// until the last rounds. E.g. n=8 → [0, 7, 3, 4, 1, 6, 2, 5].
+    fn positions(n: usize) -> Vec<usize> {
+        let mut order = vec![0usize];
+        let mut size = 1;
+        while size < n {
+            size *= 2;
+            let mut next = Vec::with_capacity(size);
+            for &s in &order {
+                next.push(s);
+                next.push(size - 1 - s);
+            }
+            order = next;
         }
-        order = next;
+        order
     }
-    order
 }
 
 #[cfg(test)]
@@ -1225,10 +1243,10 @@ mod tests {
 
     #[test]
     fn bracket_positions_are_standard_seeded_order() {
-        assert_eq!(bracket_positions(1), vec![0]);
-        assert_eq!(bracket_positions(2), vec![0, 1]);
-        assert_eq!(bracket_positions(4), vec![0, 3, 1, 2]);
-        assert_eq!(bracket_positions(8), vec![0, 7, 3, 4, 1, 6, 2, 5]);
+        assert_eq!(PlayoffBracket::positions(1), vec![0]);
+        assert_eq!(PlayoffBracket::positions(2), vec![0, 1]);
+        assert_eq!(PlayoffBracket::positions(4), vec![0, 3, 1, 2]);
+        assert_eq!(PlayoffBracket::positions(8), vec![0, 7, 3, 4, 1, 6, 2, 5]);
     }
 
     #[test]

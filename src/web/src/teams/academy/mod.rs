@@ -1,10 +1,11 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::potential_stars::{PotentialStarsView, StarRating};
 use crate::leagues::address::LeagueAddress;
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::potential_stars::{PotentialStarsView, StarRating};
 use crate::teams::newspaper::NewspaperCounter;
-use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
+use crate::teams::{TeamLookup, TeamNeighborhood};
+use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -93,253 +94,240 @@ pub struct AcademyPlayer {
     pub risk_injury_prone: bool,
 }
 
-pub async fn team_academy_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<TeamAcademyRequest>,
-) -> ApiResult<impl IntoResponse> {
-    let guard = state.data.read().await;
+pub struct TeamAcademyPage;
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+impl TeamAcademyPage {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<TeamAcademyRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        let guard = state.data.read().await;
 
-    let i18n = state.i18n.for_lang(&route_params.lang);
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let team_id = simulator_data
-        .indexes
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Indexes not available".to_string()))?
-        .slug_indexes
-        .get_team_by_slug(&route_params.team_slug)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("Team '{}' not found", route_params.team_slug))
+        let i18n = state.i18n.for_lang(&route_params.lang);
+
+        let team = TeamLookup::by_slug(simulator_data, &route_params.team_slug)?;
+
+        // Academy tab only available for Main and U18 teams
+        if team.team_type != core::TeamType::Main && team.team_type != core::TeamType::U18 {
+            return Err(ApiError::NotFound(
+                "Academy not available for this team type".to_string(),
+            ));
+        }
+
+        let club = simulator_data.club(team.club_id).ok_or_else(|| {
+            ApiError::InternalError(format!("Club with ID {} not found", team.club_id))
         })?;
 
-    let team = simulator_data
-        .team(team_id)
-        .ok_or_else(|| ApiError::NotFound(format!("Team with ID {} not found", team_id)))?;
-
-    // Academy tab only available for Main and U18 teams
-    if team.team_type != core::TeamType::Main && team.team_type != core::TeamType::U18 {
-        return Err(ApiError::NotFound(
-            "Academy not available for this team type".to_string(),
-        ));
+        Self::template(simulator_data, team, club, i18n, &route_params)
     }
 
-    let league = team.league_id.and_then(|id| simulator_data.league(id));
-    let now = simulator_data.date.date();
+    fn template(
+        data: &SimulatorData,
+        team: &core::Team,
+        club: &core::Club,
+        i18n: I18n,
+        route_params: &TeamAcademyRequest,
+    ) -> Result<TeamAcademyTemplate, ApiError> {
+        let now = data.date.date();
+        let scorer = AcademyReadinessScorer::new(
+            club.academy.pathway_reputation,
+            &club.academy.pathway_policy,
+        );
+        let players = Self::players(data, team, club, now, &scorer);
+        let counts = AcademyPipelineCounts::of(&players, club, now);
 
-    let club = simulator_data.club(team.club_id).ok_or_else(|| {
-        ApiError::InternalError(format!("Club with ID {} not found", team.club_id))
-    })?;
+        let league = team.league_id.and_then(|id| data.league(id));
+        let current_path = format!("/{}/teams/{}/academy", route_params.lang, team.slug);
+        let neighborhood = TeamNeighborhood::for_club(team.club_id, data, &i18n)?;
+        let menu_sections = neighborhood.menu_sections(
+            data,
+            team.club_id,
+            &i18n,
+            &route_params.lang,
+            &current_path,
+        );
 
-    let head_coach = team.staffs.head_coach();
+        let title = team.name.clone();
+        let league_title = league
+            .map(|l| views::Menus::league_display_name(l, &i18n, data))
+            .unwrap_or_default();
+        let identity_key = AcademyLabels::identity(club.academy.development_identity);
+        let recruitment_priority_keys = club
+            .academy
+            .recruitment_priorities
+            .iter()
+            .map(|g| AcademyLabels::position_group(*g))
+            .collect();
 
-    let scorer = AcademyReadinessScorer::new(
-        club.academy.pathway_reputation,
-        &club.academy.pathway_policy,
-    );
+        Ok(TeamAcademyTemplate {
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
+            cpu_brand: &CPU_BRAND,
+            cores_count: *CPU_CORES,
+            i18n,
+            lang: route_params.lang.clone(),
+            title,
+            sub_title_prefix: String::new(),
+            sub_title_suffix: String::new(),
+            sub_title: league_title,
+            sub_title_link: league
+                .map(|l| LeagueAddress::of(data, l).url(&route_params.lang))
+                .unwrap_or_default(),
+            sub_title_flag: None,
+            header_color: club.colors.background.clone(),
+            foreground_color: club.colors.foreground.clone(),
+            menu_sections,
+            team_slug: team.slug.clone(),
+            active_tab: "academy",
+            show_finances_tab: team.team_type.is_own_team(),
+            show_academy_tab: true,
+            newspaper_count: NewspaperCounter::count(data, team),
+            academy_level: club.academy.level(),
+            academy_tier: AcademyTier::from_level(club.academy.level()).value(),
+            pathway_reputation: club.academy.pathway_reputation,
+            identity_key,
+            recruitment_priority_keys,
+            players,
+            foundation_count: counts.foundation,
+            development_count: counts.development,
+            professional_count: counts.professional,
+            ready_for_youth_count: counts.ready_for_youth,
+            at_risk_count: counts.at_risk,
+            readiness_threshold: club.academy.pathway_policy.readiness_threshold,
+        })
+    }
 
-    // Get academy players directly from club academy
-    let mut players: Vec<AcademyPlayer> = club
-        .academy
-        .players
-        .players
-        .iter()
-        .filter_map(|p| {
-            let country = simulator_data.country(p.country_id)?;
-            let position = p.positions.display_positions_compact();
-            let age = DateUtils::age(p.birth_date, now);
-            let phase = AcademyPlayerPhase::from_age(age);
-            let readiness = scorer.score(p, now);
+    fn players(
+        data: &SimulatorData,
+        team: &core::Team,
+        club: &core::Club,
+        now: chrono::NaiveDate,
+        scorer: &AcademyReadinessScorer,
+    ) -> Vec<AcademyPlayer> {
+        let head_coach = team.staffs.head_coach();
+        let mut players: Vec<AcademyPlayer> = club
+            .academy
+            .players
+            .players
+            .iter()
+            .filter_map(|p| {
+                let country = data.country(p.country_id)?;
+                let position = p.positions.display_positions_compact();
+                let age = DateUtils::age(p.birth_date, now);
+                let phase = AcademyPlayerPhase::from_age(age);
+                let readiness = scorer.score(p, now);
 
-            Some(AcademyPlayer {
-                _id: p.id,
-                first_name: p.full_name.display_first_name().to_string(),
-                last_name: p.full_name.display_last_name().to_string(),
-                position,
-                position_sort: p.position(),
-                country_slug: country.slug.clone(),
-                country_code: country.code.clone(),
-                country_name: country.name.clone(),
-                age,
-                current_ability: PotentialStarsView::current(p),
-                potential_ability: PotentialStarsView::potential_by_staff(
-                    p, head_coach, false, now,
-                ),
-                potential_sort: PotentialStarsView::potential_value_by_staff(
-                    p, head_coach, false, now,
-                ),
-                conditions: (100f32 * (p.player_attributes.condition as f32 / 10000.0)) as u8,
-                phase_key: phase_i18n_key(phase),
-                phase_sort: phase.index(),
-                readiness,
-                risk_low_condition: p.player_attributes.condition < 5500,
-                risk_jaded: p.player_attributes.jadedness > 5500,
-                risk_injury_prone: p.player_attributes.injury_proneness >= 17,
+                Some(AcademyPlayer {
+                    _id: p.id,
+                    first_name: p.full_name.display_first_name().to_string(),
+                    last_name: p.full_name.display_last_name().to_string(),
+                    position,
+                    position_sort: p.position(),
+                    country_slug: country.slug.clone(),
+                    country_code: country.code.clone(),
+                    country_name: country.name.clone(),
+                    age,
+                    current_ability: PotentialStarsView::current(p),
+                    potential_ability: PotentialStarsView::potential_by_staff(
+                        p, head_coach, false, now,
+                    ),
+                    potential_sort: PotentialStarsView::potential_value_by_staff(
+                        p, head_coach, false, now,
+                    ),
+                    conditions: (100f32 * (p.player_attributes.condition as f32 / 10000.0)) as u8,
+                    phase_key: AcademyLabels::phase(phase),
+                    phase_sort: phase.index(),
+                    readiness,
+                    risk_low_condition: p.player_attributes.condition < 5500,
+                    risk_jaded: p.player_attributes.jadedness > 5500,
+                    risk_injury_prone: p.player_attributes.injury_proneness >= 17,
+                })
             })
-        })
-        .collect();
+            .collect();
 
-    // Default sort: phase ASC, readiness DESC, raw PA DESC.
-    players.sort_by(|a, b| {
-        a.phase_sort
-            .cmp(&b.phase_sort)
-            .then_with(|| b.readiness.cmp(&a.readiness))
-            .then_with(|| b.potential_sort.cmp(&a.potential_sort))
-    });
+        // Default sort: phase ASC, readiness DESC, raw PA DESC.
+        players.sort_by(|a, b| {
+            a.phase_sort
+                .cmp(&b.phase_sort)
+                .then_with(|| b.readiness.cmp(&a.readiness))
+                .then_with(|| b.potential_sort.cmp(&a.potential_sort))
+        });
 
-    let readiness_threshold = club.academy.pathway_policy.readiness_threshold;
-    // "Ready for youth" counts players *eligible to enter the youth-team
-    // pathway* this season (old enough, fit, not exhausted) — not just
-    // high-CA prospects. Quality only ranks them; it doesn't gate the
-    // count. Sourced from the academy's canonical eligibility method.
-    let ready_for_youth_count = club.academy.graduation_candidates(now).len();
-    let mut foundation_count = 0usize;
-    let mut development_count = 0usize;
-    let mut professional_count = 0usize;
-    let mut at_risk_count = 0usize;
-    for p in &players {
-        match p.phase_sort {
-            0 => foundation_count += 1,
-            1 => development_count += 1,
-            _ => professional_count += 1,
+        players
+    }
+}
+
+struct AcademyPipelineCounts {
+    foundation: usize,
+    development: usize,
+    professional: usize,
+    ready_for_youth: usize,
+    at_risk: usize,
+}
+
+impl AcademyPipelineCounts {
+    fn of(players: &[AcademyPlayer], club: &core::Club, now: chrono::NaiveDate) -> Self {
+        // "Ready for youth" counts players *eligible to enter the youth-team
+        // pathway* this season (old enough, fit, not exhausted) — not just
+        // high-CA prospects. Quality only ranks them; it doesn't gate the
+        // count. Sourced from the academy's canonical eligibility method.
+        let ready_for_youth = club.academy.graduation_candidates(now).len();
+        let mut foundation = 0usize;
+        let mut development = 0usize;
+        let mut professional = 0usize;
+        let mut at_risk = 0usize;
+        for p in players {
+            match p.phase_sort {
+                0 => foundation += 1,
+                1 => development += 1,
+                _ => professional += 1,
+            }
+            if p.risk_low_condition || p.risk_jaded || p.risk_injury_prone {
+                at_risk += 1;
+            }
         }
-        if p.risk_low_condition || p.risk_jaded || p.risk_injury_prone {
-            at_risk_count += 1;
+
+        Self {
+            foundation,
+            development,
+            professional,
+            ready_for_youth,
+            at_risk,
+        }
+    }
+}
+
+struct AcademyLabels;
+
+impl AcademyLabels {
+    fn identity(identity: AcademyDevelopmentIdentity) -> &'static str {
+        match identity {
+            AcademyDevelopmentIdentity::Balanced => "academy_identity_balanced",
+            AcademyDevelopmentIdentity::TechnicalSchool => "academy_identity_technical",
+            AcademyDevelopmentIdentity::TacticalSchool => "academy_identity_tactical",
+            AcademyDevelopmentIdentity::AthleticDevelopment => "academy_identity_athletic",
+            AcademyDevelopmentIdentity::PlayerTrading => "academy_identity_player_trading",
         }
     }
 
-    let (neighbor_teams, country_leagues) =
-        get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
-    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .collect();
-
-    let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-    let current_path = format!("/{}/teams/{}/academy", route_params.lang, team.slug);
-    let menu_params = views::MenuParams {
-        i18n: &i18n,
-        lang: &route_params.lang,
-        current_path: &current_path,
-        country_name: cn,
-        country_slug: cs,
-    };
-    let menu_sections = views::team_menu(&menu_params, &neighbor_refs, &league_refs);
-
-    let title = team.name.clone();
-    let league_title = league
-        .map(|l| views::league_display_name(l, &i18n, simulator_data))
-        .unwrap_or_default();
-
-    let identity_key = identity_i18n_key(club.academy.development_identity);
-    let recruitment_priority_keys = club
-        .academy
-        .recruitment_priorities
-        .iter()
-        .map(|g| position_group_i18n_key(*g))
-        .collect();
-
-    Ok(TeamAcademyTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        i18n,
-        lang: route_params.lang.clone(),
-        title,
-        sub_title_prefix: String::new(),
-        sub_title_suffix: String::new(),
-        sub_title: league_title,
-        sub_title_link: league
-            .map(|l| LeagueAddress::of(simulator_data, l).url(&route_params.lang))
-            .unwrap_or_default(),
-        sub_title_flag: None,
-        header_color: club.colors.background.clone(),
-        foreground_color: club.colors.foreground.clone(),
-        menu_sections,
-        team_slug: team.slug.clone(),
-        active_tab: "academy",
-        show_finances_tab: team.team_type.is_own_team(),
-        show_academy_tab: true,
-        newspaper_count: NewspaperCounter::count(simulator_data, team),
-        academy_level: club.academy.level(),
-        academy_tier: AcademyTier::from_level(club.academy.level()).value(),
-        pathway_reputation: club.academy.pathway_reputation,
-        identity_key,
-        recruitment_priority_keys,
-        players,
-        foundation_count,
-        development_count,
-        professional_count,
-        ready_for_youth_count,
-        at_risk_count,
-        readiness_threshold,
-    })
-}
-
-fn identity_i18n_key(identity: AcademyDevelopmentIdentity) -> &'static str {
-    match identity {
-        AcademyDevelopmentIdentity::Balanced => "academy_identity_balanced",
-        AcademyDevelopmentIdentity::TechnicalSchool => "academy_identity_technical",
-        AcademyDevelopmentIdentity::TacticalSchool => "academy_identity_tactical",
-        AcademyDevelopmentIdentity::AthleticDevelopment => "academy_identity_athletic",
-        AcademyDevelopmentIdentity::PlayerTrading => "academy_identity_player_trading",
+    fn position_group(group: core::PlayerFieldPositionGroup) -> &'static str {
+        match group {
+            core::PlayerFieldPositionGroup::Goalkeeper => "position_group_gk",
+            core::PlayerFieldPositionGroup::Defender => "position_group_df",
+            core::PlayerFieldPositionGroup::Midfielder => "position_group_mf",
+            core::PlayerFieldPositionGroup::Forward => "position_group_fw",
+        }
     }
-}
 
-fn position_group_i18n_key(group: core::PlayerFieldPositionGroup) -> &'static str {
-    match group {
-        core::PlayerFieldPositionGroup::Goalkeeper => "position_group_gk",
-        core::PlayerFieldPositionGroup::Defender => "position_group_df",
-        core::PlayerFieldPositionGroup::Midfielder => "position_group_mf",
-        core::PlayerFieldPositionGroup::Forward => "position_group_fw",
+    fn phase(phase: AcademyPlayerPhase) -> &'static str {
+        match phase {
+            AcademyPlayerPhase::Foundation => "academy_phase_foundation",
+            AcademyPlayerPhase::Development => "academy_phase_development",
+            AcademyPlayerPhase::Professional => "academy_phase_professional",
+        }
     }
-}
-
-fn phase_i18n_key(phase: AcademyPlayerPhase) -> &'static str {
-    match phase {
-        AcademyPlayerPhase::Foundation => "academy_phase_foundation",
-        AcademyPlayerPhase::Development => "academy_phase_development",
-        AcademyPlayerPhase::Professional => "academy_phase_professional",
-    }
-}
-
-fn get_neighbor_teams(
-    club_id: u32,
-    data: &SimulatorData,
-    i18n: &I18n,
-) -> Result<NeighborMenus, ApiError> {
-    let club = data
-        .club(club_id)
-        .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
-
-    let teams = views::neighbor_teams(club, i18n);
-
-    let mut country_leagues: Vec<(u32, String, String)> = data
-        .country_by_club(club_id)
-        .map(|country| {
-            country
-                .leagues
-                .leagues
-                .iter()
-                .filter(|l| !l.friendly)
-                .map(|l| (l.id, l.name.clone(), l.slug.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
-    country_leagues.sort_by_key(|(id, _, _)| *id);
-
-    Ok((
-        teams,
-        country_leagues
-            .into_iter()
-            .map(|(_, name, slug)| (name, slug))
-            .collect(),
-    ))
 }

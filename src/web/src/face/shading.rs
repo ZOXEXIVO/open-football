@@ -106,19 +106,34 @@ impl Shading {
 
     /// The skin, lit. Everything here is clipped to the head silhouette.
     pub fn head(c: &mut Canvas, l: &Landmarks, t: &Tones, id: &Identity, age: u8, heft: f32) {
-        let cx = l.cx;
-        let s = &l.skull;
-        let m = &id.morph;
-        let es = &l.eye_shape;
-        let ns = &l.nose_shape;
-        let maturity = l.maturity;
-
         c.fill_ref(&l.head_path, "sg", 1.0, Blur::Crisp);
         c.clip("hc");
 
-        // ── Colour zoning: where the blood is ──────────────
-        // Forehead and the bridge cooler and lighter; cheeks, nose tip, ears
-        // and chin flushed; the lower face of a shaven man cooler still
+        Self::colour_zoning(c, l, t, id, age);
+        Self::form(c, l, t, id, heft);
+        Self::brow_sockets(c, l, t, id);
+        Self::nose(c, l, t);
+        Self::mouth_chin(c, l, t);
+        Self::jaw(c, l, t);
+        Self::sheen(c, l, t);
+
+        Self::age_lines(c, l, t, id, age);
+        Self::marks(c, l, t, id);
+        Self::texture(c, l, t);
+
+        c.close("g");
+    }
+
+    /// ── Colour zoning: where the blood is ──────────────
+    /// Forehead and the bridge cooler and lighter; cheeks, nose tip, ears
+    /// and chin flushed; the lower face of a shaven man cooler still.
+    fn colour_zoning(c: &mut Canvas, l: &Landmarks, t: &Tones, id: &Identity, age: u8) {
+        let cx = l.cx;
+        let s = &l.skull;
+        let m = &id.morph;
+        let ns = &l.nose_shape;
+        let maturity = l.maturity;
+
         c.ellipse(
             cx,
             l.hairline + 22.0,
@@ -199,10 +214,17 @@ impl Shading {
                 0.0,
             );
         }
+    }
 
-        // ── Form: the big turns of the head ────────────────
-        // The far side of the face turns from the light, the near side
-        // only just; the jaw tucks under into shadow, the forehead lifts
+    /// ── Form: the big turns of the head ────────────────
+    /// The far side of the face turns from the light, the near side
+    /// only just; the jaw tucks under into shadow, the forehead lifts.
+    fn form(c: &mut Canvas, l: &Landmarks, t: &Tones, id: &Identity, heft: f32) {
+        let cx = l.cx;
+        let s = &l.skull;
+        let m = &id.morph;
+        let maturity = l.maturity;
+
         c.rect(0.0, 0.0, 200.0, 250.0, "url(#lat)", 1.0);
         c.rect(0.0, 0.0, 200.0, 250.0, "url(#vert)", 1.0);
         // The front plane — forehead, nose, chin — stands forward of the
@@ -271,8 +293,13 @@ impl Shading {
                 side * -18.0,
             );
         }
+    }
 
-        // ── Brow and sockets ───────────────────────────────
+    /// ── Brow and sockets ───────────────────────────────
+    fn brow_sockets(c: &mut Canvas, l: &Landmarks, t: &Tones, id: &Identity) {
+        let cx = l.cx;
+        let m = &id.morph;
+        let es = &l.eye_shape;
         for (ex, side) in [(l.eye_l, -1.0f32), (l.eye_r, 1.0)] {
             // The socket: a shallow bowl under the brow bone, its shadow
             // deepest under the ridge and against the nose
@@ -322,11 +349,15 @@ impl Shading {
         }
         // Glabella and the brow bone above each eye catch the light
         c.ellipse(cx, l.brow + 2.0, 5.0, 5.0, t.skin_hi, 0.14, Blur::Soft, 0.0);
+    }
 
-        // ── Nose ───────────────────────────────────────────
-        // The bridge is a ridge: lit down its left edge, its right side a
-        // plane in shadow, the ball a sphere with its own highlight and
-        // underside, and the whole thing throws a soft shadow rightward
+    /// ── Nose ───────────────────────────────────────────
+    /// The bridge is a ridge: lit down its left edge, its right side a
+    /// plane in shadow, the ball a sphere with its own highlight and
+    /// underside, and the whole thing throws a soft shadow rightward.
+    fn nose(c: &mut Canvas, l: &Landmarks, t: &Tones) {
+        let cx = l.cx;
+        let ns = &l.nose_shape;
         let bridge_l = PathBuilder::smooth_closed(
             &[
                 (cx - ns.bridge * 0.3, l.brow + 9.0),
@@ -365,6 +396,34 @@ impl Shading {
                 0.0,
             );
         }
+        Self::nose_ball(c, l, t);
+        Self::nose_alae(c, l, t);
+        // Base plane facing down, and the cast shadow to the lower right
+        c.ellipse(
+            cx + 1.5,
+            l.nose + 3.8,
+            ns.tip * 1.0,
+            3.2,
+            t.skin_shadow,
+            0.46,
+            Blur::Soft,
+            0.0,
+        );
+        c.ellipse(
+            cx + ns.tip * 0.8 + 1.5,
+            l.nose + 2.0,
+            ns.tip * 0.5,
+            5.5,
+            t.skin_dk2,
+            0.28,
+            Blur::Soft,
+            -25.0,
+        );
+    }
+
+    fn nose_ball(c: &mut Canvas, l: &Landmarks, t: &Tones) {
+        let cx = l.cx;
+        let ns = &l.nose_shape;
         // The ball
         c.circle(
             cx + 0.5,
@@ -394,6 +453,11 @@ impl Shading {
             Blur::Fine,
             0.0,
         );
+    }
+
+    fn nose_alae(c: &mut Canvas, l: &Landmarks, t: &Tones) {
+        let cx = l.cx;
+        let ns = &l.nose_shape;
         // Alae: each wing a small sphere
         for side in [-1.0f32, 1.0] {
             let op = if side < 0.0 { 0.20 } else { 0.08 };
@@ -416,31 +480,14 @@ impl Shading {
                 0.0,
             );
         }
-        // Base plane facing down, and the cast shadow to the lower right
-        c.ellipse(
-            cx + 1.5,
-            l.nose + 3.8,
-            ns.tip * 1.0,
-            3.2,
-            t.skin_shadow,
-            0.46,
-            Blur::Soft,
-            0.0,
-        );
-        c.ellipse(
-            cx + ns.tip * 0.8 + 1.5,
-            l.nose + 2.0,
-            ns.tip * 0.5,
-            5.5,
-            t.skin_dk2,
-            0.28,
-            Blur::Soft,
-            -25.0,
-        );
+    }
 
-        // ── Mouth region and chin ──────────────────────────
-        // Philtrum: two ridges with a groove, the upper lip's plane in
-        // shadow under the nose, the chin a sphere with its light on top
+    /// ── Mouth region and chin ──────────────────────────
+    /// Philtrum: two ridges with a groove, the upper lip's plane in
+    /// shadow under the nose, the chin a sphere with its light on top.
+    fn mouth_chin(c: &mut Canvas, l: &Landmarks, t: &Tones) {
+        let cx = l.cx;
+        let s = &l.skull;
         for side in [-1.0f32, 1.0] {
             c.stroke(
                 &PathBuilder::line(
@@ -503,8 +550,13 @@ impl Shading {
             Blur::Soft,
             0.0,
         );
+    }
 
-        // ── Jaw and the far side ───────────────────────────
+    /// ── Jaw and the far side ───────────────────────────
+    fn jaw(c: &mut Canvas, l: &Landmarks, t: &Tones) {
+        let cx = l.cx;
+        let s = &l.skull;
+        let maturity = l.maturity;
         let jaw_d = PathBuilder::smooth_open(
             &[
                 (cx - s.jaw + 2.0, s.jaw_y - 2.0),
@@ -557,8 +609,12 @@ impl Shading {
             Blur::Vast,
             0.0,
         );
+    }
 
-        // ── Sheen ──────────────────────────────────────────
+    /// ── Sheen ──────────────────────────────────────────
+    fn sheen(c: &mut Canvas, l: &Landmarks, t: &Tones) {
+        let cx = l.cx;
+        let s = &l.skull;
         c.ellipse(
             cx - 6.0,
             l.hairline + 20.0,
@@ -592,22 +648,18 @@ impl Shading {
                 side * -18.0,
             );
         }
+    }
 
-        Self::age_lines(c, l, t, id, age);
-        Self::marks(c, l, t, id);
-
-        // ── Texture: mottle and grain ──────────────────────
-        let pore_op = 0.75 + maturity * 0.25;
+    /// ── Texture: mottle and grain ──────────────────────
+    fn texture(c: &mut Canvas, l: &Landmarks, t: &Tones) {
+        let pore_op = 0.75 + l.maturity * 0.25;
         c.raw(&format!(
             r##"<rect x="0" y="0" width="200" height="250" fill="{}" filter="url(#pore)" opacity="{pore_op:.2}"/>"##,
             t.skin_dk2
         ));
         c.raw(r##"<rect x="0" y="0" width="200" height="250" fill="#888" filter="url(#gr)"/>"##);
-
-        c.close("g");
     }
 
-    /// The lines a face earns.
     fn age_lines(c: &mut Canvas, l: &Landmarks, t: &Tones, id: &Identity, age: u8) {
         let cx = l.cx;
         let es = &l.eye_shape;

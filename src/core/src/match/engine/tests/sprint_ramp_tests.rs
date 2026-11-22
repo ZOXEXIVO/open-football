@@ -125,7 +125,8 @@ fn higher_acceleration_reaches_top_speed_sooner() {
         let ms = slow.max_speed_with_condition_cached();
         quick.velocity =
             MovementEffort::sprint_ramp(&quick, 10, Vector3::new(mq, 0.0, 0.0), mq, mq, 1.0);
-        slow.velocity = MovementEffort::sprint_ramp(&slow, 10, Vector3::new(ms, 0.0, 0.0), ms, ms, 1.0);
+        slow.velocity =
+            MovementEffort::sprint_ramp(&slow, 10, Vector3::new(ms, 0.0, 0.0), ms, ms, 1.0);
         // Positions integrate on BOTH sim ticks of each AI tick.
         d_quick += quick.velocity.x * 2.0;
         d_slow += slow.velocity.x * 2.0;

@@ -1,7 +1,7 @@
 use crate::r#match::engine::ball::ball::{AerialReach, PlayerReach};
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{
+use crate::r#match::forwarders::states::shared::{
     ActivityIntensity, ForwardCondition, ForwardRead,
 };
 #[cfg(feature = "match-logs")]
@@ -9,9 +9,9 @@ use crate::r#match::player::diagnostics::defender_census::HeaderBooking;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::forward_census::{ForwardCensus, FwdHeadingExit};
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
-#[cfg(feature = "match-logs")]
-use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::CROSS_HEADER_ON_GOAL;
 use crate::r#match::player::strategies::players::{ShotType, WonHeader};
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::strategies::shared::players::ops::forward_shot_decision::mid_run_diag::CROSS_HEADER_ON_GOAL;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,

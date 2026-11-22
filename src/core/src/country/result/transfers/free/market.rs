@@ -693,157 +693,171 @@ impl FreeAgentMarketPass {
         state: &mut MatchState<'_>,
     ) -> RequestOutcome {
         let club = buyer.club;
-
-        let buyer_club_score = buyer.club_score;
-        let buyer_league_reputation = buyer.league_reputation;
-        let buyer_negotiator_skill = buyer.negotiator_skill;
-        let buyer_foreign_slots = buyer.foreign_slots;
-        let buyer_benefactor = buyer.benefactor;
-        let visibility = market.visibility;
-        let config = market.config;
-        let max_signings_per_day = market.max_signings_per_day;
-        let ability_slack = market.ability_slack;
-        let buyer_country_reputation = market.buyer_country_reputation;
-        let buyer_continent_id = market.buyer_continent_id;
-        let buyer_region_prestige = market.buyer_region_prestige;
-        let emergency_signing_count = state.emergency_signing_count;
         let signings_so_far = state.signings.len();
-
-        let depth_offers = &mut state.depth_offers;
-        let recorder = &mut state.recorder;
-
-        if signings_so_far - emergency_signing_count >= max_signings_per_day {
+        let emergency_signing_count = state.emergency_signing_count;
+        if signings_so_far - emergency_signing_count >= market.max_signings_per_day {
             return RequestOutcome::DayFull;
         }
 
         let group = request.position.position_group();
-
-        // Emergency-planner depth requests route through the
-        // staged-negotiation flow below instead of instant
-        // signing. Explicitly marker-driven: a normal evaluated
-        // DepthCover / SquadPadding request keeps the legacy
-        // instant path.
         let is_depth_request = request.is_emergency_free_agent_depth();
-        // One pursuit in flight per request, for EVERY source:
-        // Negotiating means a live paid negotiation (or staged
-        // FA pursuit) already owns this need. Instant-signing on
-        // top of it delivered two players for one hole — the FA
-        // journeyman landed, `mark_group_fulfilled` stamped the
-        // request Fulfilled, and the paid negotiation still
-        // completed for the same position.
         if request.status == TransferRequestStatus::Negotiating {
             return RequestOutcome::Next;
         }
-        // One arrival per position group per day. The squad snapshot the
-        // gates read was taken before today's signings, so a second man
-        // into the same group would be ranked against a squad that no
-        // longer exists.
-        if state.signings.iter().any(|s| s.lands_in(club.id, group))
-            || depth_offers
+        if state
+            .signings
+            .iter()
+            .any(|signing| signing.lands_in(club.id, group))
+            || state
+                .depth_offers
                 .iter()
-                .any(|d| d.to_club_id == club.id && d.arrival.group == group)
+                .any(|offer| offer.to_club_id == club.id && offer.arrival.group == group)
         {
             return RequestOutcome::Next;
         }
 
-        let buyer_ctx = RequestBuyerContext {
-            club_score: buyer_club_score,
-            league_reputation: buyer_league_reputation,
-            negotiator_skill: buyer_negotiator_skill,
-            country_reputation: buyer_country_reputation,
-            continent_id: buyer_continent_id,
-            region_prestige: buyer_region_prestige,
-            visibility,
-            foreign_slots: buyer_foreign_slots,
-            benefactor: buyer_benefactor,
-            ladder: &buyer.ladder,
-            fit: SquadFitSnapshot::build(club, group, market.date, *market.registration),
-        };
+        let buyer_ctx = Self::buyer_context(buyer, market, group);
+        let ranked = Self::ranked_candidates(
+            &buyer_ctx,
+            request,
+            group,
+            is_depth_request,
+            club.id,
+            market,
+            state,
+        );
+        if ranked.is_empty() {
+            return RequestOutcome::Next;
+        }
 
-        // Gate pass — the request's own terms, the squad-fit
-        // rule, then the sliding career-pressure tolerances
-        // (country rep, cross-continent, region prestige). Every
-        // passing candidate is collected with the role he would
-        // be offered, and each gate failure is recorded so the
-        // diagnosis layer can explain long sits.
-        let mut ranked: Vec<(&FreeAgentCandidate, f32, BuyerRoleFit)> = Vec::new();
-        for &c in &market.by_group[group.index()] {
-            if c.was_let_go_by(club.id) {
+        Self::attempt_candidates(
+            country,
+            buyer,
+            request,
+            group,
+            is_depth_request,
+            Self::request_urgency(request),
+            market,
+            state,
+            ranked,
+        );
+
+        RequestOutcome::Next
+    }
+
+    fn buyer_context<'a>(
+        buyer: &'a FreeAgentBuyer<'a>,
+        market: &'a FreeAgentMarket<'a>,
+        group: PlayerFieldPositionGroup,
+    ) -> RequestBuyerContext<'a> {
+        RequestBuyerContext {
+            club_score: buyer.club_score,
+            league_reputation: buyer.league_reputation,
+            negotiator_skill: buyer.negotiator_skill,
+            country_reputation: market.buyer_country_reputation,
+            continent_id: market.buyer_continent_id,
+            region_prestige: market.buyer_region_prestige,
+            visibility: market.visibility,
+            foreign_slots: buyer.foreign_slots,
+            benefactor: buyer.benefactor,
+            ladder: &buyer.ladder,
+            fit: SquadFitSnapshot::build(buyer.club, group, market.date, *market.registration),
+        }
+    }
+
+    fn ranked_candidates<'a>(
+        buyer_ctx: &RequestBuyerContext<'_>,
+        request: &TransferRequest,
+        group: PlayerFieldPositionGroup,
+        is_depth_request: bool,
+        club_id: u32,
+        market: &'a FreeAgentMarket<'a>,
+        state: &mut MatchState<'_>,
+    ) -> Vec<(&'a FreeAgentCandidate<'a>, f32, BuyerRoleFit)> {
+        let mut ranked = Vec::new();
+        for &candidate in &market.by_group[group.index()] {
+            if candidate.was_let_go_by(club_id) {
                 continue;
             }
-            if state.signings.iter().any(|s| s.player_id == c.player_id)
-                || depth_offers.iter().any(|d| d.player_id == c.player_id)
+            if state
+                .signings
+                .iter()
+                .any(|signing| signing.player_id == candidate.player_id)
+                || state
+                    .depth_offers
+                    .iter()
+                    .any(|offer| offer.player_id == candidate.player_id)
             {
                 continue;
             }
             match RequestCandidateGates::evaluate(
-                c,
-                &buyer_ctx,
+                candidate,
+                buyer_ctx,
                 request,
                 group,
                 is_depth_request,
-                ability_slack,
+                market.ability_slack,
             ) {
                 Ok(role) => {
-                    let priority = RequestCandidateOrdering::priority(c, &buyer_ctx, group, role);
-                    ranked.push((c, priority, role));
+                    let priority =
+                        RequestCandidateOrdering::priority(candidate, buyer_ctx, group, role);
+                    ranked.push((candidate, priority, role));
                 }
                 Err(reason) => {
-                    if c.is_global_pool {
-                        recorder.record(c.player_id, reason);
+                    if candidate.is_global_pool {
+                        state.recorder.record(candidate.player_id, reason);
                     }
                 }
             }
         }
-        if ranked.is_empty() {
-            return RequestOutcome::Next;
-        }
-        // Combined score replaces the legacy raw-quality
-        // `max_by_key`: quality fit, locality, rep closeness,
-        // career pressure, and wage affordability together
-        // decide the order, so a realistic willing journeyman
-        // outranks a stronger player who will never accept.
         ranked.sort_by(RequestCandidateOrdering::cmp);
+        ranked
+    }
 
-        // Daily probability of this club making an offer today.
-        // Urgency reflects how badly the request matters; for
-        // free agents the unfulfilled-request reason maps to a
-        // urgency bonus.
-        let urgency_bonus = match request.reason {
+    fn request_urgency(request: &TransferRequest) -> f32 {
+        match request.reason {
             TransferNeedReason::SquadPadding => 10.0,
             TransferNeedReason::FormationGap => 7.0,
             TransferNeedReason::DepthCover => 5.0,
             TransferNeedReason::CheapReinforcement => 4.0,
             TransferNeedReason::QualityUpgrade => 3.0,
             _ => 2.0,
-        };
+        }
+    }
 
-        // Fallback attempts: walk the ranked list until a
-        // candidate signs (or stages), or the per-request
-        // attempt cap runs out. The legacy single-candidate
-        // behaviour skipped the whole request when the one
-        // pick failed a roll, which let an unrealistic strong
-        // candidate starve every signable player behind them.
+    #[allow(clippy::too_many_arguments)]
+    fn attempt_candidates(
+        country: &Country,
+        buyer: &FreeAgentBuyer<'_>,
+        request: &TransferRequest,
+        group: PlayerFieldPositionGroup,
+        is_depth_request: bool,
+        urgency_bonus: f32,
+        market: &FreeAgentMarket<'_>,
+        state: &mut MatchState<'_>,
+        ranked: Vec<(&FreeAgentCandidate<'_>, f32, BuyerRoleFit)>,
+    ) {
+        let club = buyer.club;
+        let emergency_signing_count = state.emergency_signing_count;
         let mut attempts = 0usize;
-        for (best, _priority, role) in ranked {
-            if attempts >= config.free_agent_attempts_per_request {
+        for (candidate, _priority, role) in ranked {
+            if attempts >= market.config.free_agent_attempts_per_request {
                 break;
             }
-            if state.signings.len() - emergency_signing_count >= max_signings_per_day {
+            if state.signings.len() - emergency_signing_count >= market.max_signings_per_day {
                 break;
             }
-            // One pursuit in flight per (club, player) pair.
             if is_depth_request
                 && country
                     .transfer_market
-                    .has_active_negotiation_for(best.player_id, club.id)
+                    .has_active_negotiation_for(candidate.player_id, club.id)
             {
                 continue;
             }
-            // One approach per (club, player) per tick — a
-            // player this club already tried today under
-            // another request must not be re-asked.
-            if !state.approached_today.insert((club.id, best.player_id)) {
+            if !state
+                .approached_today
+                .insert((club.id, candidate.player_id))
+            {
                 continue;
             }
             attempts += 1;
@@ -856,7 +870,7 @@ impl FreeAgentMarketPass {
                     is_depth_request,
                     urgency_bonus,
                 },
-                best,
+                candidate,
                 role,
                 market,
                 state,
@@ -865,8 +879,6 @@ impl FreeAgentMarketPass {
                 CandidateOutcome::Filled => break,
             }
         }
-
-        RequestOutcome::Next
     }
 
     /// One name on the slate: roll the daily approach chance, and if he answers
@@ -874,32 +886,43 @@ impl FreeAgentMarketPass {
     fn try_candidate(
         buyer: &FreeAgentBuyer<'_>,
         brief: &RequestBrief<'_>,
-        best: &FreeAgentCandidate,
+        best: &FreeAgentCandidate<'_>,
         role: BuyerRoleFit,
         market: &FreeAgentMarket<'_>,
         state: &mut MatchState<'_>,
     ) -> CandidateOutcome {
-        let country = market.country;
-        let club = buyer.club;
-        let main_team = buyer.main_team;
-        let buyer_club_score = buyer.club_score;
-        let buyer_league_reputation = buyer.league_reputation;
-        let buyer_negotiator_skill = buyer.negotiator_skill;
-        let request = brief.request;
-        let group = brief.group;
-        let is_depth_request = brief.is_depth_request;
-        let urgency_bonus = brief.urgency_bonus;
-        let config = market.config;
-        let buyer_country_reputation = market.buyer_country_reputation;
+        let daily_chance = Self::daily_chance(best, brief.urgency_bonus, market.config);
+        if !Self::approach_roll(best, daily_chance, &mut state.recorder) {
+            return CandidateOutcome::Next;
+        }
 
-        let daily_chance = if best.is_global_pool {
-            // Pity bonus lifts the daily chance for a
-            // structurally-signable player who keeps losing
-            // the approach roll, so a real squad need isn't
-            // left unfilled for months purely on dice. The
-            // fresh-high-ability bonus makes a good player who
-            // just came free move quickly when a club already
-            // has a matching open request for him.
+        if brief.is_depth_request {
+            Self::stage_depth_offer(market.country, buyer, brief, best, role, market, state);
+            return CandidateOutcome::Filled;
+        }
+
+        if best.is_global_pool
+            && let Some(outcome) = Self::global_pool_answer(buyer, brief, best, role, market, state)
+        {
+            return outcome;
+        }
+        if !best.is_global_pool
+            && IntegerUtils::random(1, 1000) as f32 / 1000.0
+                > best.floor_allows(buyer.league_reputation)
+        {
+            return CandidateOutcome::Next;
+        }
+
+        Self::sign_candidate(buyer, brief, best, role, market, state);
+        CandidateOutcome::Filled
+    }
+
+    fn daily_chance(
+        best: &FreeAgentCandidate<'_>,
+        urgency_bonus: f32,
+        config: &TransferConfig,
+    ) -> f32 {
+        if best.is_global_pool {
             FreeAgentMarketCalculator::daily_signing_chance(
                 best.career_pressure,
                 best.ability,
@@ -908,137 +931,109 @@ impl FreeAgentMarketPass {
                     + config.fresh_high_ability_bonus(best.days_free, best.ability),
             )
         } else {
-            // In-country expiring-contract candidates keep the
-            // tuned tier-table behaviour — they're not on the
-            // open market yet, just transitioning. Falling back
-            // to the pressure curve here would cut elite-player
-            // signings (CA 160 + pressure 0 = ~7%, vs the 25%
-            // the existing balance assumes).
             config.daily_signing_chance(best.ability, best.potential, best.age)
-        };
+        }
+    }
 
-        // Roll the dice — a miss moves on to the next-ranked
-        // candidate instead of abandoning the request.
-        let roll = IntegerUtils::random(1, 1000) as f32 / 10.0; // 0.1 to 100.0
+    fn approach_roll(
+        best: &FreeAgentCandidate<'_>,
+        daily_chance: f32,
+        recorder: &mut BlockReasonRecorder,
+    ) -> bool {
+        let roll = IntegerUtils::random(1, 1000) as f32 / 10.0;
         if roll > daily_chance {
             if best.is_global_pool {
-                state
-                    .recorder
-                    .record(best.player_id, FreeAgentBlockReason::DailyChanceRollFailed);
+                recorder.record(best.player_id, FreeAgentBlockReason::DailyChanceRollFailed);
             }
-            return CandidateOutcome::Next;
+            return false;
         }
+        true
+    }
 
-        // Depth-type request: stage a real negotiation instead
-        // of an instant signing. The player's acceptance is NOT
-        // rolled here — `resolve_personal_terms` owns it when
-        // the PersonalTerms phase matures, exactly like any
-        // pipeline pursuit. Wage / role / contract length are
-        // staged now so the offer the player evaluates is the
-        // offer that gets installed on completion.
-        if is_depth_request {
-            let pricing = FreeAgentOfferPricing::compute(
-                best,
-                group,
-                role,
-                buyer_club_score,
-                buyer_league_reputation,
-                buyer_negotiator_skill,
-                buyer_country_reputation,
-            );
-            let terms = pricing.signed_terms(best);
-            // Player-side anchor for the rep-diff logic in
-            // `resolve_personal_terms`: in-country candidates
-            // use their current club's standing, pool players
-            // their own reference reputation — a big name at a
-            // tiny buyer reads as a downward move and resists.
-            let selling_rep = if best.is_global_pool {
-                (best.reference_reputation as f32 / 10_000.0).clamp(0.0, 1.0)
-            } else {
-                country
-                    .clubs
-                    .iter()
-                    .find(|c| c.id == best.club_id)
-                    .and_then(|c| c.teams.teams.first())
-                    .map(|t| t.reputation.overall_score().clamp(0.0, 1.0))
-                    .unwrap_or(0.3)
-            };
-            let player_ambition = if best.is_global_pool {
-                0.5
-            } else {
-                CountryRoster::find(country, best.player_id)
-                    .map(|p| p.attributes.ambition)
-                    .unwrap_or(0.5)
-            };
-            let negotiator_staff_id =
-                main_team.and_then(|t| t.staffs.find_negotiator().map(|s| s.id));
-
-            state.depth_offers.push(DepthNegotiationAction {
-                player_id: best.player_id,
-                player_name: best.player_name.to_string(),
-                from_club_id: best.club_id,
-                from_club_name: best.club_name.to_string(),
-                to_club_id: club.id,
-                request_id: request.id,
-                arrival: FreeAgentArrival {
-                    group,
-                    ability: best.ability,
-                    potential: best.potential,
-                    age: best.age,
-                },
-                terms,
-                selling_rep,
-                buying_rep: buyer_club_score,
-                buying_league_reputation: buyer_league_reputation,
-                negotiator_staff_id,
-                player_age: best.age,
-                player_ambition,
-                is_global_pool: best.is_global_pool,
-                level_floor: best.level_floor,
-                reason: TransferReason::key(request.reason.as_signing_reason_key()),
-            });
-            // One staged pursuit per request — the resolver
-            // owns it from here.
-            return CandidateOutcome::Filled;
-        }
-
-        // Acceptance: would the player actually sign this
-        // particular offer? Wage / role / prestige / quality
-        // fit weighted into a single score, sigmoid against a
-        // pressure-decayed threshold. Skipped for in-country
-        // expiring contracts (no career pressure; pre-decay
-        // behaviour keeps the existing balance).
-        if best.is_global_pool
-            && let Some(outcome) = Self::global_pool_answer(buyer, brief, best, role, market, state)
-        {
-            return outcome;
-        }
-        // The roll above keeps the balance for a contract just run out, but
-        // the division he will not drop to is still his own answer.
-        if !best.is_global_pool
-            && IntegerUtils::random(1, 1000) as f32 / 1000.0
-                > best.floor_allows(buyer_league_reputation)
-        {
-            return CandidateOutcome::Next;
-        }
-
-        let reason = TransferReason::key(request.reason.as_signing_reason_key());
-
-        // Stage stage-aware contract terms so the installed deal
-        // matches the free agent's market stage (a long-unemployed
-        // or older player signs a short trial, not a multi-year
-        // deal off the generic age-band default) and carries the
-        // role / pressure-decayed wage. Mirrors the depth and
-        // global-pool pricing so the contract-length policy can't
-        // drift between the free-agent entry points.
-        let terms = FreeAgentOfferPricing::compute(
+    fn stage_depth_offer(
+        country: &Country,
+        buyer: &FreeAgentBuyer<'_>,
+        brief: &RequestBrief<'_>,
+        best: &FreeAgentCandidate<'_>,
+        role: BuyerRoleFit,
+        market: &FreeAgentMarket<'_>,
+        state: &mut MatchState<'_>,
+    ) {
+        let group = brief.group;
+        let pricing = FreeAgentOfferPricing::compute(
             best,
             group,
             role,
-            buyer_club_score,
-            buyer_league_reputation,
-            buyer_negotiator_skill,
-            buyer_country_reputation,
+            buyer.club_score,
+            buyer.league_reputation,
+            buyer.negotiator_skill,
+            market.buyer_country_reputation,
+        );
+        let terms = pricing.signed_terms(best);
+        let selling_rep = if best.is_global_pool {
+            (best.reference_reputation as f32 / 10_000.0).clamp(0.0, 1.0)
+        } else {
+            country
+                .clubs
+                .iter()
+                .find(|club| club.id == best.club_id)
+                .and_then(|club| club.teams.teams.first())
+                .map(|team| team.reputation.overall_score().clamp(0.0, 1.0))
+                .unwrap_or(0.3)
+        };
+        let player_ambition = if best.is_global_pool {
+            0.5
+        } else {
+            CountryRoster::find(country, best.player_id)
+                .map(|player| player.attributes.ambition)
+                .unwrap_or(0.5)
+        };
+        let negotiator_staff_id = buyer
+            .main_team
+            .and_then(|team| team.staffs.find_negotiator().map(|staff| staff.id));
+
+        state.depth_offers.push(DepthNegotiationAction {
+            player_id: best.player_id,
+            player_name: best.player_name.to_string(),
+            from_club_id: best.club_id,
+            from_club_name: best.club_name.to_string(),
+            to_club_id: buyer.club.id,
+            request_id: brief.request.id,
+            arrival: FreeAgentArrival {
+                group,
+                ability: best.ability,
+                potential: best.potential,
+                age: best.age,
+            },
+            terms,
+            selling_rep,
+            buying_rep: buyer.club_score,
+            buying_league_reputation: buyer.league_reputation,
+            negotiator_staff_id,
+            player_age: best.age,
+            player_ambition,
+            is_global_pool: best.is_global_pool,
+            level_floor: best.level_floor,
+            reason: TransferReason::key(brief.request.reason.as_signing_reason_key()),
+        });
+    }
+
+    fn sign_candidate(
+        buyer: &FreeAgentBuyer<'_>,
+        brief: &RequestBrief<'_>,
+        best: &FreeAgentCandidate<'_>,
+        role: BuyerRoleFit,
+        market: &FreeAgentMarket<'_>,
+        state: &mut MatchState<'_>,
+    ) {
+        let terms = FreeAgentOfferPricing::compute(
+            best,
+            brief.group,
+            role,
+            buyer.club_score,
+            buyer.league_reputation,
+            buyer.negotiator_skill,
+            market.buyer_country_reputation,
         )
         .signed_terms(best);
 
@@ -1047,19 +1042,12 @@ impl FreeAgentMarketPass {
             player_name: best.player_name.to_string(),
             from_club_id: best.club_id,
             from_club_name: best.club_name.to_string(),
-            to_club_id: club.id,
-            reason,
+            to_club_id: buyer.club.id,
+            reason: TransferReason::key(brief.request.reason.as_signing_reason_key()),
             terms: Some(terms),
-            fills_group: Some(group),
+            fills_group: Some(brief.group),
         });
-        CandidateOutcome::Filled
     }
-
-    /// A name from the pool the rest of the world is letting go. He is priced
-    /// and rolled against here, and every roll counts as an offer received.
-    ///
-    /// `None` means he said yes — and deliberately does NOT sign him: a
-    /// global-pool player is signed on the ordinary path below, so the terms
     /// and the history record come out identical however he was found.
     fn global_pool_answer(
         buyer: &FreeAgentBuyer<'_>,
@@ -1211,169 +1199,154 @@ impl FreeAgentMarketPass {
         signings: Vec<FreeAgentSigning>,
         ledger: &mut FreeAgentLedger<'_>,
     ) -> Vec<GlobalFreeAgentSigning> {
-        let summary = &mut *ledger.summary;
-        let domestic_signed_ids = &mut *ledger.domestic_signed_ids;
-        let mut global_signings: Vec<GlobalFreeAgentSigning> = Vec::new();
         let country_id = country.id;
+        let mut global_signings = Vec::new();
 
         for signing in signings {
             if signing.from_club_id == 0 {
-                // Global pool signing — the caller must execute against
-                // `sim.free_agents`. We surface intent only; first-come-
-                // first-served dedup happens at execution time when the
-                // player may have already been claimed by another country.
-                let to_club_id = signing.to_club_id;
-                let fills_group = signing.fills_group;
-                global_signings.push(GlobalFreeAgentSigning {
-                    player_id: signing.player_id,
-                    player_name: signing.player_name,
-                    buying_country_id: country_id,
-                    buying_club_id: to_club_id,
-                    reason: signing.reason,
-                    terms: signing.terms,
-                });
-                // Even though execution is deferred, the buying club's
-                // open request for the same group is conceptually
-                // serviced — mark fulfilled now so weekly re-evaluation
-                // doesn't re-emit it. The actual roster mutation may
-                // still fail at Phase C (player taken by another
-                // country first); the request mark is conservative —
-                // worst case a later tick re-emits it.
-                if let Some(group) = fills_group {
-                    TransferPlanSync::mark_group_fulfilled(country, to_club_id, group);
-                }
+                global_signings.push(Self::stage_global_signing(country, country_id, signing));
                 continue;
             }
-
-            let to_club_name = country
-                .clubs
-                .iter()
-                .find(|c| c.id == signing.to_club_id)
-                .map(|c| c.name.clone())
-                .unwrap_or_default();
-            // Captured before `signing.reason` is moved into the history
-            // row below, so the monthly diagnostics can split pre-contract
-            // moves from ordinary domestic-expiry signings.
-            let is_pre_contract = signing.reason.key == "pre_contract";
-
-            // Execute first — a failed move (squad full, player not found
-            // at claimed origin) must NOT leave a phantom transfer-history
-            // row. The club-transfers page reads this list directly, so
-            // any entry written here is visible whether or not the player
-            // actually moved.
-            let buying_league_reputation = country
-                .clubs
-                .iter()
-                .find(|c| c.id == signing.to_club_id)
-                .and_then(|c| c.teams.teams.first())
-                .and_then(|t| t.league_id)
-                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-                .map(|l| l.reputation)
-                .unwrap_or(0);
-            // Translate staged emergency terms (if any) into the
-            // executor's wage + personal-terms inputs. Without this
-            // the in-country free-agent path silently falls back to
-            // the calculator default and any short-deal pitch made
-            // during the emergency offer evaporates.
-            let agreed_annual_wage = signing.terms.map(|t| t.annual_wage);
-            let personal_terms = signing.terms.map(|t| t.to_personal_terms());
-            let deferred = DeferredTransfer {
-                player_id: signing.player_id,
-                selling_country_id: country.id,
-                selling_club_id: signing.from_club_id,
-                buying_country_id: country.id,
-                buying_club_id: signing.to_club_id,
-                fee: 0.0,
-                is_loan: false,
-                has_option_to_buy: false,
-                agreed_annual_wage,
-                buying_league_reputation,
-                sell_on_percentage: None,
-                loan_future_fee: None,
-                personal_terms,
-                // Free-agent signings carry no transfer-fee clauses
-                // (no fee, no sell-on, no installments).
-                offer_clauses: Vec::new(),
-                // Nobody heard a proposal for a man who cost nothing — his
-                // purpose is the role the contract promises him.
-                mandate: None,
-            };
-            // The country IS the world here: this pass runs inside Phase A
-            // on one country borrow, and a free signing off a domestic
-            // expiry never leaves it. The executor is the same one the
-            // cross-border path uses — see
-            // [`crate::transfers::view::world::MarketWorld`].
-            let executed = TransferExecutor::permanent(country, &deferred, date);
-
-            if !executed {
-                debug!(
-                    "Free agent signing rejected: player {} from club {} to club {}",
-                    signing.player_id, signing.from_club_id, signing.to_club_id
-                );
-                continue;
-            }
-
-            // A young free signing at a big club is development material
-            // too — same pathway as paid prospect purchases. Foreign
-            // loanee count is unavailable from a single-country borrow;
-            // the domestic count still enforces the cap.
-            DevelopmentLoanPathway::stage_after_purchase(
-                country,
-                signing.to_club_id,
-                signing.player_id,
-                None,
-                date,
-                0,
-            );
-
-            country.transfer_market.transfer_history.push(
-                CompletedTransfer::new(
-            signing.player_id,
-            signing.player_name,
-            signing.from_club_id,
-            0,
-            signing.from_club_name,
-            signing.to_club_id,
-            to_club_name,
-            date,
-            CurrencyValue::new(0.0, Currency::Usd),
-            TransferType::Free,
-        )
-        .with_reason(signing.reason)
-        // A domestic expiry never leaves the country, and the row
-        // has to say so: without an origin the corridor census
-        // cannot tell it apart from a pool signing out of nowhere.
-        .with_origin_country(country.id),
-            );
-
-            ApproachPass::clear_player_interest(country, signing.player_id);
-            // Mirror the global-pool branch above: once a signing
-            // actually lands, mark the matching group's open request as
-            // fulfilled so the weekly re-evaluation doesn't generate a
-            // duplicate. Done after execution so a failed move (squad
-            // cap, lookup miss) doesn't silently fulfill a still-open
-            // need.
-            if let Some(group) = signing.fills_group {
-                TransferPlanSync::mark_group_fulfilled(country, signing.to_club_id, group);
-            }
-            // Surface the signed id so the caller (which holds the full
-            // simulator) can run the cross-country interest sweep once
-            // the country mutable borrow ends.
-            domestic_signed_ids.push(signing.player_id);
-            summary.completed_transfers += 1;
-            // Pre-contract moves are a subset of the in-country signings;
-            // count them separately so Phase C can split the monthly
-            // "pre-contract" vs "domestic-expiry" diagnostics.
-            if is_pre_contract {
-                summary.signed_pre_contract += 1;
-            }
-
-            debug!(
-                "Free agent signing: player {} from club {} to club {}",
-                signing.player_id, signing.from_club_id, signing.to_club_id
-            );
+            Self::execute_domestic_signing(country, date, signing, ledger);
         }
 
         global_signings
+    }
+
+    fn stage_global_signing(
+        country: &mut Country,
+        country_id: u32,
+        signing: FreeAgentSigning,
+    ) -> GlobalFreeAgentSigning {
+        let to_club_id = signing.to_club_id;
+        let fills_group = signing.fills_group;
+        let global = GlobalFreeAgentSigning {
+            player_id: signing.player_id,
+            player_name: signing.player_name,
+            buying_country_id: country_id,
+            buying_club_id: to_club_id,
+            reason: signing.reason,
+            terms: signing.terms,
+        };
+        if let Some(group) = fills_group {
+            TransferPlanSync::mark_group_fulfilled(country, to_club_id, group);
+        }
+        global
+    }
+
+    fn execute_domestic_signing(
+        country: &mut Country,
+        date: NaiveDate,
+        signing: FreeAgentSigning,
+        ledger: &mut FreeAgentLedger<'_>,
+    ) {
+        let to_club_name = country
+            .clubs
+            .iter()
+            .find(|club| club.id == signing.to_club_id)
+            .map(|club| club.name.clone())
+            .unwrap_or_default();
+        let is_pre_contract = signing.reason.key == "pre_contract";
+        let buying_league_reputation = Self::buying_league_reputation(country, signing.to_club_id);
+        let deferred = Self::free_agent_transfer(&signing, country.id, buying_league_reputation);
+
+        if !TransferExecutor::permanent(country, &deferred, date) {
+            debug!(
+                "Free agent signing rejected: player {} from club {} to club {}",
+                signing.player_id, signing.from_club_id, signing.to_club_id
+            );
+            return;
+        }
+
+        DevelopmentLoanPathway::stage_after_purchase(
+            country,
+            signing.to_club_id,
+            signing.player_id,
+            None,
+            date,
+            0,
+        );
+        Self::record_domestic_signing(country, date, &signing, to_club_name);
+        ApproachPass::clear_player_interest(country, signing.player_id);
+        if let Some(group) = signing.fills_group {
+            TransferPlanSync::mark_group_fulfilled(country, signing.to_club_id, group);
+        }
+
+        ledger.domestic_signed_ids.push(signing.player_id);
+        ledger.summary.completed_transfers += 1;
+        if is_pre_contract {
+            ledger.summary.signed_pre_contract += 1;
+        }
+
+        debug!(
+            "Free agent signing: player {} from club {} to club {}",
+            signing.player_id, signing.from_club_id, signing.to_club_id
+        );
+    }
+
+    fn buying_league_reputation(country: &Country, club_id: u32) -> u16 {
+        country
+            .clubs
+            .iter()
+            .find(|club| club.id == club_id)
+            .and_then(|club| club.teams.teams.first())
+            .and_then(|team| team.league_id)
+            .and_then(|league_id| {
+                country
+                    .leagues
+                    .leagues
+                    .iter()
+                    .find(|league| league.id == league_id)
+            })
+            .map(|league| league.reputation)
+            .unwrap_or(0)
+    }
+
+    fn free_agent_transfer(
+        signing: &FreeAgentSigning,
+        country_id: u32,
+        buying_league_reputation: u16,
+    ) -> DeferredTransfer {
+        DeferredTransfer {
+            player_id: signing.player_id,
+            selling_country_id: country_id,
+            selling_club_id: signing.from_club_id,
+            buying_country_id: country_id,
+            buying_club_id: signing.to_club_id,
+            fee: 0.0,
+            is_loan: false,
+            has_option_to_buy: false,
+            agreed_annual_wage: signing.terms.map(|terms| terms.annual_wage),
+            buying_league_reputation,
+            sell_on_percentage: None,
+            loan_future_fee: None,
+            personal_terms: signing.terms.map(|terms| terms.to_personal_terms()),
+            offer_clauses: Vec::new(),
+            mandate: None,
+        }
+    }
+
+    fn record_domestic_signing(
+        country: &mut Country,
+        date: NaiveDate,
+        signing: &FreeAgentSigning,
+        to_club_name: String,
+    ) {
+        country.transfer_market.transfer_history.push(
+            CompletedTransfer::new(
+                signing.player_id,
+                signing.player_name.clone(),
+                signing.from_club_id,
+                0,
+                signing.from_club_name.clone(),
+                signing.to_club_id,
+                to_club_name,
+                date,
+                CurrencyValue::new(0.0, Currency::Usd),
+                TransferType::Free,
+            )
+            .with_reason(signing.reason.clone())
+            .with_origin_country(country.id),
+        );
     }
 }

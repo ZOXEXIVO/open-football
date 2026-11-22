@@ -211,9 +211,12 @@ pub use club::{
     PlayerFieldPositionGroup,
     PlayerFoots,
     PlayerGenerator,
+    PlayerGrowth,
     PlayerHappiness,
     PlayerHistoryRow,
     PlayerHistoryRowBreakdown,
+    PlayerIdSequence,
+
     PlayerLanguage,
     PlayerLiveStatsInput,
     PlayerMailbox,
@@ -243,7 +246,6 @@ pub use club::{
     PlayerTrainingHistory,
     PlayerTrainingResult,
     PlayerTransferStatus,
-    PlayerUtils,
     PlayerValueCalculator,
     PositionCoverage,
     PositionWeights,
@@ -384,13 +386,10 @@ pub use club::{
     handlers,
     matches,
     mood,
-    next_player_id,
-
     player_attributes_mod,
     player_builder_mod,
     player_contract_mod,
     reputation,
-    seed_player_id_sequence as seed_core_player_id_sequence,
     staff_attributes_mod,
     staff_contract_mod,
     tactics,
@@ -450,7 +449,7 @@ pub use crate::r#match::engine::psychology::lapse::lapse_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::heatmap as heatmap_diag;
 #[cfg(feature = "match-logs")]
-pub use crate::r#match::midfielders::states::common::onball_diag as mid_onball_diag;
+pub use crate::r#match::midfielders::states::shared::onball_diag as mid_onball_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::player::diagnostics::defender_census;
 #[cfg(feature = "match-logs")]

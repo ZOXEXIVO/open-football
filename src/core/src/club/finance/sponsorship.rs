@@ -165,7 +165,7 @@ impl SponsorRenewalContext {
             .or_else(|| NaiveDate::from_ymd_opt(date.year() + years, date.month(), 28))
             .unwrap_or(date);
 
-        let name = generate_sponsor_name(self.reputation);
+        let name = self.generate_sponsor_name();
         Some(ClubSponsorshipContract::new_with_start(
             name,
             annual as i32,
@@ -173,32 +173,32 @@ impl SponsorRenewalContext {
             expiration,
         ))
     }
-}
 
-fn generate_sponsor_name(reputation: ReputationLevel) -> String {
-    let pool: &[&str] = match reputation {
-        ReputationLevel::Elite | ReputationLevel::Continental => &[
-            "Atlas Capital",
-            "Meridian Group",
-            "Aurora Holdings",
-            "Vanguard Industries",
-            "Helios Bank",
-        ],
-        ReputationLevel::National => &[
-            "Northwind Insurance",
-            "Civic Energy",
-            "Riverstone Logistics",
-            "Beacon Telecom",
-        ],
-        _ => &[
-            "Local Dairy Co.",
-            "Westside Builders",
-            "Hometown Print",
-            "Greenfield Foods",
-        ],
-    };
-    let idx = FloatUtils::random(0.0, pool.len() as f32) as usize;
-    pool.get(idx).copied().unwrap_or("Sponsor").to_string()
+    fn generate_sponsor_name(&self) -> String {
+        let pool: &[&str] = match self.reputation {
+            ReputationLevel::Elite | ReputationLevel::Continental => &[
+                "Atlas Capital",
+                "Meridian Group",
+                "Aurora Holdings",
+                "Vanguard Industries",
+                "Helios Bank",
+            ],
+            ReputationLevel::National => &[
+                "Northwind Insurance",
+                "Civic Energy",
+                "Riverstone Logistics",
+                "Beacon Telecom",
+            ],
+            _ => &[
+                "Local Dairy Co.",
+                "Westside Builders",
+                "Hometown Print",
+                "Greenfield Foods",
+            ],
+        };
+        let idx = FloatUtils::random(0.0, pool.len() as f32) as usize;
+        pool.get(idx).copied().unwrap_or("Sponsor").to_string()
+    }
 }
 
 #[derive(Debug, Clone)]

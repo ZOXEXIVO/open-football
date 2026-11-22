@@ -273,10 +273,33 @@ impl NationalTeam {
     ) -> MatchSquad {
         let team_id = self.country_id;
         let team_name = self.country_name.clone();
+        let all_players = self.collect_match_pool(clubs);
+        let (main_squad, mut used_ids) = self.select_starting_squad(&all_players, date, importance);
+        let substitutes = self.select_substitutes(&all_players, &mut used_ids, date, importance);
+        let (captain_id, vice_captain_id) =
+            MatchdayLeadership::from_match_squad_at(None, None, &main_squad, date);
 
-        // Collect real players from clubs (may span multiple countries)
+        MatchSquad {
+            team_id,
+            team_name,
+            tactics: self.tactics.clone(),
+            main_squad,
+            substitutes,
+            captain_id,
+            vice_captain_id,
+            penalty_taker_id: None,
+            free_kick_taker_id: None,
+            selection_omissions: Vec::new(),
+            overlooked: Vec::new(),
+            selection: Default::default(),
+            coach_snapshot: None,
+            coach_card: None,
+            familiarity: None,
+        }
+    }
+
+    fn collect_match_pool<'a>(&'a self, clubs: &[&'a Club]) -> Vec<&'a Player> {
         let mut all_players: Vec<&Player> = Vec::new();
-
         for squad_player in &self.squad {
             for club in clubs.iter() {
                 for team in club.teams.iter() {
@@ -286,50 +309,43 @@ impl NationalTeam {
                 }
             }
         }
-
-        // Add generated synthetic players
         for player in &self.generated_squad {
             all_players.push(player);
         }
+        all_players
+    }
 
-        // Select starting 11 and substitutes
-        let tactics = &self.tactics;
-        let required_positions = tactics.positions();
-
+    fn select_starting_squad(
+        &self,
+        all_players: &[&Player],
+        date: NaiveDate,
+        importance: NationalMatchImportance,
+    ) -> (Vec<MatchPlayer>, Vec<u32>) {
+        let team_id = self.country_id;
+        let required_positions = self.tactics.positions();
         let mut main_squad: Vec<MatchPlayer> = Vec::with_capacity(11);
         let mut used_ids: Vec<u32> = Vec::new();
 
-        // Pick goalkeeper. If the squad has NO natural keeper (some
-        // smaller national pools end up this way — sim generated only
-        // outfielders, or injuries removed the real GKs), fall back to
-        // the least-valuable outfielder so we never field an empty
-        // goal. Without this fallback the squad played 10-a-side with
-        // an open net, which is exactly where the "17-0 / 29-0" CA/EC
-        // international scorelines were coming from.
         let natural_gk = all_players
             .iter()
-            .filter(|p| {
-                p.positions
+            .filter(|player| {
+                player
+                    .positions
                     .positions
                     .iter()
-                    .any(|pos| pos.position == PlayerPositionType::Goalkeeper)
+                    .any(|position| position.position == PlayerPositionType::Goalkeeper)
             })
             .max_by(|a, b| {
                 Self::matchday_overall_score(a, importance, date)
                     .partial_cmp(&Self::matchday_overall_score(b, importance, date))
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
-
         let gk_choice = natural_gk.copied().or_else(|| {
-            // No natural keeper — draft the lowest-ability outfielder.
-            // Weakest-outfielder-as-GK is realistic: managers sacrifice
-            // a fringe player rather than a first-teamer.
             all_players
                 .iter()
-                .min_by_key(|p| p.player_attributes.current_ability)
+                .min_by_key(|player| player.player_attributes.current_ability)
                 .copied()
         });
-
         if let Some(gk) = gk_choice {
             main_squad.push(MatchPlayer::from_player(
                 team_id,
@@ -341,72 +357,84 @@ impl NationalTeam {
             used_ids.push(gk.id);
         }
 
-        // Fill outfield positions
-        for &pos in required_positions.iter() {
-            if pos == PlayerPositionType::Goalkeeper {
+        for &position in required_positions.iter() {
+            if position == PlayerPositionType::Goalkeeper {
                 continue;
             }
             if main_squad.len() >= 11 {
                 break;
             }
-
             let best = all_players
                 .iter()
-                .filter(|p| !used_ids.contains(&p.id))
-                .filter(|p| {
-                    !p.positions
+                .filter(|player| !used_ids.contains(&player.id))
+                .filter(|player| {
+                    !player
+                        .positions
                         .positions
                         .iter()
-                        .any(|pp| pp.position == PlayerPositionType::Goalkeeper)
+                        .any(|slot| slot.position == PlayerPositionType::Goalkeeper)
                 })
                 .max_by(|a, b| {
-                    Self::matchday_position_score(a, pos, importance, date)
-                        .partial_cmp(&Self::matchday_position_score(b, pos, importance, date))
+                    Self::matchday_position_score(a, position, importance, date)
+                        .partial_cmp(&Self::matchday_position_score(
+                            b, position, importance, date,
+                        ))
                         .unwrap_or(std::cmp::Ordering::Equal)
                 });
-
             if let Some(player) = best {
-                main_squad.push(MatchPlayer::from_player(team_id, player, pos, false, None));
+                main_squad.push(MatchPlayer::from_player(
+                    team_id, player, position, false, None,
+                ));
                 used_ids.push(player.id);
             }
         }
 
-        // Fill any remaining starting slots
         while main_squad.len() < 11 {
             let best = all_players
                 .iter()
-                .filter(|p| !used_ids.contains(&p.id))
+                .filter(|player| !used_ids.contains(&player.id))
                 .max_by(|a, b| {
                     Self::matchday_overall_score(a, importance, date)
                         .partial_cmp(&Self::matchday_overall_score(b, importance, date))
                         .unwrap_or(std::cmp::Ordering::Equal)
                 });
-
-            match best {
-                Some(player) => {
-                    let pos = player.position();
-                    main_squad.push(MatchPlayer::from_player(team_id, player, pos, false, None));
-                    used_ids.push(player.id);
-                }
-                None => break,
-            }
+            let Some(player) = best else {
+                break;
+            };
+            main_squad.push(MatchPlayer::from_player(
+                team_id,
+                player,
+                player.position(),
+                false,
+                None,
+            ));
+            used_ids.push(player.id);
         }
+        (main_squad, used_ids)
+    }
 
-        // Select substitutes (up to 7)
+    fn select_substitutes(
+        &self,
+        all_players: &[&Player],
+        used_ids: &mut Vec<u32>,
+        date: NaiveDate,
+        importance: NationalMatchImportance,
+    ) -> Vec<MatchPlayer> {
+        let team_id = self.country_id;
         let mut substitutes: Vec<MatchPlayer> = Vec::with_capacity(7);
         let remaining: Vec<&&Player> = all_players
             .iter()
-            .filter(|p| !used_ids.contains(&p.id))
+            .filter(|player| !used_ids.contains(&player.id))
             .collect();
 
-        // Backup GK first
         if let Some(gk) = remaining
             .iter()
-            .filter(|p| {
-                p.positions
+            .filter(|player| {
+                player
+                    .positions
                     .positions
                     .iter()
-                    .any(|pos| pos.position == PlayerPositionType::Goalkeeper)
+                    .any(|position| position.position == PlayerPositionType::Goalkeeper)
             })
             .max_by(|a, b| {
                 Self::matchday_overall_score(a, importance, date)
@@ -424,10 +452,9 @@ impl NationalTeam {
             used_ids.push(gk.id);
         }
 
-        // Fill rest of bench
         let mut bench_remaining: Vec<&&Player> = remaining
             .iter()
-            .filter(|p| !used_ids.contains(&p.id))
+            .filter(|player| !used_ids.contains(&player.id))
             .copied()
             .collect();
         bench_remaining.sort_by(|a, b| {
@@ -435,37 +462,16 @@ impl NationalTeam {
                 .partial_cmp(&Self::matchday_overall_score(a, importance, date))
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-
         for player in bench_remaining.iter().take(6) {
-            let pos = player.position();
-            substitutes.push(MatchPlayer::from_player(team_id, player, pos, false, None));
+            substitutes.push(MatchPlayer::from_player(
+                team_id,
+                player,
+                player.position(),
+                false,
+                None,
+            ));
         }
-
-        // National teams carry no persistent captaincy hierarchy, so the
-        // armband goes to the best leader in the selected XI.
-        let (captain_id, vice_captain_id) =
-            MatchdayLeadership::from_match_squad_at(None, None, &main_squad, date);
-
-        MatchSquad {
-            team_id,
-            team_name,
-            tactics: self.tactics.clone(),
-            main_squad,
-            substitutes,
-            captain_id,
-            vice_captain_id,
-            penalty_taker_id: None,
-            free_kick_taker_id: None,
-            selection_omissions: Vec::new(),
-            overlooked: Vec::new(),
-            selection: Default::default(),
-            // National-team coaches don't carry persistent club coach
-            // memory yet — the match engine falls back to the legacy
-            // (memory-less) substitution scoring for these fixtures.
-            coach_snapshot: None,
-            coach_card: None,
-            familiarity: None,
-        }
+        substitutes
     }
 
     /// Build a synthetic opponent squad for friendly matches

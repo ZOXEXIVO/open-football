@@ -14,8 +14,8 @@ use crate::PlayerStatusType;
 use crate::club::PlayerFieldPositionGroup;
 use crate::club::player::condition::{ConditionRecoveryModel, InjuryRiskInputs};
 use crate::club::player::injury::InjuryType;
-use crate::r#match::engine::player::injury::InjuryGrade;
 use crate::club::player::player::Player;
+use crate::r#match::engine::player::injury::InjuryGrade;
 use crate::utils::DateUtils;
 
 /// Compact inputs to the post-match physical exertion pass. Built
@@ -136,6 +136,22 @@ impl YouthMatchExertion {
     }
 }
 
+/// Joint load multipliers read once per post-match exertion pass.
+struct MatchExertionFactors {
+    position_factor: f32,
+    hi_share: f32,
+    age: u8,
+    maturity_load: f32,
+    maturity_debt: f32,
+    action_style_mult: f32,
+}
+
+/// Recorded load and the friendly discount the jadedness pass also reads.
+struct MatchLoad {
+    match_load: f32,
+    friendly_intensity: f32,
+}
+
 impl Player {
     /// Apply the physical cost of featuring in a match. The match engine
     /// already drained condition tick-by-tick during the sim — this hook
@@ -171,6 +187,39 @@ impl Player {
         let minutes = inputs.minutes.max(0.0);
         self.load.record_match_minutes(minutes, is_friendly);
 
+        let factors = self.exertion_factors(&inputs, now, is_friendly);
+        let condition_pct_after = self.apply_condition_drop(&inputs, now, is_friendly, &factors);
+        let load = self.apply_load(minutes, condition_pct_after, is_friendly, &factors);
+        self.apply_sharpness(minutes, is_friendly);
+        self.apply_jadedness(load.match_load, load.friendly_intensity, now);
+
+        self.player_attributes.days_since_last_match = 0;
+
+        if self.player_attributes.is_injured {
+            return;
+        }
+        match inputs.injury {
+            Some(severity) => self.on_match_injury(severity, minutes, now, factors.age),
+            None => {
+                let in_recovery = self.player_attributes.is_in_recovery();
+                self.roll_for_match_injury(
+                    minutes,
+                    load.match_load,
+                    now,
+                    in_recovery,
+                    factors.age,
+                    is_friendly,
+                );
+            }
+        }
+    }
+
+    fn exertion_factors(
+        &self,
+        inputs: &MatchExertionInputs,
+        now: NaiveDate,
+        is_friendly: bool,
+    ) -> MatchExertionFactors {
         let position = self.position();
         let group = position.position_group();
         let position_factor = PositionLoad::match_load_factor(position);
@@ -187,9 +236,38 @@ impl Player {
         };
 
         let age = DateUtils::age(self.birth_date, now);
-        let maturity_load = YouthMatchExertion::load_multiplier(age, is_friendly);
-        let maturity_debt = YouthMatchExertion::debt_multiplier(age, is_friendly);
+        // Action-style multiplier: a high-work-rate pressing winger
+        // with pace and acceleration to burn pays more for 90 minutes
+        // than a low-block CB who covered the same minutes. Applied to
+        // the persisted condition drop and to the post-match recovery
+        // debt below — *not* to minutes (which feed selection rotation
+        // and shouldn't be inflated for the wide players who can
+        // genuinely repeat the workload).
+        let action_style_mult = Self::action_style_mult(
+            hi_share,
+            self.skills.mental.work_rate,
+            self.skills.physical.pace,
+            self.skills.physical.acceleration,
+        );
+        MatchExertionFactors {
+            position_factor,
+            hi_share,
+            age,
+            maturity_load: YouthMatchExertion::load_multiplier(age, is_friendly),
+            maturity_debt: YouthMatchExertion::debt_multiplier(age, is_friendly),
+            action_style_mult,
+        }
+    }
 
+    /// Apply the persisted condition drop and return the post-match
+    /// condition percentage the load pass reads.
+    fn apply_condition_drop(
+        &mut self,
+        inputs: &MatchExertionInputs,
+        now: NaiveDate,
+        is_friendly: bool,
+        factors: &MatchExertionFactors,
+    ) -> f32 {
         // ── PERSISTED CONDITION DROP ──────────────────────────────
         // Sized from the snapshot's `(starting → final)` energy span,
         // duration, position, stamina/NF resistance, age, congestion,
@@ -205,27 +283,14 @@ impl Player {
         // A player who finished on fumes still recovers overnight,
         // just from a deeper hole.
         let base_condition_drop = Self::compute_condition_drop(
-            &inputs,
-            position_factor,
-            hi_share,
+            inputs,
+            factors.position_factor,
+            factors.hi_share,
             self.skills.physical.stamina,
             self.skills.physical.natural_fitness,
-            age,
+            factors.age,
             self.load.matches_last_14(),
             is_friendly,
-        );
-        // Action-style multiplier: a high-work-rate pressing winger
-        // with pace and acceleration to burn pays more for 90 minutes
-        // than a low-block CB who covered the same minutes. Applied to
-        // the persisted condition drop and to the post-match recovery
-        // debt below — *not* to minutes (which feed selection rotation
-        // and shouldn't be inflated for the wide players who can
-        // genuinely repeat the workload).
-        let action_style_mult = Self::action_style_mult(
-            hi_share,
-            self.skills.mental.work_rate,
-            self.skills.physical.pace,
-            self.skills.physical.acceleration,
         );
         // ±4% deterministic noise so two identical profiles in the
         // same match don't end up at byte-for-byte identical condition
@@ -241,7 +306,7 @@ impl Player {
             ConditionRecoveryModel::NOISE_MATCH_EXERTION,
             0.04,
         );
-        let condition_drop = base_condition_drop * action_style_mult * exertion_noise;
+        let condition_drop = base_condition_drop * factors.action_style_mult * exertion_noise;
 
         // Floor: competitive 25%, friendly 35%, post-injury recovery
         // 40% (unless an injury actually fires later in this pass —
@@ -272,18 +337,29 @@ impl Player {
         let new_condition = floored.min(starting as i32).clamp(0, 10_000) as i16;
         self.player_attributes.condition = new_condition;
 
+        self.player_attributes.condition_percentage() as f32
+    }
+
+    /// Record the position-weighted load and the recovery debt it owes.
+    fn apply_load(
+        &mut self,
+        minutes: f32,
+        condition_pct_after: f32,
+        is_friendly: bool,
+        factors: &MatchExertionFactors,
+    ) -> MatchLoad {
         // ── LOAD BOOKKEEPING ──────────────────────────────────────
         // Position-weighted minutes (legacy compat for the rolling
         // load windows). The friendly discount is applied inside
         // `record_match_load`.
-        let condition_pct_after = self.player_attributes.condition_percentage() as f32;
         let depletion_factor = if condition_pct_after < 50.0 {
             1.0 + (50.0 - condition_pct_after) / 80.0
         } else {
             1.0
         };
-        let match_load = minutes * position_factor * depletion_factor * maturity_load;
-        let hi_load = match_load * hi_share;
+        let match_load =
+            minutes * factors.position_factor * depletion_factor * factors.maturity_load;
+        let hi_load = match_load * factors.hi_share;
         self.load
             .record_match_load(match_load, hi_load, is_friendly);
 
@@ -300,14 +376,21 @@ impl Player {
         let depletion_tax = match_load * (50.0 - condition_pct_after).max(0.0) / 100.0;
         let debt_add = (match_load * 0.5 + depletion_tax)
             * friendly_intensity
-            * maturity_debt
-            * action_style_mult
-            / maturity_load.max(0.001);
+            * factors.maturity_debt
+            * factors.action_style_mult
+            / factors.maturity_load.max(0.001);
         self.load.add_recovery_debt(debt_add);
 
-        // ── SHARPNESS ─────────────────────────────────────────────
-        // Cameo subs (<15 min) don't rebuild readiness; full 90 =
-        // +3.0; friendlies sharpen at 70%.
+        MatchLoad {
+            match_load,
+            friendly_intensity,
+        }
+    }
+
+    /// ── SHARPNESS ─────────────────────────────────────────────
+    /// Cameo subs (<15 min) don't rebuild readiness; full 90 =
+    /// +3.0; friendlies sharpen at 70%.
+    fn apply_sharpness(&mut self, minutes: f32, is_friendly: bool) {
         if minutes >= 15.0 {
             let mut readiness_boost = (minutes / 90.0) * 3.0;
             if is_friendly {
@@ -316,10 +399,12 @@ impl Player {
             self.skills.physical.match_readiness =
                 (self.skills.physical.match_readiness + readiness_boost).min(20.0);
         }
+    }
 
-        // ── JADEDNESS ─────────────────────────────────────────────
-        // Scaled by match_load (which carries the youth multiplier)
-        // and recent congestion, with the same friendly discount.
+    /// ── JADEDNESS ─────────────────────────────────────────────
+    /// Scaled by match_load (which carries the youth multiplier)
+    /// and recent congestion, with the same friendly discount.
+    fn apply_jadedness(&mut self, match_load: f32, friendly_intensity: f32, now: NaiveDate) {
         let congestion = self.load.matches_last_14() as f32;
         let congestion_mult = 1.0 + (congestion - 2.0).max(0.0) * 0.20;
         let jad_gain = (match_load * friendly_intensity * 4.0 * congestion_mult).round() as i32;
@@ -329,25 +414,18 @@ impl Player {
         if self.player_attributes.jadedness > 7000 && !self.statuses.has(PlayerStatusType::Rst) {
             self.statuses.add(now, PlayerStatusType::Rst);
         }
-
-        self.player_attributes.days_since_last_match = 0;
-
-        if self.player_attributes.is_injured {
-            return;
-        }
-        match inputs.injury {
-            Some(severity) => self.on_match_injury(severity, minutes, now, age),
-            None => {
-                let in_recovery = self.player_attributes.is_in_recovery();
-                self.roll_for_match_injury(minutes, match_load, now, in_recovery, age, is_friendly);
-            }
-        }
     }
 
     /// He was hurt in the match: the injury he carries out of it is that
     /// one, sized by how bad it was on the pitch. A knock he got up from
     /// leaves nothing behind.
-    pub fn on_match_injury(&mut self, severity: InjuryGrade, minutes: f32, now: NaiveDate, age: u8) {
+    pub fn on_match_injury(
+        &mut self,
+        severity: InjuryGrade,
+        minutes: f32,
+        now: NaiveDate,
+        age: u8,
+    ) {
         let Some(injury) = InjuryType::from_match_severity(
             severity,
             minutes,

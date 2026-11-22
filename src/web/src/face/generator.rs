@@ -46,108 +46,112 @@ impl FaceFrame {
     }
 }
 
-/// `heft` is the player's weight-for-height deviation (≈ -2 lean .. +2.5
-/// heavy): it fills the cheeks/jaw/neck instead of random width alone.
-///
-/// `aggression` (0..1, from temperament/dirtiness) hardens the expression:
-/// brows drop and knit, lids weigh down, mouth corners tighten.
-///
-/// `jersey` is the club's background colour ("#rrggbb"); None falls back to
-/// a deterministic per-player hue.
-pub fn generate_face_svg(
-    player_id: u32,
-    age: u8,
-    skin_dist: SkinDist,
-    heft: f32,
-    aggression: f32,
-    jersey: Option<&str>,
-    frame: FaceFrame,
-) -> String {
-    let heft = heft.clamp(-2.0, 2.5);
-    let aggr = aggression.clamp(0.0, 1.0);
-    let mut rng = AppearanceRng::new(player_id);
+pub struct FacePortrait;
 
-    // Nation-driven phenotype class: skin band, hair/eye palettes, eye
-    // shape family, nose/lip/brow weights and beard density all follow it.
-    // Drawn FIRST off the stream, and by the shared crate rather than here,
-    // because the match viewer asks the same question about the same player
-    // and has to get the same answer — see `shared::Appearance`.
-    let id = Identity::draw(&mut rng, skin_dist, age);
-    let tones = Tones::derive(
-        Palette::SKIN[id.look.skin],
-        Palette::HAIR[id.look.hair],
-        Palette::EYES[id.look.eyes],
-        id.morph.redness,
-    );
-    let l = Landmarks::new(&id, age, heft, aggr);
+impl FacePortrait {
+    /// `heft` is the player's weight-for-height deviation (≈ -2 lean .. +2.5
+    /// heavy): it fills the cheeks/jaw/neck instead of random width alone.
+    ///
+    /// `aggression` (0..1, from temperament/dirtiness) hardens the expression:
+    /// brows drop and knit, lids weigh down, mouth corners tighten.
+    ///
+    /// `jersey` is the club's background colour ("#rrggbb"); None falls back to
+    /// a deterministic per-player hue.
+    pub fn svg(
+        player_id: u32,
+        age: u8,
+        skin_dist: SkinDist,
+        heft: f32,
+        aggression: f32,
+        jersey: Option<&str>,
+        frame: FaceFrame,
+    ) -> String {
+        let heft = heft.clamp(-2.0, 2.5);
+        let aggr = aggression.clamp(0.0, 1.0);
+        let mut rng = AppearanceRng::new(player_id);
 
-    // Jersey: real club colour when provided; otherwise a deterministic
-    // per-player hue (wrapping_mul so large generated ids don't overflow)
-    let jersey = match jersey {
-        Some(bg) => {
-            let base = Rgb::hex(bg);
-            (base.lift(0.15), base, base.shade(0.55))
+        // Nation-driven phenotype class: skin band, hair/eye palettes, eye
+        // shape family, nose/lip/brow weights and beard density all follow it.
+        // Drawn FIRST off the stream, and by the shared crate rather than here,
+        // because the match viewer asks the same question about the same player
+        // and has to get the same answer — see `shared::Appearance`.
+        let id = Identity::draw(&mut rng, skin_dist, age);
+        let tones = Tones::derive(
+            Palette::SKIN[id.look.skin],
+            Palette::HAIR[id.look.hair],
+            Palette::EYES[id.look.eyes],
+            id.morph.redness,
+        );
+        let l = Landmarks::new(&id, age, heft, aggr);
+
+        // Jersey: real club colour when provided; otherwise a deterministic
+        // per-player hue (wrapping_mul so large generated ids don't overflow)
+        let jersey = match jersey {
+            Some(bg) => {
+                let base = Rgb::hex(bg);
+                (base.lift(0.15), base, base.shade(0.55))
+            }
+            None => {
+                let hue = (player_id.wrapping_mul(137) % 360) as f32;
+                (
+                    Rgb::hsl(hue, 0.26, 0.41),
+                    Rgb::hsl(hue, 0.30, 0.30),
+                    Rgb::hsl(hue, 0.32, 0.19),
+                )
+            }
+        };
+
+        let mut c = Canvas::new();
+        c.raw(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 250">"#);
+        // Debug trace of the sampled variants (invisible; keeps visual QA cheap)
+        c.raw(&format!(
+            "<!--h{} e{} f{} n{} b{} m{} w{heft:.1} a{aggr:.1} p{}-->",
+            id.hair.code(),
+            id.eye_st,
+            id.face_var,
+            id.nose_st,
+            id.beard.map(|b| b as u8).unwrap_or(9),
+            id.moustache.map(|m| m as u8).unwrap_or(9),
+            id.phenotype as u8,
+        ));
+
+        Shading::defs(&mut c, &l, &tones, &id, jersey);
+
+        if !frame.cutout() {
+            c.raw(r#"<g id="bg">"#);
+            Shading::backdrop(&mut c, &l);
+            c.close("g");
         }
-        None => {
-            let hue = (player_id.wrapping_mul(137) % 360) as f32;
-            (
-                Rgb::hsl(hue, 0.26, 0.41),
-                Rgb::hsl(hue, 0.30, 0.30),
-                Rgb::hsl(hue, 0.32, 0.19),
-            )
-        }
-    };
 
-    let mut c = Canvas::new();
-    c.raw(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 250">"#);
-    // Debug trace of the sampled variants (invisible; keeps visual QA cheap)
-    c.raw(&format!(
-        "<!--h{} e{} f{} n{} b{} m{} w{heft:.1} a{aggr:.1} p{}-->",
-        id.hair.code(),
-        id.eye_st,
-        id.face_var,
-        id.nose_st,
-        id.beard.map(|b| b as u8).unwrap_or(9),
-        id.moustache.map(|m| m as u8).unwrap_or(9),
-        id.phenotype as u8,
-    ));
-
-    Shading::defs(&mut c, &l, &tones, &id, jersey);
-
-    if !frame.cutout() {
-        c.raw(r#"<g id="bg">"#);
-        Shading::backdrop(&mut c, &l);
+        // The head, with its slight photographic tilt
+        c.raw(&format!(
+            r#"<g transform="rotate({:.2} 100 205)">"#,
+            id.tilt
+        ));
+        Hair::back(&mut c, &l, &tones, &id);
+        Body::neck(&mut c, &l, &tones);
+        Features::ears(&mut c, &l, &tones);
+        Shading::head(&mut c, &l, &tones, &id, age, heft);
+        Features::eyes(&mut c, &l, &tones, &id, aggr);
+        Features::brows(&mut c, &l, &tones, &id, aggr, tones.hair_greyed(id.grey));
+        Features::nose(&mut c, &l, &tones);
+        Features::mouth(&mut c, &l, &tones, &id, aggr);
+        FacialHair::paint(&mut c, &l, &tones, &id, age);
+        Hair::scalp(&mut c, &l, &tones, &id, age);
         c.close("g");
-    }
 
-    // The head, with its slight photographic tilt
-    c.raw(&format!(
-        r#"<g transform="rotate({:.2} 100 205)">"#,
-        id.tilt
-    ));
-    Hair::back(&mut c, &l, &tones, &id);
-    Body::neck(&mut c, &l, &tones);
-    Features::ears(&mut c, &l, &tones);
-    Shading::head(&mut c, &l, &tones, &id, age, heft);
-    Features::eyes(&mut c, &l, &tones, &id, aggr);
-    Features::brows(&mut c, &l, &tones, &id, aggr, tones.hair_greyed(id.grey));
-    Features::nose(&mut c, &l, &tones);
-    Features::mouth(&mut c, &l, &tones, &id, aggr);
-    FacialHair::paint(&mut c, &l, &tones, &id, age);
-    Hair::scalp(&mut c, &l, &tones, &id, age);
-    c.close("g");
+        // Everything from here down is the SETTING rather than the man, so a
+        // cutout stops at the closing tag: no shoulders, no collar, no card
+        if frame.cutout() {
+            c.raw("</svg>");
+            return c.finish();
+        }
 
-    // Everything from here down is the SETTING rather than the man, so a
-    // cutout stops at the closing tag: no shoulders, no collar, no card
-    if frame.cutout() {
+        Body::jersey(&mut c, &l, &tones, jersey);
+        c.raw(r#"<rect width="200" height="250" fill="url(#vig)"/>"#);
         c.raw("</svg>");
-        return c.finish();
+        c.finish()
     }
-
-    Body::jersey(&mut c, &l, &tones, jersey);
-    c.raw(r#"<rect width="200" height="250" fill="url(#vig)"/>"#);
-    c.raw("</svg>");
-    c.finish()
 }
 
 #[cfg(test)]
@@ -173,7 +177,7 @@ mod tests {
             for player_id in [1u32, 7, 91, 4242, 900_001] {
                 let told = Palette::SKIN[Appearance::of(player_id, dist).skin];
                 let svg =
-                    generate_face_svg(player_id, 26, dist, 0.0, 0.3, None, FaceFrame::Portrait);
+                    FacePortrait::svg(player_id, 26, dist, 0.0, 0.3, None, FaceFrame::Portrait);
                 assert!(
                     svg.contains(&format!("stop-color=\"{told}\"")),
                     "player {player_id} is painted a tone the viewer was never given ({told})"
@@ -192,7 +196,7 @@ mod tests {
     fn a_cutout_is_the_portrait_with_the_setting_taken_away() {
         let dist = SkinDist::pure(SkinBucket::White, Region::WestEurope);
         for player_id in [7u32, 4242, 900_001] {
-            let portrait = generate_face_svg(
+            let portrait = FacePortrait::svg(
                 player_id,
                 26,
                 dist,
@@ -201,7 +205,7 @@ mod tests {
                 Some("#123456"),
                 FaceFrame::Portrait,
             );
-            let cutout = generate_face_svg(
+            let cutout = FacePortrait::svg(
                 player_id,
                 26,
                 dist,
@@ -333,7 +337,7 @@ mod tests {
                     // scrambled aggression sweep so it decorrelates from heft
                     let heft = -1.6 + i as f32 * 0.5;
                     let aggression = (i * 3 % 8) as f32 / 7.0;
-                    let svg = generate_face_svg(
+                    let svg = FacePortrait::svg(
                         player_id,
                         age,
                         dist,

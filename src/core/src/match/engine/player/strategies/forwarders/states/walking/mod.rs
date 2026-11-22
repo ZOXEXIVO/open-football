@@ -1,8 +1,8 @@
-use crate::r#match::common_states::ShapeTempo;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{
+use crate::r#match::forwarders::states::shared::{
     ActivityIntensity, ForwardCondition, ForwardRead,
 };
+use crate::r#match::shared_states::ShapeTempo;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -41,10 +41,7 @@ impl StateProcessingHandler for ForwardWalkingState {
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
-        ForwardCondition::new(ShapeTempo::forward_declared(
-            &ctx,
-            ActivityIntensity::Low,
-        ))
-        .process(ctx);
+        ForwardCondition::new(ShapeTempo::forward_declared(&ctx, ActivityIntensity::Low))
+            .process(ctx);
     }
 }

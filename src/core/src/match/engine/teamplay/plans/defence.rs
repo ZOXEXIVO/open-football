@@ -137,9 +137,7 @@ impl DefensivePlan {
                 .map(|p| p.position.x),
             attacking,
         );
-        line.is_some_and(|line| {
-            (field.ball.position.x - line) * attacking.forward_dir_x() > 0.0
-        })
+        line.is_some_and(|line| (field.ball.position.x - line) * attacking.forward_dir_x() > 0.0)
     }
 
     pub const fn idle() -> Self {
@@ -232,7 +230,10 @@ impl DefensivePlan {
                 p.team_id == team_id
                     && !p.off_pitch
                     && p.tactical_position.current_position.is_defender()
-                    && !p.tactical_position.current_position.is_defensive_midfielder()
+                    && !p
+                        .tactical_position
+                        .current_position
+                        .is_defensive_midfielder()
             })
             .fold((0.0f32, 0u32), |(sum, count), p| {
                 (sum + p.skills.mental.anticipation, count + 1)

@@ -513,7 +513,12 @@ impl PlanBuilder<'_> {
     /// The touchlines and the short outlet, for a side that has the ball
     /// but is not yet in a phase that commits bodies forward. Without the
     /// outlet nobody in the build-up is told to show for it.
-    fn build_width(&self, plan: &mut AttackPlan, previous: &WidePlan, previous_runner: Option<u32>) {
+    fn build_width(
+        &self,
+        plan: &mut AttackPlan,
+        previous: &WidePlan,
+        previous_runner: Option<u32>,
+    ) {
         let Some((side, wide)) = self.geometry() else {
             return;
         };
@@ -620,7 +625,6 @@ impl PlanBuilder<'_> {
         let Some((side, wide)) = self.geometry() else {
             return;
         };
-        let forward_dir = side.forward_dir_x();
         let field_width = self.field.size.width as f32;
         let field_height = self.field.size.height as f32;
         let goal = Vector3::new(
@@ -631,12 +635,41 @@ impl PlanBuilder<'_> {
             field_height / 2.0,
             0.0,
         );
+        let forward_dir = side.forward_dir_x();
 
         plan.carrier = self.field.ball.current_owner;
         plan.active = true;
 
         let mut held = HeldSet::default();
+        let carrier = plan.carrier;
 
+        self.assign_width(plan, &previous.wide, &wide, &mut held, carrier);
+        let ball_flank = plan.wide.ball_flank;
+        self.assign_rest_defence(plan, &mut held, goal, ball_flank, field_height);
+        self.assign_overlap(plan, &wide, &mut held, carrier);
+        self.assign_far_runner(plan, side, &mut held, previous.far_runner);
+        self.assign_box_slots(
+            plan,
+            &previous,
+            &mut held,
+            goal,
+            side,
+            field_width,
+            field_height,
+            forward_dir,
+        );
+        self.assign_primary_target(plan);
+        self.assign_near_support(plan, &mut held);
+    }
+
+    fn assign_width(
+        &self,
+        plan: &mut AttackPlan,
+        previous: &WidePlan,
+        wide: &WideBuilder<'_>,
+        held: &mut HeldSet,
+        carrier: Option<u32>,
+    ) {
         // ── Width first ───────────────────────────────────────────────
         // How wide a side plays is the first decision it makes with the
         // ball, not the last. Assigning the touchlines before anything
@@ -644,9 +677,7 @@ impl PlanBuilder<'_> {
         // this module pulls a man toward the middle, so a width holder
         // chosen from the leftovers is a man who has already been given
         // a reason to be somewhere else. See `wide`.
-        wide.holders(&mut plan.wide, &previous.wide, |id| {
-            Some(id) != plan.carrier
-        });
+        wide.holders(&mut plan.wide, previous, |id| Some(id) != carrier);
         plan.wide.active = true;
         // Only the BALL-SIDE holder is reserved. The far-side one stays
         // eligible for the far post, because the blind-side winger
@@ -655,7 +686,16 @@ impl PlanBuilder<'_> {
         if let Some(id) = plan.wide.holder(plan.wide.ball_flank) {
             held.mark(id);
         }
+    }
 
+    fn assign_rest_defence(
+        &self,
+        plan: &mut AttackPlan,
+        held: &mut HeldSet,
+        goal: Vector3<f32>,
+        ball_flank: Flank,
+        field_height: f32,
+    ) {
         // ── Rest defence ──────────────────────────────────────────────
         // Taking the men who hold BEFORE assigning attacking roles is
         // what stops the shape emptying: a slot can never be filled by a
@@ -666,7 +706,6 @@ impl PlanBuilder<'_> {
         // the same man as both the outlet on the flank and the cover
         // behind the ball, and he would spend the possession running
         // between the two.
-        let ball_flank = plan.wide.ball_flank;
         // At most ten outfielders — a stack buffer keeps this refresh
         // allocation-free, which matters because it runs twice every ten
         // ticks for the whole match.
@@ -701,27 +740,55 @@ impl PlanBuilder<'_> {
             *slot = Some(*id);
             held.mark(*id);
         }
+    }
 
+    fn assign_overlap(
+        &self,
+        plan: &mut AttackPlan,
+        wide: &WideBuilder<'_>,
+        held: &mut HeldSet,
+        carrier: Option<u32>,
+    ) {
         // ── …and only now, the overlap ────────────────────────────────
         // Whoever is left on the ball's flank behind the width holder is
         // by construction a man the plan could afford to send, so the
         // safety question is already answered and the run needs no gate
         // of its own.
         wide.overlap(&mut plan.wide, |id| {
-            !held.contains(id) && Some(id) != plan.carrier
+            !held.contains(id) && Some(id) != carrier
         });
         if let Some(id) = plan.wide.overlap_runner {
             held.mark(id);
         }
+    }
 
+    fn assign_far_runner(
+        &self,
+        plan: &mut AttackPlan,
+        side: PlayerSide,
+        held: &mut HeldSet,
+        previous_runner: Option<u32>,
+    ) {
         // ── The runner in behind ──────────────────────────────────────
         // Named before the box is filled: filled first, the box took the
         // strikers and the run went to whoever was left.
-        plan.far_runner = self.runner(side, &held, plan.carrier, previous.far_runner);
+        plan.far_runner = self.runner(side, held, plan.carrier, previous_runner);
         if let Some(id) = plan.far_runner {
             held.mark(id);
         }
+    }
 
+    fn assign_box_slots(
+        &self,
+        plan: &mut AttackPlan,
+        previous: &AttackPlan,
+        held: &mut HeldSet,
+        goal: Vector3<f32>,
+        side: PlayerSide,
+        field_width: f32,
+        field_height: f32,
+        forward_dir: f32,
+    ) {
         // ── Box slots ─────────────────────────────────────────────────
         // A place holds its man from the moment the box is staged. Until
         // then he stands on his place in the shape, free to be named the
@@ -773,7 +840,9 @@ impl PlanBuilder<'_> {
                 held.mark(*id);
             }
         }
+    }
 
+    fn assign_primary_target(&self, plan: &mut AttackPlan) {
         // ── Primary target ────────────────────────────────────────────
         // The man the attack is FOR: the box occupant in the most
         // dangerous position with the best chance of being found.
@@ -803,11 +872,13 @@ impl PlanBuilder<'_> {
                     .then(b.0.cmp(&a.0))
             })
             .map(|(id, _)| id);
+    }
 
+    fn assign_near_support(&self, plan: &mut AttackPlan, held: &mut HeldSet) {
         // ── Near support ──────────────────────────────────────────────
         // The short outlet. Explicitly NOT a box occupant — the whole
         // point is to have somebody to play backwards to.
-        plan.near_support = self.short_outlet(&held, plan.carrier);
+        plan.near_support = self.short_outlet(held, plan.carrier);
         if let Some(id) = plan.near_support {
             held.mark(id);
         }

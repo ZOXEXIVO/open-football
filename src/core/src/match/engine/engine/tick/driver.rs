@@ -206,7 +206,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             .midfielder_census
             .get_mut()
             .sample(field, attacks, areas, tick);
-        context.forward_census.get_mut().sample(field, attacks, tick);
+        context
+            .forward_census
+            .get_mut()
+            .sample(field, attacks, tick);
     }
 
     pub(in crate::r#match::engine::engine) fn game_tick_inner(

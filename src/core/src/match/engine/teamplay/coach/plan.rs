@@ -4,10 +4,10 @@
 //! it, how quickly and how directly it moves the ball, and how many men it
 //! commits forward. 0.5 on every dial is the neutral plan.
 
+use crate::PlayerFieldPositionGroup;
+use crate::r#match::MatchSquad;
 use crate::r#match::engine::teamplay::coach::card::CoachCard;
 use crate::r#match::engine::teamplay::tactical::TeamSkillAggregates;
-use crate::r#match::MatchSquad;
-use crate::PlayerFieldPositionGroup;
 use serde::{Deserialize, Serialize};
 
 /// What an eleven can carry out against this opponent, read at kickoff:
@@ -30,7 +30,9 @@ impl SquadFit {
                 .main_squad
                 .iter()
                 .filter(|p| p.tactical_position.current_position.position_group() == group)
-                .fold((0.0f32, 0u32), |(s, n), p| (s + p.skills.physical.pace, n + 1));
+                .fold((0.0f32, 0u32), |(s, n), p| {
+                    (s + p.skills.physical.pace, n + 1)
+                });
             if n == 0 { 0.5 } else { sum / n as f32 / 20.0 }
         };
         Self::read(
@@ -41,11 +43,7 @@ impl SquadFit {
         )
     }
 
-    pub fn read(
-        own: &TeamSkillAggregates,
-        opp: &TeamSkillAggregates,
-        back_line_pace: f32,
-    ) -> Self {
+    pub fn read(own: &TeamSkillAggregates, opp: &TeamSkillAggregates, back_line_pace: f32) -> Self {
         SquadFit {
             build_up: own.build_up_quality - opp.build_up_quality,
             press: own.press_quality - opp.press_quality,
@@ -69,13 +67,7 @@ pub struct GamePlan {
 
 impl GamePlan {
     pub const DIALS: [&'static str; 7] = [
-        "block",
-        "press",
-        "compact",
-        "width",
-        "tempo",
-        "direct",
-        "commit",
+        "block", "press", "compact", "width", "tempo", "direct", "commit",
     ];
 
     pub const fn neutral() -> Self {
@@ -149,8 +141,15 @@ impl GamePlan {
     }
 
     pub fn from_dials(dials: [f32; 7]) -> Self {
-        let [block_height, press, compactness, width, tempo, directness, commitment] =
-            dials.map(|d| d.clamp(0.0, 1.0));
+        let [
+            block_height,
+            press,
+            compactness,
+            width,
+            tempo,
+            directness,
+            commitment,
+        ] = dials.map(|d| d.clamp(0.0, 1.0));
         GamePlan {
             block_height,
             press,

@@ -188,207 +188,240 @@ struct PhaseWork {
     goalkeeping: f32,
 }
 
+/// The five drill families one session at a phase and unit practises.
+/// Each list is already phase- and unit-specific; [`PhaseWork`] only scales
+/// them by staff quality and identity.
+struct SessionPlan {
+    common: &'static [(SkillKey, f32)],
+    craft: &'static [(SkillKey, f32)],
+    mental: &'static [(SkillKey, f32)],
+    physical: &'static [(SkillKey, f32)],
+    goalkeeping: &'static [(SkillKey, f32)],
+}
+
 impl PhaseWork {
     fn session(&self) -> SessionWork {
-        let keeper = self.group == PlayerFieldPositionGroup::Goalkeeper;
-        let (common, craft, mental, physical, goalkeeping): (
-            &[(SkillKey, f32)],
-            &[(SkillKey, f32)],
-            &[(SkillKey, f32)],
-            &[(SkillKey, f32)],
-            &[(SkillKey, f32)],
-        ) = match (self.phase, keeper) {
-            (AcademyPlayerPhase::Foundation, false) => (
-                &[
-                    (SkillKey::FirstTouch, 0.035),
-                    (SkillKey::Dribbling, 0.030),
-                    (SkillKey::Technique, 0.025),
-                    (SkillKey::Passing, 0.020),
-                    (SkillKey::Crossing, 0.005),
-                ],
-                &[],
-                &[
-                    (SkillKey::Teamwork, 0.015),
-                    (SkillKey::Decisions, 0.010),
-                    (SkillKey::OffTheBall, 0.010),
-                    (SkillKey::Flair, 0.008),
-                ],
-                &[
-                    (SkillKey::Agility, 0.015),
-                    (SkillKey::Balance, 0.015),
-                    (SkillKey::Acceleration, 0.010),
-                ],
-                &[],
-            ),
-            (AcademyPlayerPhase::Foundation, true) => (
-                &[],
-                &[],
-                &[
-                    (SkillKey::Bravery, 0.015),
-                    (SkillKey::Concentration, 0.010),
-                    (SkillKey::Decisions, 0.008),
-                ],
-                &[(SkillKey::Agility, 0.020), (SkillKey::Balance, 0.015)],
-                &[
-                    (SkillKey::GkHandling, 0.030),
-                    (SkillKey::GkReflexes, 0.020),
-                    (SkillKey::GkKicking, 0.015),
-                    (SkillKey::GkFirstTouch, 0.015),
-                    (SkillKey::GkThrowing, 0.010),
-                ],
-            ),
-            (AcademyPlayerPhase::Development, false) => (
-                &[
-                    (SkillKey::FirstTouch, 0.025),
-                    (SkillKey::Passing, 0.025),
-                    (SkillKey::Technique, 0.020),
-                ],
-                self.craft(
-                    &[
-                        (SkillKey::Tackling, 0.025),
-                        (SkillKey::Marking, 0.020),
-                        (SkillKey::Heading, 0.015),
-                    ],
-                    &[
-                        (SkillKey::Passing, 0.015),
-                        (SkillKey::Crossing, 0.015),
-                        (SkillKey::Dribbling, 0.015),
-                    ],
-                    &[
-                        (SkillKey::Finishing, 0.025),
-                        (SkillKey::Dribbling, 0.020),
-                        (SkillKey::LongShots, 0.010),
-                    ],
-                ),
-                &[
-                    (SkillKey::Positioning, 0.025),
-                    (SkillKey::Concentration, 0.020),
-                    (SkillKey::Decisions, 0.020),
-                    (SkillKey::Anticipation, 0.015),
-                    (SkillKey::Teamwork, 0.015),
-                    (SkillKey::Vision, 0.010),
-                ],
-                &[
-                    (SkillKey::Agility, 0.015),
-                    (SkillKey::Balance, 0.015),
-                    (SkillKey::Pace, 0.010),
-                    (SkillKey::Stamina, 0.010),
-                ],
-                &[],
-            ),
-            (AcademyPlayerPhase::Development, true) => (
-                &[],
-                &[],
-                &[
-                    (SkillKey::Positioning, 0.025),
-                    (SkillKey::Concentration, 0.020),
-                    (SkillKey::Composure, 0.015),
-                    (SkillKey::Decisions, 0.015),
-                ],
-                &[
-                    (SkillKey::Agility, 0.020),
-                    (SkillKey::Jumping, 0.015),
-                    (SkillKey::Acceleration, 0.010),
-                ],
-                &[
-                    (SkillKey::GkHandling, 0.025),
-                    (SkillKey::GkReflexes, 0.025),
-                    (SkillKey::GkOneOnOnes, 0.020),
-                    (SkillKey::GkKicking, 0.020),
-                    (SkillKey::GkPassing, 0.015),
-                    (SkillKey::GkCommunication, 0.015),
-                    (SkillKey::GkAerialReach, 0.010),
-                    (SkillKey::GkCommandOfArea, 0.010),
-                ],
-            ),
-            (AcademyPlayerPhase::Professional, false) => (
-                &[(SkillKey::Technique, 0.015), (SkillKey::FirstTouch, 0.015)],
-                self.craft(
-                    &[
-                        (SkillKey::Tackling, 0.020),
-                        (SkillKey::Marking, 0.020),
-                        (SkillKey::Heading, 0.020),
-                        (SkillKey::Passing, 0.010),
-                    ],
-                    &[
-                        (SkillKey::Passing, 0.020),
-                        (SkillKey::Crossing, 0.015),
-                        (SkillKey::Dribbling, 0.015),
-                        (SkillKey::LongShots, 0.010),
-                    ],
-                    &[
-                        (SkillKey::Finishing, 0.025),
-                        (SkillKey::Dribbling, 0.015),
-                        (SkillKey::Heading, 0.010),
-                        (SkillKey::LongShots, 0.015),
-                    ],
-                ),
-                &[
-                    (SkillKey::Composure, 0.020),
-                    (SkillKey::Concentration, 0.020),
-                    (SkillKey::Decisions, 0.020),
-                    (SkillKey::Positioning, 0.020),
-                    (SkillKey::Anticipation, 0.015),
-                    (SkillKey::Determination, 0.010),
-                    (SkillKey::WorkRate, 0.010),
-                ],
-                &[
-                    (SkillKey::Strength, 0.025),
-                    (SkillKey::Stamina, 0.025),
-                    (SkillKey::Pace, 0.020),
-                    (SkillKey::Acceleration, 0.015),
-                    (SkillKey::Jumping, 0.015),
-                    (SkillKey::NaturalFitness, 0.010),
-                    (SkillKey::Agility, 0.010),
-                ],
-                &[],
-            ),
-            (AcademyPlayerPhase::Professional, true) => (
-                &[],
-                &[],
-                &[
-                    (SkillKey::Positioning, 0.020),
-                    (SkillKey::Concentration, 0.020),
-                    (SkillKey::Composure, 0.020),
-                    (SkillKey::Decisions, 0.015),
-                    (SkillKey::Anticipation, 0.015),
-                    (SkillKey::Leadership, 0.010),
-                ],
-                &[
-                    (SkillKey::Strength, 0.020),
-                    (SkillKey::Jumping, 0.020),
-                    (SkillKey::Agility, 0.015),
-                    (SkillKey::Acceleration, 0.010),
-                    (SkillKey::Stamina, 0.010),
-                ],
-                &[
-                    (SkillKey::GkHandling, 0.020),
-                    (SkillKey::GkReflexes, 0.020),
-                    (SkillKey::GkOneOnOnes, 0.020),
-                    (SkillKey::GkAerialReach, 0.020),
-                    (SkillKey::GkCommandOfArea, 0.020),
-                    (SkillKey::GkRushingOut, 0.015),
-                    (SkillKey::GkPunching, 0.015),
-                    (SkillKey::GkKicking, 0.015),
-                    (SkillKey::GkPassing, 0.015),
-                    (SkillKey::GkCommunication, 0.015),
-                    (SkillKey::GkThrowing, 0.010),
-                ],
-            ),
-        };
+        let plan = self.session_plan();
         let mut work = SessionWork::default();
         for (reps, scale) in [
-            (common, self.technical),
-            (craft, self.technical),
-            (mental, self.mental),
-            (physical, self.physical),
-            (goalkeeping, self.goalkeeping),
+            (plan.common, self.technical),
+            (plan.craft, self.technical),
+            (plan.mental, self.mental),
+            (plan.physical, self.physical),
+            (plan.goalkeeping, self.goalkeeping),
         ] {
             for (key, r) in reps {
                 work.practise(*key, r * scale);
             }
         }
         work
+    }
+
+    fn session_plan(&self) -> SessionPlan {
+        let keeper = self.group == PlayerFieldPositionGroup::Goalkeeper;
+        match (self.phase, keeper) {
+            (AcademyPlayerPhase::Foundation, false) => Self::foundation_outfield(),
+            (AcademyPlayerPhase::Foundation, true) => Self::foundation_keeper(),
+            (AcademyPlayerPhase::Development, false) => self.development_outfield(),
+            (AcademyPlayerPhase::Development, true) => Self::development_keeper(),
+            (AcademyPlayerPhase::Professional, false) => self.professional_outfield(),
+            (AcademyPlayerPhase::Professional, true) => Self::professional_keeper(),
+        }
+    }
+
+    fn foundation_outfield() -> SessionPlan {
+        SessionPlan {
+            common: &[
+                (SkillKey::FirstTouch, 0.035),
+                (SkillKey::Dribbling, 0.030),
+                (SkillKey::Technique, 0.025),
+                (SkillKey::Passing, 0.020),
+                (SkillKey::Crossing, 0.005),
+            ],
+            craft: &[],
+            mental: &[
+                (SkillKey::Teamwork, 0.015),
+                (SkillKey::Decisions, 0.010),
+                (SkillKey::OffTheBall, 0.010),
+                (SkillKey::Flair, 0.008),
+            ],
+            physical: &[
+                (SkillKey::Agility, 0.015),
+                (SkillKey::Balance, 0.015),
+                (SkillKey::Acceleration, 0.010),
+            ],
+            goalkeeping: &[],
+        }
+    }
+
+    fn foundation_keeper() -> SessionPlan {
+        SessionPlan {
+            common: &[],
+            craft: &[],
+            mental: &[
+                (SkillKey::Bravery, 0.015),
+                (SkillKey::Concentration, 0.010),
+                (SkillKey::Decisions, 0.008),
+            ],
+            physical: &[(SkillKey::Agility, 0.020), (SkillKey::Balance, 0.015)],
+            goalkeeping: &[
+                (SkillKey::GkHandling, 0.030),
+                (SkillKey::GkReflexes, 0.020),
+                (SkillKey::GkKicking, 0.015),
+                (SkillKey::GkFirstTouch, 0.015),
+                (SkillKey::GkThrowing, 0.010),
+            ],
+        }
+    }
+
+    fn development_outfield(&self) -> SessionPlan {
+        SessionPlan {
+            common: &[
+                (SkillKey::FirstTouch, 0.025),
+                (SkillKey::Passing, 0.025),
+                (SkillKey::Technique, 0.020),
+            ],
+            craft: self.craft(
+                &[
+                    (SkillKey::Tackling, 0.025),
+                    (SkillKey::Marking, 0.020),
+                    (SkillKey::Heading, 0.015),
+                ],
+                &[
+                    (SkillKey::Passing, 0.015),
+                    (SkillKey::Crossing, 0.015),
+                    (SkillKey::Dribbling, 0.015),
+                ],
+                &[
+                    (SkillKey::Finishing, 0.025),
+                    (SkillKey::Dribbling, 0.020),
+                    (SkillKey::LongShots, 0.010),
+                ],
+            ),
+            mental: &[
+                (SkillKey::Positioning, 0.025),
+                (SkillKey::Concentration, 0.020),
+                (SkillKey::Decisions, 0.020),
+                (SkillKey::Anticipation, 0.015),
+                (SkillKey::Teamwork, 0.015),
+                (SkillKey::Vision, 0.010),
+            ],
+            physical: &[
+                (SkillKey::Agility, 0.015),
+                (SkillKey::Balance, 0.015),
+                (SkillKey::Pace, 0.010),
+                (SkillKey::Stamina, 0.010),
+            ],
+            goalkeeping: &[],
+        }
+    }
+
+    fn development_keeper() -> SessionPlan {
+        SessionPlan {
+            common: &[],
+            craft: &[],
+            mental: &[
+                (SkillKey::Positioning, 0.025),
+                (SkillKey::Concentration, 0.020),
+                (SkillKey::Composure, 0.015),
+                (SkillKey::Decisions, 0.015),
+            ],
+            physical: &[
+                (SkillKey::Agility, 0.020),
+                (SkillKey::Jumping, 0.015),
+                (SkillKey::Acceleration, 0.010),
+            ],
+            goalkeeping: &[
+                (SkillKey::GkHandling, 0.025),
+                (SkillKey::GkReflexes, 0.025),
+                (SkillKey::GkOneOnOnes, 0.020),
+                (SkillKey::GkKicking, 0.020),
+                (SkillKey::GkPassing, 0.015),
+                (SkillKey::GkCommunication, 0.015),
+                (SkillKey::GkAerialReach, 0.010),
+                (SkillKey::GkCommandOfArea, 0.010),
+            ],
+        }
+    }
+
+    fn professional_outfield(&self) -> SessionPlan {
+        SessionPlan {
+            common: &[(SkillKey::Technique, 0.015), (SkillKey::FirstTouch, 0.015)],
+            craft: self.craft(
+                &[
+                    (SkillKey::Tackling, 0.020),
+                    (SkillKey::Marking, 0.020),
+                    (SkillKey::Heading, 0.020),
+                    (SkillKey::Passing, 0.010),
+                ],
+                &[
+                    (SkillKey::Passing, 0.020),
+                    (SkillKey::Crossing, 0.015),
+                    (SkillKey::Dribbling, 0.015),
+                    (SkillKey::LongShots, 0.010),
+                ],
+                &[
+                    (SkillKey::Finishing, 0.025),
+                    (SkillKey::Dribbling, 0.015),
+                    (SkillKey::Heading, 0.010),
+                    (SkillKey::LongShots, 0.015),
+                ],
+            ),
+            mental: &[
+                (SkillKey::Composure, 0.020),
+                (SkillKey::Concentration, 0.020),
+                (SkillKey::Decisions, 0.020),
+                (SkillKey::Positioning, 0.020),
+                (SkillKey::Anticipation, 0.015),
+                (SkillKey::Determination, 0.010),
+                (SkillKey::WorkRate, 0.010),
+            ],
+            physical: &[
+                (SkillKey::Strength, 0.025),
+                (SkillKey::Stamina, 0.025),
+                (SkillKey::Pace, 0.020),
+                (SkillKey::Acceleration, 0.015),
+                (SkillKey::Jumping, 0.015),
+                (SkillKey::NaturalFitness, 0.010),
+                (SkillKey::Agility, 0.010),
+            ],
+            goalkeeping: &[],
+        }
+    }
+
+    fn professional_keeper() -> SessionPlan {
+        SessionPlan {
+            common: &[],
+            craft: &[],
+            mental: &[
+                (SkillKey::Positioning, 0.020),
+                (SkillKey::Concentration, 0.020),
+                (SkillKey::Composure, 0.020),
+                (SkillKey::Decisions, 0.015),
+                (SkillKey::Anticipation, 0.015),
+                (SkillKey::Leadership, 0.010),
+            ],
+            physical: &[
+                (SkillKey::Strength, 0.020),
+                (SkillKey::Jumping, 0.020),
+                (SkillKey::Agility, 0.015),
+                (SkillKey::Acceleration, 0.010),
+                (SkillKey::Stamina, 0.010),
+            ],
+            goalkeeping: &[
+                (SkillKey::GkHandling, 0.020),
+                (SkillKey::GkReflexes, 0.020),
+                (SkillKey::GkOneOnOnes, 0.020),
+                (SkillKey::GkAerialReach, 0.020),
+                (SkillKey::GkCommandOfArea, 0.020),
+                (SkillKey::GkRushingOut, 0.015),
+                (SkillKey::GkPunching, 0.015),
+                (SkillKey::GkKicking, 0.015),
+                (SkillKey::GkPassing, 0.015),
+                (SkillKey::GkCommunication, 0.015),
+                (SkillKey::GkThrowing, 0.010),
+            ],
+        }
     }
 
     /// His unit's own craft.

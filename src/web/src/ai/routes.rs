@@ -1,18 +1,19 @@
 use crate::GameAppData;
+use crate::ai::AiApi;
 use axum::Router;
 use axum::routing::get;
 
-pub fn routes() -> Router<GameAppData> {
-    Router::new()
-        .route(
-            "/api/ai/config",
-            get(super::ai_config_get_action)
-                .post(super::ai_config_save_action)
-                .delete(super::ai_config_delete_action),
-        )
-        .route("/api/ai/progress", get(super::ai_progress_action))
-}
+pub struct AiRoutes;
 
-pub fn ai_routes() -> Router<GameAppData> {
-    routes()
+impl AiRoutes {
+    pub fn routes() -> Router<GameAppData> {
+        Router::new()
+            .route(
+                "/api/ai/config",
+                get(AiApi::config_get)
+                    .post(AiApi::config_save)
+                    .delete(AiApi::config_delete),
+            )
+            .route("/api/ai/progress", get(AiApi::progress))
+    }
 }

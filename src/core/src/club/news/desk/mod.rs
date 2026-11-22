@@ -60,7 +60,7 @@ mod tests {
     use super::squad::SquadDesk;
     use super::{MarketDesk, MatchDesk, TableDesk};
     use crate::club::news::types::{IssueResult, NewsStory, NewsStoryKind, ResultCompetition};
-    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::shared::FullName;
     use crate::{
         PersonAttributes, Player, PlayerAttributes, PlayerCollection, PlayerPosition,

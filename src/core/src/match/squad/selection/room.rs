@@ -78,10 +78,21 @@ mod tests {
     #[test]
     fn room_rises_only_when_the_next_fixture_is_close_and_matters_more() {
         let alone = room(0.6, &ClubWeek::free());
-        assert!(room(0.6, &week(3, 1.0)) > alone + 0.25, "a decider in three days");
+        assert!(
+            room(0.6, &week(3, 1.0)) > alone + 0.25,
+            "a decider in three days"
+        );
         assert_eq!(room(0.6, &week(7, 1.0)), alone, "a decider a week off");
-        assert_eq!(room(0.6, &week(3, 0.6)), alone, "an equal fixture in three days");
-        assert_eq!(room(0.9, &week(3, 0.5)), room(0.9, &ClubWeek::free()), "a routine match after a decider");
+        assert_eq!(
+            room(0.6, &week(3, 0.6)),
+            alone,
+            "an equal fixture in three days"
+        );
+        assert_eq!(
+            room(0.9, &week(3, 0.5)),
+            room(0.9, &ClubWeek::free()),
+            "a routine match after a decider"
+        );
     }
 
     #[test]

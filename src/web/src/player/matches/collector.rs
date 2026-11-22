@@ -14,7 +14,7 @@
 
 use super::{PlayerMatchItem, PlayerMatchResult};
 use crate::I18n;
-use crate::common::played_fixture::PlayedFixture;
+use crate::shared::played_fixture::PlayedFixture;
 use chrono::NaiveDateTime;
 use core::league::season::Season;
 use core::r#match::MatchResult;
@@ -376,7 +376,11 @@ mod tests {
     fn a_cap_between_club_matches_joins_the_campaign_before_it() {
         // February club match in 2026/27, a March cap whose national league
         // would call it 2027, then the next campaign's opener.
-        let mut rows = [row(false, 2026, true), row(true, 2027, false), row(false, 2027, true)];
+        let mut rows = [
+            row(false, 2026, true),
+            row(true, 2027, false),
+            row(false, 2027, true),
+        ];
         PlayerMatchCollector::file_borrowed_seasons(&mut rows);
         assert_eq!(seasons(&rows), [(2026, true), (2026, true), (2027, true)]);
     }

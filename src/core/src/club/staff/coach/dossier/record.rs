@@ -488,8 +488,7 @@ impl PlayerDossier {
         let years = self.years_apart(today);
         let time = (-years / DossierTuning::TAU_REUNION_YEARS).exp();
         self.warmth()
-            * (DossierTuning::WARMTH_FADE_FLOOR
-                + (1.0 - DossierTuning::WARMTH_FADE_FLOOR) * time)
+            * (DossierTuning::WARMTH_FADE_FLOOR + (1.0 - DossierTuning::WARMTH_FADE_FLOOR) * time)
     }
 
     /// How much of a full record would be lost by dropping him. Years
@@ -625,12 +624,7 @@ mod tests {
             dossier.medals = MedalFlags(medals);
             dossier.set_warmth(warmth);
             dossier.refresh_scar_strength(10.0);
-            dossier.close(
-                SeparationCause::IMovedOn,
-                3,
-                28,
-                TODAY - years_ago * YEAR,
-            );
+            dossier.close(SeparationCause::IMovedOn, 3, 28, TODAY - years_ago * YEAR);
             dossier
         }
     }

@@ -538,7 +538,10 @@ impl StaffMind {
     /// himself travels with him.
     pub fn on_club_change(&mut self, leaving_club_id: u32) {
         let change = SpellChange::release(leaving_club_id);
-        self.organs.shared.memory.on_club_change(change.former_club_id);
+        self.organs
+            .shared
+            .memory
+            .on_club_change(change.former_club_id);
         self.organs.shared.goals.on_spell_change(change.changed);
 
         // Standing is about a specific board, a specific room and a

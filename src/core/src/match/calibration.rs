@@ -7,12 +7,12 @@
 //! details and the match's own [`MatchTally`] — so matches played in
 //! parallel can be recorded in any order.
 
-use crate::r#match::engine::player::injury::InjuryGrade;
-use crate::r#match::player::statistics::MatchStatisticType;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::delivery_diag::DeliveryCensus;
+use crate::r#match::engine::player::injury::InjuryGrade;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::result::team_census::LedgerState;
+use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{GoalOrigin, MatchResultRaw, MatchTally, PassOriginRestart, PeriodKind};
 
 #[derive(Debug, Default, Clone)]
@@ -74,6 +74,31 @@ pub struct CalibrationLine {
 impl CalibrationLine {
     pub fn in_band(&self) -> bool {
         !self.checked || (self.value >= self.accept_min && self.value <= self.accept_max)
+    }
+
+    fn checked(
+        name: &'static str,
+        value: f64,
+        accept_min: f64,
+        accept_max: f64,
+    ) -> CalibrationLine {
+        CalibrationLine {
+            name,
+            value,
+            accept_min,
+            accept_max,
+            checked: true,
+        }
+    }
+
+    fn tracked(name: &'static str, value: f64, reference: f64) -> CalibrationLine {
+        CalibrationLine {
+            name,
+            value,
+            accept_min: reference,
+            accept_max: reference,
+            checked: false,
+        }
     }
 }
 
@@ -346,7 +371,8 @@ impl MatchCalibrationStats {
         let goals = result.goal_timeline();
         self.timeline
             .absorb(&GoalTimeline::read(&goals, result.match_time_ms));
-        let first_half_ends = 45 * 60_000 + result.tally.added_time_ms[PeriodKind::FirstHalf.index()];
+        let first_half_ends =
+            45 * 60_000 + result.tally.added_time_ms[PeriodKind::FirstHalf.index()];
         let second_half_ends = first_half_ends
             + 45 * 60_000
             + result.tally.added_time_ms[PeriodKind::SecondHalf.index()];
@@ -367,83 +393,186 @@ impl MatchCalibrationStats {
         }
     }
 
+    /// Every line the report reads, in report order.
     pub fn report_lines(&self) -> Vec<CalibrationLine> {
-        let n = self.matches.max(1) as f64;
-        let per = |v: f64| v / n;
-        let ratio = |num: u64, den: u64| {
-            if den == 0 {
-                0.0
-            } else {
-                num as f64 / den as f64
-            }
-        };
-        let all_goals = self.goals + self.own_goals;
-        let decided = self.home_wins + self.draws + self.away_wins;
-        let minutes = |ms: u64| per(ms as f64 / 60_000.0);
-        let restarts = |origin: PassOriginRestart| per(self.tally.restarts_of(origin) as f64);
-        let line = |name, value, accept_min, accept_max| CalibrationLine {
-            name,
-            value,
-            accept_min,
-            accept_max,
-            checked: true,
-        };
-        let tracked = |name, value, reference| CalibrationLine {
-            name,
-            value,
-            accept_min: reference,
-            accept_max: reference,
-            checked: false,
-        };
-        let (home_rate, away_rate) = (per(self.home_goals as f64), per(self.away_goals as f64));
-        let (equalised_if_independent, lead_change_if_independent) =
-            IndependentScoring::reference(home_rate, away_rate, &self.goal_minutes);
-        let profile_goals: u64 = self.goal_profile.iter().sum();
-        let profile = |period: usize| ratio(self.goal_profile[period], profile_goals);
+        let mut lines = self.ball_lines();
+        lines.extend(self.discipline_lines());
+        lines.extend(self.outcome_lines());
+        lines.extend(self.timeline_lines());
+        #[cfg(feature = "match-logs")]
+        {
+            lines.extend(self.possession_ledger_lines());
+            lines.extend(self.delivery_lines());
+            lines.extend(self.outfield_motion_lines());
+            lines.extend(self.defender_motion_lines());
+            lines.extend(self.midfielder_motion_lines());
+            lines.extend(self.forward_motion_lines());
+            lines.extend(self.keeper_ground_lines());
+        }
+        lines
+    }
 
-        #[allow(unused_mut)]
-        let mut lines = vec![
-            line("goals/match", per(all_goals as f64), 2.3, 3.4),
-            line("shots/match", per(self.shots as f64), 18.0, 32.0),
-            line("shots-on-target %", ratio(self.shots_on_target, self.shots), 0.28, 0.42),
-            line("xG/match", per(self.xg_total), 2.2, 3.4),
-            line("save %", ratio(self.saves, self.shots_on_target), 0.62, 0.76),
-            line("pass-completion %", ratio(self.passes_completed, self.passes_attempted), 0.75, 0.88),
-            line("crosses/match", per(self.crosses as f64), 22.0, 45.0),
-            line("cross-completion %", ratio(self.crosses_completed, self.crosses), 0.18, 0.32),
-            line("dribbles attempted/match", per(self.dribbles_attempted as f64), 20.0, 45.0),
-            line(
+    fn per_match(&self, value: f64) -> f64 {
+        value / self.matches.max(1) as f64
+    }
+
+    fn ratio(num: u64, den: u64) -> f64 {
+        if den == 0 {
+            0.0
+        } else {
+            num as f64 / den as f64
+        }
+    }
+
+    fn ball_lines(&self) -> Vec<CalibrationLine> {
+        let per = |v: f64| self.per_match(v);
+        let ratio = Self::ratio;
+        vec![
+            CalibrationLine::checked(
+                "goals/match",
+                per((self.goals + self.own_goals) as f64),
+                2.3,
+                3.4,
+            ),
+            CalibrationLine::checked("shots/match", per(self.shots as f64), 18.0, 32.0),
+            CalibrationLine::checked(
+                "shots-on-target %",
+                ratio(self.shots_on_target, self.shots),
+                0.28,
+                0.42,
+            ),
+            CalibrationLine::checked("xG/match", per(self.xg_total), 2.2, 3.4),
+            CalibrationLine::checked(
+                "save %",
+                ratio(self.saves, self.shots_on_target),
+                0.62,
+                0.76,
+            ),
+            CalibrationLine::checked(
+                "pass-completion %",
+                ratio(self.passes_completed, self.passes_attempted),
+                0.75,
+                0.88,
+            ),
+            CalibrationLine::checked("crosses/match", per(self.crosses as f64), 22.0, 45.0),
+            CalibrationLine::checked(
+                "cross-completion %",
+                ratio(self.crosses_completed, self.crosses),
+                0.18,
+                0.32,
+            ),
+            CalibrationLine::checked(
+                "dribbles attempted/match",
+                per(self.dribbles_attempted as f64),
+                20.0,
+                45.0,
+            ),
+            CalibrationLine::checked(
                 "dribble success %",
                 ratio(self.dribbles_succeeded, self.dribbles_attempted),
                 0.35,
                 0.55,
             ),
-            line("miscontrols/match", per(self.miscontrols as f64), 8.0, 18.0),
-            line("key passes/match", per(self.key_passes as f64), 12.0, 28.0),
-            line("progressive passes/match", per(self.progressive_passes as f64), 30.0, 90.0),
-            line("progressive carries/match", per(self.progressive_carries as f64), 12.0, 40.0),
-            line("successful pressures/match", per(self.successful_pressures as f64), 20.0, 45.0),
-            line("errors leading to shot/match", per(self.errors_leading_to_shot as f64), 1.0, 4.0),
-            line("errors leading to goal/match", per(self.errors_leading_to_goal as f64), 0.05, 0.35),
-            line("fouls/match", per(self.fouls as f64), 18.0, 32.0),
-            line("yellow-cards/match", per(self.yellow_cards as f64), 2.5, 5.5),
-            line("red-cards/match", per(self.red_cards as f64), 0.08, 0.28),
-            line("offsides/match", per(self.offsides as f64), 2.0, 6.0),
-            line("corners/match", restarts(PassOriginRestart::Corner), 7.0, 13.0),
-            line("throw-ins/match", restarts(PassOriginRestart::ThrowIn), 30.0, 55.0),
-            line("goal-kicks/match", restarts(PassOriginRestart::GoalKick), 10.0, 22.0),
-            line("penalties/match", restarts(PassOriginRestart::Penalty), 0.18, 0.35),
-            line("penalty goals/match", per(self.penalty_goals as f64), 0.12, 0.30),
-            line("own goals/match", per(self.own_goals as f64), 0.04, 0.16),
-            line("set-piece goal share", ratio(self.set_piece_goals, all_goals), 0.20, 0.36),
-            line("ball-in-play minutes/match", minutes(self.tally.ball_in_play_ms), 52.0, 62.0),
-            line(
+            CalibrationLine::checked("miscontrols/match", per(self.miscontrols as f64), 8.0, 18.0),
+            CalibrationLine::checked("key passes/match", per(self.key_passes as f64), 12.0, 28.0),
+            CalibrationLine::checked(
+                "progressive passes/match",
+                per(self.progressive_passes as f64),
+                30.0,
+                90.0,
+            ),
+            CalibrationLine::checked(
+                "progressive carries/match",
+                per(self.progressive_carries as f64),
+                12.0,
+                40.0,
+            ),
+            CalibrationLine::checked(
+                "successful pressures/match",
+                per(self.successful_pressures as f64),
+                20.0,
+                45.0,
+            ),
+            CalibrationLine::checked(
+                "errors leading to shot/match",
+                per(self.errors_leading_to_shot as f64),
+                1.0,
+                4.0,
+            ),
+            CalibrationLine::checked(
+                "errors leading to goal/match",
+                per(self.errors_leading_to_goal as f64),
+                0.05,
+                0.35,
+            ),
+        ]
+    }
+
+    fn discipline_lines(&self) -> Vec<CalibrationLine> {
+        let per = |v: f64| self.per_match(v);
+        let ratio = Self::ratio;
+        let restarts = |origin: PassOriginRestart| per(self.tally.restarts_of(origin) as f64);
+        let minutes = |ms: u64| per(ms as f64 / 60_000.0);
+        vec![
+            CalibrationLine::checked("fouls/match", per(self.fouls as f64), 18.0, 32.0),
+            CalibrationLine::checked(
+                "yellow-cards/match",
+                per(self.yellow_cards as f64),
+                2.5,
+                5.5,
+            ),
+            CalibrationLine::checked("red-cards/match", per(self.red_cards as f64), 0.08, 0.28),
+            CalibrationLine::checked("offsides/match", per(self.offsides as f64), 2.0, 6.0),
+            CalibrationLine::checked(
+                "corners/match",
+                restarts(PassOriginRestart::Corner),
+                7.0,
+                13.0,
+            ),
+            CalibrationLine::checked(
+                "throw-ins/match",
+                restarts(PassOriginRestart::ThrowIn),
+                30.0,
+                55.0,
+            ),
+            CalibrationLine::checked(
+                "goal-kicks/match",
+                restarts(PassOriginRestart::GoalKick),
+                10.0,
+                22.0,
+            ),
+            CalibrationLine::checked(
+                "penalties/match",
+                restarts(PassOriginRestart::Penalty),
+                0.18,
+                0.35,
+            ),
+            CalibrationLine::checked(
+                "penalty goals/match",
+                per(self.penalty_goals as f64),
+                0.12,
+                0.30,
+            ),
+            CalibrationLine::checked("own goals/match", per(self.own_goals as f64), 0.04, 0.16),
+            CalibrationLine::checked(
+                "set-piece goal share",
+                ratio(self.set_piece_goals, self.goals + self.own_goals),
+                0.20,
+                0.36,
+            ),
+            CalibrationLine::checked(
+                "ball-in-play minutes/match",
+                minutes(self.tally.ball_in_play_ms),
+                52.0,
+                62.0,
+            ),
+            CalibrationLine::checked(
                 "first-half added minutes",
                 minutes(self.tally.added_time_ms[PeriodKind::FirstHalf.index()]),
                 1.0,
                 4.0,
             ),
-            line(
+            CalibrationLine::checked(
                 "second-half added minutes",
                 minutes(self.tally.added_time_ms[PeriodKind::SecondHalf.index()]),
                 3.0,
@@ -451,117 +580,219 @@ impl MatchCalibrationStats {
             ),
             // Every hurt or worse is carried out of the match, so the band is
             // the world's season injury volume, not the real time-loss rate.
-            line(
+            CalibrationLine::checked(
                 "injuries (hurt or worse)/match",
                 per(self.tally.injuries_from(InjuryGrade::Hurt) as f64),
                 0.04,
                 0.14,
             ),
-            line(
+        ]
+    }
+
+    fn outcome_lines(&self) -> Vec<CalibrationLine> {
+        let per = |v: f64| self.per_match(v);
+        let ratio = Self::ratio;
+        let decided = self.home_wins + self.draws + self.away_wins;
+        vec![
+            CalibrationLine::checked(
                 "home goal edge/match (equal teams)",
                 per(self.home_goals as f64 - self.away_goals as f64),
                 0.25,
                 0.45,
             ),
-            line("home win % (equal teams)", ratio(self.home_wins, decided), 0.42, 0.48),
-            line("draw % (equal teams)", ratio(self.draws, decided), 0.23, 0.30),
-            line("away win % (equal teams)", ratio(self.away_wins, decided), 0.27, 0.34),
-            line("goal correlation (equal teams)", self.goal_correlation(), -0.08, 0.08),
-            line("draw surplus over independent", self.draw_surplus(), -0.03, 0.03),
-            line("lead/trail scoring rate <62'", self.timeline.lead_trail_ratio(0), 0.75, 1.33),
-            line("lead/trail scoring rate >=62'", self.timeline.lead_trail_ratio(1), 0.75, 1.33),
-            tracked(
+            CalibrationLine::checked(
+                "home win % (equal teams)",
+                ratio(self.home_wins, decided),
+                0.42,
+                0.48,
+            ),
+            CalibrationLine::checked(
+                "draw % (equal teams)",
+                ratio(self.draws, decided),
+                0.23,
+                0.30,
+            ),
+            CalibrationLine::checked(
+                "away win % (equal teams)",
+                ratio(self.away_wins, decided),
+                0.27,
+                0.34,
+            ),
+            CalibrationLine::checked(
+                "goal correlation (equal teams)",
+                self.goal_correlation(),
+                -0.08,
+                0.08,
+            ),
+            CalibrationLine::checked(
+                "draw surplus over independent",
+                self.draw_surplus(),
+                -0.03,
+                0.03,
+            ),
+        ]
+    }
+
+    fn timeline_lines(&self) -> Vec<CalibrationLine> {
+        let per = |v: f64| self.per_match(v);
+        let ratio = Self::ratio;
+        let (equalised_if_independent, lead_change_if_independent) = IndependentScoring::reference(
+            per(self.home_goals as f64),
+            per(self.away_goals as f64),
+            &self.goal_minutes,
+        );
+        let profile_goals: u64 = self.goal_profile.iter().sum();
+        let profile = |period: usize| ratio(self.goal_profile[period], profile_goals);
+        vec![
+            CalibrationLine::checked(
+                "lead/trail scoring rate <62'",
+                self.timeline.lead_trail_ratio(0),
+                0.75,
+                1.33,
+            ),
+            CalibrationLine::checked(
+                "lead/trail scoring rate >=62'",
+                self.timeline.lead_trail_ratio(1),
+                0.75,
+                1.33,
+            ),
+            CalibrationLine::tracked(
                 "go-ahead goals level in 15' %",
-                ratio(self.timeline.go_ahead_equalised as u64, self.timeline.go_ahead as u64),
+                ratio(
+                    self.timeline.go_ahead_equalised as u64,
+                    self.timeline.go_ahead as u64,
+                ),
                 0.0,
             ),
-            tracked("level in 15' if independent %", equalised_if_independent, 0.0),
-            tracked(
+            CalibrationLine::tracked(
+                "level in 15' if independent %",
+                equalised_if_independent,
+                0.0,
+            ),
+            CalibrationLine::tracked(
                 "lead changes hands % matches",
-                ratio(self.timeline.matches_with_lead_change as u64, self.matches as u64),
+                ratio(
+                    self.timeline.matches_with_lead_change as u64,
+                    self.matches as u64,
+                ),
                 0.0,
             ),
-            tracked("lead changes if independent %", lead_change_if_independent, 0.0),
-            tracked("goal share 0-15'", profile(0), 0.11),
-            tracked("goal share 15-30'", profile(1), 0.14),
-            tracked("goal share 30-45'", profile(2), 0.16),
-            tracked("goal share 45-60'", profile(3), 0.15),
-            tracked("goal share 60-75'", profile(4), 0.18),
-            tracked("goal share 75-90'", profile(5), 0.26),
-        ];
-        #[cfg(feature = "match-logs")]
-        {
-            let census = &self.tally.team_census;
-            let share = |state: LedgerState| {
-                let ledger = census.pooled(state);
-                ratio(ledger.possession_ticks, ledger.held_ticks)
-            };
-            let level = census.pooled(LedgerState::Level);
-            lines.push(line(
-                "possession given up 1 goal up",
-                if level.held_ticks == 0 {
-                    0.0
-                } else {
-                    share(LedgerState::Level) - share(LedgerState::LeadingByOne)
-                },
-                -0.02,
-                0.10,
-            ));
-            let delivery = &self.tally.delivery;
-            let (open_play, byline) = delivery.open_play_byline();
-            lines.push(line(
-                "byline share of open-play deliveries",
-                ratio(byline as u64, open_play as u64),
-                0.15,
-                0.35,
-            ));
-            lines.push(tracked("open-play deliveries a team", per(open_play as f64) / 2.0, 16.5));
-            lines.push(tracked(
+            CalibrationLine::tracked(
+                "lead changes if independent %",
+                lead_change_if_independent,
+                0.0,
+            ),
+            CalibrationLine::tracked("goal share 0-15'", profile(0), 0.11),
+            CalibrationLine::tracked("goal share 15-30'", profile(1), 0.14),
+            CalibrationLine::tracked("goal share 30-45'", profile(2), 0.16),
+            CalibrationLine::tracked("goal share 45-60'", profile(3), 0.15),
+            CalibrationLine::tracked("goal share 60-75'", profile(4), 0.18),
+            CalibrationLine::tracked("goal share 75-90'", profile(5), 0.26),
+        ]
+    }
+
+    #[cfg(feature = "match-logs")]
+    fn possession_ledger_lines(&self) -> Vec<CalibrationLine> {
+        let ratio = Self::ratio;
+        let census = &self.tally.team_census;
+        let share = |state: LedgerState| {
+            let ledger = census.pooled(state);
+            ratio(ledger.possession_ticks, ledger.held_ticks)
+        };
+        let level = census.pooled(LedgerState::Level);
+        let mut lines = vec![CalibrationLine::checked(
+            "possession given up 1 goal up",
+            if level.held_ticks == 0 {
+                0.0
+            } else {
+                share(LedgerState::Level) - share(LedgerState::LeadingByOne)
+            },
+            -0.02,
+            0.10,
+        )];
+        let delivery = &self.tally.delivery;
+        let (open_play, byline) = delivery.open_play_byline();
+        lines.push(CalibrationLine::checked(
+            "byline share of open-play deliveries",
+            ratio(byline as u64, open_play as u64),
+            0.15,
+            0.35,
+        ));
+        lines
+    }
+
+    #[cfg(feature = "match-logs")]
+    fn delivery_lines(&self) -> Vec<CalibrationLine> {
+        let per = |v: f64| self.per_match(v);
+        let ratio = Self::ratio;
+        let delivery = &self.tally.delivery;
+        let (open_play, _) = delivery.open_play_byline();
+        let mut lines = vec![
+            CalibrationLine::tracked(
+                "open-play deliveries a team",
+                per(open_play as f64) / 2.0,
+                16.5,
+            ),
+            CalibrationLine::tracked(
                 "open-play deliveries blocked (approx.)",
                 ratio(delivery.open_play_blocked() as u64, open_play as u64),
                 0.20,
-            ));
-            lines.push(tracked(
+            ),
+            CalibrationLine::tracked(
                 "open-play cross headers at goal/match",
                 per(delivery.open_play_headers_at_goal() as f64),
                 0.0,
-            ));
-            for (name, n) in DeliveryCensus::CORNER_LINES.iter().zip(delivery.corners) {
-                lines.push(tracked(name, per(n as f64), 0.0));
-            }
-            for (name, halves) in DeliveryCensus::THROW_LINES.iter().zip(delivery.throw_ins) {
-                lines.push(tracked(name, per(halves.iter().sum::<u32>() as f64), 0.0));
-            }
-            for (name, outcomes) in DeliveryCensus::OWN_GOAL_LINES.iter().zip(delivery.own_goals) {
-                lines.push(tracked(name, per(outcomes[DeliveryCensus::OWN_GOAL] as f64), 0.0));
-            }
-            let motion = &self.tally.outfield_motion;
-            let minutes_played = motion.ticks as f64 / 6000.0;
-            let per_player_minute = if motion.ticks == 0 {
-                0.0
-            } else {
-                motion.state_changes as f64 / minutes_played
-            };
-            let km_per_90 = if motion.ticks == 0 {
-                0.0
-            } else {
-                motion.path_mm as f64 / 1_000_000.0 / minutes_played * 90.0
-            };
-            lines.push(line(
-                "state changes/player/minute",
-                per_player_minute,
+            ),
+        ];
+        for (name, n) in DeliveryCensus::CORNER_LINES.iter().zip(delivery.corners) {
+            lines.push(CalibrationLine::tracked(name, per(n as f64), 0.0));
+        }
+        for (name, halves) in DeliveryCensus::THROW_LINES.iter().zip(delivery.throw_ins) {
+            lines.push(CalibrationLine::tracked(
+                name,
+                per(halves.iter().sum::<u32>() as f64),
                 0.0,
-                45.0,
             ));
-            lines.push(line(
-                "distance km/outfield player/90",
-                km_per_90,
-                10.0,
-                13.0,
+        }
+        for (name, outcomes) in DeliveryCensus::OWN_GOAL_LINES
+            .iter()
+            .zip(delivery.own_goals)
+        {
+            lines.push(CalibrationLine::tracked(
+                name,
+                per(outcomes[DeliveryCensus::OWN_GOAL] as f64),
+                0.0,
             ));
-            let defenders = &self.tally.defender_motion;
-            let defender_minutes = defenders.ticks as f64 / 6000.0;
-            lines.push(line(
+        }
+        lines
+    }
+
+    #[cfg(feature = "match-logs")]
+    fn outfield_motion_lines(&self) -> Vec<CalibrationLine> {
+        let motion = &self.tally.outfield_motion;
+        let minutes_played = motion.ticks as f64 / 6000.0;
+        let per_player_minute = if motion.ticks == 0 {
+            0.0
+        } else {
+            motion.state_changes as f64 / minutes_played
+        };
+        let km_per_90 = if motion.ticks == 0 {
+            0.0
+        } else {
+            motion.path_mm as f64 / 1_000_000.0 / minutes_played * 90.0
+        };
+        vec![
+            CalibrationLine::checked("state changes/player/minute", per_player_minute, 0.0, 45.0),
+            CalibrationLine::checked("distance km/outfield player/90", km_per_90, 10.0, 13.0),
+        ]
+    }
+
+    #[cfg(feature = "match-logs")]
+    fn defender_motion_lines(&self) -> Vec<CalibrationLine> {
+        let defenders = &self.tally.defender_motion;
+        let defender_minutes = defenders.ticks as f64 / 6000.0;
+        vec![
+            CalibrationLine::checked(
                 "distance km/defender/90",
                 if defenders.ticks == 0 {
                     0.0
@@ -570,8 +801,8 @@ impl MatchCalibrationStats {
                 },
                 9.5,
                 12.0,
-            ));
-            lines.push(line(
+            ),
+            CalibrationLine::checked(
                 "defender time at or below a walk %",
                 if defenders.live_ticks == 0 {
                     0.0
@@ -580,8 +811,8 @@ impl MatchCalibrationStats {
                 },
                 0.50,
                 0.75,
-            ));
-            lines.push(line(
+            ),
+            CalibrationLine::checked(
                 "state changes/defender/minute",
                 if defenders.ticks == 0 {
                     0.0
@@ -590,10 +821,16 @@ impl MatchCalibrationStats {
                 },
                 0.0,
                 20.0,
-            ));
-            let midfielders = &self.tally.midfielder_motion;
-            let midfielder_minutes = midfielders.ticks as f64 / 6000.0;
-            lines.push(line(
+            ),
+        ]
+    }
+
+    #[cfg(feature = "match-logs")]
+    fn midfielder_motion_lines(&self) -> Vec<CalibrationLine> {
+        let midfielders = &self.tally.midfielder_motion;
+        let midfielder_minutes = midfielders.ticks as f64 / 6000.0;
+        vec![
+            CalibrationLine::checked(
                 "distance km/midfielder/90",
                 if midfielders.ticks == 0 {
                     0.0
@@ -602,8 +839,8 @@ impl MatchCalibrationStats {
                 },
                 10.5,
                 12.5,
-            ));
-            lines.push(line(
+            ),
+            CalibrationLine::checked(
                 "midfielder time at or below a walk %",
                 if midfielders.live_ticks == 0 {
                     0.0
@@ -612,8 +849,8 @@ impl MatchCalibrationStats {
                 },
                 0.45,
                 0.70,
-            ));
-            lines.push(line(
+            ),
+            CalibrationLine::checked(
                 "state changes/midfielder/minute",
                 if midfielders.ticks == 0 {
                     0.0
@@ -622,10 +859,16 @@ impl MatchCalibrationStats {
                 },
                 0.0,
                 24.0,
-            ));
-            let forwards = &self.tally.forward_motion;
-            let forward_minutes = forwards.ticks as f64 / 6000.0;
-            lines.push(line(
+            ),
+        ]
+    }
+
+    #[cfg(feature = "match-logs")]
+    fn forward_motion_lines(&self) -> Vec<CalibrationLine> {
+        let forwards = &self.tally.forward_motion;
+        let forward_minutes = forwards.ticks as f64 / 6000.0;
+        vec![
+            CalibrationLine::checked(
                 "distance km/forward/90",
                 if forwards.ticks == 0 {
                     0.0
@@ -634,8 +877,8 @@ impl MatchCalibrationStats {
                 },
                 9.5,
                 11.5,
-            ));
-            lines.push(line(
+            ),
+            CalibrationLine::checked(
                 "forward time at or below a walk %",
                 if forwards.live_ticks == 0 {
                     0.0
@@ -644,8 +887,8 @@ impl MatchCalibrationStats {
                 },
                 0.50,
                 0.75,
-            ));
-            lines.push(line(
+            ),
+            CalibrationLine::checked(
                 "state changes/forward/minute",
                 if forwards.ticks == 0 {
                     0.0
@@ -654,10 +897,16 @@ impl MatchCalibrationStats {
                 },
                 0.0,
                 22.0,
-            ));
-            let ground = &self.tally.keeper_ground;
-            let seconds_down = ground.ticks as f64 / 100.0;
-            lines.push(line(
+            ),
+        ]
+    }
+
+    #[cfg(feature = "match-logs")]
+    fn keeper_ground_lines(&self) -> Vec<CalibrationLine> {
+        let ground = &self.tally.keeper_ground;
+        let seconds_down = ground.ticks as f64 / 100.0;
+        vec![
+            CalibrationLine::checked(
                 "keeper time down (s)",
                 if ground.spells == 0 {
                     0.0
@@ -666,8 +915,8 @@ impl MatchCalibrationStats {
                 },
                 0.6,
                 1.2,
-            ));
-            lines.push(line(
+            ),
+            CalibrationLine::checked(
                 "keeper speed while down (m/s)",
                 if ground.ticks == 0 {
                     0.0
@@ -676,9 +925,8 @@ impl MatchCalibrationStats {
                 },
                 0.0,
                 1.5,
-            ));
-        }
-        lines
+            ),
+        ]
     }
 
     pub fn print_report(&self) {
@@ -713,7 +961,8 @@ impl MatchCalibrationStats {
         if n < 2.0 {
             return 0.0;
         }
-        let mean = |pick: fn(&(u8, u8)) -> u8| self.scores.iter().map(|s| pick(s) as f64).sum::<f64>() / n;
+        let mean =
+            |pick: fn(&(u8, u8)) -> u8| self.scores.iter().map(|s| pick(s) as f64).sum::<f64>() / n;
         let (mean_home, mean_away) = (mean(|s| s.0), mean(|s| s.1));
         let (mut covariance, mut var_home, mut var_away) = (0.0, 0.0, 0.0);
         for &(home, away) in &self.scores {
@@ -745,7 +994,11 @@ impl MatchCalibrationStats {
                 draws += 1.0;
             }
         }
-        let independent: f64 = home.iter().zip(away.iter()).map(|(h, a)| (h / n) * (a / n)).sum();
+        let independent: f64 = home
+            .iter()
+            .zip(away.iter())
+            .map(|(h, a)| (h / n) * (a / n))
+            .sum();
         draws / n - independent
     }
 
@@ -892,8 +1145,14 @@ mod tests {
             stats.record(&scoreline(&goals));
         }
         let misses: Vec<&str> = stats.out_of_range().iter().map(|l| l.name).collect();
-        assert!(misses.contains(&"goal correlation (equal teams)"), "{misses:?}");
-        assert!(misses.contains(&"draw surplus over independent"), "{misses:?}");
+        assert!(
+            misses.contains(&"goal correlation (equal teams)"),
+            "{misses:?}"
+        );
+        assert!(
+            misses.contains(&"draw surplus over independent"),
+            "{misses:?}"
+        );
     }
 
     #[test]
@@ -905,7 +1164,10 @@ mod tests {
         }
         assert_eq!(line(&stats, "lead/trail scoring rate >=62'"), 0.0);
         let misses: Vec<&str> = stats.out_of_range().iter().map(|l| l.name).collect();
-        assert!(misses.contains(&"lead/trail scoring rate >=62'"), "{misses:?}");
+        assert!(
+            misses.contains(&"lead/trail scoring rate >=62'"),
+            "{misses:?}"
+        );
     }
 
     #[test]

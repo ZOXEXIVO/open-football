@@ -7,6 +7,7 @@
 //! guessing from the headline alone.
 
 use super::ManagerInteractionTopic;
+use crate::HappinessEventCause;
 use crate::club::player::contract::PlayerSquadStatus;
 
 // ────────────────────────────────────────────────────────────────
@@ -42,6 +43,20 @@ impl PrivateTalkReason {
             PrivateTalkReason::CaptaincyOrStatus => "private_talk_reason_captaincy_or_status",
             PrivateTalkReason::TacticalRole => "private_talk_reason_tactical_role",
             PrivateTalkReason::ManagerRelationship => "private_talk_reason_manager_relationship",
+        }
+    }
+
+    /// Map a private-talk reason to the right top-level
+    /// `HappinessEventCause` label. Drives the cause i18n key on the
+    /// rendered row.
+    pub fn happiness_cause(self) -> HappinessEventCause {
+        match self {
+            PrivateTalkReason::PlayingTime => HappinessEventCause::PoorFormPressure,
+            PrivateTalkReason::Contract => HappinessEventCause::WageJealousy,
+            PrivateTalkReason::TransferStatus => HappinessEventCause::ReputationTension,
+            PrivateTalkReason::CaptaincyOrStatus => HappinessEventCause::LeadershipDispute,
+            PrivateTalkReason::TacticalRole => HappinessEventCause::TacticalDisagreement,
+            PrivateTalkReason::ManagerRelationship => HappinessEventCause::LeadershipDispute,
         }
     }
 

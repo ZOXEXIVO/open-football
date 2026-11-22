@@ -1,8 +1,8 @@
-use crate::r#match::common_states::ShapeTempo;
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{
+use crate::r#match::defenders::states::shared::{
     ActivityIntensity, DefenderCondition, DefenderRead, DefensiveSlot,
 };
+use crate::r#match::shared_states::ShapeTempo;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,

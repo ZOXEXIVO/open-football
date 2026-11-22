@@ -82,116 +82,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     ) {
         // Coaches read the score from the goal; under the OF_SCORE_BLIND
         // diagnostic they coach as if level.
-        let (home_goals, away_goals) = if !context.behavioral_score_visible() {
-            (0i8, 0i8)
-        } else {
-            (
-                context.score.home_team.get() as i8,
-                context.score.away_team.get() as i8,
-            )
-        };
+        let (home_goals, away_goals) = Self::visible_goals(context);
         // One pass over the player list collects the cumulative metric
         // totals (xG, shots, press, deep entries, dangerous turnovers) for
         // both sides; each coach folds them into his moving read.
-        let mut home_xg = 0.0f32;
-        let mut away_xg = 0.0f32;
-        let mut home_shots = 0u32;
-        let mut away_shots = 0u32;
-        let mut home_pressures = 0u32;
-        let mut away_pressures = 0u32;
-        let mut home_successful_pressures = 0u32;
-        let mut away_successful_pressures = 0u32;
-        let mut home_deep_entries = 0u32;
-        let mut away_deep_entries = 0u32;
-        let mut home_dangerous_turnovers = 0u32;
-        let mut away_dangerous_turnovers = 0u32;
-        let on_pitch = |team_id: u32| {
-            field
-                .players
-                .iter()
-                .filter(|p| p.team_id == team_id && !p.off_pitch)
-                .count() as i8
-        };
-        let home_on_pitch = on_pitch(context.field_home_team_id);
-        let away_on_pitch = on_pitch(context.field_away_team_id);
-
-        for p in field.players.iter() {
-            let xg = p.memory.xg_total;
-            let shots = p.memory.shots_taken;
-            let pressures = p.statistics.pressures as u32;
-            let succ = p.statistics.successful_pressures as u32;
-            // Passes that arrived in the opponent's box. Our nearest
-            // proxy for "deep territorial entries" — every pass-into-
-            // box advances the team's threat into the danger zone.
-            let deep_entries = p.statistics.passes_into_box as u32;
-            // Coach-side "dangerous turnovers" = errors that produced an
-            // opposition shot PLUS any giveaway inside the team's own
-            // box (irrespective of whether the opponent converted
-            // within the response window). The own-third bucket is
-            // deliberately NOT summed — that's a much wider net and
-            // would dilute the bench's read. Aligns with the
-            // rating helper's zone counters: an own-box turnover is
-            // rated as the worst non-error event, so the coach
-            // metric matches that severity.
-            let dangerous_turnovers = (p.statistics.errors_leading_to_shot as u32)
-                + (p.statistics.zone_stats.dangerous_turnovers_own_box as u32);
-            if p.team_id == context.field_home_team_id {
-                home_xg += xg;
-                home_shots += shots;
-                home_pressures += pressures;
-                home_successful_pressures += succ;
-                home_deep_entries += deep_entries;
-                home_dangerous_turnovers += dangerous_turnovers;
-            } else {
-                away_xg += xg;
-                away_shots += shots;
-                away_pressures += pressures;
-                away_successful_pressures += succ;
-                away_deep_entries += deep_entries;
-                away_dangerous_turnovers += dangerous_turnovers;
-            }
-        }
-
-        let counters = |coach: &MatchCoach,
-                        xg_for,
-                        xg_against,
-                        shots_for,
-                        pressures,
-                        successful_pressures,
-                        deep_entries,
-                        dangerous_turnovers| ReadCounters {
-            xg_for,
-            xg_against,
-            shots_for,
-            pressures,
-            successful_pressures,
-            deep_entries,
-            dangerous_turnovers,
-            line_breaks_against: coach.cum_line_breaks_against,
-            possession_ticks: coach.cum_possession_ticks,
-            tilt_ticks: coach.cum_field_tilt_ticks,
-            ticks: coach.cum_ticks,
-        };
-        let home_metrics = counters(
-            &context.coach_home,
-            home_xg,
-            away_xg,
-            home_shots,
-            home_pressures,
-            home_successful_pressures,
-            home_deep_entries,
-            home_dangerous_turnovers,
-        );
-        let away_metrics = counters(
-            &context.coach_away,
-            away_xg,
-            home_xg,
-            away_shots,
-            away_pressures,
-            away_successful_pressures,
-            away_deep_entries,
-            away_dangerous_turnovers,
-        );
+        let totals = CoachReadTotals::collect(field, context.field_home_team_id);
+        let home_on_pitch = Self::on_pitch(field, context.field_home_team_id);
+        let away_on_pitch = Self::on_pitch(field, context.field_away_team_id);
+        let home_metrics = totals.home.counters(&context.coach_home, totals.away.xg);
+        let away_metrics = totals.away.counters(&context.coach_away, totals.home.xg);
 
         let minute = context.total_match_time as f32 / 60_000.0;
         let minutes_left = MATCH_TIME_MS.saturating_sub(context.total_match_time) as f32 / 60_000.0;
@@ -223,6 +122,27 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
     }
 
+    /// The scoreline the coaches are allowed to see, under the score-blind
+    /// diagnostic or as it stands.
+    fn visible_goals(context: &MatchContext) -> (i8, i8) {
+        if !context.behavioral_score_visible() {
+            (0i8, 0i8)
+        } else {
+            (
+                context.score.home_team.get() as i8,
+                context.score.away_team.get() as i8,
+            )
+        }
+    }
+
+    fn on_pitch(field: &MatchField, team_id: u32) -> i8 {
+        field
+            .players
+            .iter()
+            .filter(|p| p.team_id == team_id && !p.off_pitch)
+            .count() as i8
+    }
+
     /// Refresh the team-level tactical state (phase, possession timers,
     /// defensive-line height) for both sides. Reads the ball and players,
     /// and reads each man's adherence onto him with the skill aggregates;
@@ -235,7 +155,24 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         possession: TeamPossession,
         tick_interval: u32,
     ) {
-        // One pass over players collects condition for both sides.
+        let (home_avg_cond, away_avg_cond) = Self::average_condition(field, context);
+
+        Self::refresh_skill_aggregates(field, context);
+        Self::refresh_tactical_plans(
+            field,
+            context,
+            possession,
+            tick_interval,
+            home_avg_cond,
+            away_avg_cond,
+        );
+        Self::refresh_attack_and_defence(field, context, possession);
+        Self::refresh_shape(field, context, tick_interval);
+        Self::note_coach_counters(field, context, tick_interval);
+    }
+
+    /// One pass over players collects condition for both sides.
+    fn average_condition(field: &MatchField, context: &MatchContext) -> (f32, f32) {
         let (home_count, home_cond_sum, away_count, away_cond_sum) =
             field
                 .players
@@ -258,64 +195,78 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         } else {
             0.5
         };
+        (home_avg_cond, away_avg_cond)
+    }
 
-        // Per-team skill composite aggregates. Recomputed only every
-        // SKILL_AGGREGATE_INTERVAL_TICKS (or on roster invalidation) —
-        // each pass walks 22 players and calls 6-8 fatigue-aware
-        // composite helpers per player, so dropping the cadence from
-        // every-tactical-refresh to ~once per second cuts a sizable
-        // chunk of refresh CPU. The previous fixed-cadence value
-        // could be tens of thousands of times per match; the cache
-        // brings it down to ~5_400.
+    /// Per-team skill composite aggregates. Recomputed only every
+    /// `SKILL_AGGREGATE_INTERVAL_TICKS` (or on roster invalidation) —
+    /// each pass walks 22 players and calls 6-8 fatigue-aware composite
+    /// helpers per player, so dropping the cadence from every-tactical-
+    /// refresh to ~once per second cuts a sizable chunk of refresh CPU.
+    fn refresh_skill_aggregates(field: &mut MatchField, context: &mut MatchContext) {
         const SKILL_AGGREGATE_INTERVAL_TICKS: u64 = 100;
         let current_tick = context.current_tick();
         let needs_recompute = context.skill_aggregates_dirty
             || current_tick.saturating_sub(context.last_skill_aggregate_tick)
                 >= SKILL_AGGREGATE_INTERVAL_TICKS;
-        if needs_recompute {
-            let minute_now = sc::minute_from_ms(context.total_match_time);
-            let mut home_skills = SkillAccumulator::new();
-            let mut away_skills = SkillAccumulator::new();
-            for p in field.players.iter().filter(|p| !p.off_pitch) {
-                let bucket = if p.team_id == context.field_home_team_id {
-                    &mut home_skills
-                } else {
-                    &mut away_skills
-                };
-                bucket.add(p, minute_now);
-            }
-            context.home_skill_aggregates = home_skills.finalize();
-            context.away_skill_aggregates = away_skills.finalize();
-            // How used each side is to the shape it is playing, from its
-            // record: what its line steps with and what each man's
-            // adherence reads.
-            let familiarity = |team_id: u32| {
-                let shape = if field.side_of(team_id) == PlayerSide::Left {
-                    field.left_team_tactics.tactic_type
-                } else {
-                    field.right_team_tactics.tactic_type
-                };
-                context.formation_familiarity(team_id).of(shape)
-            };
-            let home_id = context.field_home_team_id;
-            let (home, away) = (
-                familiarity(home_id),
-                familiarity(context.field_away_team_id),
-            );
-            context.tactical_familiarity_home.score = home;
-            context.tactical_familiarity_away.score = away;
-            if !MatchContext::adherence_off() {
-                for p in field.players.iter_mut().filter(|p| !p.off_pitch) {
-                    p.read_adherence(if p.team_id == home_id { home } else { away });
-                }
-            }
-            context.last_skill_aggregate_tick = current_tick;
-            context.skill_aggregates_dirty = false;
-            let moment = context.pressure_moment();
-            context
-                .psychology
-                .refresh(&field.players, current_tick, &moment);
+        if !needs_recompute {
+            return;
         }
+
+        let minute_now = sc::minute_from_ms(context.total_match_time);
+        let mut home_skills = SkillAccumulator::new();
+        let mut away_skills = SkillAccumulator::new();
+        for p in field.players.iter().filter(|p| !p.off_pitch) {
+            let bucket = if p.team_id == context.field_home_team_id {
+                &mut home_skills
+            } else {
+                &mut away_skills
+            };
+            bucket.add(p, minute_now);
+        }
+        context.home_skill_aggregates = home_skills.finalize();
+        context.away_skill_aggregates = away_skills.finalize();
+        // How used each side is to the shape it is playing, from its
+        // record: what its line steps with and what each man's
+        // adherence reads.
+        let familiarity = |team_id: u32| {
+            let shape = if field.side_of(team_id) == PlayerSide::Left {
+                field.left_team_tactics.tactic_type
+            } else {
+                field.right_team_tactics.tactic_type
+            };
+            context.formation_familiarity(team_id).of(shape)
+        };
+        let home_id = context.field_home_team_id;
+        let (home, away) = (
+            familiarity(home_id),
+            familiarity(context.field_away_team_id),
+        );
+        context.tactical_familiarity_home.score = home;
+        context.tactical_familiarity_away.score = away;
+        if !MatchContext::adherence_off() {
+            for p in field.players.iter_mut().filter(|p| !p.off_pitch) {
+                p.read_adherence(if p.team_id == home_id { home } else { away });
+            }
+        }
+        context.last_skill_aggregate_tick = current_tick;
+        context.skill_aggregates_dirty = false;
+        let moment = context.pressure_moment();
+        context
+            .psychology
+            .refresh(&field.players, current_tick, &moment);
+    }
+
+    /// The stance and plan inputs for the team-level tactical state, then
+    /// the refresh that turns them into phase, line height and timers.
+    fn refresh_tactical_plans(
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        possession: TeamPossession,
+        tick_interval: u32,
+        home_avg_cond: f32,
+        away_avg_cond: f32,
+    ) {
         let home_skill_aggregates = context.home_skill_aggregates;
         let away_skill_aggregates = context.away_skill_aggregates;
 
@@ -364,7 +315,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             &mut context.tactical_away,
             &inputs,
         );
+    }
 
+    /// Attacking roles and defensive duties, assigned on the same cadence as
+    /// the tactical state they read.
+    fn refresh_attack_and_defence(
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        possession: TeamPossession,
+    ) {
         // Attacking roles are assigned on the same cadence and read the
         // tactical state that was just produced — the phase decides
         // WHETHER to commit bodies forward, the plan decides WHO and
@@ -426,13 +385,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             tick,
         );
         context.record_plans();
+    }
 
-        // …and the positional layer under all three. The plans above name
-        // the players involved with the ball; this gives EVERY player a
-        // live place to be, so the seven or eight who aren't involved stop
-        // steering at a kickoff dot they were drawn on before the match.
-        // Runs last because it reads the tactical state the first refresh
-        // produced (line height, compactness, width, press intensity).
+    /// …and the positional layer under all three. The plans above name
+    /// the players involved with the ball; this gives EVERY player a
+    /// live place to be, so the seven or eight who aren't involved stop
+    /// steering at a kickoff dot they were drawn on before the match.
+    /// Runs last because it reads the tactical state the first refresh
+    /// produced (line height, compactness, width, press intensity).
+    fn refresh_shape(field: &mut MatchField, context: &mut MatchContext, tick_interval: u32) {
         let shape_inputs = ShapeRefreshInputs {
             field,
             home_team_id: context.field_home_team_id,
@@ -446,11 +407,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             &mut context.shape_away,
             &shape_inputs,
         );
+    }
 
-        // Cumulative possession + field-tilt counters feed the rolling
-        // metrics consumed by the smart coach evaluator. Updated here
-        // (every ~10 ticks) so the per-coach-eval pass doesn't have to
-        // re-derive them from scratch.
+    /// Cumulative possession + field-tilt counters feed the rolling
+    /// metrics consumed by the smart coach evaluator. Updated here
+    /// (every ~10 ticks) so the per-coach-eval pass doesn't have to
+    /// re-derive them from scratch.
+    fn note_coach_counters(field: &MatchField, context: &mut MatchContext, tick_interval: u32) {
         use crate::r#match::BallZone;
         if context.tactical_home.in_possession {
             context.coach_home.cum_possession_ticks = context
@@ -486,6 +449,81 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 .coach_away
                 .cum_field_tilt_ticks
                 .saturating_add(tick_interval);
+        }
+    }
+}
+
+/// The cumulative match metrics each coach's moving read folds in, kept per
+/// side so one walk over the roster fills both.
+#[derive(Default)]
+struct CoachReadTotals {
+    home: TeamReadTotals,
+    away: TeamReadTotals,
+}
+
+#[derive(Default)]
+struct TeamReadTotals {
+    xg: f32,
+    shots: u32,
+    pressures: u32,
+    successful_pressures: u32,
+    deep_entries: u32,
+    dangerous_turnovers: u32,
+}
+
+impl CoachReadTotals {
+    fn collect(field: &MatchField, home_team_id: u32) -> Self {
+        let mut totals = Self::default();
+        for p in field.players.iter() {
+            let xg = p.memory.xg_total;
+            let shots = p.memory.shots_taken;
+            let pressures = p.statistics.pressures as u32;
+            let succ = p.statistics.successful_pressures as u32;
+            // Passes that arrived in the opponent's box. Our nearest
+            // proxy for "deep territorial entries" — every pass-into-
+            // box advances the team's threat into the danger zone.
+            let deep_entries = p.statistics.passes_into_box as u32;
+            // Coach-side "dangerous turnovers" = errors that produced an
+            // opposition shot PLUS any giveaway inside the team's own
+            // box (irrespective of whether the opponent converted
+            // within the response window). The own-third bucket is
+            // deliberately NOT summed — that's a much wider net and
+            // would dilute the bench's read. Aligns with the
+            // rating helper's zone counters: an own-box turnover is
+            // rated as the worst non-error event, so the coach
+            // metric matches that severity.
+            let dangerous_turnovers = (p.statistics.errors_leading_to_shot as u32)
+                + (p.statistics.zone_stats.dangerous_turnovers_own_box as u32);
+            let side = if p.team_id == home_team_id {
+                &mut totals.home
+            } else {
+                &mut totals.away
+            };
+            side.xg += xg;
+            side.shots += shots;
+            side.pressures += pressures;
+            side.successful_pressures += succ;
+            side.deep_entries += deep_entries;
+            side.dangerous_turnovers += dangerous_turnovers;
+        }
+        totals
+    }
+}
+
+impl TeamReadTotals {
+    fn counters(&self, coach: &MatchCoach, xg_against: f32) -> ReadCounters {
+        ReadCounters {
+            xg_for: self.xg,
+            xg_against,
+            shots_for: self.shots,
+            pressures: self.pressures,
+            successful_pressures: self.successful_pressures,
+            deep_entries: self.deep_entries,
+            dangerous_turnovers: self.dangerous_turnovers,
+            line_breaks_against: coach.cum_line_breaks_against,
+            possession_ticks: coach.cum_possession_ticks,
+            tilt_ticks: coach.cum_field_tilt_ticks,
+            ticks: coach.cum_ticks,
         }
     }
 }

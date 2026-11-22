@@ -1,12 +1,12 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{
+use crate::r#match::defenders::states::shared::{
     ActivityIntensity, DefenderCondition, DefenderRead, ReadLevel,
 };
-use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
-use crate::r#match::player::strategies::common::states::{
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::player::strategies::shared::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::shared::states::{
     BlockChallenge, ChallengeKind, ClosingPoint, RecoveryChallenge, TackleEngagement,
 };
-use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchContext, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,

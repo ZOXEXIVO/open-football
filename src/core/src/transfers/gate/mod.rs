@@ -1095,6 +1095,9 @@ struct PlausibilityReading {
     /// 0..1 — how resigned a listed player has become to leaving. Every
     /// unsold month widens the drop he will accept.
     resignation: f32,
+    adjustment: TransferPlausibilityAdjustment,
+    fee_to_value_ratio: f32,
+    wage_to_current_ratio: f32,
     very_important: bool,
     huge_drop: bool,
     important: bool,
@@ -1174,6 +1177,70 @@ impl StandingFit {
 
 impl TransferMovePlausibility {
     pub fn assess(inputs: &TransferPlausibilityInputs) -> TransferMoveAssessment {
+        let reading = Self::reading(inputs);
+        // Builds the assessment with the diagnostics filled from the
+        // captured context — one place so every early-return is consistent.
+        let make = |stage: TransferMoveStage, reason: Option<TransferPlausibilityReason>| {
+            Self::assessment(inputs, reading, stage, reason)
+        };
+
+        // ── Route closure: a closed country-pair route can't even be
+        // watched (no point filing a report on an impossible move). ──
+        if inputs.country_pair_blocked {
+            return make(
+                TransferMoveStage::Blocked,
+                Some(TransferPlausibilityReason::CountryPairBlocked),
+            );
+        }
+
+        if let Some(reason) = StandingFit::read(inputs) {
+            return make(TransferMoveStage::Blocked, Some(reason));
+        }
+
+        // ── Public-interest gate ──────────────────────────────────────
+        // Quiet scouting is always allowed (a club may watch anyone). These
+        // gates decide whether the move is credible enough to put on the
+        // internal shortlist / show PUBLIC interest. An *egregious* mismatch
+        // (a very-important player on a huge sporting drop) is so far-fetched
+        // that the club can watch but wouldn't even waste a shortlist slot;
+        // a merely-important / big-drop mismatch can be an internal name but
+        // not public interest.
+
+        if let Some(verdict) = Self::reach_and_standing_gates(inputs, reading, &make) {
+            return verdict;
+        }
+
+        if let Some(verdict) = Self::loan_gates(inputs, reading, &make) {
+            return verdict;
+        }
+
+        if let Some(verdict) = Self::money_gates(inputs, reading, &make) {
+            return verdict;
+        }
+
+        // ── Personal-terms gate: player willingness floor ────────────
+        // Fee + wage are credible, so talks can open — but the player's
+        // own career incentives must make sense before he agrees terms.
+        if let Some(reason) = Self::player_terms_floor(inputs) {
+            return make(TransferMoveStage::CanStartNegotiation, Some(reason));
+        }
+
+        // Everything clears. A move that still asks the player to step down
+        // (a tolerated drop he has a reason to accept) reaches
+        // `CanAgreePersonalTerms` — he will agree, but completion stays
+        // sensitive to the wage / status offered. A clean lateral or upward
+        // move has nothing left to weigh and reaches `CanCompleteMove`.
+        let tolerated_step_down = reading.drop > thresholds::DOMESTIC_STEP_DOWN_DROP
+            && !matches!(reading.strength, AvailabilityStrength::None);
+        if tolerated_step_down {
+            make(TransferMoveStage::CanAgreePersonalTerms, None)
+        } else {
+            make(TransferMoveStage::CanCompleteMove, None)
+        }
+    }
+
+    /// Every number the staged walk reads, derived once from the inputs.
+    fn reading(inputs: &TransferPlausibilityInputs) -> PlausibilityReading {
         let importance = TransferPlausibilityEvaluator::player_importance(inputs);
         let drop = TransferPlausibilityEvaluator::sporting_drop(inputs);
         let strength = inputs.availability_strength();
@@ -1204,47 +1271,6 @@ impl TransferMovePlausibility {
         } else {
             0.0
         };
-
-        // Builds the assessment with the diagnostics filled from the
-        // captured context — one place so every early-return is consistent.
-        let make = |stage: TransferMoveStage, reason: Option<TransferPlausibilityReason>| {
-            TransferMoveAssessment {
-                stage,
-                blocking_reason: reason,
-                adjustment,
-                diagnostics: TransferMoveDiagnostics {
-                    seller_rep: inputs.seller_rep,
-                    buyer_rep: inputs.buyer_rep,
-                    seller_league_rep: inputs.seller_league_rep,
-                    buyer_league_rep: inputs.buyer_league_rep,
-                    player_world_rep: inputs.player_world_rep,
-                    player_current_rep: inputs.player_current_rep,
-                    player_home_rep: inputs.player_home_rep,
-                    player_effective_rep: eff_rep,
-                    importance,
-                    sporting_drop: drop,
-                    reputation_drop: rep_drop,
-                    availability: strength,
-                    fee_to_value_ratio,
-                    wage_to_current_ratio,
-                    stage,
-                    blocking_reason: reason,
-                },
-            }
-        };
-
-        // ── Route closure: a closed country-pair route can't even be
-        // watched (no point filing a report on an impossible move). ──
-        if inputs.country_pair_blocked {
-            return make(
-                TransferMoveStage::Blocked,
-                Some(TransferPlausibilityReason::CountryPairBlocked),
-            );
-        }
-
-        if let Some(reason) = StandingFit::read(inputs) {
-            return make(TransferMoveStage::Blocked, Some(reason));
-        }
 
         let important = importance >= thresholds::IMPORTANT;
         let prime_age =
@@ -1285,7 +1311,7 @@ impl TransferMovePlausibility {
             hard_gate_open
         };
 
-        let reading = PlausibilityReading {
+        PlausibilityReading {
             importance,
             drop,
             strength,
@@ -1293,6 +1319,9 @@ impl TransferMovePlausibility {
             rep_drop,
             max_fee,
             resignation,
+            adjustment,
+            fee_to_value_ratio,
+            wage_to_current_ratio,
             very_important,
             huge_drop,
             important,
@@ -1302,47 +1331,39 @@ impl TransferMovePlausibility {
             hard_gate_open,
             soft_rescue,
             level_gate_open,
-        };
-
-        // ── Public-interest gate ──────────────────────────────────────
-        // Quiet scouting is always allowed (a club may watch anyone). These
-        // gates decide whether the move is credible enough to put on the
-        // internal shortlist / show PUBLIC interest. An *egregious* mismatch
-        // (a very-important player on a huge sporting drop) is so far-fetched
-        // that the club can watch but wouldn't even waste a shortlist slot;
-        // a merely-important / big-drop mismatch can be an internal name but
-        // not public interest.
-
-        if let Some(verdict) = Self::reach_and_standing_gates(inputs, reading, &make) {
-            return verdict;
         }
+    }
 
-        if let Some(verdict) = Self::loan_gates(inputs, reading, &make) {
-            return verdict;
-        }
-
-        if let Some(verdict) = Self::money_gates(inputs, reading, &make) {
-            return verdict;
-        }
-
-        // ── Personal-terms gate: player willingness floor ────────────
-        // Fee + wage are credible, so talks can open — but the player's
-        // own career incentives must make sense before he agrees terms.
-        if let Some(reason) = Self::player_terms_floor(inputs) {
-            return make(TransferMoveStage::CanStartNegotiation, Some(reason));
-        }
-
-        // Everything clears. A move that still asks the player to step down
-        // (a tolerated drop he has a reason to accept) reaches
-        // `CanAgreePersonalTerms` — he will agree, but completion stays
-        // sensitive to the wage / status offered. A clean lateral or upward
-        // move has nothing left to weigh and reaches `CanCompleteMove`.
-        let tolerated_step_down = drop > thresholds::DOMESTIC_STEP_DOWN_DROP
-            && !matches!(strength, AvailabilityStrength::None);
-        if tolerated_step_down {
-            make(TransferMoveStage::CanAgreePersonalTerms, None)
-        } else {
-            make(TransferMoveStage::CanCompleteMove, None)
+    /// The verdict with its diagnostics, filled from the reading every gate
+    /// consulted.
+    fn assessment(
+        inputs: &TransferPlausibilityInputs,
+        reading: PlausibilityReading,
+        stage: TransferMoveStage,
+        reason: Option<TransferPlausibilityReason>,
+    ) -> TransferMoveAssessment {
+        TransferMoveAssessment {
+            stage,
+            blocking_reason: reason,
+            adjustment: reading.adjustment,
+            diagnostics: TransferMoveDiagnostics {
+                seller_rep: inputs.seller_rep,
+                buyer_rep: inputs.buyer_rep,
+                seller_league_rep: inputs.seller_league_rep,
+                buyer_league_rep: inputs.buyer_league_rep,
+                player_world_rep: inputs.player_world_rep,
+                player_current_rep: inputs.player_current_rep,
+                player_home_rep: inputs.player_home_rep,
+                player_effective_rep: reading.eff_rep,
+                importance: reading.importance,
+                sporting_drop: reading.drop,
+                reputation_drop: reading.rep_drop,
+                availability: reading.strength,
+                fee_to_value_ratio: reading.fee_to_value_ratio,
+                wage_to_current_ratio: reading.wage_to_current_ratio,
+                stage,
+                blocking_reason: reason,
+            },
         }
     }
 

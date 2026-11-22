@@ -13,14 +13,14 @@
 
 use crate::PlayerFieldPositionGroup;
 use crate::PlayerPositionType;
-use crate::r#match::common_states::{ChallengeKind, TackleEngagement, TackleOutcome};
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::engine::teamplay::plans::defence::{DefensiveDuty, DefensivePlan};
 use crate::r#match::player::diagnostics::forward_census::ForwardCensus;
 use crate::r#match::player::diagnostics::midfielder_census::MidfielderCensus;
-use crate::r#match::engine::teamplay::plans::defence::{DefensiveDuty, DefensivePlan};
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::players::ops::defending::defensive::DefensiveRole;
 use crate::r#match::player::strategies::processor::TakeBallYield;
+use crate::r#match::shared_states::{ChallengeKind, TackleEngagement, TackleOutcome};
 use crate::r#match::{
     GameTickContext, MatchField, MatchPlayer, MatchTally, PenaltyArea, PlayerSide,
     StateProcessingContext, StateProcessingResult,

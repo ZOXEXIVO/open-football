@@ -1,4 +1,3 @@
-use crate::r#match::common_states::ShapeTempo;
 use crate::r#match::midfielders::states::{
     MidfielderAttackSupportingState, MidfielderCreatingSpaceState, MidfielderCrossingState,
     MidfielderDistanceShootingState, MidfielderDribblingState, MidfielderGuardingState,
@@ -9,6 +8,7 @@ use crate::r#match::midfielders::states::{
     MidfielderTacklingState, MidfielderTakeBallState, MidfielderTrackingBackState,
     MidfielderWalkingState,
 };
+use crate::r#match::shared_states::ShapeTempo;
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::Result;
 use std::fmt::{Display, Formatter};

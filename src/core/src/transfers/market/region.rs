@@ -124,122 +124,125 @@ impl ScoutingRegion {
     /// Returns (target_region, weight) pairs — higher weight = more likely to scout there.
     /// Models real-world transfer corridors (Africa→Europe, SouthAmerica→Europe, etc.)
     pub fn transfer_corridors(&self) -> &'static [(ScoutingRegion, u8)] {
-        match self {
-            // European clubs: strong corridors to S.America, W.Africa, E.Europe
-            ScoutingRegion::WesternEurope => &[
-                (ScoutingRegion::SouthAmerica, 25),
-                (ScoutingRegion::WestAfrica, 20),
-                (ScoutingRegion::EasternEurope, 15),
-                (ScoutingRegion::Scandinavia, 10),
-                (ScoutingRegion::NorthAfrica, 8),
-                (ScoutingRegion::EastSouthAfrica, 5),
-                (ScoutingRegion::NorthAmerica, 5),
-                (ScoutingRegion::MiddleEastEurope, 5),
-                (ScoutingRegion::EastAsia, 4),
-                (ScoutingRegion::CentralAmericaCaribbean, 3),
-            ],
-            ScoutingRegion::EasternEurope => &[
-                (ScoutingRegion::WesternEurope, 25),
-                (ScoutingRegion::SouthAmerica, 15),
-                (ScoutingRegion::WestAfrica, 12),
-                (ScoutingRegion::Scandinavia, 10),
-                (ScoutingRegion::NorthAfrica, 8),
-                (ScoutingRegion::MiddleEastEurope, 8),
-                (ScoutingRegion::EastSouthAfrica, 5),
-            ],
-            ScoutingRegion::Scandinavia => &[
-                (ScoutingRegion::WesternEurope, 25),
-                (ScoutingRegion::EasternEurope, 15),
-                (ScoutingRegion::WestAfrica, 12),
-                (ScoutingRegion::SouthAmerica, 10),
-                (ScoutingRegion::NorthAfrica, 8),
-                (ScoutingRegion::NorthAmerica, 5),
-            ],
-            ScoutingRegion::MiddleEastEurope => &[
-                (ScoutingRegion::WesternEurope, 20),
-                (ScoutingRegion::EasternEurope, 18),
-                (ScoutingRegion::SouthAmerica, 15),
-                (ScoutingRegion::WestAfrica, 12),
-                (ScoutingRegion::NorthAfrica, 10),
-                (ScoutingRegion::MiddleEast, 10),
-            ],
-            // S.American clubs scout neighbors — their players export to Europe,
-            // but the clubs themselves don't scout Europe or Asia.
-            ScoutingRegion::SouthAmerica => &[
-                (ScoutingRegion::CentralAmericaCaribbean, 20),
-                (ScoutingRegion::NorthAmerica, 8),
-                (ScoutingRegion::WestAfrica, 4),
-            ],
-            // W.African clubs scout within Africa — the European pipeline is
-            // one-way player export, not two-way scouting.
-            ScoutingRegion::WestAfrica => &[
-                (ScoutingRegion::NorthAfrica, 18),
-                (ScoutingRegion::EastSouthAfrica, 12),
-                (ScoutingRegion::CentralAmericaCaribbean, 3),
-            ],
-            ScoutingRegion::NorthAfrica => &[
-                (ScoutingRegion::WestAfrica, 18),
-                (ScoutingRegion::MiddleEast, 12),
-                (ScoutingRegion::EastSouthAfrica, 8),
-                (ScoutingRegion::MiddleEastEurope, 5),
-            ],
-            ScoutingRegion::EastSouthAfrica => &[
-                (ScoutingRegion::WestAfrica, 15),
-                (ScoutingRegion::NorthAfrica, 10),
-                (ScoutingRegion::CentralAmericaCaribbean, 3),
-            ],
-            // North American clubs
-            ScoutingRegion::NorthAmerica => &[
-                (ScoutingRegion::SouthAmerica, 30),
-                (ScoutingRegion::WesternEurope, 20),
-                (ScoutingRegion::CentralAmericaCaribbean, 15),
-                (ScoutingRegion::WestAfrica, 10),
-                (ScoutingRegion::EasternEurope, 8),
-            ],
-            // CONCACAF clubs scout their own neighborhood; they don't scout Europe.
-            ScoutingRegion::CentralAmericaCaribbean => &[
-                (ScoutingRegion::SouthAmerica, 20),
-                (ScoutingRegion::NorthAmerica, 15),
-                (ScoutingRegion::WestAfrica, 3),
-            ],
-            // Asian leagues
-            ScoutingRegion::EastAsia => &[
-                (ScoutingRegion::SouthAmerica, 25),
-                (ScoutingRegion::WesternEurope, 20),
-                (ScoutingRegion::SoutheastAsia, 15),
-                (ScoutingRegion::EasternEurope, 10),
-                (ScoutingRegion::Oceania, 8),
-                (ScoutingRegion::WestAfrica, 5),
-            ],
-            ScoutingRegion::SoutheastAsia => &[
-                (ScoutingRegion::EastAsia, 25),
-                (ScoutingRegion::SouthAmerica, 15),
-                (ScoutingRegion::WesternEurope, 12),
-                (ScoutingRegion::Oceania, 10),
-                (ScoutingRegion::SouthAsia, 8),
-            ],
-            ScoutingRegion::MiddleEast => &[
-                (ScoutingRegion::SouthAmerica, 25),
-                (ScoutingRegion::WesternEurope, 20),
-                (ScoutingRegion::WestAfrica, 15),
-                (ScoutingRegion::NorthAfrica, 12),
-                (ScoutingRegion::EasternEurope, 10),
-                (ScoutingRegion::EastAsia, 5),
-            ],
-            ScoutingRegion::SouthAsia => &[
-                (ScoutingRegion::WesternEurope, 20),
-                (ScoutingRegion::MiddleEast, 15),
-                (ScoutingRegion::EastAsia, 12),
-                (ScoutingRegion::SoutheastAsia, 10),
-            ],
-            // Oceanian clubs scout Asia-Pacific + S.America; players export to Europe.
-            ScoutingRegion::Oceania => &[
-                (ScoutingRegion::EastAsia, 15),
-                (ScoutingRegion::SoutheastAsia, 12),
-                (ScoutingRegion::SouthAmerica, 5),
-            ],
-        }
+        Self::CORRIDORS[self.index()]
     }
+
+    /// The corridor table, in [`Self::index`] order.
+    const CORRIDORS: [&'static [(ScoutingRegion, u8)]; ScoutingRegion::COUNT] = [
+        // European clubs: strong corridors to S.America, W.Africa, E.Europe
+        &[
+            (ScoutingRegion::SouthAmerica, 25),
+            (ScoutingRegion::WestAfrica, 20),
+            (ScoutingRegion::EasternEurope, 15),
+            (ScoutingRegion::Scandinavia, 10),
+            (ScoutingRegion::NorthAfrica, 8),
+            (ScoutingRegion::EastSouthAfrica, 5),
+            (ScoutingRegion::NorthAmerica, 5),
+            (ScoutingRegion::MiddleEastEurope, 5),
+            (ScoutingRegion::EastAsia, 4),
+            (ScoutingRegion::CentralAmericaCaribbean, 3),
+        ],
+        &[
+            (ScoutingRegion::WesternEurope, 25),
+            (ScoutingRegion::SouthAmerica, 15),
+            (ScoutingRegion::WestAfrica, 12),
+            (ScoutingRegion::Scandinavia, 10),
+            (ScoutingRegion::NorthAfrica, 8),
+            (ScoutingRegion::MiddleEastEurope, 8),
+            (ScoutingRegion::EastSouthAfrica, 5),
+        ],
+        &[
+            (ScoutingRegion::WesternEurope, 25),
+            (ScoutingRegion::EasternEurope, 15),
+            (ScoutingRegion::WestAfrica, 12),
+            (ScoutingRegion::SouthAmerica, 10),
+            (ScoutingRegion::NorthAfrica, 8),
+            (ScoutingRegion::NorthAmerica, 5),
+        ],
+        &[
+            (ScoutingRegion::WesternEurope, 20),
+            (ScoutingRegion::EasternEurope, 18),
+            (ScoutingRegion::SouthAmerica, 15),
+            (ScoutingRegion::WestAfrica, 12),
+            (ScoutingRegion::NorthAfrica, 10),
+            (ScoutingRegion::MiddleEast, 10),
+        ],
+        // S.American clubs scout neighbors — their players export to Europe,
+        // but the clubs themselves don't scout Europe or Asia.
+        &[
+            (ScoutingRegion::CentralAmericaCaribbean, 20),
+            (ScoutingRegion::NorthAmerica, 8),
+            (ScoutingRegion::WestAfrica, 4),
+        ],
+        // W.African clubs scout within Africa — the European pipeline is
+        // one-way player export, not two-way scouting.
+        &[
+            (ScoutingRegion::NorthAfrica, 18),
+            (ScoutingRegion::EastSouthAfrica, 12),
+            (ScoutingRegion::CentralAmericaCaribbean, 3),
+        ],
+        &[
+            (ScoutingRegion::WestAfrica, 18),
+            (ScoutingRegion::MiddleEast, 12),
+            (ScoutingRegion::EastSouthAfrica, 8),
+            (ScoutingRegion::MiddleEastEurope, 5),
+        ],
+        &[
+            (ScoutingRegion::WestAfrica, 15),
+            (ScoutingRegion::NorthAfrica, 10),
+            (ScoutingRegion::CentralAmericaCaribbean, 3),
+        ],
+        // North American clubs
+        &[
+            (ScoutingRegion::SouthAmerica, 30),
+            (ScoutingRegion::WesternEurope, 20),
+            (ScoutingRegion::CentralAmericaCaribbean, 15),
+            (ScoutingRegion::WestAfrica, 10),
+            (ScoutingRegion::EasternEurope, 8),
+        ],
+        // CONCACAF clubs scout their own neighborhood; they don't scout Europe.
+        &[
+            (ScoutingRegion::SouthAmerica, 20),
+            (ScoutingRegion::NorthAmerica, 15),
+            (ScoutingRegion::WestAfrica, 3),
+        ],
+        // Asian leagues
+        &[
+            (ScoutingRegion::SouthAmerica, 25),
+            (ScoutingRegion::WesternEurope, 20),
+            (ScoutingRegion::SoutheastAsia, 15),
+            (ScoutingRegion::EasternEurope, 10),
+            (ScoutingRegion::Oceania, 8),
+            (ScoutingRegion::WestAfrica, 5),
+        ],
+        &[
+            (ScoutingRegion::EastAsia, 25),
+            (ScoutingRegion::SouthAmerica, 15),
+            (ScoutingRegion::WesternEurope, 12),
+            (ScoutingRegion::Oceania, 10),
+            (ScoutingRegion::SouthAsia, 8),
+        ],
+        &[
+            (ScoutingRegion::SouthAmerica, 25),
+            (ScoutingRegion::WesternEurope, 20),
+            (ScoutingRegion::WestAfrica, 15),
+            (ScoutingRegion::NorthAfrica, 12),
+            (ScoutingRegion::EasternEurope, 10),
+            (ScoutingRegion::EastAsia, 5),
+        ],
+        &[
+            (ScoutingRegion::WesternEurope, 20),
+            (ScoutingRegion::MiddleEast, 15),
+            (ScoutingRegion::EastAsia, 12),
+            (ScoutingRegion::SoutheastAsia, 10),
+        ],
+        // Oceanian clubs scout Asia-Pacific + S.America; players export to Europe.
+        &[
+            (ScoutingRegion::EastAsia, 15),
+            (ScoutingRegion::SoutheastAsia, 12),
+            (ScoutingRegion::SouthAmerica, 5),
+        ],
+    ];
 
     /// Number of regions. Lets callers index a fixed-size table by
     /// [`Self::index`] instead of hashing.

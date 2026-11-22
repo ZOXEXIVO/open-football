@@ -883,6 +883,66 @@ impl Player {
         } else {
             1.0
         };
+        self.emit_signing_prestige(&pending, club_rep_0_to_1, league_reputation, loan_damp, now);
+        self.emit_arrival_language_isolation(&pending, country_code);
+        if let Some(f) = formation {
+            self.emit_role_mismatch_if_unfit(f);
+        }
+
+        // Big-money signings (or loans — the borrowing club took him to play)
+        // arrive with an implicit playing-time promise.
+        let promise_horizon = cfg.promise_horizon_days(pending.is_loan, pending.fee);
+        if promise_horizon > 0 {
+            self.record_promise(ManagerPromiseKind::PlayingTime, now, promise_horizon);
+        }
+
+        // Career-desire satisfaction events. These run at the *new*
+        // club's first tick (after happiness was reset by the move) so
+        // they latch on top of the fresh state. Cooldowns prevent any
+        // duplicate emission if process_transfer_shock fires twice for
+        // the same signing (defensive guard — pending_signing is
+        // single-shot today). The continental helper consults the
+        // UEFA-suspension policy — a top Russian club after 2022-02-28
+        // can't satisfy a "wants Europe" desire because the club itself
+        // can't enter Europe regardless of reputation.
+        self.emit_continental_satisfaction_on_signing(&pending, club_rep_0_to_1, country_code, now);
+        self.emit_home_return_satisfaction_on_signing(&pending, country_code);
+
+        // Transfer-environment realism: weak↔elite and star↔weak
+        // narratives layered on top of the existing shock events.
+        // Builds the `TransferEnvironmentProfile` from the staged
+        // `PendingSigning` + current ctx and fires the matching
+        // first-tick events.
+        let profile = TransferEnvironmentProfile::build(
+            self,
+            now,
+            &pending,
+            club_rep_0_to_1,
+            league_reputation,
+        );
+        self.apply_first_tick_environment_events(now, &profile);
+
+        // Bound the *total* negative morale-event load this single move may
+        // apply on its first tick. Without this an ordinary signing can stack
+        // language isolation + role mismatch + ambition shock + fan burden +
+        // too-good-for-level at full force on day one and tip straight into a
+        // grievance. Genuinely extreme moves unlock a much higher ceiling so
+        // the drama survives where it's earned. Computed from immutable reads
+        // before the mutable handle on `happiness` is taken.
+        let extremes = self.transfer_shock_extremes(&pending, formation, club_rep_0_to_1);
+        TransferShockBudget::default().cap_first_tick(&mut self.happiness, extremes);
+    }
+
+    /// Prestige reactions: ambition shock, dream framing, elite joining,
+    /// salary change, and the shirt number.
+    fn emit_signing_prestige(
+        &mut self,
+        pending: &PendingSigning,
+        club_rep_0_to_1: f32,
+        league_reputation: u16,
+        loan_damp: f32,
+        now: NaiveDate,
+    ) {
         let is_favorite_destination = self.favorite_clubs.contains(&pending.destination_club_id);
         // Ambition shock is muted when joining a favorite club — the player
         // knew what they were signing for and the sentimental pull covers the
@@ -953,71 +1013,33 @@ impl Player {
                     .add_event(HappinessEventType::ShirtNumberPromotion, magnitude);
             }
         }
+    }
 
-        if !self.speaks_local_language(country_code) {
-            let mag = if pending.is_loan { -3.0 } else { -5.0 };
-            let ctx = HappinessEventContext::new(
-                HappinessEventCause::AdaptationIsolation,
-                HappinessEventSeverity::from_magnitude(mag),
-                HappinessEventScope::DressingRoom,
-            )
-            .with_evidence(HappinessEventEvidence::LanguageBarrier)
-            .with_evidence(HappinessEventEvidence::NewSigningStillSettling)
-            .with_follow_up(HappinessEventFollowUp::SettlingInProgress);
-            self.happiness.add_event_with_context(
-                HappinessEventType::FeelingIsolated,
-                mag,
-                None,
-                ctx,
-            );
+    fn emit_arrival_language_isolation(&mut self, pending: &PendingSigning, country_code: &str) {
+        if self.speaks_local_language(country_code) {
+            return;
         }
+        let mag = if pending.is_loan { -3.0 } else { -5.0 };
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::AdaptationIsolation,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_evidence(HappinessEventEvidence::LanguageBarrier)
+        .with_evidence(HappinessEventEvidence::NewSigningStillSettling)
+        .with_follow_up(HappinessEventFollowUp::SettlingInProgress);
+        self.happiness
+            .add_event_with_context(HappinessEventType::FeelingIsolated, mag, None, ctx);
+    }
 
-        if let Some(f) = formation {
-            self.emit_role_mismatch_if_unfit(f);
-        }
-
-        // Big-money signings (or loans — the borrowing club took him to play)
-        // arrive with an implicit playing-time promise.
-        let promise_horizon = cfg.promise_horizon_days(pending.is_loan, pending.fee);
-        if promise_horizon > 0 {
-            self.record_promise(ManagerPromiseKind::PlayingTime, now, promise_horizon);
-        }
-
-        // Career-desire satisfaction events. These run at the *new*
-        // club's first tick (after happiness was reset by the move) so
-        // they latch on top of the fresh state. Cooldowns prevent any
-        // duplicate emission if process_transfer_shock fires twice for
-        // the same signing (defensive guard — pending_signing is
-        // single-shot today). The continental helper consults the
-        // UEFA-suspension policy — a top Russian club after 2022-02-28
-        // can't satisfy a "wants Europe" desire because the club itself
-        // can't enter Europe regardless of reputation.
-        self.emit_continental_satisfaction_on_signing(&pending, club_rep_0_to_1, country_code, now);
-        self.emit_home_return_satisfaction_on_signing(&pending, country_code);
-
-        // Transfer-environment realism: weak↔elite and star↔weak
-        // narratives layered on top of the existing shock events.
-        // Builds the `TransferEnvironmentProfile` from the staged
-        // `PendingSigning` + current ctx and fires the matching
-        // first-tick events.
-        let profile = TransferEnvironmentProfile::build(
-            self,
-            now,
-            &pending,
-            club_rep_0_to_1,
-            league_reputation,
-        );
-        self.apply_first_tick_environment_events(now, &profile);
-
-        // Bound the *total* negative morale-event load this single move may
-        // apply on its first tick. Without this an ordinary signing can stack
-        // language isolation + role mismatch + ambition shock + fan burden +
-        // too-good-for-level at full force on day one and tip straight into a
-        // grievance. Genuinely extreme moves unlock a much higher ceiling so
-        // the drama survives where it's earned. Computed from immutable reads
-        // before the mutable handle on `happiness` is taken.
+    fn transfer_shock_extremes(
+        &self,
+        pending: &PendingSigning,
+        formation: Option<&[PlayerPositionType; 11]>,
+        club_rep_0_to_1: f32,
+    ) -> TransferShockExtremes {
         let dest_club_rep = (club_rep_0_to_1.clamp(0.0, 1.0) * 10000.0) as i32;
-        let extremes = TransferShockExtremes {
+        TransferShockExtremes {
             huge_salary_cut: match (
                 pending.previous_salary,
                 self.contract.as_ref().map(|c| c.salary),
@@ -1037,8 +1059,7 @@ impl Player {
             dramatic_step_down: (pending.source_club_reputation as i32 - dest_club_rep >= 4000)
                 || (self.player_attributes.world_reputation as i32 - dest_club_rep >= 5000),
             high_controversy: self.attributes.controversy >= 15.0,
-        };
-        TransferShockBudget::default().cap_first_tick(&mut self.happiness, extremes);
+        }
     }
 
     /// Stage `ContinentalAmbitionSatisfied` when a player who carried a
@@ -1529,6 +1550,20 @@ impl Player {
             return;
         }
 
+        let state = self.integration_state(days, country_code, squad, &cfg);
+        if self.try_emit_isolation(now, &state) {
+            return;
+        }
+        self.maybe_emit_settled(&cfg, &state);
+    }
+
+    fn integration_state(
+        &self,
+        days: i64,
+        country_code: &str,
+        squad: &AdaptationSquadContext,
+        cfg: &AdaptationConfig,
+    ) -> IntegrationState {
         let weeks = days / 7;
         let speaks_local = self.speaks_local_language(country_code);
         let adapt = self.attributes.adaptability.clamp(0.0, 20.0);
@@ -1561,40 +1596,47 @@ impl Player {
         } else {
             0.0
         };
-        let isolation_chance = (isolation_base_chance * isolation_dampener).clamp(0.0, 1.0);
-
-        if isolation_chance > 0.0 {
-            // Use deterministic per-day roll so testing stays stable.
-            let roll = isolation_roll(self.id, now);
-            if roll < isolation_chance {
-                let mag = -2.0;
-                let mut ctx = HappinessEventContext::new(
-                    HappinessEventCause::AdaptationIsolation,
-                    HappinessEventSeverity::from_magnitude(mag),
-                    HappinessEventScope::DressingRoom,
-                )
-                .with_evidence(HappinessEventEvidence::NoInnerCircleYet)
-                .with_evidence(HappinessEventEvidence::NewSigningStillSettling)
-                .with_follow_up(HappinessEventFollowUp::SettlingInProgress);
-                if !speaks_local {
-                    ctx = ctx.with_evidence(HappinessEventEvidence::LanguageBarrier);
-                }
-                self.happiness.add_event_with_context(
-                    HappinessEventType::FeelingIsolated,
-                    mag,
-                    None,
-                    ctx,
-                );
-                return;
-            }
+        IntegrationState {
+            weeks,
+            speaks_local,
+            pull_toward_bonding,
+            isolation_chance: (isolation_base_chance * isolation_dampener).clamp(0.0, 1.0),
         }
+    }
 
-        // Settled-into-squad lift. Long cooldown so the per-tick
-        // bonding/language predicate doesn't refire the event week after
-        // week — happiness clears on transfer, so a fresh club gets a
-        // fresh emission.
-        if weeks >= cfg.settled_min_weeks
-            && (pull_toward_bonding > cfg.settled_pull_threshold || speaks_local)
+    fn try_emit_isolation(&mut self, now: NaiveDate, state: &IntegrationState) -> bool {
+        if state.isolation_chance <= 0.0 {
+            return false;
+        }
+        // Use deterministic per-day roll so testing stays stable.
+        let roll = AdaptationRoll::isolation(self.id, now);
+        if roll >= state.isolation_chance {
+            return false;
+        }
+        let mag = -2.0;
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::AdaptationIsolation,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_evidence(HappinessEventEvidence::NoInnerCircleYet)
+        .with_evidence(HappinessEventEvidence::NewSigningStillSettling)
+        .with_follow_up(HappinessEventFollowUp::SettlingInProgress);
+        if !state.speaks_local {
+            ctx = ctx.with_evidence(HappinessEventEvidence::LanguageBarrier);
+        }
+        self.happiness
+            .add_event_with_context(HappinessEventType::FeelingIsolated, mag, None, ctx);
+        true
+    }
+
+    /// Settled-into-squad lift. Long cooldown so the per-tick
+    /// bonding/language predicate doesn't refire the event week after
+    /// week — happiness clears on transfer, so a fresh club gets a
+    /// fresh emission.
+    fn maybe_emit_settled(&mut self, cfg: &AdaptationConfig, state: &IntegrationState) {
+        if state.weeks >= cfg.settled_min_weeks
+            && (state.pull_toward_bonding > cfg.settled_pull_threshold || state.speaks_local)
         {
             let mag = 1.0;
             let ctx = HappinessEventContext::new(
@@ -1615,15 +1657,39 @@ impl Player {
     }
 }
 
-/// Deterministic per-day per-player isolation roll, in `[0, 1)`. Same date +
-/// id produces the same number — keeps weekly tests stable.
-fn isolation_roll(player_id: u32, date: NaiveDate) -> f32 {
-    use chrono::Datelike;
-    let h = (player_id as u64)
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(date.num_days_from_ce() as u64);
-    let frac = ((h >> 13) as u32 as f32) / (u32::MAX as f32);
-    frac.clamp(0.0, 0.999)
+/// Read-once integration inputs for one weekly settlement tick.
+struct IntegrationState {
+    weeks: i64,
+    speaks_local: bool,
+    pull_toward_bonding: f32,
+    isolation_chance: f32,
+}
+
+/// Deterministic per-player adaptation rolls.
+struct AdaptationRoll;
+
+impl AdaptationRoll {
+    /// Deterministic per-day per-player isolation roll, in `[0, 1)`. Same date +
+    /// id produces the same number — keeps weekly tests stable.
+    pub fn isolation(player_id: u32, date: NaiveDate) -> f32 {
+        use chrono::Datelike;
+        let h = (player_id as u64)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            .wrapping_add(date.num_days_from_ce() as u64);
+        let frac = ((h >> 13) as u32 as f32) / (u32::MAX as f32);
+        frac.clamp(0.0, 0.999)
+    }
+}
+
+/// Read-once scoring result for one chronic adaptation check.
+struct ChronicAdaptationAssessment {
+    days_at_club: i64,
+    speaks_local: bool,
+    adapt: f32,
+    different_continent: bool,
+    recent_isolation_count: u8,
+    poor_adaptation: bool,
+    adaptation_score: f32,
 }
 
 /// Inputs for chronic-adaptation-failure detection. Keeps the player
@@ -1674,13 +1740,28 @@ impl Player {
         country_code: &str,
         signals: &AdaptationFailureSignals,
     ) -> bool {
+        let Some(assessment) = self.assess_chronic_adaptation(now, country_code, signals) else {
+            return false;
+        };
+        self.emit_chronic_adaptation(&assessment, signals);
+        true
+    }
+
+    /// Honeymoon, cooldown, home-country and scoring gates for a chronic
+    /// adaptation complaint.
+    fn assess_chronic_adaptation(
+        &self,
+        now: NaiveDate,
+        country_code: &str,
+        signals: &AdaptationFailureSignals,
+    ) -> Option<ChronicAdaptationAssessment> {
         // Honeymoon guard — settlement window plus a tail. The weakest
         // bound (60 days) is the request requirement; the upper bound
         // (no upper bound) lets the mood persist as long as the
         // mismatch does, gated by cooldown.
         let days_at_club = match self.days_since_transfer(now) {
             Some(d) if d >= 60 => d,
-            _ => return false,
+            _ => return None,
         };
 
         // Cooldown — 60 days between WantsReturnHome events on the same
@@ -1690,12 +1771,12 @@ impl Player {
             .happiness
             .has_recent_event(&HappinessEventType::WantsReturnHome, 60)
         {
-            return false;
+            return None;
         }
 
         // Players in their home country never want to "return home".
         if signals.club_in_home_country {
-            return false;
+            return None;
         }
 
         let speaks_local = self.speaks_local_language(country_code);
@@ -1711,37 +1792,7 @@ impl Player {
             .player_nationality_continent_id
             .is_some_and(|nationality| nationality != signals.club_continent_id);
 
-        // Repeated isolation events in the last 90 days — a chronic
-        // outsider, not a one-off bad fortnight. Filter out the
-        // companion `StillStrugglingToSettle` markers this helper itself
-        // emits below, otherwise the detector would feed itself: every
-        // fired WantsReturnHome would stage an isolation event that
-        // counts toward the *next* fire, ratcheting the mood up.
-        let recent_isolation_count = self
-            .happiness
-            .recent_events
-            .iter()
-            .filter(|e| {
-                if e.event_type != HappinessEventType::FeelingIsolated || e.days_ago > 90 {
-                    return false;
-                }
-                // Drop our own companion markers — see emit site below.
-                let is_companion = e
-                    .context
-                    .as_ref()
-                    .and_then(|c| c.personal_adaptation_context.as_ref())
-                    .map(|p| {
-                        matches!(
-                            p.kind,
-                            PersonalAdaptationKind::StillStrugglingToSettle
-                                | PersonalAdaptationKind::ReturnHomeAfterPoorAdaptation
-                        )
-                    })
-                    .unwrap_or(false);
-                !is_companion
-            })
-            .count() as u8;
-
+        let recent_isolation_count = self.chronic_isolation_count();
         let adaptation_score = signals.adaptation_score;
         let poor_adaptation = adaptation_score > 0.0 && adaptation_score < 40.0;
 
@@ -1789,7 +1840,7 @@ impl Player {
         // through.
         if signals.destination_is_favourite {
             if !poor_adaptation || self.happiness.morale > 20.0 {
-                return false;
+                return None;
             }
             score -= 2.0;
         }
@@ -1799,34 +1850,80 @@ impl Player {
         // few isolation events crosses this naturally; a settled
         // foreign player with one or two checks does not.
         if score < 5.0 {
-            return false;
+            return None;
         }
 
+        Some(ChronicAdaptationAssessment {
+            days_at_club,
+            speaks_local,
+            adapt,
+            different_continent,
+            recent_isolation_count,
+            poor_adaptation,
+            adaptation_score,
+        })
+    }
+
+    /// Repeated isolation events in the last 90 days — a chronic outsider,
+    /// not a one-off bad fortnight. Filters out the companion
+    /// `StillStrugglingToSettle` markers this helper itself emits, otherwise
+    /// the detector would feed itself.
+    fn chronic_isolation_count(&self) -> u8 {
+        self.happiness
+            .recent_events
+            .iter()
+            .filter(|e| {
+                if e.event_type != HappinessEventType::FeelingIsolated || e.days_ago > 90 {
+                    return false;
+                }
+                // Drop our own companion markers — see emit site below.
+                let is_companion = e
+                    .context
+                    .as_ref()
+                    .and_then(|c| c.personal_adaptation_context.as_ref())
+                    .map(|p| {
+                        matches!(
+                            p.kind,
+                            PersonalAdaptationKind::StillStrugglingToSettle
+                                | PersonalAdaptationKind::ReturnHomeAfterPoorAdaptation
+                        )
+                    })
+                    .unwrap_or(false);
+                !is_companion
+            })
+            .count() as u8
+    }
+
+    fn emit_chronic_adaptation(
+        &mut self,
+        assessment: &ChronicAdaptationAssessment,
+        signals: &AdaptationFailureSignals,
+    ) {
         let cfg = HappinessConfig::default();
         let mag = cfg.catalog.wants_return_home;
 
         let mut desire_ctx =
             CareerDesireEventContext::new(CareerDesireKind::ReturnHomeAfterPoorAdaptation)
-                .with_days_at_club(days_at_club.max(0) as u32);
-        if adaptation_score > 0.0 {
-            desire_ctx = desire_ctx.with_adaptation_score(adaptation_score);
+                .with_days_at_club(assessment.days_at_club.max(0) as u32);
+        if assessment.adaptation_score > 0.0 {
+            desire_ctx = desire_ctx.with_adaptation_score(assessment.adaptation_score);
         }
-        if different_continent {
+        if assessment.different_continent {
             desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::DifferentContinent);
         }
-        if !speaks_local {
+        if !assessment.speaks_local {
             desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::NoLocalLanguage);
         }
-        if adapt <= 8.0 {
+        if assessment.adapt <= 8.0 {
             desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::LowAdaptability);
         }
         if signals.same_language_or_nationality_teammates == 0 {
             desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::NoCompatriotSupport);
         }
-        if poor_adaptation {
+        if assessment.poor_adaptation {
             desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::PoorAdaptationScore);
         }
-        if recent_isolation_count >= 2 {
+        if assessment.recent_isolation_count >= 2 {
             desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::RepeatedIsolation);
         }
         if signals.club_fit <= -3.0 {
@@ -1849,10 +1946,10 @@ impl Player {
         // that drives this helper (see filter above).
         let pactx = PersonalAdaptationEventContext::new(
             PersonalAdaptationKind::StillStrugglingToSettle,
-            days_at_club.max(0) as u32,
+            assessment.days_at_club.max(0) as u32,
         )
         .with_adaptability(self.attributes.adaptability)
-        .with_local_language(speaks_local);
+        .with_local_language(assessment.speaks_local);
 
         self.happiness.add_event_with_context(
             HappinessEventType::WantsReturnHome,
@@ -1876,7 +1973,6 @@ impl Player {
             still_struggling_ctx,
             30,
         );
-        true
     }
 
     /// Post-settlement ongoing language check. A player who's been at a
@@ -3013,7 +3109,7 @@ impl Player {
         // Deterministic per-player/per-week roll. Mirrors
         // `isolation_roll` but uses the ISO week number so events
         // don't fire every weekly tick of the same situation.
-        let roll = environment_story_roll(self.id, now);
+        let roll = AdaptationRoll::environment_story(self.id, now);
 
         let dest_club_rep = (club_rep_0_to_1.clamp(0.0, 1.0) * 10000.0) as u16;
         let player_world_rep = self.player_attributes.world_reputation as i32;
@@ -3110,20 +3206,23 @@ impl Player {
     }
 }
 
-/// Deterministic per-player/per-week roll, in `[0, 1)`. Same player +
-/// same ISO week yields the same number, so re-running the weekly tick
-/// is idempotent. Distinct from `isolation_roll` (per-day) so the two
-/// systems don't share a seed and lock in correlated outcomes.
-fn environment_story_roll(player_id: u32, date: NaiveDate) -> f32 {
-    use chrono::Datelike;
-    let week = date.iso_week().week();
-    let year = date.iso_week().year();
-    let h = (player_id as u64)
-        .wrapping_mul(0xBF58_476D_1CE4_E5B9)
-        .wrapping_add(week as u64)
-        .wrapping_add((year as u64).wrapping_mul(54_321));
-    let frac = ((h >> 17) as u32 as f32) / (u32::MAX as f32);
-    frac.clamp(0.0, 0.999)
+/// Deterministic per-player adaptation rolls.
+impl AdaptationRoll {
+    /// Deterministic per-player/per-week roll, in `[0, 1)`. Same player +
+    /// same ISO week yields the same number, so re-running the weekly tick
+    /// is idempotent. Distinct from `isolation_roll` (per-day) so the two
+    /// systems don't share a seed and lock in correlated outcomes.
+    pub fn environment_story(player_id: u32, date: NaiveDate) -> f32 {
+        use chrono::Datelike;
+        let week = date.iso_week().week();
+        let year = date.iso_week().year();
+        let h = (player_id as u64)
+            .wrapping_mul(0xBF58_476D_1CE4_E5B9)
+            .wrapping_add(week as u64)
+            .wrapping_add((year as u64).wrapping_mul(54_321));
+        let frac = ((h >> 17) as u32 as f32) / (u32::MAX as f32);
+        frac.clamp(0.0, 0.999)
+    }
 }
 
 #[cfg(test)]
@@ -4023,7 +4122,7 @@ mod transfer_environment_tests {
         // SeniorMentorSupport beats RolePathBlocked / Overawed in the
         // Flavor slot (priority 70 vs 65/50).
         let mut p = player_with(24, 14.0, 1000, 1000, 80, 5.0, 10.0, 10.0);
-        p.squad_social_view = Some(crate::club::player::core::player::SquadSocialView {
+        p.squad_social_view = Some(crate::club::player::model::player::SquadSocialView {
             same_nationality_teammates: 2,
             same_language_teammates: 2,
         });

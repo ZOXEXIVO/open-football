@@ -22,6 +22,10 @@ crate-type = ["cdylib", "rlib"]
 [lints.clippy]
 too_many_arguments = "allow"
 type_complexity = "allow"
+too_many_lines = "deny"
+
+[lints.rust]
+unfulfilled_lint_expectations = "deny"
 
 [dependencies]
 # Shared with the server, which is the whole point of it: the colour tables a

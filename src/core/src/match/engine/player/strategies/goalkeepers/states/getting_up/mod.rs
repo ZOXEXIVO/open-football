@@ -1,14 +1,14 @@
-use crate::r#match::common_states::ChallengeKind;
 use crate::r#match::engine::ball::ball::HandlingVerdict;
 use crate::r#match::engine::ball::ball::contest::body::KeeperBody;
 use crate::r#match::events::Event;
-use crate::r#match::goalkeepers::states::common::{
+use crate::r#match::goalkeepers::states::shared::{
     ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperDelivery, KeeperFeetDecision,
     KeeperRead, KeeperSmother, ReadLevel,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
+use crate::r#match::shared_states::ChallengeKind;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };

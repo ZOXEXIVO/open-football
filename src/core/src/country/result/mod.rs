@@ -1,8 +1,4 @@
 mod end_of_period;
-mod preseason;
-mod regulations;
-mod reputation;
-mod statistics;
 pub mod transfers;
 
 use crate::club::board::manager::ManagerMarketTick;
@@ -128,7 +124,7 @@ impl CountryResult {
             // omitted players receive the SquadRegistrationOmitted
             // happiness event. Runs once on the season-start tick so
             // the registration is stable for the rest of the campaign.
-            Self::enforce_squad_registration(data, self.country_id, current_date);
+            data.enforce_squad_registration(self.country_id, current_date);
         }
 
         drop(stage);

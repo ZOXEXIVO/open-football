@@ -163,6 +163,33 @@ impl TeamTacticalState {
     /// from the match tick loop (every ~10 ticks is enough — phase shifts
     /// settle over multiple seconds, not every frame).
     pub fn refresh(home: &mut Self, away: &mut Self, inputs: &TacticalRefreshInputs<'_>) {
+        Self::refresh_ball_state(home, away, inputs);
+        let (home_style, away_style, home_high_press, away_high_press) =
+            Self::refresh_stance_and_styles(home, away, inputs);
+        Self::refresh_phase(
+            home,
+            away,
+            home_style,
+            away_style,
+            home_high_press,
+            away_high_press,
+        );
+        Self::refresh_defensive_line(home, away, inputs, home_style, away_style);
+        Self::refresh_phase_signals(
+            home,
+            away,
+            inputs,
+            home_style,
+            away_style,
+            home_high_press,
+            away_high_press,
+        );
+        Self::apply_home_edge(home, away, inputs.home_edge);
+        Self::clamp_press_and_rest(home, away, inputs, home_style, away_style);
+        Self::refresh_side_density(home, away, inputs);
+    }
+
+    fn refresh_ball_state(home: &mut Self, away: &mut Self, inputs: &TacticalRefreshInputs<'_>) {
         let field = inputs.field;
         let field_width = field.size.width as f32;
         let field_height = field.size.height as f32;
@@ -223,7 +250,13 @@ impl TeamTacticalState {
         let side_zone = BallSideZone::for_y(field_height, ball_y);
         home.ball_side = side_zone;
         away.ball_side = side_zone;
+    }
 
+    fn refresh_stance_and_styles(
+        home: &mut Self,
+        away: &mut Self,
+        inputs: &TacticalRefreshInputs<'_>,
+    ) -> (StyleInputs, StyleInputs, bool, bool) {
         // ── No-phase-dependency signals first ────────────────────────
         // The protecting share of each side's stance, risk appetite and
         // build-up patience depend on the plan and the stance — none of
@@ -262,6 +295,17 @@ impl TeamTacticalState {
             inputs.away_skills.build_up_quality,
         );
 
+        (home_style, away_style, home_high_press, away_high_press)
+    }
+
+    fn refresh_phase(
+        home: &mut Self,
+        away: &mut Self,
+        home_style: StyleInputs,
+        away_style: StyleInputs,
+        home_high_press: bool,
+        away_high_press: bool,
+    ) {
         // ── Phase ────────────────────────────────────────────────────
         // Use per-team transition windows derived from the just-computed
         // patience and tactic signals.
@@ -288,6 +332,18 @@ impl TeamTacticalState {
             away_attack_window,
             away_def_window,
         );
+    }
+
+    fn refresh_defensive_line(
+        home: &mut Self,
+        away: &mut Self,
+        inputs: &TacticalRefreshInputs<'_>,
+        home_style: StyleInputs,
+        away_style: StyleInputs,
+    ) {
+        let field_width = inputs.field.size.width as f32;
+        let home_side = inputs.home_side;
+        let away_side = home_side.opposite();
 
         // Defensive line x: interpolate between "deep" (own third
         // boundary) and "high" (opponent's half) based on phase. Gives
@@ -340,7 +396,17 @@ impl TeamTacticalState {
         away.defensive_line_x = (away_base_line
             + away_side.forward_dir_x() * (away_gk_lift - away_line_drop_units))
             .clamp(0.0, field_width);
+    }
 
+    fn refresh_phase_signals(
+        home: &mut Self,
+        away: &mut Self,
+        inputs: &TacticalRefreshInputs<'_>,
+        home_style: StyleInputs,
+        away_style: StyleInputs,
+        home_high_press: bool,
+        away_high_press: bool,
+    ) {
         // ── Phase-dependent signals ──────────────────────────────────
         home.press_intensity = Self::compute_press_intensity(
             home_style.pressing,
@@ -377,7 +443,9 @@ impl TeamTacticalState {
 
         home.tempo = Self::compute_tempo(home_style.tempo, home.phase);
         away.tempo = Self::compute_tempo(away_style.tempo, away.phase);
+    }
 
+    fn apply_home_edge(home: &mut Self, away: &mut Self, home_edge: f32) {
         // ── Home advantage (play-quality half) ───────────────────────
         // Real equal-strength matches split ~45/25/30 toward the home
         // side — home teams take ~15-20% more shots and score ~+0.35
@@ -397,7 +465,7 @@ impl TeamTacticalState {
         // effective_skill.rs); this block just adds the visible
         // front-foot flavour — home sides pressing a touch higher and
         // playing a touch quicker — without pretending to be the edge.
-        let home_edge = inputs.home_edge.clamp(0.0, 1.0);
+        let home_edge = home_edge.clamp(0.0, 1.0);
         if home_edge > 0.0 {
             home.press_intensity = (home.press_intensity + 0.14 * home_edge).clamp(0.0, 1.0);
             home.risk_appetite = (home.risk_appetite + 0.10 * home_edge).clamp(0.0, 1.0);
@@ -409,6 +477,15 @@ impl TeamTacticalState {
             away.risk_appetite = (away.risk_appetite - 0.06 * home_edge).clamp(0.0, 1.0);
             away.press_intensity = (away.press_intensity - 0.05 * home_edge).clamp(0.0, 1.0);
         }
+    }
+
+    fn clamp_press_and_rest(
+        home: &mut Self,
+        away: &mut Self,
+        inputs: &TacticalRefreshInputs<'_>,
+        home_style: StyleInputs,
+        away_style: StyleInputs,
+    ) {
         home.press_intensity = home.press_intensity.min(inputs.press_ceiling);
         away.press_intensity = away.press_intensity.min(inputs.press_ceiling);
 
@@ -416,6 +493,11 @@ impl TeamTacticalState {
             Self::compute_rest_defense_count(home_style.rest_defence, home.phase, home.stance);
         away.rest_defense_count =
             Self::compute_rest_defense_count(away_style.rest_defence, away.phase, away.stance);
+    }
+
+    fn refresh_side_density(home: &mut Self, away: &mut Self, inputs: &TacticalRefreshInputs<'_>) {
+        let field = inputs.field;
+        let field_height = field.size.height as f32;
 
         // Side density: count own players on left/center/right thirds
         // of the pitch (vertically). Cheap O(N=22) pass.

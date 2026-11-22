@@ -1,9 +1,10 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::slug::player_history_slug;
 use crate::leagues::address::LeagueAddress;
-use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
+use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::shared::slug::PlayerSlug;
+use crate::teams::{TeamLookup, TeamNeighborhood};
+use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n, NewsI18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -299,104 +300,84 @@ pub struct ResultView {
     pub match_id: String,
 }
 
-pub async fn team_newspaper_action(
-    State(state): State<GameAppData>,
-    Path(route_params): Path<TeamNewspaperRequest>,
-) -> ApiResult<impl IntoResponse> {
-    let guard = state.data.read().await;
+pub struct NewspaperPage;
 
-    let simulator_data = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+impl NewspaperPage {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<TeamNewspaperRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        let guard = state.data.read().await;
 
-    let i18n = state.i18n.for_lang(&route_params.lang);
-    let news = state.news_i18n.for_lang(&route_params.lang);
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let team_id = simulator_data
-        .indexes
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Indexes not available".to_string()))?
-        .slug_indexes
-        .get_team_by_slug(&route_params.team_slug)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("Team '{}' not found", route_params.team_slug))
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let news = state.news_i18n.for_lang(&route_params.lang);
+
+        let team = TeamLookup::by_slug(simulator_data, &route_params.team_slug)?;
+
+        let club = simulator_data.club(team.club_id).ok_or_else(|| {
+            ApiError::InternalError(format!("Club with ID {} not found", team.club_id))
         })?;
 
-    let team = simulator_data
-        .team(team_id)
-        .ok_or_else(|| ApiError::NotFound(format!("Team with ID {} not found", team_id)))?;
+        let league = team.league_id.and_then(|id| simulator_data.league(id));
 
-    let club = simulator_data.club(team.club_id).ok_or_else(|| {
-        ApiError::InternalError(format!("Club with ID {} not found", team.club_id))
-    })?;
+        let press = PressTeam::covering(simulator_data, team);
+        // The nameplate the page is titled with. A squad with no presses of
+        // its own reads the flagship's paper, so it is titled with the
+        // flagship's nameplate; a club the world has no paper for at all
+        // falls back to its own name rather than to an empty tab.
+        let masthead = press
+            .map(|paper| PressDesk::masthead(paper.newsroom.masthead_key(), &paper.name, &news))
+            .unwrap_or_else(|| team.name.clone());
+        let issues = press
+            .map(|paper| PressDesk::typeset(simulator_data, paper, &i18n, &news))
+            .unwrap_or_default();
 
-    let league = team.league_id.and_then(|id| simulator_data.league(id));
+        let current_path = format!("/{}/teams/{}/newspaper", route_params.lang, team.slug);
+        let neighborhood = TeamNeighborhood::for_club(team.club_id, simulator_data, &i18n)?;
+        let menu_sections = neighborhood.menu_sections(
+            simulator_data,
+            team.club_id,
+            &i18n,
+            &route_params.lang,
+            &current_path,
+        );
 
-    let press = PressTeam::covering(simulator_data, team);
-    // The nameplate the page is titled with. A squad with no presses of
-    // its own reads the flagship's paper, so it is titled with the
-    // flagship's nameplate; a club the world has no paper for at all
-    // falls back to its own name rather than to an empty tab.
-    let masthead = press
-        .map(|paper| PressDesk::masthead(paper.newsroom.masthead_key(), &paper.name, &news))
-        .unwrap_or_else(|| team.name.clone());
-    let issues = press
-        .map(|paper| PressDesk::typeset(simulator_data, paper, &i18n, &news))
-        .unwrap_or_default();
+        let league_title = league
+            .map(|l| views::Menus::league_display_name(l, &i18n, simulator_data))
+            .unwrap_or_default();
 
-    let (neighbor_teams, country_leagues) =
-        NewspaperPage::menu_sources(team.club_id, simulator_data, &i18n)?;
-    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
-        .iter()
-        .map(|(name, slug)| (name.as_str(), slug.as_str()))
-        .collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues
-        .iter()
-        .map(|(name, slug)| (name.as_str(), slug.as_str()))
-        .collect();
-
-    let (country_name, country_slug) = views::club_country_info(simulator_data, team.club_id);
-    let current_path = format!("/{}/teams/{}/newspaper", route_params.lang, team.slug);
-    let menu_params = views::MenuParams {
-        i18n: &i18n,
-        lang: &route_params.lang,
-        current_path: &current_path,
-        country_name,
-        country_slug,
-    };
-    let menu_sections = views::team_menu(&menu_params, &neighbor_refs, &league_refs);
-
-    let league_title = league
-        .map(|l| views::league_display_name(l, &i18n, simulator_data))
-        .unwrap_or_default();
-
-    Ok(TeamNewspaperTemplate {
-        css_version: CSS_VERSION,
-        computer_name: &COMPUTER_NAME,
-        cpu_brand: &CPU_BRAND,
-        cores_count: *CPU_CORES,
-        i18n,
-        news,
-        lang: route_params.lang.clone(),
-        title: team.name.clone(),
-        masthead,
-        sub_title_prefix: String::new(),
-        sub_title_suffix: String::new(),
-        sub_title: league_title,
-        sub_title_link: league
-            .map(|l| LeagueAddress::of(simulator_data, l).url(&route_params.lang))
-            .unwrap_or_default(),
-        sub_title_flag: None,
-        header_color: club.colors.background.clone(),
-        foreground_color: club.colors.foreground.clone(),
-        menu_sections,
-        team_slug: team.slug.clone(),
-        active_tab: "newspaper",
-        show_finances_tab: team.team_type.is_own_team(),
-        show_academy_tab: team.team_type == TeamType::Main || team.team_type == TeamType::U18,
-        newspaper_count: NewspaperCounter::count(simulator_data, team),
-        issues,
-    })
+        Ok(TeamNewspaperTemplate {
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
+            cpu_brand: &CPU_BRAND,
+            cores_count: *CPU_CORES,
+            i18n,
+            news,
+            lang: route_params.lang.clone(),
+            title: team.name.clone(),
+            masthead,
+            sub_title_prefix: String::new(),
+            sub_title_suffix: String::new(),
+            sub_title: league_title,
+            sub_title_link: league
+                .map(|l| LeagueAddress::of(simulator_data, l).url(&route_params.lang))
+                .unwrap_or_default(),
+            sub_title_flag: None,
+            header_color: club.colors.background.clone(),
+            foreground_color: club.colors.foreground.clone(),
+            menu_sections,
+            team_slug: team.slug.clone(),
+            active_tab: "newspaper",
+            show_finances_tab: team.team_type.is_own_team(),
+            show_academy_tab: team.team_type == TeamType::Main || team.team_type == TeamType::U18,
+            newspaper_count: NewspaperCounter::count(simulator_data, team),
+            issues,
+        })
+    }
 }
 
 /// Which side's paper a given team's tab shows.
@@ -1306,46 +1287,7 @@ impl PlayerName {
             return (Self::display(&player.full_name), player.slug());
         }
 
-        (String::new(), player_history_slug(data, player_id, ""))
-    }
-}
-
-/// Left-menu sources shared with every other team tab.
-struct NewspaperPage;
-
-impl NewspaperPage {
-    fn menu_sources(
-        club_id: u32,
-        data: &SimulatorData,
-        i18n: &I18n,
-    ) -> Result<NeighborMenus, ApiError> {
-        let club = data.club(club_id).ok_or_else(|| {
-            ApiError::InternalError(format!("Club with ID {} not found", club_id))
-        })?;
-
-        let teams = views::neighbor_teams(club, i18n);
-
-        let mut country_leagues: Vec<(u32, String, String)> = data
-            .country_by_club(club_id)
-            .map(|country| {
-                country
-                    .leagues
-                    .leagues
-                    .iter()
-                    .filter(|league| !league.friendly)
-                    .map(|league| (league.id, league.name.clone(), league.slug.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        country_leagues.sort_by_key(|(id, _, _)| *id);
-
-        Ok((
-            teams,
-            country_leagues
-                .into_iter()
-                .map(|(_, name, slug)| (name, slug))
-                .collect(),
-        ))
+        (String::new(), PlayerSlug::history(data, player_id, ""))
     }
 }
 

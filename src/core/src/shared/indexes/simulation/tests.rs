@@ -2,7 +2,7 @@ use super::entry::PlayerHome;
 use super::place::{ClubPlace, CountryPlace, LeaguePlace, LeagueSeat, RosterPlace, TeamPlace};
 use super::{CountryLookupIndex, ReconcileStats, SimulatorDataIndexes};
 use crate::academy::ClubAcademy;
-use crate::club::player::core::builder::PlayerBuilder;
+use crate::club::player::model::builder::PlayerBuilder;
 use crate::competitions::global::GlobalCompetitions;
 use crate::continent::Continent;
 use crate::country::Country;

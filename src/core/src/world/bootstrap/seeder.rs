@@ -169,7 +169,7 @@ impl SimulatorData {
     /// save-load path) so runtime academy intake and the scout market
     /// can never mint an id that already exists.
     pub fn seed_player_id_sequence(&self) {
-        crate::seed_core_player_id_sequence(WorldSeeder::max_player_id(self));
+        crate::PlayerIdSequence::seed(WorldSeeder::max_player_id(self));
         StaffIdSequence::seed(WorldSeeder::max_staff_id(self));
     }
 }

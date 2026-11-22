@@ -33,6 +33,14 @@ pub struct PlayerMonitoringDetail {
     pub negotiating: bool,
 }
 
+struct MonitoringPresence<'a> {
+    team_slug: String,
+    monitorings: Vec<&'a ScoutPlayerMonitoring>,
+    on_shortlist: bool,
+    in_negotiation: bool,
+    recommended_by_staff: Vec<u32>,
+}
+
 /// Pre-resolved snapshot of a club's scouting department state, served
 /// to the web crate so templates stay presentational. Names, slugs,
 /// dates and enum-as-i18n-keys are already worked out — the UI just
@@ -354,10 +362,9 @@ impl SimulatorData {
     /// (by latest observation), then everyone else by club name.
     pub fn player_monitoring_details(&self, player_id: u32) -> Vec<PlayerMonitoringDetail> {
         let mut out: Vec<PlayerMonitoringDetail> = Vec::new();
-
-        // Hide the player's current host and loan parent — these clubs
-        // already hold his registration, so listing them as "watching"
-        // him is nonsensical.
+        // Hide the player's current host and loan parent — these clubs already
+        // hold his registration, so listing them as "watching" him is
+        // nonsensical.
         let (host_club_id, parent_club_id) = self
             .player_with_team(player_id)
             .map(|(p, t)| {
@@ -374,112 +381,16 @@ impl SimulatorData {
                     if host_club_id == Some(club.id) || parent_club_id == Some(club.id) {
                         continue;
                     }
-                    let plan = &club.transfer_plan;
-                    let team_slug = club
-                        .teams
-                        .teams
-                        .first()
-                        .map(|t| t.slug.clone())
-                        .unwrap_or_default();
-
-                    let monitorings: Vec<&ScoutPlayerMonitoring> =
-                        plan.monitorings_for_player(player_id);
-                    let on_shortlist = plan
-                        .shortlists
-                        .iter()
-                        .any(|s| s.candidates.iter().any(|c| c.player_id == player_id));
-                    // Only Pending / Countered negotiations are "live" —
-                    // Accepted ones have already produced a completed
-                    // transfer (and would otherwise keep the buying club
-                    // showing as "Negotiating" forever after the move).
-                    let in_negotiation = country.transfer_market.negotiations.values().any(|n| {
-                        n.player_id == player_id
-                            && n.buying_club_id == club.id
-                            && matches!(
-                                n.status,
-                                NegotiationStatus::Pending | NegotiationStatus::Countered
-                            )
-                    });
-                    let recommended_by_staff: Vec<u32> = plan
-                        .staff_recommendations
-                        .iter()
-                        .filter(|r| r.player_id == player_id)
-                        .map(|r| r.recommender_staff_id)
-                        .collect();
-
-                    if monitorings.is_empty()
-                        && !on_shortlist
-                        && !in_negotiation
-                        && recommended_by_staff.is_empty()
-                        && !plan.known_players.iter().any(|m| m.player_id == player_id)
-                    {
+                    let Some(presence) = self.monitoring_presence(
+                        club,
+                        country,
+                        player_id,
+                        host_club_id,
+                        parent_club_id,
+                    ) else {
                         continue;
-                    }
-
-                    if monitorings.is_empty() {
-                        // No active scout monitoring, but the player
-                        // still surfaces because the club has a
-                        // shortlist / negotiation / known-player
-                        // record. Emit one summary row per recommender
-                        // (or a single row if there's no recommender).
-                        let recommender_id = recommended_by_staff.first().copied();
-                        let scout_name = recommender_id.and_then(|id| {
-                            self.staff_with_team(id).map(|(s, _)| Self::full_name(s))
-                        });
-                        out.push(PlayerMonitoringDetail {
-                            club_id: club.id,
-                            club_name: club.name.clone(),
-                            team_slug: team_slug.clone(),
-                            scout_name,
-                            scout_staff_id: recommender_id,
-                            status: if in_negotiation {
-                                "negotiating".to_string()
-                            } else if on_shortlist {
-                                "shortlisted".to_string()
-                            } else if !recommended_by_staff.is_empty() {
-                                "recommended".to_string()
-                            } else {
-                                "known".to_string()
-                            },
-                            last_observed: None,
-                            confidence: 0.0,
-                            times_watched: 0,
-                            matches_watched: 0,
-                            shortlisted: on_shortlist,
-                            negotiating: in_negotiation,
-                        });
-                        continue;
-                    }
-
-                    for m in monitorings {
-                        let scout_name = self
-                            .staff_with_team(m.scout_staff_id)
-                            .map(|(s, _)| Self::full_name(s));
-                        let status = match m.status {
-                            ScoutMonitoringStatus::Active => "active",
-                            ScoutMonitoringStatus::Paused => "paused",
-                            ScoutMonitoringStatus::ReportReady => "report_ready",
-                            ScoutMonitoringStatus::PromotedToShortlist => "shortlisted",
-                            ScoutMonitoringStatus::Negotiating => "negotiating",
-                            ScoutMonitoringStatus::Signed => "signed",
-                            ScoutMonitoringStatus::Lost => "lost",
-                            ScoutMonitoringStatus::Rejected => "rejected",
-                        };
-                        out.push(PlayerMonitoringDetail {
-                            club_id: club.id,
-                            club_name: club.name.clone(),
-                            team_slug: team_slug.clone(),
-                            scout_name,
-                            scout_staff_id: Some(m.scout_staff_id),
-                            status: status.to_string(),
-                            last_observed: Some(m.last_observed),
-                            confidence: m.confidence,
-                            times_watched: m.times_watched,
-                            matches_watched: m.matches_watched,
-                            shortlisted: on_shortlist,
-                            negotiating: in_negotiation,
-                        });
-                    }
+                    };
+                    out.extend(self.monitoring_rows_for_club(club, &presence));
                 }
             }
         }
@@ -491,6 +402,139 @@ impl SimulatorData {
                 .then(a.club_name.cmp(&b.club_name))
         });
         out
+    }
+
+    fn monitoring_presence<'a>(
+        &self,
+        club: &'a Club,
+        country: &crate::Country,
+        player_id: u32,
+        host_club_id: Option<u32>,
+        parent_club_id: Option<u32>,
+    ) -> Option<MonitoringPresence<'a>> {
+        if host_club_id == Some(club.id) || parent_club_id == Some(club.id) {
+            return None;
+        }
+        let plan = &club.transfer_plan;
+        let team_slug = club
+            .teams
+            .teams
+            .first()
+            .map(|t| t.slug.clone())
+            .unwrap_or_default();
+
+        let monitorings: Vec<&ScoutPlayerMonitoring> = plan.monitorings_for_player(player_id);
+        let on_shortlist = plan
+            .shortlists
+            .iter()
+            .any(|s| s.candidates.iter().any(|c| c.player_id == player_id));
+        // Only Pending / Countered negotiations are "live" — Accepted ones
+        // have already produced a completed transfer (and would otherwise keep
+        // the buying club showing as "Negotiating" forever after the move).
+        let in_negotiation = country.transfer_market.negotiations.values().any(|n| {
+            n.player_id == player_id
+                && n.buying_club_id == club.id
+                && matches!(
+                    n.status,
+                    NegotiationStatus::Pending | NegotiationStatus::Countered
+                )
+        });
+        let recommended_by_staff: Vec<u32> = plan
+            .staff_recommendations
+            .iter()
+            .filter(|r| r.player_id == player_id)
+            .map(|r| r.recommender_staff_id)
+            .collect();
+
+        if monitorings.is_empty()
+            && !on_shortlist
+            && !in_negotiation
+            && recommended_by_staff.is_empty()
+            && !plan.known_players.iter().any(|m| m.player_id == player_id)
+        {
+            return None;
+        }
+
+        Some(MonitoringPresence {
+            team_slug,
+            monitorings,
+            on_shortlist,
+            in_negotiation,
+            recommended_by_staff,
+        })
+    }
+
+    fn monitoring_rows_for_club(
+        &self,
+        club: &Club,
+        presence: &MonitoringPresence<'_>,
+    ) -> Vec<PlayerMonitoringDetail> {
+        if presence.monitorings.is_empty() {
+            // No active scout monitoring, but the player still surfaces
+            // because the club has a shortlist / negotiation / known-player
+            // record. Emit one summary row per recommender (or a single row
+            // if there's no recommender).
+            let recommender_id = presence.recommended_by_staff.first().copied();
+            let scout_name = recommender_id
+                .and_then(|id| self.staff_with_team(id).map(|(s, _)| Self::full_name(s)));
+            let status = if presence.in_negotiation {
+                "negotiating".to_string()
+            } else if presence.on_shortlist {
+                "shortlisted".to_string()
+            } else if !presence.recommended_by_staff.is_empty() {
+                "recommended".to_string()
+            } else {
+                "known".to_string()
+            };
+            return vec![PlayerMonitoringDetail {
+                club_id: club.id,
+                club_name: club.name.clone(),
+                team_slug: presence.team_slug.clone(),
+                scout_name,
+                scout_staff_id: recommender_id,
+                status,
+                last_observed: None,
+                confidence: 0.0,
+                times_watched: 0,
+                matches_watched: 0,
+                shortlisted: presence.on_shortlist,
+                negotiating: presence.in_negotiation,
+            }];
+        }
+
+        presence
+            .monitorings
+            .iter()
+            .map(|m| {
+                let scout_name = self
+                    .staff_with_team(m.scout_staff_id)
+                    .map(|(s, _)| Self::full_name(s));
+                let status = match m.status {
+                    ScoutMonitoringStatus::Active => "active",
+                    ScoutMonitoringStatus::Paused => "paused",
+                    ScoutMonitoringStatus::ReportReady => "report_ready",
+                    ScoutMonitoringStatus::PromotedToShortlist => "shortlisted",
+                    ScoutMonitoringStatus::Negotiating => "negotiating",
+                    ScoutMonitoringStatus::Signed => "signed",
+                    ScoutMonitoringStatus::Lost => "lost",
+                    ScoutMonitoringStatus::Rejected => "rejected",
+                };
+                PlayerMonitoringDetail {
+                    club_id: club.id,
+                    club_name: club.name.clone(),
+                    team_slug: presence.team_slug.clone(),
+                    scout_name,
+                    scout_staff_id: Some(m.scout_staff_id),
+                    status: status.to_string(),
+                    last_observed: Some(m.last_observed),
+                    confidence: m.confidence,
+                    times_watched: m.times_watched,
+                    matches_watched: m.matches_watched,
+                    shortlisted: presence.on_shortlist,
+                    negotiating: presence.in_negotiation,
+                }
+            })
+            .collect()
     }
 
     /// Workload summary for a single scout — every player they're
@@ -1473,7 +1517,7 @@ mod interested_clubs_tests {
     use super::*;
     use crate::Player;
     use crate::academy::ClubAcademy;
-    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::model::builder::PlayerBuilder;
     use crate::competitions::global::GlobalCompetitions;
     use crate::continent::Continent;
     use crate::country::Country;

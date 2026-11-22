@@ -327,11 +327,13 @@ impl InjuryType {
         );
         // The shift moves the bands, and a serious injury is never a
         // bruise however young and fresh the man.
-        Some(if severity == InjuryGrade::Serious && injury.severity() == InjurySeverity::Minor {
-            InjuryType::HamstringStrain
-        } else {
-            injury
-        })
+        Some(
+            if severity == InjuryGrade::Serious && injury.severity() == InjurySeverity::Minor {
+                InjuryType::HamstringStrain
+            } else {
+                injury
+            },
+        )
     }
 
     /// Upper bound of the minor band on the match-injury roll.

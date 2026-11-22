@@ -10,16 +10,25 @@ use crate::r#match::engine::ball::ball::Ball;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::teleport as tc;
 use crate::r#match::engine::ball::ball::{
-    AerialDelivery, AerialOutcome, AerialReach, DeliveryIntent, FlightProtection,
-    KICKABLE_DISTANCE,
+    AerialDelivery, AerialOutcome, AerialReach, DeliveryIntent, FlightProtection, KICKABLE_DISTANCE,
 };
 use crate::r#match::engine::engine::*;
 use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
 
-impl<const W: usize, const H: usize> FootballEngine<W, H> {
+/// The resolved shape of one aerial delivery: who it is for, where it is
+/// aimed, and what he will do when it arrives.
+struct AerialDeliveryPlan {
+    winner_pos: Vector3<f32>,
+    winner_id: u32,
+    head_height: f32,
+    target: Vector3<f32>,
+    outcome: AerialOutcome,
+    outcome_is_header: bool,
+}
 
+impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// How far short of the winner a cross is aimed, in units. 1.2u
     /// (15 cm) sits inside every role's heading reach, including the
     /// midfielder's 2.0u.
@@ -65,6 +74,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// units — the two contests use different values and the difference
     /// is load-bearing (a midfielder's heading reach is 2.0u, which the
     /// corner's own 2.0u drop sat exactly on the boundary of).
+    /// Ticks of slack past the solved flight before the delivery is
+    /// abandoned. Half a second: the winner is running while the ball is
+    /// in the air, so the arrival test has to tolerate him being a
+    /// stride from where the arc was solved to.
+    const DELIVERY_GRACE_TICKS: u64 = 50;
+
     pub(in crate::r#match::engine::engine) fn deliver_to_winner(
         field: &mut MatchField,
         winner_idx: usize,
@@ -78,12 +93,44 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // Read only by the arming census.
         #[cfg(not(feature = "match-logs"))]
         let _ = source;
-        /// Ticks of slack past the solved flight before the delivery is
-        /// abandoned. Half a second: the winner is running while the ball
-        /// is in the air, so the arrival test has to tolerate him being a
-        /// stride from where the arc was solved to.
-        const GRACE_TICKS: u64 = 50;
+        let plan = Self::aerial_delivery_plan(field, winner_idx, attacked_goal, behind, intent);
+        field.ball.current_owner = None;
+        field.ball.previous_owner = previous_owner;
+        if plan.outcome_is_header {
+            // Every heading state reads this to take a clean-contact roll
+            // instead of re-deciding the duel. Set at the strike rather
+            // than on arrival because the winner's own state machine uses
+            // it to decide to go and attack the ball in the first place.
+            field.ball.aerial_contest_winner = Some(plan.winner_id);
+        }
 
+        let kept = Self::kept_delivery_flight(field, &plan);
+        // Not lifted again: it carries on at about its own pace and drops
+        // the last of the way onto him, which is his stride to meet it.
+        let launch = Ball::ballistic_launch_arriving_at(field.ball.position, plan.target, 0.0);
+
+        #[cfg(feature = "match-logs")]
+        Self::note_delivery_arming(source, &field.ball, &plan, kept, launch);
+
+        if let Some((velocity, aim, ticks)) = kept
+            .map(|(drop, ticks)| (field.ball.velocity, drop, ticks))
+            .or_else(|| launch.map(|(velocity, ticks)| (velocity, plan.target, ticks)))
+        {
+            Self::arm_aerial_delivery(field, plan, velocity, aim, ticks, force_heading);
+        } else {
+            Self::apply_aerial_outcome_now(field, plan, force_heading);
+        }
+    }
+
+    /// The winner, the aim point and the outcome the delivery is solved
+    /// for. Pure geometry: no ball state is written here.
+    fn aerial_delivery_plan(
+        field: &MatchField,
+        winner_idx: usize,
+        attacked_goal: Vector3<f32>,
+        behind: f32,
+        intent: DeliveryIntent,
+    ) -> AerialDeliveryPlan {
         let winner_pos = field.players[winner_idx].position;
         let winner_id = field.players[winner_idx].id;
         let to_goal = attacked_goal - winner_pos;
@@ -133,175 +180,186 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             },
         };
 
-        let b = &mut field.ball;
-        b.current_owner = None;
-        b.previous_owner = previous_owner;
-        if outcome_is_header {
-            // Every heading state reads this to take a clean-contact roll
-            // instead of re-deciding the duel. Set at the strike rather
-            // than on arrival because the winner's own state machine uses
-            // it to decide to go and attack the ball in the first place.
-            b.aerial_contest_winner = Some(winner_id);
+        AerialDeliveryPlan {
+            winner_pos,
+            winner_id,
+            head_height,
+            target,
+            outcome,
+            outcome_is_header,
         }
+    }
 
-        // ⚠ **A ball already in the heading band is not launched again.**
-        //
-        // The contest fires on a ball descending through [1.5, 2.9] m with
-        // the winner a stride and a jump from where it comes down, and a
-        // second launch there is a ball nobody touched taking off again.
-        //
-        // Measured over 200 matches before this existed, per arming:
-        //
-        // | source | armed at | to travel | turned | peak |
-        // |---|---|---|---|---|
-        // | corner won | 2.07 m | 27.3 m | 6° | 7.07 m |
-        // | corner behind | 2.07 m | 23.2 m | 3° | 7.07 m |
-        // | **open cross** | **2.82 m** | **3.0 m** | **41°, 19% past 90°** | **6.82 m** |
-        //
-        // Four metres straight up to travel three, 4.45 times a match,
-        // with nobody within a stride of it. That is the reported *"the
-        // ball bounces off an invisible object above the player"*.
-        //
-        // The ball is already where the delivery was going to put it, so
-        // it keeps its own flight and the delivery is aimed at where that
-        // flight actually arrives. `PlayerReach::can_strike` at the
-        // arrival is still what makes the winner reach it, and the
-        // deadline is still what ends it if he never does.
-        //
-        // `OF_DELIVERY_RELAUNCH=1` restores the unconditional launch.
-        let kept = if MatchContext::delivery_relaunch_flat() {
-            None
-        } else {
-            // Descending, and no higher than a man can head it: this
-            // contest was resolved in mid-flight, not at a strike.
-            b.natural_drop(AerialReach::ATTACKED)
-                .filter(|_| b.velocity.z <= 0.0 && b.position.z <= AerialReach::HIGHEST)
-                // …and only if it comes down on him. A man a stride off its
-                // line who has won it meets it; left on its own flight it
-                // dropped beside him and nobody headed it.
-                .filter(|(drop, _)| (drop - winner_pos).xy().norm() <= KICKABLE_DISTANCE)
-        };
-        // Not lifted again: it carries on at about its own pace and drops
-        // the last of the way onto him, which is his stride to meet it.
-        let launch = Ball::ballistic_launch_arriving_at(b.position, target, 0.0);
+    /// **A ball already in the heading band is not launched again.**
+    ///
+    /// The contest fires on a ball descending through [1.5, 2.9] m with
+    /// the winner a stride and a jump from where it comes down, and a
+    /// second launch there is a ball nobody touched taking off again.
+    ///
+    /// Measured over 200 matches before this existed, per arming:
+    ///
+    /// | source | armed at | to travel | turned | peak |
+    /// |---|---|---|---|---|
+    /// | corner won | 2.07 m | 27.3 m | 6° | 7.07 m |
+    /// | corner behind | 2.07 m | 23.2 m | 3° | 7.07 m |
+    /// | **open cross** | **2.82 m** | **3.0 m** | **41°, 19% past 90°** | **6.82 m** |
+    ///
+    /// Four metres straight up to travel three, 4.45 times a match,
+    /// with nobody within a stride of it. That is the reported *"the
+    /// ball bounces off an invisible object above the player"*.
+    ///
+    /// The ball is already where the delivery was going to put it, so
+    /// it keeps its own flight and the delivery is aimed at where that
+    /// flight actually arrives. `PlayerReach::can_strike` at the
+    /// arrival is still what makes the winner reach it, and the
+    /// deadline is still what ends it if he never does.
+    ///
+    /// `OF_DELIVERY_RELAUNCH=1` restores the unconditional launch.
+    fn kept_delivery_flight(
+        field: &MatchField,
+        plan: &AerialDeliveryPlan,
+    ) -> Option<(Vector3<f32>, u32)> {
+        if MatchContext::delivery_relaunch_flat() {
+            return None;
+        }
+        // Descending, and no higher than a man can head it: this
+        // contest was resolved in mid-flight, not at a strike.
+        field
+            .ball
+            .natural_drop(AerialReach::ATTACKED)
+            .filter(|_| field.ball.velocity.z <= 0.0 && field.ball.position.z <= AerialReach::HIGHEST)
+            // …and only if it comes down on him. A man a stride off its
+            // line who has won it meets it; left on its own flight it
+            // dropped beside him and nobody headed it.
+            .filter(|(drop, _)| (drop - plan.winner_pos).xy().norm() <= KICKABLE_DISTANCE)
+    }
 
+    /// Arm a delivery that has a flight to run: the ball keeps the solved
+    /// velocity and the outcome waits on `aerial_delivery`.
+    fn arm_aerial_delivery(
+        field: &mut MatchField,
+        plan: AerialDeliveryPlan,
+        velocity: Vector3<f32>,
+        aim: Vector3<f32>,
+        ticks: u32,
+        force_heading: bool,
+    ) {
         #[cfg(feature = "match-logs")]
-        {
-            /// Metres per game unit on the horizontal axes — the census
-            /// reports distances in metres and these two are in units.
-            const M_PER_U: f32 = 0.125;
-            /// Under this the ball is not meaningfully travelling, so the
-            /// arc it is given cannot be said to have TURNED it.
-            /// 0.05 u/tick is 0.6 m/s.
-            const ARMED_IN_FLIGHT: f32 = 0.05;
+        tc::TeleportCensus::note_delivery_armed(ticks);
+        let b = &mut field.ball;
+        b.velocity = velocity;
+        // Hold the loose-ball machinery off for the whole flight:
+        // `in_flight_state > 0` is what keeps `check_ball_ownership`
+        // from handing a travelling delivery to whoever is nearest.
+        b.flags.in_flight_state = ticks as usize + Self::DELIVERY_GRACE_TICKS as usize;
+        b.aerial_delivery = Some(AerialDelivery {
+            winner_id: plan.winner_id,
+            target: aim,
+            outcome: plan.outcome,
+            arrival_height: plan.head_height,
+            deadline_tick: b.current_tick_cached + ticks as u64 + Self::DELIVERY_GRACE_TICKS,
+            force_heading,
+        });
+    }
 
-            // What the arming ACTUALLY did, not what the unused arc would
-            // have done: a flight that is kept turns the ball by nothing
-            // and peaked before it ever got here.
-            let flat = Vector3::new(b.velocity.x, b.velocity.y, 0.0);
-            let moving = flat.norm() > ARMED_IN_FLIGHT;
-            let turn = launch
-                .filter(|_| kept.is_none())
-                .map(|(v, _)| Vector3::new(v.x, v.y, 0.0))
-                .filter(|to| moving && to.norm() > 1.0e-4)
-                .map(|to| flat.angle(&to).to_degrees())
-                .unwrap_or(0.0);
-            let peak = if kept.is_some() {
-                b.position.z
-            } else {
-                b.position.z
-            };
-            tc::TeleportCensus::note_delivery_arming(
-                source,
-                moving,
-                turn,
-                b.position.z,
-                peak,
-                (target.x - b.position.x).hypot(target.y - b.position.y) * M_PER_U,
-                b.natural_drop(AerialReach::ATTACKED).map(|(drop, _)| {
-                    (drop.x - winner_pos.x).hypot(drop.y - winner_pos.y) * M_PER_U
-                }),
-                kept.is_some(),
-            );
-        }
-
-        // The ball's own flight first, the solved arc second. Both arms
-        // arm the SAME delivery — what differs is whether the velocity is
-        // rewritten and where the aim point is.
-        match kept
-            .map(|(drop, ticks)| (b.velocity, drop, ticks))
-            .or_else(|| launch.map(|(velocity, ticks)| (velocity, target, ticks)))
-        {
-            Some((velocity, aim, ticks)) => {
+    /// Neither arm has anything to fly: the ball is not in the band, and
+    /// it is already standing on the target so there is no arc to solve
+    /// either. Apply the outcome now; the "relocation" is under a unit.
+    fn apply_aerial_outcome_now(
+        field: &mut MatchField,
+        plan: AerialDeliveryPlan,
+        force_heading: bool,
+    ) {
+        // A `Header` outcome is a HOLD in the heading band, over
+        // in a tick — its own guard (`aerial_contest_winner`) is
+        // what protects it. A `HookedBehind` is a real 5 m arc,
+        // and the window has to cover it or the states are sent
+        // at a ball still climbing. See
+        // [`FlightProtection::for_launch`].
+        let b = &mut field.ball;
+        b.flags.in_flight_state = match plan.outcome {
+            AerialOutcome::Header { drift } => {
+                b.velocity = drift;
+                1
+            }
+            AerialOutcome::HookedBehind {
+                attacked_goal,
+                field_height,
+            } => {
                 #[cfg(feature = "match-logs")]
-                tc::TeleportCensus::note_delivery_armed(ticks);
+                crate::mid_run_diag::HEADED_BEHIND_FIRED.fetch_add(1, Ordering::Relaxed);
+                b.velocity = Ball::hook_behind_velocity(b.position, attacked_goal, field_height);
+                FlightProtection::for_launch(b.velocity, b.position.z)
+            }
+            // …and so is a headed clear: a 6 m arc that has to
+            // travel twenty metres, which nothing may claim off
+            // him while it is still going up.
+            AerialOutcome::Cleared {
+                attacked_goal,
+                range,
+                apex: clear_apex,
+                turn,
+            } => {
+                b.velocity = Ball::skew(
+                    Ball::headed_clear_velocity(b.position, attacked_goal, range, clear_apex),
+                    turn,
+                );
+                FlightProtection::for_launch(b.velocity, b.position.z)
+            }
+            AerialOutcome::HeadedAway { velocity, .. } => {
                 b.velocity = velocity;
-                // Hold the loose-ball machinery off for the whole flight:
-                // `in_flight_state > 0` is what keeps `check_ball_ownership`
-                // from handing a travelling delivery to whoever is nearest.
-                b.flags.in_flight_state = ticks as usize + GRACE_TICKS as usize;
-                b.aerial_delivery = Some(AerialDelivery {
-                    winner_id,
-                    target: aim,
-                    outcome,
-                    arrival_height: head_height,
-                    deadline_tick: b.current_tick_cached + ticks as u64 + GRACE_TICKS,
-                    force_heading,
-                });
+                FlightProtection::for_launch(b.velocity, b.position.z)
             }
-            None => {
-                // Neither arm has anything to fly: the ball is not in the
-                // band, and it is already standing on the target so there
-                // is no arc to solve either. Apply the outcome now; the
-                // "relocation" is under a unit.
-                // A `Header` outcome is a HOLD in the heading band, over
-                // in a tick — its own guard (`aerial_contest_winner`) is
-                // what protects it. A `HookedBehind` is a real 5 m arc,
-                // and the window has to cover it or the states are sent
-                // at a ball still climbing. See
-                // [`FlightProtection::for_launch`].
-                b.flags.in_flight_state = match outcome {
-                    AerialOutcome::Header { drift } => {
-                        b.velocity = drift;
-                        1
-                    }
-                    AerialOutcome::HookedBehind {
-                        attacked_goal,
-                        field_height,
-                    } => {
-                        #[cfg(feature = "match-logs")]
-                        crate::mid_run_diag::HEADED_BEHIND_FIRED.fetch_add(1, Ordering::Relaxed);
-                        b.velocity =
-                            Ball::hook_behind_velocity(b.position, attacked_goal, field_height);
-                        FlightProtection::for_launch(b.velocity, b.position.z)
-                    }
-                    // …and so is a headed clear: a 6 m arc that has to
-                    // travel twenty metres, which nothing may claim off
-                    // him while it is still going up.
-                    AerialOutcome::Cleared {
-                        attacked_goal,
-                        range,
-                        apex: clear_apex,
-                        turn,
-                    } => {
-                        b.velocity = Ball::skew(
-                            Ball::headed_clear_velocity(b.position, attacked_goal, range, clear_apex),
-                            turn,
-                        );
-                        FlightProtection::for_launch(b.velocity, b.position.z)
-                    }
-                    AerialOutcome::HeadedAway { velocity, .. } => {
-                        b.velocity = velocity;
-                        FlightProtection::for_launch(b.velocity, b.position.z)
-                    }
-                };
-                // There is no delivery to carry the heading transition, so
-                // it is stashed straight away — the arrival is now.
-                if force_heading {
-                    b.pending_aerial_strike = Some(winner_id);
-                }
-            }
+        };
+        // There is no delivery to carry the heading transition, so
+        // it is stashed straight away — the arrival is now.
+        if force_heading {
+            b.pending_aerial_strike = Some(plan.winner_id);
         }
+    }
+
+    /// What the arming ACTUALLY did, not what the unused arc would have
+    /// done — booked at the strike, in the units the census reads.
+    #[cfg(feature = "match-logs")]
+    fn note_delivery_arming(
+        source: usize,
+        b: &Ball,
+        plan: &AerialDeliveryPlan,
+        kept: Option<(Vector3<f32>, u32)>,
+        launch: Option<(Vector3<f32>, u32)>,
+    ) {
+        /// Metres per game unit on the horizontal axes — the census
+        /// reports distances in metres and these two are in units.
+        const M_PER_U: f32 = 0.125;
+        /// Under this the ball is not meaningfully travelling, so the
+        /// arc it is given cannot be said to have TURNED it.
+        /// 0.05 u/tick is 0.6 m/s.
+        const ARMED_IN_FLIGHT: f32 = 0.05;
+
+        // What the arming ACTUALLY did, not what the unused arc would
+        // have done: a flight that is kept turns the ball by nothing
+        // and peaked before it ever got here.
+        let flat = Vector3::new(b.velocity.x, b.velocity.y, 0.0);
+        let moving = flat.norm() > ARMED_IN_FLIGHT;
+        let turn = launch
+            .filter(|_| kept.is_none())
+            .map(|(v, _)| Vector3::new(v.x, v.y, 0.0))
+            .filter(|to| moving && to.norm() > 1.0e-4)
+            .map(|to| flat.angle(&to).to_degrees())
+            .unwrap_or(0.0);
+        let peak = b.position.z;
+        tc::TeleportCensus::note_delivery_arming(
+            source,
+            moving,
+            turn,
+            b.position.z,
+            peak,
+            (plan.target.x - b.position.x).hypot(plan.target.y - b.position.y) * M_PER_U,
+            b.natural_drop(AerialReach::ATTACKED).map(|(drop, _)| {
+                (drop.x - plan.winner_pos.x).hypot(drop.y - plan.winner_pos.y) * M_PER_U
+            }),
+            kept.is_some(),
+        );
     }
 
     pub(in crate::r#match::engine::engine) fn hook_it_behind(

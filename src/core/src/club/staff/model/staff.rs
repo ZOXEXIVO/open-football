@@ -15,7 +15,6 @@ use crate::club::staff::{
 };
 use crate::club::{PersonBehaviour, StaffClubContract, StaffPosition, StaffStatus};
 use crate::context::GlobalContext;
-use serde::{Deserialize, Serialize};
 use crate::shared::RosterRevision;
 use crate::shared::fullname::FullName;
 use crate::utils::IntegerUtils;
@@ -28,6 +27,7 @@ use crate::{
 };
 use chrono::Weekday;
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
+use serde::{Deserialize, Serialize};
 use std::slice::Iter;
 use std::slice::IterMut;
 

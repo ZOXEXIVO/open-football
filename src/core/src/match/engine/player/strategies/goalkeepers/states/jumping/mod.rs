@@ -1,5 +1,5 @@
 use crate::r#match::goalkeepers::states::GoalkeeperPunchingState;
-use crate::r#match::goalkeepers::states::common::{
+use crate::r#match::goalkeepers::states::shared::{
     ActivityIntensity, GoalkeeperCondition, KeeperRead, ReadLevel, Reading,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;

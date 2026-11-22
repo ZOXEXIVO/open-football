@@ -12,7 +12,8 @@
 
 use super::organs::MindOrgans;
 use super::organs::goals::{GoalDomain, GoalEvidence, GoalKind, GoalOrigin};
-use super::organs::memory::{ActorKind, ActorRef, EpisodeKind, FactClaim, MindEpisode};
+use super::organs::memory::{ActorKind, ActorRef, EpisodeKind, EpochDay, FactClaim, MindEpisode};
+use super::situation::MindSituation;
 use super::submind::{MindOption, MindView, MoodContribution, ReasonSet, SubMind};
 
 /// His read of the man picking the team.
@@ -191,66 +192,106 @@ impl SubMind for ProfessionalMind {
         // two cases point in opposite directions — which is why this
         // reads the old relationship before it throws it away.
         if s.manager.is_some() && s.manager != self.manager {
-            let was_rated = self.feels_rated();
-            // Either the episode already told him (the sacking landed as
-            // a memory) or he works it out here, when the team sheet has
-            // somebody else's name on it.
-            let had_a_sponsor = self.lost_his_advocate
-                || (self.signed_by.is_some() && self.signed_by == self.manager);
-            self.on_manager_change(s.manager);
-
-            let mut evidence = GoalEvidence::EMPTY;
-            // He has lost the man who wanted him here. Every assumption
-            // underwriting his place has just gone with him, and he
-            // knows it before the successor has picked a side.
-            let strength = if had_a_sponsor && was_rated > -0.2 {
-                evidence.insert(GoalEvidence::LOST_HIS_ADVOCATE);
-                self.lost_his_advocate = true;
-                0.75
-            } else if was_rated < Self::WRITTEN_OFF {
-                // The other case, and the happier one: a fresh start is
-                // the commonest way an out-of-favour player gets his
-                // career back. It also takes the heat out of wanting
-                // away — there is a reason to wait and see now.
-                organs.goals.ease(GoalKind::LeaveThisClub, 0.45);
-                organs.goals.ease(GoalKind::BeAllowedToLeave, 0.45);
-                0.55
-            } else {
-                0.45
-            };
-
-            // Either way the work is the same and it starts from zero:
-            // convince a man who does not know him yet. How hard he goes
-            // at it is the most reliable thing professionalism decides.
-            organs.goals.pursue(
-                GoalKind::WinTheManagersTrust,
-                GoalOrigin::SelfDrive,
-                evidence,
-                (strength * (0.6 + 0.7 * s.diligence())).clamp(0.0, 1.0),
-                today,
-            );
+            self.handle_manager_change(s, organs, today);
             return;
         }
         if s.manager.is_none() || !s.is_settled() {
             return;
         }
 
-        // Being left out with nobody explaining why. How long he gives
-        // it before he stops assuming there is a reason is temperament:
-        // a level-headed professional waits most of a season, a hot head
-        // about a month.
+        self.refresh_unexplained_weeks(s);
+        let standing = organs.memory.standing_with(s.manager, today);
+        self.pursue_trust_or_leave(s, organs, today, standing);
+    }
+
+    fn weigh(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
+        self.weigh_option(option, organs)
+    }
+
+    fn appraise(&self, _organs: &MindOrgans) -> MoodContribution {
+        // Feeling rated and understanding the role are separate axes;
+        // both weigh, trust the heavier of the two.
+        let value = self.feels_rated() * 6.0 + self.role_clarity() * 3.0;
+        // No manager, no view.
+        let confidence = if self.manager.is_none() { 0.0 } else { 0.8 };
+        MoodContribution::new(GoalDomain::Professional, value, confidence)
+    }
+}
+
+impl ProfessionalMind {
+    /// A new manager: work out what he inherited, then start from zero on
+    /// convincing him.
+    fn handle_manager_change(
+        &mut self,
+        s: &MindSituation,
+        organs: &mut MindOrgans,
+        today: EpochDay,
+    ) {
+        let was_rated = self.feels_rated();
+        // Either the episode already told him (the sacking landed as
+        // a memory) or he works it out here, when the team sheet has
+        // somebody else's name on it.
+        let had_a_sponsor =
+            self.lost_his_advocate || (self.signed_by.is_some() && self.signed_by == self.manager);
+        self.on_manager_change(s.manager);
+
+        let mut evidence = GoalEvidence::EMPTY;
+        // He has lost the man who wanted him here. Every assumption
+        // underwriting his place has just gone with him, and he
+        // knows it before the successor has picked a side.
+        let strength = if had_a_sponsor && was_rated > -0.2 {
+            evidence.insert(GoalEvidence::LOST_HIS_ADVOCATE);
+            self.lost_his_advocate = true;
+            0.75
+        } else if was_rated < Self::WRITTEN_OFF {
+            // The other case, and the happier one: a fresh start is
+            // the commonest way an out-of-favour player gets his
+            // career back. It also takes the heat out of wanting
+            // away — there is a reason to wait and see now.
+            organs.goals.ease(GoalKind::LeaveThisClub, 0.45);
+            organs.goals.ease(GoalKind::BeAllowedToLeave, 0.45);
+            0.55
+        } else {
+            0.45
+        };
+
+        // Either way the work is the same and it starts from zero:
+        // convince a man who does not know him yet. How hard he goes
+        // at it is the most reliable thing professionalism decides.
+        organs.goals.pursue(
+            GoalKind::WinTheManagersTrust,
+            GoalOrigin::SelfDrive,
+            evidence,
+            (strength * (0.6 + 0.7 * s.diligence())).clamp(0.0, 1.0),
+            today,
+        );
+    }
+
+    /// Being left out with nobody explaining why. How long he gives it
+    /// before he stops assuming there is a reason is temperament: a
+    /// level-headed professional waits most of a season, a hot head about
+    /// a month.
+    fn refresh_unexplained_weeks(&mut self, s: &MindSituation) {
         if s.playing_time_gap() < -0.2 {
             self.unexplained_weeks = self.unexplained_weeks.saturating_add(1);
         } else {
             self.unexplained_weeks = 0;
         }
+    }
+
+    fn pursue_trust_or_leave(
+        &mut self,
+        s: &MindSituation,
+        organs: &mut MindOrgans,
+        today: EpochDay,
+        standing: f32,
+    ) {
         let patience = Self::SILENCE_LIMIT as f32 * (0.55 + (1.0 - s.volatility()) * 0.9);
         let silence_limit = patience.round().clamp(2.0, 20.0) as u8;
 
         // What memory says about this man, independently of how the
         // player currently feels. A conviction that his word is worthless
         // outlives any amount of recent politeness.
-        let standing = organs.memory.standing_with(s.manager, today);
         let word_is_worthless = organs
             .memory
             .believes(FactClaim::HisWordIsWorthless, s.manager);
@@ -323,19 +364,6 @@ impl SubMind for ProfessionalMind {
                 today,
             );
         }
-    }
-
-    fn weigh(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
-        self.weigh_option(option, organs)
-    }
-
-    fn appraise(&self, _organs: &MindOrgans) -> MoodContribution {
-        // Feeling rated and understanding the role are separate axes;
-        // both weigh, trust the heavier of the two.
-        let value = self.feels_rated() * 6.0 + self.role_clarity() * 3.0;
-        // No manager, no view.
-        let confidence = if self.manager.is_none() { 0.0 } else { 0.8 };
-        MoodContribution::new(GoalDomain::Professional, value, confidence)
     }
 }
 

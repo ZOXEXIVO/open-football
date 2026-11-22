@@ -14,11 +14,11 @@ use chrono::NaiveDate;
 use log::info;
 use std::cmp::Reverse;
 
-use super::lookups::{world_country_name, world_country_reputation};
+use super::lookups::WorldCountryLookup;
 use super::squad::NationalSquadBuilder;
 use super::stats::{
-    InternationalMatchContext, apply_world_elo, apply_world_international_stats_for_level,
-    collect_international_appearances, record_world_country_schedule,
+    InternationalAppearances, InternationalMatchContext, WorldCountrySchedule, WorldElo,
+    WorldInternationalStats,
 };
 use crate::continent::Continent;
 use crate::continent::national::NationalCompetitionFixture;
@@ -48,9 +48,9 @@ struct StampedFixture {
 /// * MatchResults are stashed via a single helper that uses the
 ///   `"international"` league slug so the match-detail page can find them
 ///
-/// The same [`apply_world_international_stats_for_level`], [`apply_world_elo`]
-/// and [`record_world_country_schedule`] helpers are reused by
-/// [`super::tournament::apply_global_tournament_result`] so World Cup
+/// The same [`WorldInternationalStats::apply_for_level`], [`WorldElo::apply`]
+/// and [`WorldCountrySchedule::record`] helpers are reused by
+/// [`super::tournament::GlobalTournamentMatch::apply`] so World Cup
 /// matches see exactly the same downstream side effects as continental
 /// qualifiers.
 pub struct WorldNationalCompetitions;
@@ -270,6 +270,9 @@ impl WorldNationalCompetitions {
     /// Apply a single match's outcome: record into the source continent's
     /// competition state, fan stats/Elo/schedule out across the world, and
     /// produce the MatchResult for the global match store.
+    /// Apply a single match's outcome: record into the source continent's
+    /// competition state, fan stats/Elo/schedule out across the world, and
+    /// produce the MatchResult for the global match store.
     fn apply_match_outcome(
         continents: &mut [Continent],
         stamp: &StampedFixture,
@@ -294,45 +297,8 @@ impl WorldNationalCompetitions {
             away_country_id
         );
 
-        // Knockout draws read the winner straight from the engine-played
-        // shootout. Reputation comparison was wrong: the lower-rep side can
-        // win on penalties, and the engine actually models the kicks.
-        let penalty_winner = if fixture.phase.is_knockout() && home_score == away_score {
-            if score.had_shootout() {
-                Some(if score.home_shootout > score.away_shootout {
-                    home_country_id
-                } else if score.away_shootout > score.home_shootout {
-                    away_country_id
-                } else {
-                    // Shootout tied — defensive fallback.
-                    home_country_id
-                })
-            } else {
-                // No shootout was run (engine didn't recognise this as a
-                // knockout, or fixture data was inconsistent). Last-resort
-                // reputation-weighted resolution to keep the tournament
-                // moving.
-                let home_rep = world_country_reputation(continents, home_country_id);
-                let away_rep = world_country_reputation(continents, away_country_id);
-                Some(if home_rep >= away_rep {
-                    home_country_id
-                } else {
-                    away_country_id
-                })
-            }
-        } else {
-            None
-        };
-
-        let (label, comp_full_name) = continents
-            .get(continent_idx)
-            .and_then(|c| {
-                c.national_team_competitions
-                    .competitions
-                    .get(fixture.competition_idx)
-            })
-            .map(|c| (c.short_name().to_string(), c.config.name.clone()))
-            .unwrap_or_else(|| ("INT".to_string(), "International".to_string()));
+        let penalty_winner = Self::penalty_winner(continents, &fixture, &score);
+        let (label, comp_full_name) = Self::competition_labels(continents, &fixture, continent_idx);
 
         if let Some(continent) = continents.get_mut(continent_idx) {
             continent.national_team_competitions.record_result(
@@ -343,45 +309,21 @@ impl WorldNationalCompetitions {
             );
         }
 
-        let appearances = collect_international_appearances(
+        Self::apply_match_effects(
+            continents,
             &raw,
-            home_country_id,
-            away_country_id,
-            home_score,
-            away_score,
-        );
-
-        apply_world_international_stats_for_level(
-            continents,
-            home_country_id,
-            away_country_id,
-            &appearances,
-            &InternationalMatchContext::new(date, level, &comp_full_name),
-        );
-        apply_world_elo(
-            continents,
-            home_country_id,
-            away_country_id,
-            home_score,
-            away_score,
-        );
-
-        let home_name = world_country_name(continents, home_country_id);
-        let away_name = world_country_name(continents, away_country_id);
-
-        record_world_country_schedule(
-            continents,
             date,
+            level,
             home_country_id,
             away_country_id,
-            &home_name,
-            &away_name,
             home_score,
             away_score,
             &comp_full_name,
             &match_id,
-            level,
         );
+
+        let home_name = WorldCountryLookup::name(continents, home_country_id);
+        let away_name = WorldCountryLookup::name(continents, away_country_id);
 
         info!(
             "International match ({}): {} {} - {} {}",
@@ -398,5 +340,112 @@ impl WorldNationalCompetitions {
             details: Some(raw),
             friendly: false,
         })
+    }
+
+    /// Knockout draws read the winner straight from the engine-played
+    /// shootout. Reputation comparison was wrong: the lower-rep side can
+    /// win on penalties, and the engine actually models the kicks.
+    fn penalty_winner(
+        continents: &[Continent],
+        fixture: &NationalCompetitionFixture,
+        score: &crate::r#match::Score,
+    ) -> Option<u32> {
+        if !fixture.phase.is_knockout() || score.home_team.get() != score.away_team.get() {
+            return None;
+        }
+        if score.had_shootout() {
+            Some(if score.home_shootout > score.away_shootout {
+                fixture.home_country_id
+            } else if score.away_shootout > score.home_shootout {
+                fixture.away_country_id
+            } else {
+                // Shootout tied — defensive fallback.
+                fixture.home_country_id
+            })
+        } else {
+            // No shootout was run (engine didn't recognise this as a
+            // knockout, or fixture data was inconsistent). Last-resort
+            // reputation-weighted resolution to keep the tournament
+            // moving.
+            let home_rep = WorldCountryLookup::reputation(continents, fixture.home_country_id);
+            let away_rep = WorldCountryLookup::reputation(continents, fixture.away_country_id);
+            Some(if home_rep >= away_rep {
+                fixture.home_country_id
+            } else {
+                fixture.away_country_id
+            })
+        }
+    }
+
+    fn competition_labels(
+        continents: &[Continent],
+        fixture: &NationalCompetitionFixture,
+        continent_idx: usize,
+    ) -> (String, String) {
+        continents
+            .get(continent_idx)
+            .and_then(|c| {
+                c.national_team_competitions
+                    .competitions
+                    .get(fixture.competition_idx)
+            })
+            .map(|c| (c.short_name().to_string(), c.config.name.clone()))
+            .unwrap_or_else(|| ("INT".to_string(), "International".to_string()))
+    }
+
+    /// Fan the match's player-facing effects across every continent: caps
+    /// and goals, Elo, and each country's schedule entry.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_match_effects(
+        continents: &mut [Continent],
+        raw: &MatchResultRaw,
+        date: NaiveDate,
+        level: NationalTeamLevel,
+        home_country_id: u32,
+        away_country_id: u32,
+        home_score: u8,
+        away_score: u8,
+        comp_full_name: &str,
+        match_id: &str,
+    ) {
+        let appearances = InternationalAppearances::collect(
+            raw,
+            home_country_id,
+            away_country_id,
+            home_score,
+            away_score,
+        );
+
+        WorldInternationalStats::apply_for_level(
+            continents,
+            home_country_id,
+            away_country_id,
+            &appearances,
+            &InternationalMatchContext::new(date, level, comp_full_name),
+        );
+        WorldElo::apply(
+            continents,
+            home_country_id,
+            away_country_id,
+            home_score,
+            away_score,
+        );
+
+        let home_name = WorldCountryLookup::name(continents, home_country_id);
+        let away_name = WorldCountryLookup::name(continents, away_country_id);
+
+        WorldCountrySchedule::record(
+            continents,
+            date,
+            home_country_id,
+            away_country_id,
+            &home_name,
+            &away_name,
+            home_score,
+            away_score,
+            comp_full_name,
+            match_id,
+            level,
+        );
     }
 }

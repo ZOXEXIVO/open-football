@@ -9,18 +9,20 @@ use crate::continent::competitions::{
 use crate::league::Season;
 use chrono::{Datelike, NaiveDate};
 
-/// True for the four continental club competitions whose per-season
-/// appearances are folded into the player history page's league line.
-/// Domestic cups (real `League`s with their own slugs) are deliberately
-/// excluded — only international competitions are merged.
-fn is_continental_slug(slug: &str) -> bool {
-    matches!(
-        slug,
-        CHAMPIONS_LEAGUE_SLUG
-            | EUROPA_LEAGUE_SLUG
-            | CONFERENCE_LEAGUE_SLUG
-            | COPA_LIBERTADORES_SLUG
-    )
+impl PlayerStatistics {
+    /// True for the four continental club competitions whose per-season
+    /// appearances are folded into the player history page's league line.
+    /// Domestic cups (real `League`s with their own slugs) are deliberately
+    /// excluded — only international competitions are merged.
+    pub(super) fn is_continental_slug(slug: &str) -> bool {
+        matches!(
+            slug,
+            CHAMPIONS_LEAGUE_SLUG
+                | EUROPA_LEAGUE_SLUG
+                | CONFERENCE_LEAGUE_SLUG
+                | COPA_LIBERTADORES_SLUG
+        )
+    }
 }
 
 impl Player {
@@ -42,7 +44,7 @@ impl Player {
     pub fn continental_cup_statistics(&self) -> PlayerStatistics {
         let mut total = PlayerStatistics::default();
         for comp in &self.cup_statistics_by_competition {
-            if is_continental_slug(&comp.competition_slug) {
+            if PlayerStatistics::is_continental_slug(&comp.competition_slug) {
                 total.merge_from(&comp.statistics);
             }
         }
@@ -63,7 +65,7 @@ impl Player {
         let slices: Vec<(String, PlayerStatistics)> = self
             .cup_statistics_by_competition
             .iter()
-            .filter(|c| is_continental_slug(&c.competition_slug))
+            .filter(|c| PlayerStatistics::is_continental_slug(&c.competition_slug))
             .map(|c| (c.competition_slug.clone(), c.statistics.clone()))
             .collect();
         for (slug, stats) in slices {
@@ -81,7 +83,7 @@ impl Player {
         let slices: Vec<(String, PlayerStatistics)> = self
             .cup_statistics_by_competition
             .iter()
-            .filter(|c| !is_continental_slug(&c.competition_slug))
+            .filter(|c| !PlayerStatistics::is_continental_slug(&c.competition_slug))
             .map(|c| (c.competition_slug.clone(), c.statistics.clone()))
             .collect();
         for (slug, stats) in slices {
@@ -142,7 +144,8 @@ impl Player {
                 && entry.team_slug != team_slug
                 && matches!(
                     entry.competition_kind,
-                    PlayerStatCompetitionKind::DomesticCup | PlayerStatCompetitionKind::ContinentalCup
+                    PlayerStatCompetitionKind::DomesticCup
+                        | PlayerStatCompetitionKind::ContinentalCup
                 )
                 && entry.statistics.played + entry.statistics.played_subs > 0
         })

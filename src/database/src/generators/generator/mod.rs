@@ -9,16 +9,14 @@ use std::collections::HashMap;
 use crate::DatabaseEntity;
 use crate::generators::PlayerGenerator;
 use crate::generators::convert::{
-    convert_country_transfers, convert_national_competition, uefa_u21_championship_config,
+    CountryTransferProfileConverter, NationalCompetitionConverter, UefaU21Championship,
 };
 use crate::generators::world_start::WorldStart;
 use chrono::NaiveDateTime;
 use core::competitions::GlobalCompetitions;
 use core::context::NaiveTime;
 use core::continent::Continent;
-use core::{
-    CompetitionScope, NationalCompetitionConfig, SimulatorData, seed_core_player_id_sequence,
-};
+use core::{CompetitionScope, NationalCompetitionConfig, PlayerIdSequence, SimulatorData};
 use rayon::prelude::*;
 
 pub struct DatabaseGenerator;
@@ -35,7 +33,7 @@ impl DatabaseGenerator {
         // of this function) as belt-and-suspenders against any id source
         // we don't know about today.
         if let Some(max_odb_id) = data.players_odb.as_ref().and_then(|o| o.max_player_id()) {
-            seed_core_player_id_sequence(max_odb_id);
+            PlayerIdSequence::seed(max_odb_id);
         }
 
         let current_date = NaiveDateTime::new(WorldStart::date(), NaiveTime::default());
@@ -54,71 +52,17 @@ impl DatabaseGenerator {
         // The compiled database predates the `team_level` field, so the
         // bundled UEFA U21 Championship is appended here to give the U21
         // layer a competition to contest until the database ships one.
-        let mut all_configs: Vec<NationalCompetitionConfig> = data
-            .national_competitions
-            .iter()
-            .map(convert_national_competition)
-            .collect();
-        all_configs.push(uefa_u21_championship_config());
+        let all_configs = Self::national_competition_configs(data);
 
         // Separate global configs for GlobalCompetitions
-        let global_configs: Vec<NationalCompetitionConfig> = all_configs
-            .iter()
-            .filter(|c| c.scope == CompetitionScope::Global)
-            .cloned()
-            .collect();
+        let global_competitions = Self::global_competitions(&all_configs);
 
-        let global_competitions = GlobalCompetitions::new(global_configs);
-
-        // Parallelise at the continent level too: only ~6 continents, but
-        // each one drives an independent par_iter over its countries, so the
-        // overall tree is rayon-parallel at three levels (continent →
-        // country → club). Rayon's work-stealing keeps all cores saturated
-        // even when one continent's country/club mix dwarfs the others.
-        let continents = data
-            .continents
-            .par_iter()
-            .map(|continent| {
-                // Filter configs relevant to this continent:
-                // - continental configs where continent_id matches
-                // - global configs that have a qualifying zone for this continent
-                let continent_configs: Vec<NationalCompetitionConfig> = all_configs
-                    .iter()
-                    .filter(|config| match config.scope {
-                        CompetitionScope::Continental => config.continent_id == Some(continent.id),
-                        CompetitionScope::Global => config
-                            .qualifying
-                            .zones
-                            .iter()
-                            .any(|z| z.continent_id == continent.id),
-                    })
-                    .cloned()
-                    .collect();
-
-                Continent::new(
-                    continent.id,
-                    continent.name.clone(),
-                    Self::generate_countries(continent, data),
-                    continent_configs,
-                )
-            })
-            .collect();
+        let continents = Self::build_continents(data, &all_configs);
 
         let mut simulator_data = SimulatorData::new(current_date, continents, global_competitions);
 
-        // Register ALL countries so nationality lookups always succeed
-        // (simulation only loads countries with active leagues)
-        for country in &data.countries {
-            simulator_data.add_country_info(
-                country.id,
-                country.code.clone(),
-                country.slug.clone(),
-                country.name.clone(),
-                country.continent_id,
-                country.reputation,
-                convert_country_transfers(country.transfers.as_ref(), &country_id_by_code),
-            );
-        }
+        Self::register_country_info(&mut simulator_data, data, &country_id_by_code);
+
         // The market map was built from the participating countries alone;
         // rebuild it now that all 224 nationalities carry their card, so a
         // Senegalese export corridor exists even though Senegal runs no
@@ -129,24 +73,7 @@ impl DatabaseGenerator {
         // into `SimulatorData.free_agents` — same pool the runtime uses for
         // released players, so the existing free-agent matching pipeline
         // can sign them without any new plumbing.
-        if let Some(odb) = data.players_odb.as_ref() {
-            let records = odb.free_agents();
-            if !records.is_empty() {
-                let hydrated: Vec<core::Player> = records
-                    .par_iter()
-                    .map(|r| {
-                        let (continent_id, country_code) = data
-                            .countries
-                            .iter()
-                            .find(|c| c.id == r.country_id)
-                            .map(|c| (c.continent_id, c.code.clone()))
-                            .unwrap_or((1, String::new()));
-                        PlayerGenerator::generate_from_odb(r, continent_id, &country_code, data)
-                    })
-                    .collect();
-                simulator_data.admit_opening_free_agents(hydrated);
-            }
-        }
+        Self::hydrate_free_agents(&mut simulator_data, data);
 
         // Final seed: walk the fully-populated world and bump the counter
         // past the highest id we actually placed. ODB ids, procedurally
@@ -157,5 +84,112 @@ impl DatabaseGenerator {
         simulator_data.seed_player_id_sequence();
 
         simulator_data
+    }
+
+    fn national_competition_configs(data: &DatabaseEntity) -> Vec<NationalCompetitionConfig> {
+        let mut all_configs: Vec<NationalCompetitionConfig> = data
+            .national_competitions
+            .iter()
+            .map(NationalCompetitionConverter::convert)
+            .collect();
+        all_configs.push(UefaU21Championship::config());
+        all_configs
+    }
+
+    fn global_competitions(all_configs: &[NationalCompetitionConfig]) -> GlobalCompetitions {
+        let global_configs: Vec<NationalCompetitionConfig> = all_configs
+            .iter()
+            .filter(|c| c.scope == CompetitionScope::Global)
+            .cloned()
+            .collect();
+        GlobalCompetitions::new(global_configs)
+    }
+
+    fn build_continents(
+        data: &DatabaseEntity,
+        all_configs: &[NationalCompetitionConfig],
+    ) -> Vec<Continent> {
+        // Parallelise at the continent level too: only ~6 continents, but
+        // each one drives an independent par_iter over its countries, so the
+        // overall tree is rayon-parallel at three levels (continent →
+        // country → club). Rayon's work-stealing keeps all cores saturated
+        // even when one continent's country/club mix dwarfs the others.
+        data.continents
+            .par_iter()
+            .map(|continent| {
+                let continent_configs = Self::continent_configs(all_configs, continent);
+                Continent::new(
+                    continent.id,
+                    continent.name.clone(),
+                    Self::generate_countries(continent, data),
+                    continent_configs,
+                )
+            })
+            .collect()
+    }
+
+    fn continent_configs(
+        all_configs: &[NationalCompetitionConfig],
+        continent: &crate::ContinentEntity,
+    ) -> Vec<NationalCompetitionConfig> {
+        // Filter configs relevant to this continent:
+        // - continental configs where continent_id matches
+        // - global configs that have a qualifying zone for this continent
+        all_configs
+            .iter()
+            .filter(|config| match config.scope {
+                CompetitionScope::Continental => config.continent_id == Some(continent.id),
+                CompetitionScope::Global => config
+                    .qualifying
+                    .zones
+                    .iter()
+                    .any(|z| z.continent_id == continent.id),
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn register_country_info(
+        simulator_data: &mut SimulatorData,
+        data: &DatabaseEntity,
+        country_id_by_code: &HashMap<String, u32>,
+    ) {
+        let converter = CountryTransferProfileConverter::new(country_id_by_code);
+        // Register ALL countries so nationality lookups always succeed
+        // (simulation only loads countries with active leagues)
+        for country in &data.countries {
+            simulator_data.add_country_info(
+                country.id,
+                country.code.clone(),
+                country.slug.clone(),
+                country.name.clone(),
+                country.continent_id,
+                country.reputation,
+                converter.convert(country.transfers.as_ref()),
+            );
+        }
+    }
+
+    fn hydrate_free_agents(simulator_data: &mut SimulatorData, data: &DatabaseEntity) {
+        let Some(odb) = data.players_odb.as_ref() else {
+            return;
+        };
+        let records = odb.free_agents();
+        if records.is_empty() {
+            return;
+        }
+        let hydrated: Vec<core::Player> = records
+            .par_iter()
+            .map(|r| {
+                let (continent_id, country_code) = data
+                    .countries
+                    .iter()
+                    .find(|c| c.id == r.country_id)
+                    .map(|c| (c.continent_id, c.code.clone()))
+                    .unwrap_or((1, String::new()));
+                PlayerGenerator::generate_from_odb(r, continent_id, &country_code, data)
+            })
+            .collect();
+        simulator_data.admit_opening_free_agents(hydrated);
     }
 }

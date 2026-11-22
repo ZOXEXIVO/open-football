@@ -10,46 +10,48 @@
 use crate::Country;
 use crate::continent::Continent;
 
-pub fn world_country_reputation(continents: &[Continent], country_id: u32) -> u16 {
-    continents
-        .iter()
-        .flat_map(|c| c.countries.iter())
-        .find(|c| c.id == country_id)
-        .map(|c| c.reputation)
-        .unwrap_or(0)
-}
+/// Looks a country up across every continent, wherever it lives.
+pub struct WorldCountryLookup;
 
-pub fn world_country_elo(continents: &[Continent], country_id: u32) -> u16 {
-    continents
-        .iter()
-        .flat_map(|c| c.countries.iter())
-        .find(|c| c.id == country_id)
-        .map(|c| c.national_team.elo_rating)
-        .unwrap_or(1500)
-}
+impl WorldCountryLookup {
+    pub fn reputation(continents: &[Continent], country_id: u32) -> u16 {
+        continents
+            .iter()
+            .flat_map(|c| c.countries.iter())
+            .find(|c| c.id == country_id)
+            .map(|c| c.reputation)
+            .unwrap_or(0)
+    }
 
-pub fn world_country_name(continents: &[Continent], country_id: u32) -> String {
-    continents
-        .iter()
-        .flat_map(|c| c.countries.iter())
-        .find(|c| c.id == country_id)
-        .map(|c| c.name.clone())
-        .unwrap_or_default()
-}
+    pub fn elo(continents: &[Continent], country_id: u32) -> u16 {
+        continents
+            .iter()
+            .flat_map(|c| c.countries.iter())
+            .find(|c| c.id == country_id)
+            .map(|c| c.national_team.elo_rating)
+            .unwrap_or(1500)
+    }
 
-pub(crate) fn country_lookup(continents: &[Continent], country_id: u32) -> Option<&Country> {
-    continents
-        .iter()
-        .flat_map(|c| c.countries.iter())
-        .find(|c| c.id == country_id)
-}
+    pub fn name(continents: &[Continent], country_id: u32) -> String {
+        continents
+            .iter()
+            .flat_map(|c| c.countries.iter())
+            .find(|c| c.id == country_id)
+            .map(|c| c.name.clone())
+            .unwrap_or_default()
+    }
 
-pub(crate) fn country_lookup_mut(
-    continents: &mut [Continent],
-    country_id: u32,
-) -> Option<&mut Country> {
-    continents
-        .iter_mut()
-        .flat_map(|c| c.countries.iter_mut())
-        .find(|c| c.id == country_id)
+    pub(crate) fn find(continents: &[Continent], country_id: u32) -> Option<&Country> {
+        continents
+            .iter()
+            .flat_map(|c| c.countries.iter())
+            .find(|c| c.id == country_id)
+    }
+
+    pub(crate) fn find_mut(continents: &mut [Continent], country_id: u32) -> Option<&mut Country> {
+        continents
+            .iter_mut()
+            .flat_map(|c| c.countries.iter_mut())
+            .find(|c| c.id == country_id)
+    }
 }

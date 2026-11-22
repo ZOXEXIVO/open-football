@@ -1,5 +1,5 @@
 use crate::PlayerSkills;
-use crate::r#match::defenders::states::common::{
+use crate::r#match::defenders::states::shared::{
     ActivityIntensity, DefenderCondition, DefenderRead,
 };
 use crate::r#match::engine::ball::ball::{Ball, KICKABLE_DISTANCE};
@@ -9,7 +9,7 @@ use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
 use crate::r#match::player::PlayerSide;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::state::PlayerState;
-use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::shared::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,

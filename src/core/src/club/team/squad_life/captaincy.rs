@@ -32,9 +32,7 @@
 //!    longer wear at this club.
 
 use crate::club::player::behaviour_config::HappinessConfig;
-use crate::club::player::events::scaling::{
-    criticism_amplifier, criticism_dampener, reputation_amplifier,
-};
+use crate::club::player::events::scaling::HappinessScaling;
 use crate::club::player::mind::{ActorRef, EpisodeKind};
 use crate::club::team::Team;
 use crate::utils::DateUtils;
@@ -632,17 +630,17 @@ impl<'a> CaptaincyModel<'a> {
         let m = &p.skills.mental;
         let a = &p.attributes;
         100.0
-            * (norm(m.leadership) * 0.30
-                + norm(a.professionalism) * 0.13
-                + norm(m.teamwork) * 0.11
-                + norm(m.determination) * 0.10
-                + norm(m.composure) * 0.09
-                + norm(a.pressure) * 0.08
-                + norm(m.decisions) * 0.06
-                + norm(a.consistency) * 0.05
-                + norm(a.important_matches) * 0.04
-                + norm(a.temperament) * 0.025
-                + norm(a.sportsmanship) * 0.015)
+            * (CaptaincyModel::norm(m.leadership) * 0.30
+                + CaptaincyModel::norm(a.professionalism) * 0.13
+                + CaptaincyModel::norm(m.teamwork) * 0.11
+                + CaptaincyModel::norm(m.determination) * 0.10
+                + CaptaincyModel::norm(m.composure) * 0.09
+                + CaptaincyModel::norm(a.pressure) * 0.08
+                + CaptaincyModel::norm(m.decisions) * 0.06
+                + CaptaincyModel::norm(a.consistency) * 0.05
+                + CaptaincyModel::norm(a.important_matches) * 0.04
+                + CaptaincyModel::norm(a.temperament) * 0.025
+                + CaptaincyModel::norm(a.sportsmanship) * 0.015)
     }
 
     /// Standing within the club: tenure, squad importance, playing share,
@@ -657,7 +655,7 @@ impl<'a> CaptaincyModel<'a> {
             .sqrt()
             .clamp(0.0, 1.0);
         let ca_rank = self.ca_rank_factor(p);
-        let loyalty = norm(p.attributes.loyalty);
+        let loyalty = CaptaincyModel::norm(p.attributes.loyalty);
 
         100.0
             * (tenure * 0.24
@@ -706,9 +704,9 @@ impl<'a> CaptaincyModel<'a> {
     /// Low discipline risk: high temperament & sportsmanship, low dirtiness,
     /// and a clean card record relative to games played. 0..1.
     fn low_discipline_risk(&self, p: &Player) -> f32 {
-        let temperament = norm(p.attributes.temperament);
-        let sportsmanship = norm(p.attributes.sportsmanship);
-        let low_dirtiness = 1.0 - norm(p.attributes.dirtiness);
+        let temperament = CaptaincyModel::norm(p.attributes.temperament);
+        let sportsmanship = CaptaincyModel::norm(p.attributes.sportsmanship);
+        let low_dirtiness = 1.0 - CaptaincyModel::norm(p.attributes.dirtiness);
         let apps = (p.statistics.played + p.statistics.played_subs).max(5) as f32;
         let card_load =
             (p.statistics.yellow_cards as f32 + p.statistics.red_cards as f32 * 3.0) / apps;
@@ -733,12 +731,12 @@ impl<'a> CaptaincyModel<'a> {
             ),
             None => (
                 self.nationality_integration(p),
-                norm(p.attributes.adaptability),
+                CaptaincyModel::norm(p.attributes.adaptability),
             ),
         };
-        let stability = 0.40 * (1.0 - norm(p.attributes.controversy))
-            + 0.30 * norm(p.attributes.loyalty)
-            + 0.30 * norm(p.attributes.professionalism);
+        let stability = 0.40 * (1.0 - CaptaincyModel::norm(p.attributes.controversy))
+            + 0.30 * CaptaincyModel::norm(p.attributes.loyalty)
+            + 0.30 * CaptaincyModel::norm(p.attributes.professionalism);
 
         100.0
             * (age * 0.35
@@ -923,9 +921,11 @@ impl<'a> CaptaincyModel<'a> {
     }
 }
 
-/// Normalise a 0..20 attribute to a 0..1 factor.
-fn norm(attr: f32) -> f32 {
-    (attr / 20.0).clamp(0.0, 1.0)
+impl<'a> CaptaincyModel<'a> {
+    /// Normalise a 0..20 attribute to a 0..1 factor.
+    fn norm(attr: f32) -> f32 {
+        (attr / 20.0).clamp(0.0, 1.0)
+    }
 }
 
 /// Magnitude calculators for the captaincy morale events. Catalog defaults
@@ -960,9 +960,13 @@ impl CaptaincyMagnitude {
     pub fn removed(p: &Player) -> f32 {
         let cfg = HappinessConfig::default();
         let base = cfg.catalog.captaincy_removed;
-        let rep_amp = reputation_amplifier(p.player_attributes.current_reputation);
-        let provoke_amp = criticism_amplifier(p.attributes.controversy, p.attributes.temperament);
-        let prof_dampen = criticism_dampener(p.attributes.professionalism);
+        let rep_amp =
+            HappinessScaling::reputation_amplifier(p.player_attributes.current_reputation);
+        let provoke_amp = HappinessScaling::criticism_amplifier(
+            p.attributes.controversy,
+            p.attributes.temperament,
+        );
+        let prof_dampen = HappinessScaling::criticism_dampener(p.attributes.professionalism);
         // base is negative; multiplying by these factors keeps the sign.
         base * rep_amp * provoke_amp * prof_dampen
     }
@@ -972,7 +976,7 @@ impl CaptaincyMagnitude {
 mod tests {
     use super::{CaptaincyAssigner, CaptaincyModel};
     use crate::club::player::builder::PlayerBuilder;
-    use crate::club::player::core::player::SquadSocialView;
+    use crate::club::player::model::player::SquadSocialView;
     use crate::club::team::squad_life::matchday_leadership::{
         LeadershipCandidate, MatchdayLeadership,
     };
