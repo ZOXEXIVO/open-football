@@ -27,7 +27,9 @@ improving.
 
 Watch the video about it
 
-[![Watch the video](https://img.youtube.com/vi/HYV0YQAaQe4/default.jpg)](https://youtu.be/HYV0YQAaQe4)
+<a href="https://youtu.be/HYV0YQAaQe4">
+  <img src=".docs/images/video-preview.png" alt="Watch the Open Football video on YouTube" width="640">
+</a>
 
 ## What Makes It Different
 
