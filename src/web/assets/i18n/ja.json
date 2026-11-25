@@ -1440,6 +1440,7 @@
   "scope_training_ground": "トレーニングの雰囲気",
   "scout": "スカウト",
   "scout_monitoring": "スカウト監視",
+  "scouting_observations": "スカウトの観察記録",
   "scout_vote_approve": "承認",
   "scout_vote_monitor": "観察",
   "scout_verdict_line": "スカウト: {recommendation}（能力: {ability}、潜在能力: {potential}、確信度: {confidence}%）",

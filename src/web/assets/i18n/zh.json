@@ -1441,6 +1441,7 @@
   "scope_training_ground": "训练场氛围",
   "scout": "球探",
   "scout_monitoring": "球探监控",
+  "scouting_observations": "球探觀察紀錄",
   "scout_vote_approve": "赞成",
   "scout_vote_monitor": "观察",
   "scout_verdict_line": "球探：{recommendation}（能力：{ability}，潜力：{potential}，信心：{confidence}%）",

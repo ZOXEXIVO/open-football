@@ -1,8 +1,9 @@
 pub mod routes;
 
+use crate::leagues::address::LeagueAddress;
 use crate::player::{PlayerPageChrome, PlayerPageColors};
 use crate::shared::slug::{PlayerPage, PlayerSlug};
-use crate::views::{MenuSection, SubTitleFlag};
+use crate::views::{ClubCountryFlag, MenuSection, Menus, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -88,15 +89,16 @@ pub struct PlayerNegotiationDto {
 pub struct PlayerInterestedClubDto {
     pub club_name: String,
     pub club_slug: String,
+    pub country_flag: Option<ClubCountryFlag>,
 }
 
-/// Scout-monitoring summary for the player's transfers page. One row
-/// per (scout, club) actively watching this player. Replaces the bare
-/// "interested clubs" list with something that names the scout, shows
-/// observation count, and surfaces meeting status.
+/// A scout observation or recruitment summary on the player's transfers page.
 pub struct PlayerMonitoringDto {
     pub club_name: String,
     pub club_slug: String,
+    pub country: Option<ClubCountryFlag>,
+    pub league: Option<MonitoringLeague>,
+    world_reputation: Option<u16>,
     pub scout_name: String,
     pub scout_id: u32,
     /// i18n key — "monitoring_status_active", "..._report_ready", etc.
@@ -106,6 +108,11 @@ pub struct PlayerMonitoringDto {
     pub confidence_pct: u8,
     pub times_watched: u16,
     pub matches_watched: u16,
+}
+
+pub struct MonitoringLeague {
+    pub name: String,
+    pub path: Option<String>,
 }
 
 pub struct PlayerCompletedTransferDto {
@@ -372,9 +379,10 @@ impl TransfersView {
             interested_clubs: data
                 .clubs_interested_in_player(player.id)
                 .into_iter()
-                .map(|(_club_id, club_name, team_slug)| PlayerInterestedClubDto {
+                .map(|(club_id, club_name, team_slug)| PlayerInterestedClubDto {
                     club_name,
                     club_slug: team_slug,
+                    country_flag: ClubCountryFlag::for_club(data, club_id, i18n),
                 })
                 .collect(),
             monitoring: Self::monitoring(data, player, i18n),
@@ -462,27 +470,46 @@ impl TransfersView {
     }
 
     fn monitoring(data: &SimulatorData, player: &Player, i18n: &I18n) -> Vec<PlayerMonitoringDto> {
-        data.player_monitoring_details(player.id)
+        let mut rows: Vec<_> = data
+            .player_monitoring_details(player.id)
             .into_iter()
-            .map(|row| PlayerMonitoringDto {
-                club_name: row.club_name,
-                club_slug: row.team_slug,
-                scout_name: row.scout_name.unwrap_or_else(|| {
-                    // Fall back to a localized "recruitment department" label
-                    // when no specific scout is named on the row.
-                    i18n.t("recruitment_department").to_string()
-                }),
-                scout_id: row.scout_staff_id.unwrap_or(0),
-                status_key: format!("monitoring_status_{}", row.status),
-                last_observed: row
-                    .last_observed
-                    .map(|d| d.format("%d.%m.%Y").to_string())
-                    .unwrap_or_default(),
-                confidence_pct: (row.confidence * 100.0).round().clamp(0.0, 100.0) as u8,
-                times_watched: row.times_watched,
-                matches_watched: row.matches_watched,
+            .map(|row| {
+                let senior_team = data.club(row.club_id).and_then(|club| club.teams.main());
+                let league = senior_team
+                    .and_then(|team| team.league_id)
+                    .and_then(|id| data.league(id))
+                    .filter(|league| !league.friendly && !league.name.is_empty())
+                    .map(|league| MonitoringLeague {
+                        name: Menus::league_display_name(league, i18n, data),
+                        path: data
+                            .country(league.country_id)
+                            .filter(|country| !country.slug.is_empty() && !league.slug.is_empty())
+                            .map(|country| LeagueAddress::new(&country.slug, &league.slug).path()),
+                    });
+
+                PlayerMonitoringDto {
+                    club_name: row.club_name,
+                    club_slug: row.team_slug,
+                    country: ClubCountryFlag::for_club(data, row.club_id, i18n),
+                    league,
+                    world_reputation: senior_team.map(|team| team.reputation.world),
+                    scout_name: row
+                        .scout_name
+                        .unwrap_or_else(|| i18n.t("recruitment_department").to_string()),
+                    scout_id: row.scout_staff_id.unwrap_or(0),
+                    status_key: format!("monitoring_status_{}", row.status),
+                    last_observed: row
+                        .last_observed
+                        .map(|d| d.format("%d.%m.%Y").to_string())
+                        .unwrap_or_default(),
+                    confidence_pct: (row.confidence * 100.0).round().clamp(0.0, 100.0) as u8,
+                    times_watched: row.times_watched,
+                    matches_watched: row.matches_watched,
+                }
             })
-            .collect()
+            .collect();
+        rows.sort_by_key(|row| Reverse(row.world_reputation));
+        rows
     }
 
     fn completed(
@@ -556,17 +583,34 @@ impl TransfersView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveDate;
+    use crate::teams::transfers::routes::TeamTransfersRoutes;
+    use axum::body::{Body, to_bytes};
+    use axum::http::{Request, StatusCode};
+    use chrono::{NaiveDate, NaiveTime};
+    use core::club::ClubAcademy;
     use core::club::player::builder::PlayerBuilder;
     use core::club::player::calculators::FreeAgentReleaseReason;
+    use core::competitions::global::GlobalCompetitions;
+    use core::continent::Continent;
+    use core::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use core::shared::fullname::FullName;
+    use core::shared::{Currency, CurrencyValue, Location};
     use core::transfers::deal::reason::{AbilityBand, ScoutVerdict};
-    use core::transfers::pipeline::{ScoutingRecommendation, TransferNeedReason};
+    use core::transfers::gate::TransferMoveStage;
+    use core::transfers::pipeline::{
+        FileObservation, FileReading, ScoutingRecommendation, ShortlistCandidate,
+        ShortlistCandidateStatus, TransferNeedReason,
+    };
+    use core::transfers::scouting::recruitment::ScoutMonitoringSource;
+    use core::transfers::{CompletedTransfer, TransferType};
     use core::{
-        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
-        PlayerSkills,
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes,
+        PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, StaffCollection, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
     };
     use std::collections::HashMap;
+    use std::sync::Arc;
+    use tower::ServiceExt;
 
     fn en_map() -> HashMap<String, String> {
         serde_json::from_str(include_str!("../../../assets/i18n/en.json"))
@@ -764,5 +808,401 @@ mod tests {
         let i18n = I18n::for_test(en_map());
         let player = loan_listed_then_pathway_changed();
         assert!(ListingReasonView::of(&player, &[PlayerStatusType::Unh], &i18n).is_empty());
+    }
+
+    fn observation_date(day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2030, 6, day).unwrap()
+    }
+
+    fn monitoring_team(
+        club_id: u32,
+        slug: &str,
+        kind: TeamType,
+        league_id: Option<u32>,
+        world_reputation: u16,
+    ) -> Team {
+        Team::builder()
+            .id(club_id * 10 + u32::from(kind != TeamType::Main))
+            .league_id(league_id)
+            .club_id(club_id)
+            .name(slug.to_string())
+            .slug(slug.to_string())
+            .team_type(kind)
+            .players(PlayerCollection::new(Vec::new()))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(500, 500, world_reputation))
+            .training_schedule(TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            ))
+            .build()
+            .unwrap()
+    }
+
+    fn monitoring_club(id: u32, name: &str, teams: Vec<Team>) -> Club {
+        Club::new(
+            id,
+            name.to_string(),
+            Location::new(1),
+            ClubFinances::new(1_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(teams),
+            ClubFacilities::default(),
+        )
+    }
+
+    fn observe(club: &mut Club, scout_staff_id: u32, day: u32) {
+        let date = observation_date(day);
+        assert!(club.transfer_plan.keep_file(
+            FileReading {
+                stage: TransferMoveStage::CanScoutQuietly,
+                stopped_by: None,
+                read_on: date,
+            },
+            FileObservation {
+                scout_staff_id,
+                player_id: 1,
+                source: ScoutMonitoringSource::StaffRecommendation,
+                transfer_request_id: None,
+                origin_assignment_id: None,
+                region: None,
+                assessed_ability: 65,
+                assessed_potential: 90,
+                confidence: 0.43,
+                role_fit: 1.0,
+                estimated_value: 0.0,
+                risk_flags: Vec::new(),
+                is_match: true,
+            },
+            date,
+        ));
+    }
+
+    fn monitoring_world() -> SimulatorData {
+        let mut amkar = monitoring_club(
+            11,
+            "Amkar",
+            vec![monitoring_team(
+                11,
+                "amkar-perm",
+                TeamType::Main,
+                Some(1),
+                6000,
+            )],
+        );
+        observe(&mut amkar, 101, 14);
+        observe(&mut amkar, 102, 13);
+
+        let mut tied = monitoring_club(
+            12,
+            "Dinamo St Petersburg",
+            vec![monitoring_team(
+                12,
+                "dinamo-st-petersburg",
+                TeamType::Main,
+                Some(1),
+                6000,
+            )],
+        );
+        observe(&mut tied, 103, 15);
+
+        let mut reserves_first = monitoring_club(
+            13,
+            "Reserves First",
+            vec![
+                monitoring_team(13, "reserves-first-b", TeamType::B, Some(2), 9900),
+                monitoring_team(13, "reserves-first", TeamType::Main, Some(3), 1000),
+            ],
+        );
+        observe(&mut reserves_first, 104, 16);
+
+        let mut zero = monitoring_club(
+            14,
+            "Zero Reputation",
+            vec![monitoring_team(
+                14,
+                "zero-reputation",
+                TeamType::Main,
+                None,
+                0,
+            )],
+        );
+        observe(&mut zero, 105, 12);
+
+        let mut no_team = monitoring_club(15, "No Senior Team", Vec::new());
+        for club in [&mut amkar, &mut no_team] {
+            assert!(club.transfer_plan.shortlist(
+                FileReading {
+                    stage: TransferMoveStage::CanShowPublicInterest,
+                    stopped_by: None,
+                    read_on: observation_date(18),
+                },
+                1,
+                0.0,
+                ShortlistCandidate {
+                    player_id: 1,
+                    score: 0.5,
+                    estimated_fee: 0.0,
+                    status: ShortlistCandidateStatus::Available,
+                },
+                None,
+            ));
+        }
+
+        let country = monitoring_country(vec![amkar, tied, reserves_first, zero, no_team]);
+        let mut data = SimulatorData::new(
+            observation_date(18).and_hms_opt(12, 0, 0).unwrap(),
+            vec![Continent::new(
+                1,
+                "Europe".to_string(),
+                vec![country],
+                Vec::new(),
+            )],
+            GlobalCompetitions::new(Vec::new()),
+        );
+        let player = loan_listed_then_pathway_changed();
+        let mut unmonitored = loan_listed_then_pathway_changed();
+        unmonitored.id = 2;
+        data.free_agents.push(player);
+        data.free_agents.push(unmonitored);
+        data
+    }
+
+    fn monitoring_country(clubs: Vec<Club>) -> Country {
+        let league = |id, name: &str, slug: &str| {
+            League::new(
+                id,
+                name.to_string(),
+                slug.to_string(),
+                1,
+                3000,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                    split_season: false,
+                },
+                false,
+            )
+        };
+        Country::builder()
+            .id(1)
+            .code("ru".to_string())
+            .slug("russia".to_string())
+            .name("Russia".to_string())
+            .continent_id(1)
+            .leagues(LeagueCollection::new(vec![
+                league(
+                    1,
+                    "Second Division B Ural-Volga",
+                    "russian-second-division-b-ural-volga",
+                ),
+                league(2, "Reserve League", "reserve-league"),
+                league(3, "Senior League", ""),
+            ]))
+            .clubs(clubs)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn monitoring_uses_senior_league_and_stable_world_reputation_order() {
+        let data = monitoring_world();
+        let player = data.player(1).unwrap();
+        let i18n = crate::I18nManager::new().for_lang("en");
+        let source = data.player_monitoring_details(player.id);
+        assert_eq!(source[0].club_name, "Reserves First");
+        let rows = TransfersView::monitoring(&data, player, &i18n);
+
+        let ranks: Vec<_> = rows
+            .iter()
+            .map(|row| (row.club_name.as_str(), row.scout_id, row.world_reputation))
+            .collect();
+        assert_eq!(
+            ranks,
+            [
+                ("Dinamo St Petersburg", 103, Some(6000)),
+                ("Amkar", 101, Some(6000)),
+                ("Amkar", 102, Some(6000)),
+                ("Reserves First", 104, Some(1000)),
+                ("Zero Reputation", 105, Some(0)),
+                ("No Senior Team", 0, None),
+            ]
+        );
+        assert_eq!(
+            rows[3].league.as_ref().unwrap().name,
+            "Russian Senior League"
+        );
+        assert!(rows[4].league.is_none());
+        assert!(rows[5].league.is_none());
+    }
+
+    #[test]
+    fn transfer_routes_render_localized_club_flags_and_monitoring() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let _runtime_guard = runtime.enter();
+        let i18n = Arc::new(crate::I18nManager::new());
+        let mut world = monitoring_world();
+        let counterparts = [
+            (11, "Amkar", 1, TransferType::Permanent),
+            (99, "Recorded Club", 1, TransferType::Permanent),
+            (98, "Unknown Club", 0, TransferType::Permanent),
+            (0, "", 1, TransferType::Free),
+        ];
+        world.continents[0].countries[0]
+            .transfer_market
+            .transfer_history
+            .extend(counterparts.into_iter().map(|(id, name, origin, kind)| {
+                CompletedTransfer::new(
+                    500,
+                    "Ledger Player".to_string(),
+                    id,
+                    0,
+                    name.to_string(),
+                    12,
+                    "Dinamo St Petersburg".to_string(),
+                    observation_date(16),
+                    CurrencyValue::new(0.0, Currency::Usd),
+                    kind,
+                )
+                .with_origin_country(origin)
+            }));
+        let state = GameAppData {
+            database: Arc::new(database::DatabaseLoader::load()),
+            data: Arc::new(tokio::sync::RwLock::new(Some(Arc::new(world)))),
+            process_lock: Arc::default(),
+            cancel_flag: Arc::default(),
+            news_i18n: Arc::new(crate::NewsI18nManager::new()),
+            events_i18n: Arc::new(crate::EventI18nManager::new(&i18n)),
+            i18n: Arc::clone(&i18n),
+            workers: crate::WorkerRegistry::empty(),
+            ai: crate::AiConfig::new(),
+            ai_jobs: crate::AiJobs::new(),
+        };
+        let app = routes::PlayerTransfersRoutes::create()
+            .merge(TeamTransfersRoutes::router())
+            .with_state(state);
+        let country_labels = [
+            ("en", "Russia"),
+            ("es", "Rusia"),
+            ("fr", "Russie"),
+            ("de", "Russland"),
+            ("pt", "Rússia"),
+            ("ru", "Россия"),
+            ("zh", "俄羅斯"),
+            ("tr", "Rusya"),
+            ("ja", "ロシア"),
+        ];
+        for (lang, country_name) in country_labels {
+            let localization = i18n.for_lang(lang);
+            let label = localization.t("scouting_observations");
+            assert_ne!(label, "scouting_observations");
+            if lang != "en" {
+                assert_ne!(label, "Scouting observations", "{lang}");
+            }
+            let html = runtime.block_on(transfer_page_html(
+                &app,
+                format!("/{lang}/players/1-seb-nava/transfers"),
+            ));
+            let interested = html.split_once("fm-pt-clubs\"").unwrap().1;
+            let interested = interested.split_once("</div>").unwrap().0;
+            let flag_label =
+                format!("role=\"img\" aria-label=\"{country_name}\" title=\"{country_name}\"");
+            assert_eq!(interested.matches(&flag_label).count(), 2);
+            assert!(interested.contains(&format!("class=\"flag flag-ru\" {flag_label}")));
+            assert!(interested.contains(&format!(
+                "</span>&nbsp;<a href=\"/{lang}/teams/amkar-perm\">Amkar</a>, \
+                 <span class=\"flag flag-ru fm-pt-club-flag-spaced\" {flag_label}"
+            )));
+            assert!(interested.contains("</span>&nbsp;No Senior Team"));
+            let panel = html
+                .split_once("scout-monitoring\"")
+                .unwrap()
+                .1
+                .split_once("</section>")
+                .unwrap()
+                .0;
+            assert!(panel.contains(&format!("aria-label=\"{label}\" tabindex=\"0\"")));
+            assert!(panel.contains(&format!("href=\"/{lang}/teams/amkar-perm\"")));
+            assert!(panel.contains(&format!(
+                "href=\"/{lang}/leagues/russia/russian-second-division-b-ural-volga\""
+            )));
+            assert!(panel.contains(&format!("href=\"/{lang}/staff/101\"")));
+            assert!(panel.contains("<span class=\"fm-panel-count\">6</span>"));
+            assert_eq!(panel.matches("scope=\"col\"").count(), 6);
+            assert_eq!(panel.matches("<td class=\"pt-club\">").count(), 6);
+            assert_eq!(panel.matches(&flag_label).count(), 6, "{lang}");
+            if lang == "en" {
+                assert!(
+                    panel
+                        .contains("<span class=\"scout-club-league\">Russian Senior League</span>")
+                );
+                assert!(panel.contains(">Active</span>"));
+                assert!(panel.contains(">Shortlisted</span>"));
+                assert!(panel.contains(">43%</td>"));
+                assert!(panel.contains(">1 / 1m</td>"));
+                assert!(panel.contains(">14.06.2030</td>"));
+                let summary = panel.split_once("<span>No Senior Team</span>").unwrap().1;
+                assert!(summary.contains(&format!(
+                    ">{}</td>",
+                    localization.t("recruitment_department")
+                )));
+                assert!(summary.contains("<td class=\"pt-date\"></td>"));
+                assert!(!summary.contains("href="));
+            }
+
+            let team_html = runtime.block_on(transfer_page_html(
+                &app,
+                format!("/{lang}/teams/dinamo-st-petersburg/transfers"),
+            ));
+            let club_cells: Vec<_> = team_html
+                .split("<td class=\"trf-club\">")
+                .skip(1)
+                .map(|cell| cell.split_once("</td>").unwrap().0)
+                .collect();
+            assert_eq!(club_cells.len(), 4);
+            for name in ["Amkar", "Recorded Club"] {
+                let cell = club_cells.iter().find(|cell| cell.contains(name)).unwrap();
+                assert!(cell.contains(&format!("class=\"flag flag-ru\" {flag_label}")));
+            }
+            let unknown = club_cells
+                .iter()
+                .find(|cell| cell.contains("Unknown Club"))
+                .unwrap();
+            let free_agent = club_cells
+                .iter()
+                .find(|cell| cell.contains("class=\"trf-free-agent\""))
+                .unwrap();
+            assert!(free_agent.contains(localization.t("free_agent")));
+            assert!(!unknown.contains("role=\"img\""));
+            assert!(!free_agent.contains("role=\"img\""));
+        }
+
+        let html = runtime.block_on(transfer_page_html(
+            &app,
+            "/en/players/2-seb-nava/transfers".into(),
+        ));
+        assert!(html.contains("No scouts currently watching this player"));
+        assert!(!html.contains("scout-monitoring-table"));
+        assert!(!html.contains("fm-pt-clubs"));
+    }
+
+    async fn transfer_page_html(app: &axum::Router, path: String) -> String {
+        let response = app
+            .clone()
+            .oneshot(Request::get(path.as_str()).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
     }
 }

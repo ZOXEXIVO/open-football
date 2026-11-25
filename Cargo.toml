@@ -28,7 +28,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "1.8.490"
+version = "1.8.700"
 
 authors = ["Artemov Ivan (ZOXEXIVO) <zoxexivo@gmail.com>"]
 edition = "2024"

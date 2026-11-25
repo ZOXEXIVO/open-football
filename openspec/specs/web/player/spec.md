@@ -384,3 +384,43 @@ carries no listing, the page SHALL show no listing reason.
 #### Scenario: An unlisted player shows no listing reason
 - **WHEN** a player carries no transfer or loan listing
 - **THEN** the transfers page shows no listing reason, whatever his latest recorded decision is
+
+### Requirement: The player transfers page shows scouting clubs with league context and reputation order
+
+For each row in the Scout Monitoring table at `/{lang}/players/{player_slug}/transfers`, the Club cell SHALL show the monitoring club’s name with its country flag when available. The flag SHALL have an accessible country name in the page language. The club name SHALL link to its team page when a team URL is available. The current senior first-team league SHALL appear below the club name in smaller type and link to the league’s canonical country-scoped overview in the current language when that route can be resolved.
+
+The table SHALL show monitoring rows in descending order of the club’s senior first-team world reputation. Rows tied on reputation SHALL keep their order from the monitoring summary. Rows with unavailable reputation SHALL follow rows with a known value. The panel SHALL count monitoring rows, including multiple rows for the same club and summary rows that have no named scout.
+
+#### Scenario: A scouting club has country and league information
+
+- **WHEN** a player has a monitoring row for Amkar and Amkar’s current senior league is Russian Second Division B Ural-Volga
+- **THEN** the Club cell SHALL show the Russian flag identified as Russia on the English page, Amkar linked to `/en/teams/amkar-perm`, and Russian Second Division B Ural-Volga linked to `/en/leagues/russia/russian-second-division-b-ural-volga` on the line below
+- **AND** the URLs and accessible labels SHALL follow the requested language when viewing a localized page
+
+#### Scenario: Club context is incomplete
+
+- **WHEN** some country, current league, or team-route information is unavailable
+- **THEN** the row SHALL still show the club name and all available context
+- **AND** the club and league names SHALL appear as plain text when each name is known but its destination is unavailable, and any unknown country flag or league name SHALL be omitted
+
+#### Scenario: The higher-reputation club appears first
+
+- **WHEN** the monitoring summary contains a lower-reputation club with a newer observation and a higher-reputation club whose file has an older observation or only summary information
+- **THEN** the higher-reputation club’s rows SHALL appear first
+- **AND** each row SHALL retain its scout name or recruitment department label, status, confidence, watch counts, and any last-observed date
+
+#### Scenario: Equal or unavailable world reputation
+
+- **WHEN** several rows have equal senior first-team world reputation and other rows have no known reputation
+- **THEN** the tied rows SHALL retain their relative order from the monitoring summary, with unavailable ratings appearing after every known rating, including zero
+
+#### Scenario: Narrow layout and keyboard navigation
+
+- **WHEN** the table is wider than the available panel space
+- **THEN** the table SHALL scroll horizontally inside the panel and keep all six columns, including Last Observed, reachable without page-level horizontal scrolling from the table
+- **AND** the table’s scroll region SHALL have a localized accessible label and a visible keyboard focus indicator
+
+#### Scenario: No scouting records
+
+- **WHEN** a player has no monitoring rows
+- **THEN** the panel SHALL show a count of zero and the localized empty-state message in place of the table

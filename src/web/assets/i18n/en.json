@@ -1440,6 +1440,7 @@
   "scope_training_ground": "training-ground atmosphere",
   "scout": "Scout",
   "scout_monitoring": "Scout Monitoring",
+  "scouting_observations": "Scouting observations",
   "scout_vote_approve": "Approve",
   "scout_vote_monitor": "Monitor",
   "scout_verdict_line": "Scout: {recommendation} (ability: {ability}, potential: {potential}, confidence: {confidence}%)",

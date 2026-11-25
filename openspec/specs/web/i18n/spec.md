@@ -64,11 +64,32 @@ The system SHALL resolve a count-dependent phrase (such as an age in years) by s
 - **THEN** the system returns that language's single stored value regardless of the count supplied
 
 ### Requirement: Country name resolution with English-code fallback
-The system SHALL translate country codes into localized display names per language, and SHALL additionally expose the English-language spelling of a country name (independent of the currently resolved language) for callers that need the untranslated form, falling back to the raw code when no English entry exists.
+
+The system SHALL resolve a country's place name and its nationality wording independently. A localized lookup SHALL use the requested language first and English second. Callers SHALL be able to request the English forms regardless of the page language. A country-code lookup SHALL return the code if the requested form is unavailable.
+
+The country flags beside interested clubs and Scout Monitoring clubs on the player transfers page and beside counterpart clubs on the team transfers page SHALL use the resolved place name as both their accessible name and tooltip. If the country or its place name is unavailable, the page SHALL show the club without a flag.
 
 #### Scenario: Looking up a country's English name regardless of active language
-- **WHEN** a caller is operating under a non-English resolved language and asks for a country's English-language name
-- **THEN** the system returns the English spelling from the default-language bundle, not the localized one
+
+- **WHEN** a caller on a Russian page requests the English place name or nationality wording for Russia
+- **THEN** the English place name is “Russia” and the English nationality wording is “Russian”
+
+#### Scenario: Transfer flags use country names in the page language
+
+- **WHEN** a transfer page shows an interested, monitoring, or counterpart club from Russia
+- **THEN** the flag's accessible name and tooltip read “Russia” on the English page and “Россия” on the Russian page
+- **AND** the nationality lookup still returns the existing wording for each language
+
+#### Scenario: Countries that share a database code have distinct flags
+
+- **WHEN** a transfer page shows clubs from Sudan and South Sudan, Thailand and Tahiti, or Turkmenistan and Timor-Leste
+- **THEN** each club's flag and label identify its own country
+
+#### Scenario: A place name is missing
+
+- **WHEN** a club's country has an English place name and the page language has no entry for it
+- **THEN** the flag uses the English place name
+- **AND** if neither language has a place name, the page shows the club without a flag
 
 ### Requirement: Locale bundles maintain full key parity with English
 For every translation scope shipped in the localization assets, every non-English locale file SHALL contain exactly the same set of keys as the English (`en.json`) file for that scope — no missing keys and no extra keys — and every supported language (English, German, Spanish, French, Japanese, Portuguese, Russian, Turkish, Chinese) SHALL ship a bundle file for each scope (page chrome, country names, happiness events, press/news).

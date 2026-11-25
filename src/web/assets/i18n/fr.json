@@ -1440,6 +1440,7 @@
   "scope_training_ground": "ambiance à l'entraînement",
   "scout": "Recruteur",
   "scout_monitoring": "Suivi recruteurs",
+  "scouting_observations": "Observations des recruteurs",
   "scout_vote_approve": "Approuver",
   "scout_vote_monitor": "Observer",
   "scout_verdict_line": "Recruteur : {recommendation} (capacité : {ability}, potentiel : {potential}, confiance : {confidence} %)",

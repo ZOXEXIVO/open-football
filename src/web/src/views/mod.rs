@@ -23,6 +23,31 @@ impl SubTitleFlag {
     }
 }
 
+pub struct ClubCountryFlag {
+    pub code: String,
+    pub name: String,
+}
+
+impl ClubCountryFlag {
+    pub(crate) fn for_club(data: &SimulatorData, club_id: u32, i18n: &I18n) -> Option<Self> {
+        let country = data.country_by_club(club_id)?;
+        Self::of(&country.code, &country.slug, i18n)
+    }
+
+    pub(crate) fn of(country_code: &str, country_slug: &str, i18n: &I18n) -> Option<Self> {
+        let country_code = country_code.to_ascii_lowercase();
+        // The database shares these codes between distinct countries.
+        let code = match (country_code.as_str(), country_slug) {
+            ("sd", "south sudan") => "ss".to_string(),
+            ("th", "tahiti") => "pf".to_string(),
+            ("tm", "east timor") => "tl".to_string(),
+            _ => country_code,
+        };
+        let name = i18n.country_name(&code)?.to_string();
+        Some(Self { code, name })
+    }
+}
+
 pub struct MenuSection {
     pub items: Vec<MenuItem>,
     pub collapsible: bool,

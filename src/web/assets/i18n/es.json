@@ -1440,6 +1440,7 @@
   "scope_training_ground": "ambiente del entrenamiento",
   "scout": "Ojeador",
   "scout_monitoring": "Seguimiento de ojeadores",
+  "scouting_observations": "Observaciones de ojeadores",
   "scout_vote_approve": "Aprobar",
   "scout_vote_monitor": "Observar",
   "scout_verdict_line": "Ojeador: {recommendation} (habilidad: {ability}, potencial: {potential}, confianza: {confidence}%)",

@@ -1441,6 +1441,7 @@
   "scope_training_ground": "antrenman atmosferi",
   "scout": "Gözlemci",
   "scout_monitoring": "Gözlemci Takibi",
+  "scouting_observations": "Gözlemci gözlemleri",
   "scout_vote_approve": "Onayla",
   "scout_vote_monitor": "İzle",
   "scout_verdict_line": "Gözlemci: {recommendation} (yetenek: {ability}, potansiyel: {potential}, güven: %{confidence})",

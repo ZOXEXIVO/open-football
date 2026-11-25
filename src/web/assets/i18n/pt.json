@@ -1440,6 +1440,7 @@
   "scope_training_ground": "ambiente do treino",
   "scout": "Olheiro",
   "scout_monitoring": "Monitoramento de olheiros",
+  "scouting_observations": "Observações dos olheiros",
   "scout_vote_approve": "Aprovar",
   "scout_vote_monitor": "Observar",
   "scout_verdict_line": "Observador: {recommendation} (habilidade: {ability}, potencial: {potential}, confiança: {confidence}%)",

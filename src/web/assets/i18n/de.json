@@ -1440,6 +1440,7 @@
   "scope_training_ground": "Atmosphäre auf dem Trainingsplatz",
   "scout": "Scout",
   "scout_monitoring": "Scout-Beobachtung",
+  "scouting_observations": "Scout-Beobachtungen",
   "scout_vote_approve": "Befürworten",
   "scout_vote_monitor": "Beobachten",
   "scout_verdict_line": "Scout: {recommendation} (Fähigkeit: {ability}, Potenzial: {potential}, Sicherheit: {confidence}%)",

@@ -1058,6 +1058,16 @@ a.fm-seasonstep-arrow:hover {
     font-size: 15px;
 }
 
+.fm-pt-clubs .flag {
+    width: 14px;
+    height: 10.5px;
+    vertical-align: -1px;
+}
+
+.fm-pt-clubs .fm-pt-club-flag-spaced {
+    margin-inline-start: 5px;
+}
+
 .fm-pt-status-grid {
     display: flex;
     flex-direction: column;
@@ -1159,6 +1169,62 @@ a.fm-seasonstep-arrow:hover {
 
 .fm-pt-table .pt-club a {
     font-weight: 500;
+}
+
+.col:has(.scout-monitoring) {
+    min-width: 0;
+}
+
+.scout-monitoring-table {
+    overflow-x: auto;
+}
+
+.scout-monitoring-table:focus-visible {
+    outline: 2px solid #8cb9dc;
+    outline-offset: -2px;
+}
+
+.scout-monitoring .fm-pt-table {
+    min-width: 620px;
+}
+
+.scout-monitoring .fm-pt-table .pt-club {
+    width: 32%;
+    overflow-wrap: anywhere;
+}
+
+.scout-monitoring .fm-pt-table .pt-date {
+    display: table-cell;
+}
+
+.scout-monitoring .scout-club-name {
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+    font-size: calc(1em + 1pt);
+    line-height: 1.25;
+}
+
+.scout-monitoring .scout-club-flag {
+    flex: none;
+    width: 14px;
+    height: 10.5px;
+    margin-top: .3em;
+    background-position: center;
+}
+
+.scout-monitoring .pt-club .scout-club-league {
+    display: block;
+    margin-top: 3px;
+    color: #a3aeb6;
+    font-size: .8em;
+    line-height: 1.3;
+    font-weight: 400;
+}
+
+.scout-monitoring a.scout-club-league:hover {
+    color: #d8e3ec;
+    text-decoration: underline;
 }
 
 /* Completed Transfers — card layout */
@@ -1330,8 +1396,6 @@ a.fm-seasonstep-arrow:hover {
     flex: none;
     width: 32px;
     height: 32px;
-    border-radius: 50%;
-    overflow: hidden;
     background: linear-gradient(180deg, #2f3e4a, #243139);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
@@ -1352,8 +1416,7 @@ a.fm-seasonstep-arrow:hover {
     inset: 0;
     width: 100%;
     height: 100%;
-    object-fit: cover;
-    object-position: center top;
+    object-fit: contain;
 }
 
 .trf-id {
@@ -1424,8 +1487,8 @@ a.fm-seasonstep-arrow:hover {
     --pill: #f06b5a;
 }
 
-.trf-club a,
-.trf-club span {
+.trf-club > a,
+.trf-club > span {
     display: inline-flex;
     align-items: center;
     gap: 8px;
@@ -1437,13 +1500,10 @@ a.fm-seasonstep-arrow:hover {
     color: #7a868e;
 }
 
-.trf-crest {
+.trf-club .flag {
     flex: none;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: radial-gradient(circle, var(--c1) 0 52%, var(--c2) 54%);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.16);
+    width: 16px;
+    height: 12px;
 }
 
 .fm-squad .trf-date {
@@ -1548,8 +1608,8 @@ a.fm-seasonstep-arrow:hover {
         padding: 3px 5px;
     }
 
-    .trf-club a,
-    .trf-club span {
+    .trf-club > a,
+    .trf-club > span {
         gap: 6px;
         font-size: 13px;
     }

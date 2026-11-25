@@ -23,14 +23,21 @@
 <td class="trf-pos">{% if p.known %}<span class="trf-pill trf-pill-{{ p.position_group }}">{{ p.position }}</span>{% endif %}</td>
 {% endmacro %}
 
+{% macro club_label(c) %}
+{% if let Some(flag) = c.country_flag %}
+<span class="flag flag-{{ flag.code }}" role="img" aria-label="{{ flag.name }}" title="{{ flag.name }}"></span>
+{% endif %}
+{{ c.name }}
+{% endmacro %}
+
 {% macro club_cell(c, lang) %}
 <td class="trf-club">
     {% if c.free_agent %}
     <span class="trf-free-agent">{{ c.name }}</span>
     {% else if c.slug.is_empty() %}
-    <span><i class="trf-crest" style="--c1: {{ c.background }}; --c2: {{ c.foreground }};"></i>{{ c.name }}</span>
+    <span>{% call club_label(c) %}{% endcall %}</span>
     {% else %}
-    <a href="/{{ lang }}/teams/{{ c.slug }}"><i class="trf-crest" style="--c1: {{ c.background }}; --c2: {{ c.foreground }};"></i>{{ c.name }}</a>
+    <a href="/{{ lang }}/teams/{{ c.slug }}">{% call club_label(c) %}{% endcall %}</a>
     {% endif %}
 </td>
 {% endmacro %}

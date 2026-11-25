@@ -5,7 +5,7 @@ use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VE
 use crate::shared::slug::PlayerSlug;
 use crate::teams::newspaper::NewspaperCounter;
 use crate::teams::{TeamLookup, TeamNeighborhood};
-use crate::views::{self, MenuSection, SubTitleFlag};
+use crate::views::{self, ClubCountryFlag, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, Query, State};
@@ -141,39 +141,41 @@ impl TransferPlayerView {
     }
 }
 
-/// The other side of a move: a club in its colours, or the free-agent pool.
+/// The club or free-agent pool on the other side of a move.
 pub struct TransferClubView {
     pub name: String,
     pub slug: String,
-    pub background: String,
-    pub foreground: String,
+    pub country_flag: Option<ClubCountryFlag>,
     pub free_agent: bool,
 }
 
 impl TransferClubView {
-    fn of(data: &SimulatorData, club_id: u32, stored_name: &str, i18n: &I18n) -> Self {
+    fn of(
+        data: &SimulatorData,
+        club_id: u32,
+        stored_name: &str,
+        origin_country_id: u32,
+        i18n: &I18n,
+    ) -> Self {
         if club_id == 0 {
             return TransferClubView {
                 name: i18n.t("free_agent").to_string(),
                 slug: String::new(),
-                background: String::new(),
-                foreground: String::new(),
+                country_flag: None,
                 free_agent: true,
             };
         }
-        let club = data.club(club_id);
         TransferClubView {
             name: stored_name.to_string(),
-            slug: club
-                .and_then(|c| c.teams.teams.iter().find(|t| t.team_type == TeamType::Main))
+            slug: data
+                .club(club_id)
+                .and_then(|club| club.teams.main())
                 .map(|t| t.slug.clone())
                 .unwrap_or_default(),
-            background: club
-                .map(|c| c.colors.background.clone())
-                .unwrap_or_default(),
-            foreground: club
-                .map(|c| c.colors.foreground.clone())
-                .unwrap_or_default(),
+            country_flag: ClubCountryFlag::for_club(data, club_id, i18n).or_else(|| {
+                let country = data.country_info.get(&origin_country_id)?;
+                ClubCountryFlag::of(&country.code, &country.slug, i18n)
+            }),
             free_agent: false,
         }
     }
@@ -302,13 +304,13 @@ impl TransferLedger {
 
         for t in records {
             let incoming = t.to_club_id == club_id;
-            let (other_id, other_name) = if incoming {
-                (t.from_club_id, &t.from_team_name)
+            let (other_id, other_name, other_country_id) = if incoming {
+                (t.from_club_id, &t.from_team_name, t.origin_country_id)
             } else {
-                (t.to_club_id, &t.to_team_name)
+                (t.to_club_id, &t.to_team_name, 0)
             };
             let player = TransferPlayerView::of_record(data, t.player_id, &t.player_name, now);
-            let club = TransferClubView::of(data, other_id, other_name, i18n);
+            let club = TransferClubView::of(data, other_id, other_name, other_country_id, i18n);
 
             match &t.transfer_type {
                 TransferType::Loan(end) => {
@@ -491,5 +493,75 @@ impl SeasonOption {
                 selected: y == selected_season,
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::club::ClubAcademy;
+    use core::competitions::global::GlobalCompetitions;
+    use core::continent::Continent;
+    use core::league::LeagueCollection;
+    use core::shared::Location;
+    use core::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, TeamCollection,
+    };
+
+    #[test]
+    fn counterpart_flags_distinguish_shared_country_codes_for_live_and_recorded_clubs() {
+        let countries = [
+            (1, "sd", "sudan", "sd", "Sudan"),
+            (2, "sd", "south sudan", "ss", "South Sudan"),
+            (3, "th", "thailand", "th", "Thailand"),
+            (4, "th", "tahiti", "pf", "Tahiti"),
+            (5, "tm", "turkmenistan", "tm", "Turkmenistan"),
+            (6, "tm", "east timor", "tl", "Timor-Leste"),
+        ];
+        let world = countries
+            .iter()
+            .map(|&(id, code, slug, _, name)| {
+                let club = Club::new(
+                    id,
+                    format!("{name} Club"),
+                    Location::new(1),
+                    ClubFinances::new(0, Vec::new()),
+                    ClubAcademy::new(3),
+                    ClubStatus::Professional,
+                    ClubColors::default(),
+                    TeamCollection::new(Vec::new()),
+                    ClubFacilities::default(),
+                );
+                Country::builder()
+                    .id(id)
+                    .code(code.to_string())
+                    .slug(slug.to_string())
+                    .name(name.to_string())
+                    .continent_id(1)
+                    .leagues(LeagueCollection::new(Vec::new()))
+                    .clubs(vec![club])
+                    .build()
+                    .unwrap()
+            })
+            .collect();
+        let data = SimulatorData::new(
+            NaiveDate::from_ymd_opt(2030, 6, 18)
+                .unwrap()
+                .and_hms_opt(12, 0, 0)
+                .unwrap(),
+            vec![Continent::new(1, "World".to_string(), world, Vec::new())],
+            GlobalCompetitions::new(Vec::new()),
+        );
+        let i18n = crate::I18nManager::new().for_lang("en");
+
+        for (id, _, _, expected_code, expected_name) in countries {
+            let live = TransferClubView::of(&data, id, "Club", 0, &i18n);
+            let recorded = TransferClubView::of(&data, 99, "Club", id, &i18n);
+            for counterpart in [live, recorded] {
+                let flag = counterpart.country_flag.unwrap();
+                assert_eq!(flag.code, expected_code);
+                assert_eq!(flag.name, expected_name);
+            }
+        }
     }
 }

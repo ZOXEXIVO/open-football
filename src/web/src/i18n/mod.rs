@@ -2,7 +2,7 @@ mod catalog;
 pub mod events;
 pub mod news;
 
-use crate::i18n::catalog::{LocaleCatalog, ScopeLookup};
+use crate::i18n::catalog::{LocaleCatalog, ScopeLookup, country_name_key};
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use std::borrow::Borrow;
 #[cfg(test)]
@@ -46,7 +46,7 @@ const DAY_KEYS: &[&str] = &[
 ];
 
 /// Owns the page-chrome vocabulary: `assets/i18n/{lang}.json` plus the
-/// country-name bundles.
+/// country bundles.
 ///
 /// Deliberately *not* the whole application's dictionary. The newspaper and
 /// happiness-event pages each render a vocabulary an order of magnitude
@@ -57,7 +57,7 @@ const DAY_KEYS: &[&str] = &[
 /// accidentally resolve a press headline.
 pub struct I18nManager {
     ui: Arc<LocaleCatalog>,
-    country_names: LocaleCatalog,
+    countries: LocaleCatalog,
     date: RwLock<NaiveDateTime>,
 }
 
@@ -65,7 +65,7 @@ impl I18nManager {
     pub fn new() -> Self {
         I18nManager {
             ui: Arc::new(LocaleCatalog::required(None, SUPPORTED_LANG_CODES)),
-            country_names: LocaleCatalog::optional("countries", SUPPORTED_LANG_CODES),
+            countries: LocaleCatalog::countries(SUPPORTED_LANG_CODES),
             date: RwLock::new(NaiveDateTime::default()),
         }
     }
@@ -108,7 +108,7 @@ impl I18nManager {
 
         I18n {
             translations,
-            country_names: self.country_names.resolve(lang_key, DEFAULT_LANGUAGE),
+            countries: self.countries.resolve(lang_key, DEFAULT_LANGUAGE),
             lang: lang_key.to_string(),
             date_main,
             date_sub,
@@ -130,7 +130,7 @@ impl Default for I18nManager {
 /// dates — never press copy or happiness-event copy.
 pub struct I18n {
     translations: ScopeLookup,
-    country_names: ScopeLookup,
+    countries: ScopeLookup,
     pub lang: String,
     pub date_main: String,
     pub date_sub: String,
@@ -152,7 +152,7 @@ impl I18n {
     pub fn for_test(map: HashMap<String, String>) -> Self {
         Self {
             translations: ScopeLookup::from_map(map),
-            country_names: ScopeLookup::empty(),
+            countries: ScopeLookup::empty(),
             lang: "en".to_string(),
             date_main: String::new(),
             date_sub: String::new(),
@@ -237,12 +237,19 @@ impl I18n {
         }
     }
 
+    /// Nationality wording for player profiles.
     pub fn country<'a>(&'a self, code: &'a str) -> &'a str {
-        self.country_names.t(code)
+        self.countries.t(code)
     }
 
+    /// The English nationality wording used as the adjective in league titles.
     pub fn country_en<'a>(&'a self, code: &'a str) -> &'a str {
-        self.country_names.default_get(code).unwrap_or(code)
+        self.countries.default_get(code).unwrap_or(code)
+    }
+
+    /// The country itself, for labels such as the accessible name of its flag.
+    pub(crate) fn country_name(&self, code: &str) -> Option<&str> {
+        self.countries.get(&country_name_key(code))
     }
 
     pub fn current_flag(&self) -> &'static str {
@@ -563,6 +570,25 @@ mod tests {
             assert_eq!(chrome.t("news_desk_match"), "news_desk_match", "{lang}");
             assert_eq!(chrome.t("event_label_cause"), "event_label_cause", "{lang}");
         }
+    }
+
+    #[test]
+    fn country_catalog_preserves_nationality_and_supplies_place_names() {
+        let manager = I18nManager::new();
+        let english = manager.for_lang("en");
+        let russian = manager.for_lang("ru");
+        let japanese = manager.for_lang("ja");
+
+        assert_eq!(english.country_name("ru"), Some("Russia"));
+        assert_eq!(russian.country_name("ru"), Some("Россия"));
+        assert_eq!(russian.country("ru"), "Россиянин");
+        assert_eq!(russian.country_en("ru"), "Russian");
+        assert_eq!(japanese.country("ru"), "ロシア");
+        assert_eq!(japanese.country_name("ru"), Some("ロシア"));
+        assert_eq!(japanese.country_name("gb"), Some("イングランド"));
+        assert_eq!(russian.country("zz"), "zz");
+        assert_eq!(russian.country_en("zz"), "zz");
+        assert_eq!(russian.country_name("zz"), None);
     }
 
     /// The age line reads "{n} {noun}", so a locale that spells one noun

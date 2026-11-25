@@ -1440,6 +1440,7 @@
   "scope_training_ground": "атмосфера на тренировке",
   "scout": "Скаут",
   "scout_monitoring": "Скаутское наблюдение",
+  "scouting_observations": "Наблюдения скаутов",
   "scout_vote_approve": "За",
   "scout_vote_monitor": "Наблюдать",
   "scout_verdict_line": "Скаут: {recommendation} (способности: {ability}, потенциал: {potential}, уверенность: {confidence}%)",
