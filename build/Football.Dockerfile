@@ -15,7 +15,13 @@ WORKDIR /src
 # `src/web/build.rs` compiles the Bevy match viewer (src/match) to WebAssembly
 # and embeds it. Without this target the build still succeeds, but the shipped
 # image serves match pages with no replay.
-RUN rustup target add wasm32-unknown-unknown
+#
+# Clippy is NOT part of the image: the official `rust` image installs the
+# minimal rustup profile, which ships rustc/cargo only. The `lint` stage below
+# inherits this stage, so the component has to be added here — otherwise it
+# fails with "'cargo-clippy' is not installed for the toolchain".
+RUN rustup target add wasm32-unknown-unknown \
+    && rustup component add clippy
 
 COPY ./ ./
 
