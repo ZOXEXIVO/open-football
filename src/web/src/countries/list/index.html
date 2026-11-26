@@ -91,12 +91,8 @@
             </div>
             <div class="fm-worker-dialog-body fm-ai-dialog-body">
                 <label class="fm-worker-dialog-field">
-                    <span>{{ i18n.t("ai_settings_base_url") }}</span>
-                    <input type="text" id="fm-ai-base-url" autocomplete="off" spellcheck="false" value="{{ ai_base_url }}" required>
-                </label>
-                <label class="fm-worker-dialog-field">
-                    <span>{{ i18n.t("ai_settings_model") }}</span>
-                    <input type="text" id="fm-ai-model" autocomplete="off" spellcheck="false" value="{{ ai_model }}" required>
+                    <span>{{ i18n.t("ai_settings_url") }}</span>
+                    <input type="text" id="fm-ai-url" autocomplete="off" spellcheck="false" value="{{ ai_url }}" required>
                 </label>
                 <label class="fm-worker-dialog-field">
                     <span>{{ i18n.t("ai_settings_api_key") }}</span>
@@ -112,7 +108,7 @@
         </form>
     </dialog>
     <script>
-    /* AI badge → open the LLM contract dialog; on save, POST the settings
+    /* AI badge → open the model connection dialog; on save, POST the settings
        (kept in memory server-side) and flip the badge to ON in place. */
     (function() {
         var badge = document.getElementById('fm-ai-btn');
@@ -124,8 +120,7 @@
         var submitBtn = document.getElementById('fm-ai-submit');
         var disableBtn = document.getElementById('fm-ai-disable');
         var result = document.getElementById('fm-ai-result');
-        var baseUrlInput = document.getElementById('fm-ai-base-url');
-        var modelInput = document.getElementById('fm-ai-model');
+        var urlInput = document.getElementById('fm-ai-url');
         var apiKeyInput = document.getElementById('fm-ai-api-key');
 
         var labels = {
@@ -152,7 +147,7 @@
             if (disableBtn) { disableBtn.disabled = false; }
             if (typeof dialog.showModal === 'function') { dialog.showModal(); }
             else { dialog.setAttribute('open', ''); }
-            baseUrlInput.focus();
+            urlInput.focus();
         }
         function closeDialog() {
             if (typeof dialog.close === 'function') { dialog.close(); }
@@ -196,9 +191,8 @@
 
         form.addEventListener('submit', function(e) {
             e.preventDefault();
-            var baseUrl = baseUrlInput.value.trim();
-            var model = modelInput.value.trim();
-            if (!baseUrl || !model) { return; }
+            var url = urlInput.value.trim();
+            if (!url) { return; }
 
             submitBtn.disabled = true;
             showResult('pending', labels.saving);
@@ -206,7 +200,7 @@
             fetch('/api/ai/config', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ base_url: baseUrl, model: model, api_key: apiKeyInput.value.trim() })
+                body: JSON.stringify({ url: url, api_key: apiKeyInput.value.trim() })
             })
             .then(function(resp) {
                 if (!resp.ok) { throw new Error('http ' + resp.status); }

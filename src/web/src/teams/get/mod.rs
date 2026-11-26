@@ -1,4 +1,3 @@
-pub mod ai_report;
 pub mod routes;
 
 use crate::leagues::address::LeagueAddress;
@@ -45,11 +44,6 @@ pub struct TeamGetTemplate {
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub team_slug: String,
-    /// Numeric club id — the AI team-report button posts this to the agent.
-    pub club_id: u32,
-    /// Gates the AI report button: true only on the Main team page when an
-    /// LLM contract is configured (hidden on B / reserve / youth squads).
-    pub ai_enabled: bool,
     pub active_tab: &'static str,
     pub show_finances_tab: bool,
     pub show_academy_tab: bool,
@@ -109,18 +103,13 @@ impl TeamGetPage {
         let i18n = state.i18n.for_lang(&route_params.lang);
         let team: &Team = TeamLookup::by_slug(simulator_data, &route_params.team_slug)?;
 
-        // The AI team report is a club-level feature surfaced once, on the Main
-        // team page only — not on B / reserve / youth (U18…) squads.
-        let ai_enabled = team.team_type == TeamType::Main && state.ai.is_configured().await;
-
-        Self::template(simulator_data, team, i18n, ai_enabled, &route_params)
+        Self::template(simulator_data, team, i18n, &route_params)
     }
 
     fn template(
         data: &SimulatorData,
         team: &Team,
         i18n: I18n,
-        ai_enabled: bool,
         route_params: &TeamGetRequest,
     ) -> Result<TeamGetTemplate, ApiError> {
         let league = team.league_id.and_then(|id| data.league(id));
@@ -173,8 +162,6 @@ impl TeamGetPage {
                 .unwrap_or_default(),
             menu_sections,
             team_slug: team.slug.clone(),
-            club_id: team.club_id,
-            ai_enabled,
             active_tab: "squad",
             show_finances_tab: team.team_type.is_own_team(),
             show_academy_tab: team.team_type == TeamType::Main || team.team_type == TeamType::U18,

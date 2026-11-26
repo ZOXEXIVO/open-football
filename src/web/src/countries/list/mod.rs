@@ -3,7 +3,7 @@ pub mod routes;
 use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::views::{MenuSection, SubTitleFlag};
 use crate::worker::WorkerStatus;
-use crate::{ApiError, ApiResult, GameAppData, I18n, LlmSettings};
+use crate::{ApiError, ApiResult, GameAppData, I18n, ModelSettings};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -47,13 +47,12 @@ pub struct CountryListTemplate {
     /// Workers currently in `Ready` state — surfaced alongside the
     /// total so the badge can read "3/4 ready" at a glance.
     pub workers_ready: usize,
-    /// True once an OpenAI-compatible LLM contract has been saved — the
-    /// "AI" badge renders ON when set, OFF otherwise.
+    /// True once a model connection has been saved — the "AI" badge
+    /// renders ON when set, OFF otherwise.
     pub ai_enabled: bool,
-    /// Values pre-filled into the AI settings dialog: the saved contract
+    /// Values pre-filled into the AI settings dialog: the saved connection
     /// when configured, otherwise the built-in defaults.
-    pub ai_base_url: String,
-    pub ai_model: String,
+    pub ai_url: String,
     pub ai_api_key: String,
 }
 
@@ -156,7 +155,7 @@ impl CountryListPage {
 
         let ai_saved = state.ai.get().await;
         let ai_enabled = ai_saved.is_some();
-        let ai_settings = ai_saved.unwrap_or_else(LlmSettings::defaults);
+        let ai_settings = ai_saved.unwrap_or_else(ModelSettings::defaults);
 
         Ok(CountryListTemplate {
             css_version: CSS_VERSION,
@@ -183,8 +182,7 @@ impl CountryListPage {
             workers_count,
             workers_ready,
             ai_enabled,
-            ai_base_url: ai_settings.base_url,
-            ai_model: ai_settings.model,
+            ai_url: ai_settings.url,
             ai_api_key: ai_settings.api_key,
         })
     }
@@ -204,5 +202,66 @@ impl CountryListPage {
             }
         }
         (total_countries, total_clubs, total_players)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CountryListTemplate;
+    use crate::I18nManager;
+    use askama::Template;
+
+    fn render(ai_enabled: bool, ai_url: &str, ai_api_key: &str) -> String {
+        CountryListTemplate {
+            css_version: "test",
+            computer_name: "test",
+            cpu_brand: "test",
+            cores_count: 1,
+            title: String::new(),
+            sub_title_prefix: String::new(),
+            sub_title_suffix: String::new(),
+            sub_title: String::new(),
+            sub_title_link: String::new(),
+            sub_title_flag: None,
+            header_color: String::new(),
+            foreground_color: String::new(),
+            menu_sections: vec![],
+            i18n: I18nManager::new().for_lang("en"),
+            lang: "en".to_string(),
+            continents: vec![],
+            version: "test",
+            total_countries: 0,
+            total_clubs: 0,
+            total_players: 0,
+            show_download: false,
+            workers_count: 0,
+            workers_ready: 0,
+            ai_enabled,
+            ai_url: ai_url.to_string(),
+            ai_api_key: ai_api_key.to_string(),
+        }
+        .render()
+        .unwrap()
+    }
+
+    #[test]
+    fn settings_dialog_offers_url_and_api_key_only() {
+        let html = render(true, "http://box:8080/v1/systemone", "secret");
+        assert!(html.contains(r#"id="fm-ai-url""#));
+        assert!(html.contains(r#"value="http://box:8080/v1/systemone""#));
+        assert!(html.contains(r#"value="secret""#));
+        assert!(html.contains("<span>URL</span>"));
+        assert!(!html.contains("fm-ai-model"));
+        assert!(!html.contains("ai_settings_"));
+        assert!(html.contains(r#"fm-ai-btn fm-ai-btn-on""#));
+        assert!(html.contains(r#"id="fm-ai-disable">"#));
+    }
+
+    #[test]
+    fn unconfigured_dialog_hides_disable_and_badge_reads_off() {
+        let html = render(false, "http://localhost:8080/v1/systemone", "");
+        assert!(html.contains(r#"value="http://localhost:8080/v1/systemone""#));
+        assert!(html.contains(r#"id="fm-ai-disable" hidden>"#));
+        assert!(!html.contains("fm-ai-btn-on\""));
     }
 }

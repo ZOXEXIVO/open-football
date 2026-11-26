@@ -32,7 +32,7 @@ mod workers;
 
 pub use settings::Settings;
 
-pub use ai::{AiConfig, AiJobs, LlmSettings};
+pub use ai::{AiConfig, ModelSettings};
 pub use error::{ApiError, ApiResult};
 pub use i18n::events::{EventI18n, EventI18nManager};
 pub use i18n::news::{NewsI18n, NewsI18nManager};
@@ -110,12 +110,9 @@ pub struct GameAppData {
     /// Live registry of distributed match workers. Always present;
     /// starts empty and is populated at runtime from the /workers page.
     pub workers: WorkerRegistry,
-    /// In-memory OpenAI-compatible LLM contract, set from the home-page
+    /// In-memory decision-model connection, set from the home-page
     /// "AI" badge dialog. Unset until the operator saves settings.
     pub ai: AiConfig,
-    /// In-flight AI agent runs, polled by the per-page report dialogs so
-    /// tool calls stream in live.
-    pub ai_jobs: AiJobs,
 }
 
 impl Clone for GameAppData {
@@ -130,7 +127,6 @@ impl Clone for GameAppData {
             events_i18n: Arc::clone(&self.events_i18n),
             workers: self.workers.clone(),
             ai: self.ai.clone(),
-            ai_jobs: self.ai_jobs.clone(),
         }
     }
 }

@@ -1085,7 +1085,6 @@ mod tests {
             i18n: Arc::clone(&i18n),
             workers: crate::WorkerRegistry::empty(),
             ai: crate::AiConfig::new(),
-            ai_jobs: crate::AiJobs::new(),
         };
         let app = routes::PlayerTransfersRoutes::create()
             .merge(TeamTransfersRoutes::router())

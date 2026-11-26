@@ -1,4 +1,3 @@
-pub mod ai_report;
 pub mod routes;
 
 use crate::player::{PlayerPageChrome, PlayerPageColors};
@@ -55,9 +54,6 @@ pub struct PlayerGetTemplate {
     pub player_id: u32,
     pub player_slug: String,
     pub club_id: u32,
-    /// True when an LLM contract is configured; gates the AI player-report
-    /// button in the Attributes panel head.
-    pub ai_enabled: bool,
     pub player: PlayerViewModel,
     pub is_goalkeeper: bool,
     pub is_on_loan: bool,
@@ -306,7 +302,6 @@ impl PlayerGetPage {
         let i18n = state.i18n.for_lang(&route_params.lang);
         let guard = state.data.read().await;
         let debug_enabled = query.debug.is_some();
-        let ai_enabled = state.ai.is_configured().await;
 
         let simulator_data = guard
             .as_ref()
@@ -345,7 +340,7 @@ impl PlayerGetPage {
                     "overview",
                     PlayerPageColors::Empty,
                 )?;
-                Self::active_template(player_vm, is_goalkeeper, debug, chrome, ai_enabled)
+                Self::active_template(player_vm, is_goalkeeper, debug, chrome)
             }
             None => {
                 let player_vm = PlayerViewModel::for_retired(simulator_data, &i18n, player, now);
@@ -362,7 +357,7 @@ impl PlayerGetPage {
                     PlayerPageColors::Grey,
                 )?
                 .without_club_activity();
-                Self::retired_template(player_vm, is_goalkeeper, debug, chrome, ai_enabled)
+                Self::retired_template(player_vm, is_goalkeeper, debug, chrome)
             }
         };
 
@@ -374,7 +369,6 @@ impl PlayerGetPage {
         is_goalkeeper: bool,
         debug: Option<PlayerDebugDto>,
         chrome: PlayerPageChrome,
-        ai_enabled: bool,
     ) -> PlayerGetTemplate {
         PlayerGetTemplate {
             css_version: chrome.css_version,
@@ -396,7 +390,6 @@ impl PlayerGetPage {
             player_id: chrome.player_id,
             player_slug: chrome.player_slug,
             club_id: chrome.club_id,
-            ai_enabled,
             player,
             is_goalkeeper,
             is_on_loan: chrome.is_on_loan,
@@ -417,7 +410,6 @@ impl PlayerGetPage {
         is_goalkeeper: bool,
         debug: Option<PlayerDebugDto>,
         chrome: PlayerPageChrome,
-        ai_enabled: bool,
     ) -> PlayerGetTemplate {
         PlayerGetTemplate {
             css_version: chrome.css_version,
@@ -439,7 +431,6 @@ impl PlayerGetPage {
             player_id: chrome.player_id,
             player_slug: chrome.player_slug,
             club_id: chrome.club_id,
-            ai_enabled,
             player,
             is_goalkeeper,
             is_on_loan: chrome.is_on_loan,

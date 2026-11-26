@@ -17,9 +17,10 @@ one competition, plus world-level summary counts and machine/AI status badges.
   name when no translation exists)
 
 #### Scenario: Distributed worker and AI status
-- **WHEN** the deployment has distributed match workers configured and/or an AI report contract saved
-- **THEN** the page SHALL report the worker count and how many are ready, and whether AI reporting is enabled,
-  pre-filling the AI settings with the saved contract or built-in defaults
+- **WHEN** the deployment has distributed match workers configured and/or a decision-model connection saved
+- **THEN** the page SHALL report the worker count and how many are ready, and whether a model connection is
+  configured, pre-filling the AI settings dialog's URL and API key with the saved connection or the built-in
+  defaults
 
 ### Requirement: Country competitions overview page
 The system SHALL provide, for a country identified by slug, a page listing its non-friendly leagues grouped into
