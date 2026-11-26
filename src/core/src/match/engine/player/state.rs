@@ -429,10 +429,9 @@ impl DecisionResolver {
         mut decide: impl FnMut(&mut MatchPlayer) -> StateProcessingResult,
     ) -> ResolvedDecision {
         let mut visited = [player.state.compact_id(), first.compact_id(), 0, 0, 0];
-        let mut seen = 2;
         let mut at = first;
         let mut claim_intent = None;
-        for _ in 0..Self::MAX_HOPS {
+        for seen in 2..2 + Self::MAX_HOPS {
             let outcome = player.trying_state(at, &mut decide);
             claim_intent = claim_intent.or(outcome.claim_intent);
             if outcome.claim_intent.is_some() {
@@ -484,7 +483,6 @@ impl DecisionResolver {
                 return ResolvedDecision::default();
             }
             visited[seen] = next.compact_id();
-            seen += 1;
             at = next;
         }
         ResolvedDecision {

@@ -373,10 +373,10 @@ impl FrameTrace {
             }
             previous = Some(sample);
         }
-        if let Some(last) = capture.entries.last() {
-            if last.sample.in_net {
-                summary.rested_in_net += 1;
-            }
+        if let Some(last) = capture.entries.last()
+            && last.sample.in_net
+        {
+            summary.rested_in_net += 1;
         }
     }
 

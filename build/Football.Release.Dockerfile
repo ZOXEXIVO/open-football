@@ -27,8 +27,10 @@ RUN sed -i 's|http://deb.debian.org/debian|https://mirror.yandex.ru/debian|g' \
     && rm -rf /var/lib/apt/lists/*
 # The wasm target is for `src/web/build.rs`, which compiles the Bevy match
 # viewer (src/match) and embeds it. Every platform stage needs it: without it
-# the binary still builds, but ships without a replay viewer.
-RUN rustup target add x86_64-pc-windows-gnu wasm32-unknown-unknown
+# the binary still builds, but ships without a replay viewer. Every stage also
+# needs the lint driver `.cargo/config.toml` makes the workspace's compiler.
+RUN rustup target add x86_64-pc-windows-gnu wasm32-unknown-unknown \
+    && rustup component add clippy
 
 COPY ./ ./
 
@@ -44,7 +46,8 @@ RUN --mount=type=cache,id=cargo-registry-windows,target=/usr/local/cargo/registr
 FROM rust:${RUST_VERSION} AS build-linux
 WORKDIR /src
 
-RUN rustup target add wasm32-unknown-unknown
+RUN rustup target add wasm32-unknown-unknown \
+    && rustup component add clippy
 
 COPY ./ ./
 
@@ -64,7 +67,7 @@ WORKDIR /src
 # Toolchain first, so a source-only change does not re-run it. `rustup target`
 # is per-toolchain, hence after the default switch. The image's osxcross linker
 # wiring lives in /root/.cargo/config and is unaffected by the Rust bump.
-RUN rustup toolchain install ${RUST_VERSION} --profile minimal \
+RUN rustup toolchain install ${RUST_VERSION} --profile minimal --component clippy \
     && rustup default ${RUST_VERSION} \
     && rustup target add x86_64-apple-darwin wasm32-unknown-unknown
 
@@ -90,7 +93,7 @@ FROM joseluisq/rust-linux-darwin-builder:${DARWIN_BUILDER_VERSION} AS build-mac-
 ARG RUST_VERSION
 WORKDIR /src
 
-RUN rustup toolchain install ${RUST_VERSION} --profile minimal \
+RUN rustup toolchain install ${RUST_VERSION} --profile minimal --component clippy \
     && rustup default ${RUST_VERSION} \
     && rustup target add aarch64-apple-darwin wasm32-unknown-unknown
 

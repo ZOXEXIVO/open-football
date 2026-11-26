@@ -23,6 +23,9 @@
 //!    [`Appearance`], seeded from the player id alone. Same player, same face,
 //!    every render, on both sides of the WebAssembly boundary.
 
+#![cfg_attr(not(test), forbid(clippy::too_many_lines))]
+#![cfg_attr(test, allow(clippy::too_many_lines))]
+
 pub mod field;
 
 // ── Region ────────────────────────────────────────────────────

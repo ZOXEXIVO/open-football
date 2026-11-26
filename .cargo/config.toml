@@ -1,0 +1,5 @@
+# Workspace crates compile through clippy on every build, so the lints the
+# workspace denies (the 100-line function cap among them) cannot be skipped by
+# choosing a different cargo command.
+[build]
+rustc-workspace-wrapper = "clippy-driver"

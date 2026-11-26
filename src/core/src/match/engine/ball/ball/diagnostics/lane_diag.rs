@@ -15,6 +15,7 @@ use crate::r#match::forwarders::states::ForwardFamily;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderFamily;
 use crate::r#match::player::state::PlayerState;
+use std::cmp::Reverse;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Band edges in game units (1u = 0.125 m): half a metre, a metre, a
@@ -243,7 +244,7 @@ impl LaneDiag {
             .map(|(i, l)| (*l, ROLL_STATE[age][i].load(Ordering::Relaxed)))
             .filter(|(_, n)| *n > 0)
             .collect();
-        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        rows.sort_by_key(|row| Reverse(row.1));
         rows
     }
 

@@ -177,15 +177,13 @@ impl ShotSkillReads {
         // decisions + finishing + long_shots + concentration. Composure
         // and decisions are the dominant signals; finishing matters less
         // than for execution because we're scoring choice, not strike.
-        let selection_skill = (ShotSkillProfile::pow_curve(self.composure01, 1.30) * 0.32
+        (ShotSkillProfile::pow_curve(self.composure01, 1.30) * 0.32
             + ShotSkillProfile::pow_curve(self.decisions01, 1.30) * 0.28
             + ShotSkillProfile::pow_curve(self.finishing01, 1.45) * 0.18
             + ShotSkillProfile::pow_curve(self.long_shots01, 1.45) * 0.10
             + ShotSkillProfile::pow_curve(self.concentration01, 1.20) * 0.07
             + ShotSkillProfile::pow_curve(self.technique01, 1.20) * 0.05)
-            .clamp(0.0, 1.0);
-
-        selection_skill
+            .clamp(0.0, 1.0)
     }
 
     fn body_control(&self, is_sprinting_or_recent_sprint: bool) -> f32 {
@@ -203,8 +201,7 @@ impl ShotSkillReads {
         } else {
             1.0
         };
-        let body_control = (raw_body * sprint_factor).clamp(0.0, 1.0);
-        body_control
+        (raw_body * sprint_factor).clamp(0.0, 1.0)
     }
 
     fn placement(&self, shot_type: ShotType, header: bool, execution_skill: f32) -> f32 {
@@ -215,25 +212,23 @@ impl ShotSkillReads {
         // goes the same way: a man cannot pick a corner with his head any
         // better than he can direct the ball at all, and steering it down
         // and across the keeper IS heading ability.
-        let placement_skill = match shot_type {
+        match shot_type {
             _ if shot_type.is_dead_ball() || header => execution_skill,
             _ => (ShotSkillProfile::pow_curve(self.finishing01, 1.65) * 0.45
                 + ShotSkillProfile::pow_curve(self.decisions01, 1.40) * 0.25
                 + ShotSkillProfile::pow_curve(self.technique01, 1.40) * 0.20
                 + ShotSkillProfile::pow_curve(self.composure01, 1.30) * 0.10)
                 .clamp(0.0, 1.0),
-        };
-        placement_skill
+        }
     }
 
     fn power(&self) -> f32 {
         // Power — strength + technique + finishing + long_shots.
-        let power_skill = (ShotSkillProfile::pow_curve(self.strength01, 1.15) * 0.32
+        (ShotSkillProfile::pow_curve(self.strength01, 1.15) * 0.32
             + ShotSkillProfile::pow_curve(self.technique01, 1.30) * 0.28
             + ShotSkillProfile::pow_curve(self.finishing01, 1.30) * 0.22
             + ShotSkillProfile::pow_curve(self.long_shots01, 1.40) * 0.18)
-            .clamp(0.0, 1.0);
-        power_skill
+            .clamp(0.0, 1.0)
     }
 
     fn execution(&self, player: &MatchPlayer, inputs: &ShotSkillInputs) -> f32 {
@@ -277,13 +272,12 @@ impl ShotSkillReads {
             let skill01 = sc::header_finish(player, inputs.minute);
             ShotSkillProfile::pow_curve(skill01, 1.45)
         };
-        let execution_skill = match inputs.shot_type {
+        match inputs.shot_type {
             ShotType::Penalty => sc::penalty_execution(player, inputs.minute),
             ShotType::DirectFreeKick => sc::dead_ball_strike(player, inputs.minute),
             _ if header => header_execution(),
             _ => open_play_execution,
-        };
-        execution_skill
+        }
     }
 
     fn multipliers(
@@ -337,12 +331,11 @@ impl ShotSkillReads {
         // to push the realistic-weak shot population over 30% miskick rate).
         // 1.6 keeps the soft-curve shape but lets weak players still strike
         // cleanly often enough to convert tap-ins.
-        let miskick_probability = (poor_penalty * 0.10
+        (poor_penalty * 0.10
             + (1.0 - technique_curve).max(0.0).powf(1.6) * 0.08
             + inputs.pressure_count_5u as f32 * 0.025
             + low_condition_penalty * 0.05)
-            .clamp(0.0, 0.55);
-        miskick_probability
+            .clamp(0.0, 0.55)
     }
 }
 

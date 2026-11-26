@@ -80,7 +80,7 @@ struct Pursuit<'a> {
 
 /// What deciding one pursuit produced.
 enum PursuitOutcome {
-    Action(NegotiationAction),
+    Action(Box<NegotiationAction>),
     /// The gate or the age band refused him; the caller stages the reject.
     Rejected,
     /// Nothing to stage — the target or his club could not be read.
@@ -237,7 +237,7 @@ impl DomesticApproachPass {
             };
 
             match Self::decide(buyer, &pursuit, date, price_level) {
-                PursuitOutcome::Action(action) => actions.push(action),
+                PursuitOutcome::Action(action) => actions.push(*action),
                 PursuitOutcome::Rejected => {
                     plausibility_rejected.push(PlausibilityReject {
                         club_id: club.id,
@@ -427,7 +427,7 @@ impl DomesticApproachPass {
         );
 
         match outcome {
-            ApproachOutcome::Approach(action) => PursuitOutcome::Action(*action),
+            ApproachOutcome::Approach(action) => PursuitOutcome::Action(action),
             ApproachOutcome::Refused => PursuitOutcome::Rejected,
         }
     }

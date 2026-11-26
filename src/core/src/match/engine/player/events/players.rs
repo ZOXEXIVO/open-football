@@ -2256,29 +2256,19 @@ impl PlayerEventDispatcher {
         } else {
             PlayerReach::can_strike(&field.ball, player, aerial)
         };
-        if reached {
-            #[cfg(feature = "match-logs")]
-            {
-                use crate::r#match::engine::ball::ball::strike_diag::StrikeCensus;
-                let keeper = player.tactical_position.current_position.is_goalkeeper();
-                StrikeCensus::note_strike(
-                    kind.census_slot(),
-                    field.ball.position.z,
-                    aerial,
-                    keeper,
-                );
-                StrikeCensus::note_restrike(striker_id, tick);
-            }
-            return true;
-        }
         #[cfg(feature = "match-logs")]
-        {
+        if reached {
+            use crate::r#match::engine::ball::ball::strike_diag::StrikeCensus;
+            let keeper = player.tactical_position.current_position.is_goalkeeper();
+            StrikeCensus::note_strike(kind.census_slot(), field.ball.position.z, aerial, keeper);
+            StrikeCensus::note_restrike(striker_id, tick);
+        } else {
             use crate::r#match::engine::ball::ball::ownership::reception_diag;
             use crate::r#match::engine::ball::ball::strike_diag::StrikeCensus;
             reception_diag::OUT_OF_REACH.fetch_add(1, Ordering::Relaxed);
             StrikeCensus::note_refusal(kind.census_slot(), striker_id, tick);
         }
-        false
+        reached
     }
 
     /// The four ball-away events share one strike path; classified here
@@ -9221,13 +9211,9 @@ impl PlayerEventDispatcher {
         // exists to centre `PENALTY_EXECUTION_REFERENCE` on the
         // population of penalties — one sample per penalty.
         #[cfg(feature = "match-logs")]
-        if in_penalty_area {
-            if let Some(taker) = field.players.iter().find(|p| p.id == taker_id) {
-                let minute = sc::minute_from_ms(context.total_match_time);
-                crate::mid_run_diag::SetPieceDiag::note_penalty(sc::penalty_execution(
-                    taker, minute,
-                ));
-            }
+        if in_penalty_area && let Some(taker) = field.players.iter().find(|p| p.id == taker_id) {
+            let minute = sc::minute_from_ms(context.total_match_time);
+            crate::mid_run_diag::SetPieceDiag::note_penalty(sc::penalty_execution(taker, minute));
         }
 
         let origin = if in_penalty_area {

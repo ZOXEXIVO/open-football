@@ -24,10 +24,9 @@ pub mod stuck_exit_stats {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     pub const EXITS: usize = 5;
-    const ZERO: AtomicU64 = AtomicU64::new(0);
     /// 0 tempo-hold, 1 point-blank Hold, 2 box Hold, 3 drive-at-goal,
     /// 4 fell off the end of the tree.
-    pub static EXIT: [AtomicU64; EXITS] = [ZERO; EXITS];
+    pub static EXIT: [AtomicU64; EXITS] = [const { AtomicU64::new(0) }; EXITS];
     pub const NAMES: [&str; EXITS] = [
         "tempo-hold",
         "point-blank Hold",

@@ -207,8 +207,7 @@ impl SpatialGrid {
         // equal keys because field index strictly increases — matching
         // the old per-cell insertion order.
         let mut order = [(0u16, 0u8); MAX_GRID_PLAYERS];
-        for i in 0..n {
-            let key = self.prev_keys[i];
+        for (i, &key) in self.prev_keys[..n].iter().enumerate() {
             let item = (key, i as u8);
             let mut j = i;
             while j > 0 && order[j - 1].0 > key {

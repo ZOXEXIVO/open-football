@@ -666,7 +666,7 @@ impl DutyAssigner<'_> {
             }
         }
         let n = MARK_CENSUS[10].fetch_add(1, CensusOrd::Relaxed) + 1;
-        if n % 20_000 == 0 {
+        if n.is_multiple_of(20_000) {
             let g = |i: usize| MARK_CENSUS[i].load(CensusOrd::Relaxed);
             let tot = g(0).max(1) as f64;
             eprintln!(

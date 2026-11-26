@@ -4,6 +4,9 @@
 //! human-readable string rather than panicking, because a machine without the
 //! wasm target should still be able to build the rest of the project.
 
+#![cfg_attr(not(test), forbid(clippy::too_many_lines))]
+#![cfg_attr(test, allow(clippy::too_many_lines))]
+
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use std::collections::hash_map::DefaultHasher;

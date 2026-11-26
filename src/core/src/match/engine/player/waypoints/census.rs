@@ -238,8 +238,8 @@ impl WaypointCensus {
             G_AGREE[i].store(0, Ordering::Relaxed);
             G_OPPOSED[i].store(0, Ordering::Relaxed);
         }
-        for i in 0..GROUPS * IDX_BINS {
-            G_IDX[i].store(0, Ordering::Relaxed);
+        for bin in &G_IDX {
+            bin.store(0, Ordering::Relaxed);
         }
         MGR_TICKS.store(0, Ordering::Relaxed);
         MGR_ADVANCES.store(0, Ordering::Relaxed);

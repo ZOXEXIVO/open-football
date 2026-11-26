@@ -100,11 +100,10 @@ impl TeamBehaviour {
             if a.id == captain_id {
                 continue;
             }
-            for j in (i + 1)..players.players.len() {
+            for b in &players.players[i + 1..] {
                 if emitted >= MAX_MEDIATIONS {
                     break 'outer;
                 }
-                let b = &players.players[j];
                 if b.id == captain_id {
                     continue;
                 }

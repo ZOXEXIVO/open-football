@@ -292,47 +292,54 @@ pub struct KeeperCensusSnapshot {
     pub relaxed_alert_reversed: u64,
 }
 
-const ZERO: AtomicU64 = AtomicU64::new(0);
-static PHYSICS: [AtomicU64; SaveSettlement::COUNT] = [ZERO; SaveSettlement::COUNT];
-static BEYOND_REACH: AtomicU64 = ZERO;
-static MACHINE: AtomicU64 = ZERO;
-static BOTH: AtomicU64 = ZERO;
-static CLAIMS: AtomicU64 = ZERO;
-static CLAIM_ACTIONS: [AtomicU64; 3] = [ZERO; 3];
-static CLAIM_ENDS: [AtomicU64; ClaimEnd::COUNT] = [ZERO; ClaimEnd::COUNT];
-static CLAIM_SITE_COUNT: [AtomicU64; ClaimSite::COUNT + 1] = [ZERO; ClaimSite::COUNT + 1];
-static CLAIM_SITES: [AtomicU64; ClaimSite::COUNT] = [ZERO; ClaimSite::COUNT];
-static CLAIM_DECIDED_BY: [AtomicU64; ClaimSite::COUNT + 1] = [ZERO; ClaimSite::COUNT + 1];
-static CLAIM_ROLLS: AtomicU64 = ZERO;
-static CONTEST_UNCOMMITTED: AtomicU64 = ZERO;
-static REBOUNDS: AtomicU64 = ZERO;
-static REBOUND_STATE: [AtomicU64; KeeperCensus::SLOTS] = [ZERO; KeeperCensus::SLOTS];
-static REBOUND_HEIGHT_CM: AtomicU64 = ZERO;
-static REBOUND_SPEED_CMPS: AtomicU64 = ZERO;
-static REBOUND_ENDS: [AtomicU64; ShotEnd::COUNT] = [ZERO; ShotEnd::COUNT];
-static DIVES: AtomicU64 = ZERO;
-static DIVES_LANDED: AtomicU64 = ZERO;
-static DIVES_UP_AIRBORNE: AtomicU64 = ZERO;
-static DIVES_NEVER_AIRBORNE: AtomicU64 = ZERO;
-static SPELLS_CUT: AtomicU64 = ZERO;
-static REDIVES: AtomicU64 = ZERO;
-static DOWN_SPELLS: [AtomicU64; 2] = [ZERO; 2];
-static DOWN_TICKS: [AtomicU64; 2] = [ZERO; 2];
-static DOWN_PATH_MM: [AtomicU64; 2] = [ZERO; 2];
+static PHYSICS: [AtomicU64; SaveSettlement::COUNT] =
+    [const { AtomicU64::new(0) }; SaveSettlement::COUNT];
+static BEYOND_REACH: AtomicU64 = AtomicU64::new(0);
+static MACHINE: AtomicU64 = AtomicU64::new(0);
+static BOTH: AtomicU64 = AtomicU64::new(0);
+static CLAIMS: AtomicU64 = AtomicU64::new(0);
+static CLAIM_ACTIONS: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+static CLAIM_ENDS: [AtomicU64; ClaimEnd::COUNT] = [const { AtomicU64::new(0) }; ClaimEnd::COUNT];
+static CLAIM_SITE_COUNT: [AtomicU64; ClaimSite::COUNT + 1] =
+    [const { AtomicU64::new(0) }; ClaimSite::COUNT + 1];
+static CLAIM_SITES: [AtomicU64; ClaimSite::COUNT] = [const { AtomicU64::new(0) }; ClaimSite::COUNT];
+static CLAIM_DECIDED_BY: [AtomicU64; ClaimSite::COUNT + 1] =
+    [const { AtomicU64::new(0) }; ClaimSite::COUNT + 1];
+static CLAIM_ROLLS: AtomicU64 = AtomicU64::new(0);
+static CONTEST_UNCOMMITTED: AtomicU64 = AtomicU64::new(0);
+static REBOUNDS: AtomicU64 = AtomicU64::new(0);
+static REBOUND_STATE: [AtomicU64; KeeperCensus::SLOTS] =
+    [const { AtomicU64::new(0) }; KeeperCensus::SLOTS];
+static REBOUND_HEIGHT_CM: AtomicU64 = AtomicU64::new(0);
+static REBOUND_SPEED_CMPS: AtomicU64 = AtomicU64::new(0);
+static REBOUND_ENDS: [AtomicU64; ShotEnd::COUNT] = [const { AtomicU64::new(0) }; ShotEnd::COUNT];
+static DIVES: AtomicU64 = AtomicU64::new(0);
+static DIVES_LANDED: AtomicU64 = AtomicU64::new(0);
+static DIVES_UP_AIRBORNE: AtomicU64 = AtomicU64::new(0);
+static DIVES_NEVER_AIRBORNE: AtomicU64 = AtomicU64::new(0);
+static SPELLS_CUT: AtomicU64 = AtomicU64::new(0);
+static REDIVES: AtomicU64 = AtomicU64::new(0);
+static DOWN_SPELLS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+static DOWN_TICKS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+static DOWN_PATH_MM: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 static DOWN_TIME_HIST: [[AtomicU64; KeeperCensus::TIME_BINS]; 2] =
-    [const { [ZERO; KeeperCensus::TIME_BINS] }; 2];
+    [const { [const { AtomicU64::new(0) }; KeeperCensus::TIME_BINS] }; 2];
 static DOWN_SPEED_HIST: [[AtomicU64; KeeperCensus::SPEED_BINS]; 2] =
-    [const { [ZERO; KeeperCensus::SPEED_BINS] }; 2];
-static STRIKE_SHOTS: [AtomicU64; KeeperCensus::SLOTS] = [ZERO; KeeperCensus::SLOTS];
-static STRIKE_SPEED_CMPS: [AtomicU64; KeeperCensus::SLOTS] = [ZERO; KeeperCensus::SLOTS];
-static STRIKE_OFF_LINE_CM: [AtomicU64; KeeperCensus::SLOTS] = [ZERO; KeeperCensus::SLOTS];
+    [const { [const { AtomicU64::new(0) }; KeeperCensus::SPEED_BINS] }; 2];
+static STRIKE_SHOTS: [AtomicU64; KeeperCensus::SLOTS] =
+    [const { AtomicU64::new(0) }; KeeperCensus::SLOTS];
+static STRIKE_SPEED_CMPS: [AtomicU64; KeeperCensus::SLOTS] =
+    [const { AtomicU64::new(0) }; KeeperCensus::SLOTS];
+static STRIKE_OFF_LINE_CM: [AtomicU64; KeeperCensus::SLOTS] =
+    [const { AtomicU64::new(0) }; KeeperCensus::SLOTS];
 static STRIKE_PACE: [[AtomicU64; 3]; KeeperCensus::SLOTS] =
-    [const { [ZERO; 3] }; KeeperCensus::SLOTS];
-static PHASE_TICKS: [AtomicU64; KeeperCensus::PHASES] = [ZERO; KeeperCensus::PHASES];
-static PHASE_CHANGES: AtomicU64 = ZERO;
-static PHASE_REVERSED: AtomicU64 = ZERO;
-static RELAXED_ALERT_CHANGES: AtomicU64 = ZERO;
-static RELAXED_ALERT_REVERSED: AtomicU64 = ZERO;
+    [const { [const { AtomicU64::new(0) }; 3] }; KeeperCensus::SLOTS];
+static PHASE_TICKS: [AtomicU64; KeeperCensus::PHASES] =
+    [const { AtomicU64::new(0) }; KeeperCensus::PHASES];
+static PHASE_CHANGES: AtomicU64 = AtomicU64::new(0);
+static PHASE_REVERSED: AtomicU64 = AtomicU64::new(0);
+static RELAXED_ALERT_CHANGES: AtomicU64 = AtomicU64::new(0);
+static RELAXED_ALERT_REVERSED: AtomicU64 = AtomicU64::new(0);
 
 /// The open episodes of one match.
 #[derive(Debug, Default)]

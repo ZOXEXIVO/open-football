@@ -452,12 +452,12 @@ fn the_run_door_reads_the_referees_line() {
         .stand(FL, 740.0, 272.0)
         .refresh();
     assert!(
-        !pitch.with_ctx(FL, |ctx| RunLine::is_offside(ctx)),
+        !pitch.with_ctx(FL, RunLine::is_offside),
         "onside, a few metres inside the second-last man"
     );
     pitch.stand(FL, 780.0, 272.0).refresh();
     assert!(
-        pitch.with_ctx(FL, |ctx| RunLine::is_offside(ctx)),
+        pitch.with_ctx(FL, RunLine::is_offside),
         "beyond the second-last man and the ball"
     );
 }
@@ -1529,7 +1529,7 @@ fn the_runner_walks_with_the_line_and_breaks_on_the_ball() {
 fn a_cross_is_attacked_at_full_effort() {
     let mut pitch = Pitch::new();
     pitch.stand(FL, 760.0, 272.0).refresh();
-    let conditions = pitch.context.conditions.clone();
+    let conditions = pitch.context.conditions;
     let forward = pitch.field.get_player_mut(FL).unwrap();
     ForwardCrossReceivingState::default().process_conditions(ConditionContext {
         in_state_time: 10,

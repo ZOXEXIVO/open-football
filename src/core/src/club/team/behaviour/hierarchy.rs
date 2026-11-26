@@ -40,11 +40,10 @@ impl TeamBehaviour {
                 continue;
             }
 
-            for j in 0..count {
+            for (j, other) in players.players.iter().enumerate() {
                 if i == j {
                     continue;
                 }
-                let other = &players.players[j];
                 let other_age = DateUtils::age(other.birth_date, date);
 
                 let other_to_leader_rel = other

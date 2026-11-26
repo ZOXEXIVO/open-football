@@ -223,8 +223,7 @@ mod recorder {
     const NUM_SOURCES: usize = 6;
     const EDGE_BITS: usize = DENSE_STATES * DENSE_STATES * NUM_SOURCES;
     const SEEN_WORDS: usize = EDGE_BITS.div_ceil(64);
-    const ZERO_WORD: AtomicU64 = AtomicU64::new(0);
-    static SEEN_BITS: [AtomicU64; SEEN_WORDS] = [ZERO_WORD; SEEN_WORDS];
+    static SEEN_BITS: [AtomicU64; SEEN_WORDS] = [const { AtomicU64::new(0) }; SEEN_WORDS];
 
     /// compact_id → dense 0..DENSE_STATES, `None` for an id outside the
     /// known bands (future-proofing: those take the slow Mutex path).

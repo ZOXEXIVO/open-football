@@ -15,6 +15,15 @@ use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 
 const PLAYER: u32 = 30;
 
+/// A door's name, its write, the check for its file, and the stage that
+/// refuses it.
+type Door = (
+    &'static str,
+    fn(&mut ClubTransferPlan, FileReading) -> bool,
+    fn(&ClubTransferPlan) -> bool,
+    TransferMoveStage,
+);
+
 struct Fx;
 
 impl Fx {
@@ -96,12 +105,7 @@ impl Fx {
 
     /// Each door, its file's presence, and the stage under which it must
     /// refuse.
-    fn doors() -> Vec<(
-        &'static str,
-        fn(&mut ClubTransferPlan, FileReading) -> bool,
-        fn(&ClubTransferPlan) -> bool,
-        TransferMoveStage,
-    )> {
+    fn doors() -> Vec<Door> {
         vec![
             (
                 "keep_file",

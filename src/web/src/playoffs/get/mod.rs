@@ -125,6 +125,9 @@ pub struct PlayoffPlayerStat {
     pub stat_value: String,
 }
 
+/// Home goals, away goals and the shoot-out score, series-oriented.
+type GameGoals = (u8, u8, Option<(u8, u8)>);
+
 impl PlayoffRound {
     /// I18n label for a playoff round stage.
     fn label(i18n: &I18n, label: PlayoffRoundLabel) -> String {
@@ -274,11 +277,7 @@ impl<'a> PlayoffGetPage<'a> {
     /// Goals of one played game, oriented to the series' home/away sides.
     /// The schedule item's ids may sit in either slot of the stored `Score`,
     /// so map through the recorded `team_id`s like the cup page's `build_tie`.
-    fn game_goals(
-        &self,
-        s: &PlayoffSeries,
-        item: &ScheduleItem,
-    ) -> Option<(u8, u8, Option<(u8, u8)>)> {
+    fn game_goals(&self, s: &PlayoffSeries, item: &ScheduleItem) -> Option<GameGoals> {
         let res = item.result.as_ref()?;
         let series_home_first = s.home_team_id == res.home_team.team_id;
         let (hg, ag) = if series_home_first {

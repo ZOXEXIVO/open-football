@@ -22,6 +22,7 @@ use chrono::NaiveDate;
 use rustc_hash::FxHashMap;
 
 type Engine = FootballEngine<840, 545>;
+type StatRead = fn(&PlayerMatchEndStats) -> f32;
 
 fn rated(team_id: u32, base_id: u32, ability: u8) -> MatchSquad {
     let mut side = squad(team_id, base_id);
@@ -148,9 +149,8 @@ fn every_player_who_takes_the_pitch_is_credited_and_minutes_add_up() {
             } else {
                 assert!(minutes <= 11 * 90, "{minutes} minutes in eleven slots");
             }
-            assert_eq!(
+            assert!(
                 result.player_stats.len() >= 11 + used,
-                true,
                 "every starter and every used substitute has a stat line"
             );
         }
@@ -609,10 +609,10 @@ fn a_better_player_has_a_better_line() {
         better_lines.push(result.player_stats[&better].clone());
         worse_lines.push(result.player_stats[&worse].clone());
     }
-    let mean = |lines: &[PlayerMatchEndStats], read: fn(&PlayerMatchEndStats) -> f32| {
+    let mean = |lines: &[PlayerMatchEndStats], read: StatRead| {
         lines.iter().map(read).sum::<f32>() / lines.len() as f32
     };
-    let reads: [(&str, fn(&PlayerMatchEndStats) -> f32); 5] = [
+    let reads: [(&str, StatRead); 5] = [
         ("key passes", |s| s.key_passes as f32),
         ("progressive passes", |s| s.progressive_passes as f32),
         ("tackles", |s| s.tackles as f32),
@@ -697,7 +697,7 @@ fn a_bad_day_shows_in_the_line() {
             .map(|seed| play(&home, &away, seed, false).player_stats[&subject].clone())
             .collect()
     };
-    let mean = |lines: &[PlayerMatchEndStats], read: fn(&PlayerMatchEndStats) -> f32| {
+    let mean = |lines: &[PlayerMatchEndStats], read: StatRead| {
         lines.iter().map(read).sum::<f32>() / lines.len() as f32
     };
     let (bad_day, good_day) = (lines(0.80), lines(1.20));

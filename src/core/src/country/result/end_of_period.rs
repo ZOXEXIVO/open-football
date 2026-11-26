@@ -81,6 +81,12 @@ enum LoanBuyoutDecision {
     TurnedDown(BoardTransferConcern),
 }
 
+/// Trophies per player id, and the happiness events that go with them.
+type TrophyEvents = (
+    Vec<(u32, AchievementType)>,
+    Vec<(u32, HappinessEventType, f32)>,
+);
+
 /// Per-team view of which loaned-in players a borrower is warehousing.
 /// Keeps the top `ideal_squad_depth` of each position group by current
 /// ability; a loaned-in player outside that set — long-settled, barely
@@ -173,13 +179,7 @@ impl CountryResult {
             .collect()
     }
 
-    fn collect_trophy_events(
-        country: &Country,
-        ladder: &LeagueLadder,
-    ) -> (
-        Vec<(u32, AchievementType)>,
-        Vec<(u32, HappinessEventType, f32)>,
-    ) {
+    fn collect_trophy_events(country: &Country, ladder: &LeagueLadder) -> TrophyEvents {
         let per_league: Vec<_> = country
             .leagues
             .leagues

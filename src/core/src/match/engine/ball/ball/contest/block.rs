@@ -192,7 +192,8 @@ impl Ball {
         if let Some(t) = self.cached_shot_target.as_mut() {
             t.block_rolled = true;
         }
-        if !(context.rng.unit_f32() < best_chance.clamp(0.03, 0.70)) {
+        let charged_down = context.rng.unit_f32() < best_chance.clamp(0.03, 0.70);
+        if !charged_down {
             return;
         }
         #[cfg(feature = "match-logs")]

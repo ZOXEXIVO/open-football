@@ -1,9 +1,31 @@
 # Agent guide
 
+## What a build checks
+
+`.cargo/config.toml` makes clippy the compiler for workspace crates, so every
+`cargo build`, `check`, `run` and `test` fails on a production function over
+100 lines and on any rustc or default clippy warning, in every profile and
+feature set. Measured on a one-line `core` edit under `--profile fast`, this
+adds no time that rises above the noise (about 64 s with or without it).
+
+Every crate root forbids the line cap outside test builds, so no `allow` or
+`expect` can lift it. A new crate takes `[lints] workspace = true` and:
+
+```rust
+#![cfg_attr(not(test), forbid(clippy::too_many_lines))]
+#![cfg_attr(test, allow(clippy::too_many_lines))]
+```
+
+Set any other lint aside for one item, with `expect` and a reason.
+
+Module-level functions and legacy directory names are not build errors; the
+architecture test catches them.
+
 ## Module layout and naming
 
 These rules are normative for every crate in the repository. The architecture
-test enforces the directory-name rules.
+test (`cargo test -p core --test function_structure`) enforces the
+directory-name rules and the ban on module-level functions.
 
 - A domain module is named after the domain (`club`, `country`, `league`,
   `transfers`, …). Its aggregate lives at the module root or in `model/`;

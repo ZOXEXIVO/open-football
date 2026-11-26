@@ -572,11 +572,11 @@ mod readable_intake_tests {
         .stage(&mut actions);
         let named: Vec<u32> = actions
             .iter()
-            .filter_map(|a| match &a.kind {
+            .map(|a| match &a.kind {
                 RecommendationProcessKind::CreateRequest { candidate, .. }
                 | RecommendationProcessKind::SeedShortlist { candidate, .. }
                 | RecommendationProcessKind::AddToShortlist { candidate, .. } => {
-                    Some(candidate.player_id)
+                    candidate.player_id
                 }
             })
             .collect();

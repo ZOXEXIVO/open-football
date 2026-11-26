@@ -232,19 +232,19 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // Possession geography sample: where on the pitch is the ball
         // actually being held? Ground truth behind the shot mix.
         #[cfg(feature = "match-logs")]
-        if let Some(owner_id) = field.ball.current_owner {
-            if let Some(owner) = field.players.iter().find(|p| p.id == owner_id) {
-                let goal_x = match owner.side {
-                    Some(crate::r#match::PlayerSide::Left) => context.field_size.width as f32,
-                    _ => 0.0,
-                };
-                let dx = owner.position.x - goal_x;
-                let dy = owner.position.y - context.field_size.height as f32 / 2.0;
-                let d = (dx * dx + dy * dy).sqrt();
-                let band = crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag::band_for_distance(d);
-                crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag::POSSESSION_TICKS_BY_DIST[band]
+        if let Some(owner_id) = field.ball.current_owner
+            && let Some(owner) = field.players.iter().find(|p| p.id == owner_id)
+        {
+            let goal_x = match owner.side {
+                Some(crate::r#match::PlayerSide::Left) => context.field_size.width as f32,
+                _ => 0.0,
+            };
+            let dx = owner.position.x - goal_x;
+            let dy = owner.position.y - context.field_size.height as f32 / 2.0;
+            let d = (dx * dx + dy * dy).sqrt();
+            let band = crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag::band_for_distance(d);
+            crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag::POSSESSION_TICKS_BY_DIST[band]
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
         }
 
         // Whole-tick relocation census. Every checkpoint below closes the

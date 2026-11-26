@@ -954,9 +954,7 @@ impl Siege {
             ball: [None; 2],
         };
         if let Some(ball) = ball {
-            for end in 0..2 {
-                siege.ball[end] = Some(Self::flat(Self::goal(end), ball));
-            }
+            siege.ball = std::array::from_fn(|end| Some(Self::flat(Self::goal(end), ball)));
         }
         siege
     }
@@ -969,9 +967,9 @@ impl Siege {
     /// rather than through a second copy of it that can quietly drift.
     pub(crate) fn observe(&mut self, is_home: bool, position: Vec3) {
         let side = usize::from(is_home);
-        for end in 0..2 {
+        for (end, nearest) in self.nearest.iter_mut().enumerate() {
             let gap = Self::flat(Self::goal(end), position);
-            let slot = &mut self.nearest[end][side];
+            let slot = &mut nearest[side];
             if gap < *slot {
                 *slot = gap;
             }

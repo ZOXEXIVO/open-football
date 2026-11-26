@@ -1220,10 +1220,8 @@ impl Staff {
         }
 
         // Extreme fatigue can lead to health issues
-        if self.fatigue > 95.0 {
-            if RandomEngine::gen_f32() < 0.05 {
-                result.health_issue = Some(HealthIssue::StressRelated);
-            }
+        if self.fatigue > 95.0 && RandomEngine::gen_f32() < 0.05 {
+            result.health_issue = Some(HealthIssue::StressRelated);
         }
     }
 

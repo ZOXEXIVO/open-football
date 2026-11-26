@@ -19,6 +19,10 @@ schema: spec-driven
 #     tasks:
 #       - Break tasks into chunks of max 2 hours
 
+rules:
+  tasks:
+    - The last task group verifies with a full workspace `cargo build` and `cargo test -p core --test function_structure`.
+
 # Per-operation guidance (optional)
 # Add advisory guidance for how apply and archive work should be conducted.
 # This is separate from artifact rules above.
@@ -30,3 +34,8 @@ schema: spec-driven
 #     archive:
 #       guidance:
 #         - Summarize the archive outcome before finishing
+
+operations:
+  apply:
+    guidance:
+      - After each task group, build the touched crates and run `cargo test -p core --test function_structure`. A failed lint or structure check is a task failure, never deferred.

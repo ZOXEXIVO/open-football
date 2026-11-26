@@ -136,35 +136,43 @@ pub struct GoalKickSnapshot {
     pub max_speed_hist: [u64; GoalKickCensus::SPEED_BINS],
 }
 
-const ZERO: AtomicU64 = AtomicU64::new(0);
-static KICKS: AtomicU64 = ZERO;
-static PHASE_TICKS: [AtomicU64; GoalKickCensus::PHASE_COUNT] = [ZERO; GoalKickCensus::PHASE_COUNT];
-static WAIT_TICKS: AtomicU64 = ZERO;
-static ON_SETUP: AtomicU64 = ZERO;
-static AT_CEILING: AtomicU64 = ZERO;
-static TELEPORTED: AtomicU64 = ZERO;
-static RELEASE: [AtomicU64; GoalKickRelease::COUNT] = [ZERO; GoalKickRelease::COUNT];
-static HANDLED: AtomicU64 = ZERO;
-static STILL_HIST: [AtomicU64; GoalKickCensus::STILL_BINS] = [ZERO; GoalKickCensus::STILL_BINS];
-static STILL_TICKS: AtomicU64 = ZERO;
+static KICKS: AtomicU64 = AtomicU64::new(0);
+static PHASE_TICKS: [AtomicU64; GoalKickCensus::PHASE_COUNT] =
+    [const { AtomicU64::new(0) }; GoalKickCensus::PHASE_COUNT];
+static WAIT_TICKS: AtomicU64 = AtomicU64::new(0);
+static ON_SETUP: AtomicU64 = AtomicU64::new(0);
+static AT_CEILING: AtomicU64 = AtomicU64::new(0);
+static TELEPORTED: AtomicU64 = AtomicU64::new(0);
+static RELEASE: [AtomicU64; GoalKickRelease::COUNT] =
+    [const { AtomicU64::new(0) }; GoalKickRelease::COUNT];
+static HANDLED: AtomicU64 = AtomicU64::new(0);
+static STILL_HIST: [AtomicU64; GoalKickCensus::STILL_BINS] =
+    [const { AtomicU64::new(0) }; GoalKickCensus::STILL_BINS];
+static STILL_TICKS: AtomicU64 = AtomicU64::new(0);
 static QUIET_REACHED: [AtomicU64; GoalKickCensus::QUIET_COUNT] =
-    [ZERO; GoalKickCensus::QUIET_COUNT];
-static QUIET_TICKS: [AtomicU64; GoalKickCensus::QUIET_COUNT] = [ZERO; GoalKickCensus::QUIET_COUNT];
-static LOST: AtomicU64 = ZERO;
-static SHOT: AtomicU64 = ZERO;
-static WAIT_STATE: [AtomicU64; KeeperCensus::SLOTS] = [ZERO; KeeperCensus::SLOTS];
-static HANDOVER_STATE: [AtomicU64; KeeperCensus::SLOTS] = [ZERO; KeeperCensus::SLOTS];
-static AT_SPOT_TICKS: AtomicU64 = ZERO;
-static OPPONENT_IN_AREA_TICKS: AtomicU64 = ZERO;
-static OPPONENTS_IN_AREA: AtomicU64 = ZERO;
+    [const { AtomicU64::new(0) }; GoalKickCensus::QUIET_COUNT];
+static QUIET_TICKS: [AtomicU64; GoalKickCensus::QUIET_COUNT] =
+    [const { AtomicU64::new(0) }; GoalKickCensus::QUIET_COUNT];
+static LOST: AtomicU64 = AtomicU64::new(0);
+static SHOT: AtomicU64 = AtomicU64::new(0);
+static WAIT_STATE: [AtomicU64; KeeperCensus::SLOTS] =
+    [const { AtomicU64::new(0) }; KeeperCensus::SLOTS];
+static HANDOVER_STATE: [AtomicU64; KeeperCensus::SLOTS] =
+    [const { AtomicU64::new(0) }; KeeperCensus::SLOTS];
+static AT_SPOT_TICKS: AtomicU64 = AtomicU64::new(0);
+static OPPONENT_IN_AREA_TICKS: AtomicU64 = AtomicU64::new(0);
+static OPPONENTS_IN_AREA: AtomicU64 = AtomicU64::new(0);
 static INTRUDER_DEPTH_HIST: [AtomicU64; GoalKickCensus::DEPTH_BINS] =
-    [ZERO; GoalKickCensus::DEPTH_BINS];
-static INTRUDER_STATE: [AtomicU64; GoalKickCensus::STATE_IDS] = [ZERO; GoalKickCensus::STATE_IDS];
-static CLEAR_BY_A_STRIDE_TICKS: AtomicU64 = ZERO;
-static FAST_MATE_STATE: [AtomicU64; GoalKickCensus::STATE_IDS] = [ZERO; GoalKickCensus::STATE_IDS];
+    [const { AtomicU64::new(0) }; GoalKickCensus::DEPTH_BINS];
+static INTRUDER_STATE: [AtomicU64; GoalKickCensus::STATE_IDS] =
+    [const { AtomicU64::new(0) }; GoalKickCensus::STATE_IDS];
+static CLEAR_BY_A_STRIDE_TICKS: AtomicU64 = AtomicU64::new(0);
+static FAST_MATE_STATE: [AtomicU64; GoalKickCensus::STATE_IDS] =
+    [const { AtomicU64::new(0) }; GoalKickCensus::STATE_IDS];
 static MEAN_SPEED_HIST: [AtomicU64; GoalKickCensus::SPEED_BINS] =
-    [ZERO; GoalKickCensus::SPEED_BINS];
-static MAX_SPEED_HIST: [AtomicU64; GoalKickCensus::SPEED_BINS] = [ZERO; GoalKickCensus::SPEED_BINS];
+    [const { AtomicU64::new(0) }; GoalKickCensus::SPEED_BINS];
+static MAX_SPEED_HIST: [AtomicU64; GoalKickCensus::SPEED_BINS] =
+    [const { AtomicU64::new(0) }; GoalKickCensus::SPEED_BINS];
 
 pub struct GoalKickCensus;
 
@@ -423,7 +431,7 @@ impl GoalKickCensus {
         let Some(t) = track.as_mut() else {
             return;
         };
-        if now % Self::SAMPLE_TICKS == 0 {
+        if now.is_multiple_of(Self::SAMPLE_TICKS) {
             Self::sample(t, players);
         }
         let Some(handed) = t.handed else {

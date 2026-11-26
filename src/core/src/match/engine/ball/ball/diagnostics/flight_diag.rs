@@ -161,6 +161,10 @@ pub static PASS_INTO_BOX: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 /// path — the band's completion rate against the shape counts above.
 pub static PASS_COMPLETED: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 
+/// One distance band: shape counts, then traffic-lifted, airborne, lifted,
+/// backward, wide and into-box.
+pub type PassShapeRow = ([u64; 7], u64, u64, u64, u64, u64, u64);
+
 /// Accessors. Grouped on a struct so the module exposes no free
 /// functions; the statics stay module-level because Rust has no
 /// associated statics.
@@ -180,12 +184,11 @@ impl FlightDiag {
         APEX_MAX_MM.fetch_max((apex.max(0.0) * 1000.0) as u64, Ordering::Relaxed);
         // Only the absurd ones are worth attributing; a histogram over
         // every launch in the match would be all noise.
-        if apex > 30.0 {
-            if let Some(id) = striker_state {
-                if let Some(c) = ABSURD_BY_STATE.get(id) {
-                    c.fetch_add(1, Ordering::Relaxed);
-                }
-            }
+        if apex > 30.0
+            && let Some(id) = striker_state
+            && let Some(c) = ABSURD_BY_STATE.get(id)
+        {
+            c.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -290,7 +293,7 @@ impl FlightDiag {
         std::array::from_fn(|b| PASS_COMPLETED[b].load(Ordering::Relaxed))
     }
 
-    pub fn pass_snapshot() -> [([u64; 7], u64, u64, u64, u64, u64, u64); 5] {
+    pub fn pass_snapshot() -> [PassShapeRow; 5] {
         std::array::from_fn(|b| {
             (
                 std::array::from_fn(|s| PASS_SHAPE[b][s].load(Ordering::Relaxed)),

@@ -337,9 +337,106 @@ pub struct HeatReport {
     pub box_spell_ticks: [u64; 3],
 }
 
+/// Each side's outfield extent at one instant, in the frame it attacks.
+#[cfg(feature = "match-logs")]
+struct FrameShapes {
+    lo_x: [f32; 2],
+    hi_x: [f32; 2],
+    lo_y: [f32; 2],
+    hi_y: [f32; 2],
+    sum_x: [f32; 2],
+    count: [u32; 2],
+    swarm: [u32; 2],
+    team_of_frame: [Option<u32>; 2],
+}
+
+#[cfg(feature = "match-logs")]
+impl FrameShapes {
+    fn new() -> Self {
+        Self {
+            lo_x: [f32::MAX; 2],
+            hi_x: [f32::MIN; 2],
+            lo_y: [f32::MAX; 2],
+            hi_y: [f32::MIN; 2],
+            sum_x: [0.0; 2],
+            count: [0; 2],
+            swarm: [0; 2],
+            team_of_frame: [None; 2],
+        }
+    }
+
+    fn add(&mut self, frame: usize, team_id: u32, x: f32, y: f32, near_ball: bool) {
+        if self.count[frame] as usize >= MAX_PER_SIDE {
+            return;
+        }
+        self.team_of_frame[frame] = Some(team_id);
+        self.lo_x[frame] = self.lo_x[frame].min(x);
+        self.hi_x[frame] = self.hi_x[frame].max(x);
+        self.lo_y[frame] = self.lo_y[frame].min(y);
+        self.hi_y[frame] = self.hi_y[frame].max(y);
+        self.sum_x[frame] += x;
+        self.count[frame] += 1;
+        if near_ball {
+            self.swarm[frame] += 1;
+        }
+    }
+}
+
 pub struct HeatMapCensus;
 
 impl HeatMapCensus {
+    /// One man's instant, booked against his position.
+    #[cfg(feature = "match-logs")]
+    fn note_position(index: usize, x: f32, y: f32, gap: f32, phase: usize) {
+        let acc = &POS[index];
+        let cell = HeatMapCensus::cell(x, y);
+        HeatMapCensus::grid_slot(index, PHASE_ALL, cell).fetch_add(1, Ordering::Relaxed);
+        HeatMapCensus::grid_slot(index, phase, cell).fetch_add(1, Ordering::Relaxed);
+
+        let off_centre = (y - PITCH_WIDTH_M * 0.5).abs();
+        acc.samples.fetch_add(1, Ordering::Relaxed);
+        acc.sum_x_x10
+            .fetch_add((x.max(0.0) * 10.0) as u64, Ordering::Relaxed);
+        acc.sum_x2
+            .fetch_add((x * x).max(0.0) as u64, Ordering::Relaxed);
+        acc.sum_y_x10
+            .fetch_add((y.max(0.0) * 10.0) as u64, Ordering::Relaxed);
+        acc.sum_y2
+            .fetch_add((y * y).max(0.0) as u64, Ordering::Relaxed);
+        if x < PITCH_LENGTH_M * 0.5 {
+            acc.own_half.fetch_add(1, Ordering::Relaxed);
+        }
+        if x > PITCH_LENGTH_M * 2.0 / 3.0 {
+            acc.final_third.fetch_add(1, Ordering::Relaxed);
+        }
+        if x < BOX_DEPTH_M && off_centre < BOX_HALF_WIDTH_M {
+            acc.own_box.fetch_add(1, Ordering::Relaxed);
+        }
+        if x > PITCH_LENGTH_M - BOX_DEPTH_M && off_centre < BOX_HALF_WIDTH_M {
+            acc.opp_box.fetch_add(1, Ordering::Relaxed);
+        }
+        if off_centre > BOX_HALF_WIDTH_M {
+            acc.wide.fetch_add(1, Ordering::Relaxed);
+        }
+        if y < TOUCHLINE_M || y > PITCH_WIDTH_M - TOUCHLINE_M {
+            acc.touchline.fetch_add(1, Ordering::Relaxed);
+        }
+        acc.ball_gap_x10
+            .fetch_add((gap.max(0.0) * 10.0) as u64, Ordering::Relaxed);
+        if gap < BALL_RING_M {
+            acc.near_ball.fetch_add(1, Ordering::Relaxed);
+        }
+        if phase == PHASE_IN_POSSESSION {
+            acc.poss_n.fetch_add(1, Ordering::Relaxed);
+            acc.poss_x_x10
+                .fetch_add((x.max(0.0) * 10.0) as u64, Ordering::Relaxed);
+        } else {
+            acc.oop_n.fetch_add(1, Ordering::Relaxed);
+            acc.oop_x_x10
+                .fetch_add((x.max(0.0) * 10.0) as u64, Ordering::Relaxed);
+        }
+    }
+
     /// Fold a point into the frame of a side attacking RIGHT, in metres.
     ///
     /// A 180° rotation about the centre spot — `(x, y) -> (W-x, H-y)` —
@@ -521,87 +618,113 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             BALL[HeatMapCensus::cell(bx, by)].fetch_add(1, Ordering::Relaxed);
         }
         if field.ball.playing_time(context.current_tick()) == PlayingTime::Live {
-            LIVE.fetch_add(1, Ordering::Relaxed);
-            let (_, y) = HeatMapCensus::fold(ball, PlayerSide::Left, w, h);
-            if y < TOUCHLINE_M || y > PITCH_WIDTH_M - TOUCHLINE_M {
-                LIVE_NEAR_TOUCHLINE.fetch_add(1, Ordering::Relaxed);
-            }
-            let attacking = field
-                .ball
-                .current_owner
-                .or(field.ball.previous_owner)
-                .and_then(|id| field.get_player(id))
-                .and_then(|p| p.side);
-            let owner = field.ball.current_owner;
-            if let Some(side) = attacking {
-                let (x, y) = HeatMapCensus::fold(ball, side, w, h);
-                let final_third = PITCH_LENGTH_M * 2.0 / 3.0;
-                let lane = ((y / (PITCH_WIDTH_M / 3.0)) as usize).min(2);
-                if x >= final_third {
-                    ATTACK_LANES[lane].fetch_add(1, Ordering::Relaxed);
-                    if let Some(holder) = owner.and_then(|id| field.get_player(id)) {
-                        let group =
-                            holder.tactical_position.current_position.position_group() as usize;
-                        ATTACK_HELD[group.min(3)][lane].fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-                if let Some((was_side, was_x, was_owner)) = PREVIOUS.with(|c| c.get())
-                    && was_side == side
-                    && was_x < final_third
-                    && x >= final_third
-                {
-                    let carried = owner.is_some() && owner == was_owner;
-                    ATTACK_ENTRIES[if carried { 0 } else { 1 }][lane]
-                        .fetch_add(1, Ordering::Relaxed);
-                }
-                PREVIOUS.with(|c| c.set(Some((side, x, owner))));
-                // A spell on the ball in the box, from the first instant one
-                // of the side's men has it there to the shot, the loss or
-                // the ball leaving the area: what the attacks that get
-                // there come to.
-                let in_box = x >= PITCH_LENGTH_M - BOX_DEPTH_M
-                    && (y - PITCH_WIDTH_M * 0.5).abs() <= BOX_HALF_WIDTH_M;
-                let holder_side = owner
-                    .and_then(|id| field.get_player(id))
-                    .and_then(|p| p.side);
-                let shot = field.ball.cached_shot_target.is_some();
-                let tick = context.current_tick();
-                BOX_SPELL.with(|spell| {
-                    if let Some((spell_side, start)) = spell.get() {
-                        let end = if shot && spell_side == side {
-                            Some(0)
-                        } else if holder_side.is_some_and(|h| h != spell_side) {
-                            Some(1)
-                        } else if spell_side == side && !in_box && holder_side == Some(side) {
-                            Some(2)
-                        } else {
-                            None
-                        };
-                        if let Some(end) = end {
-                            BOX_SPELLS[end].fetch_add(1, Ordering::Relaxed);
-                            BOX_SPELL_TICKS[end]
-                                .fetch_add(tick.saturating_sub(start), Ordering::Relaxed);
-                            spell.set(None);
-                        }
-                    }
-                    if spell.get().is_none() && in_box && holder_side == Some(side) && !shot {
-                        spell.set(Some((side, tick)));
-                    }
-                });
-            }
+            Self::note_live_ball(field, context, w, h);
         }
 
         // Per-side shape, gathered on the same walk so the outfielders are
         // only read once. Frame 0 is the side attacking right this half.
-        let mut lo_x = [f32::MAX; 2];
-        let mut hi_x = [f32::MIN; 2];
-        let mut lo_y = [f32::MAX; 2];
-        let mut hi_y = [f32::MIN; 2];
-        let mut sum_x = [0.0f32; 2];
-        let mut count = [0u32; 2];
-        let mut swarm = [0u32; 2];
-        let mut team_of_frame = [None::<u32>; 2];
+        let shapes = Self::note_players(field, context, w, h);
+        Self::note_frame_shapes(context, &shapes);
+    }
 
+    /// Where the ball is being played while it is live.
+    #[cfg(feature = "match-logs")]
+    fn note_live_ball(field: &MatchField, context: &MatchContext, w: f32, h: f32) {
+        let ball = field.ball.position;
+        LIVE.fetch_add(1, Ordering::Relaxed);
+        let (_, y) = HeatMapCensus::fold(ball, PlayerSide::Left, w, h);
+        if y < TOUCHLINE_M || y > PITCH_WIDTH_M - TOUCHLINE_M {
+            LIVE_NEAR_TOUCHLINE.fetch_add(1, Ordering::Relaxed);
+        }
+        let attacking = field
+            .ball
+            .current_owner
+            .or(field.ball.previous_owner)
+            .and_then(|id| field.get_player(id))
+            .and_then(|p| p.side);
+        let Some(side) = attacking else {
+            return;
+        };
+        let owner = field.ball.current_owner;
+        let (x, y) = HeatMapCensus::fold(ball, side, w, h);
+        Self::note_final_third(field, side, x, y);
+        Self::note_box_spell(field, context, side, x, y, owner);
+    }
+
+    /// Who holds the ball in the final third, in which lane, and how it
+    /// got there.
+    #[cfg(feature = "match-logs")]
+    fn note_final_third(field: &MatchField, side: PlayerSide, x: f32, y: f32) {
+        let owner = field.ball.current_owner;
+        let final_third = PITCH_LENGTH_M * 2.0 / 3.0;
+        let lane = ((y / (PITCH_WIDTH_M / 3.0)) as usize).min(2);
+        if x >= final_third {
+            ATTACK_LANES[lane].fetch_add(1, Ordering::Relaxed);
+            if let Some(holder) = owner.and_then(|id| field.get_player(id)) {
+                let group = holder.tactical_position.current_position.position_group() as usize;
+                ATTACK_HELD[group.min(3)][lane].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        if let Some((was_side, was_x, was_owner)) = PREVIOUS.with(|c| c.get())
+            && was_side == side
+            && was_x < final_third
+            && x >= final_third
+        {
+            let carried = owner.is_some() && owner == was_owner;
+            ATTACK_ENTRIES[if carried { 0 } else { 1 }][lane].fetch_add(1, Ordering::Relaxed);
+        }
+        PREVIOUS.with(|c| c.set(Some((side, x, owner))));
+    }
+
+    /// A spell on the ball in the box, from the first instant one
+    /// of the side's men has it there to the shot, the loss or
+    /// the ball leaving the area: what the attacks that get
+    /// there come to.
+    #[cfg(feature = "match-logs")]
+    fn note_box_spell(
+        field: &MatchField,
+        context: &MatchContext,
+        side: PlayerSide,
+        x: f32,
+        y: f32,
+        owner: Option<u32>,
+    ) {
+        let in_box = x >= PITCH_LENGTH_M - BOX_DEPTH_M
+            && (y - PITCH_WIDTH_M * 0.5).abs() <= BOX_HALF_WIDTH_M;
+        let holder_side = owner
+            .and_then(|id| field.get_player(id))
+            .and_then(|p| p.side);
+        let shot = field.ball.cached_shot_target.is_some();
+        let tick = context.current_tick();
+        BOX_SPELL.with(|spell| {
+            if let Some((spell_side, start)) = spell.get() {
+                let end = if shot && spell_side == side {
+                    Some(0)
+                } else if holder_side.is_some_and(|h| h != spell_side) {
+                    Some(1)
+                } else if spell_side == side && !in_box && holder_side == Some(side) {
+                    Some(2)
+                } else {
+                    None
+                };
+                if let Some(end) = end {
+                    BOX_SPELLS[end].fetch_add(1, Ordering::Relaxed);
+                    BOX_SPELL_TICKS[end].fetch_add(tick.saturating_sub(start), Ordering::Relaxed);
+                    spell.set(None);
+                }
+            }
+            if spell.get().is_none() && in_box && holder_side == Some(side) && !shot {
+                spell.set(Some((side, tick)));
+            }
+        });
+    }
+
+    /// Books every man on the pitch, and gathers each side's outfield shape
+    /// on the same walk.
+    #[cfg(feature = "match-logs")]
+    fn note_players(field: &MatchField, context: &MatchContext, w: f32, h: f32) -> FrameShapes {
+        let ball = field.ball.position;
+        let mut shapes = FrameShapes::new();
         for p in field.players.iter() {
             if p.off_pitch {
                 continue;
@@ -613,59 +736,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             if index >= POSITIONS {
                 continue;
             }
-            let acc = &POS[index];
             let phase = if context.tactical_for_team(p.team_id).in_possession {
                 PHASE_IN_POSSESSION
             } else {
                 PHASE_OUT_OF_POSSESSION
             };
-            let cell = HeatMapCensus::cell(x, y);
-            HeatMapCensus::grid_slot(index, PHASE_ALL, cell).fetch_add(1, Ordering::Relaxed);
-            HeatMapCensus::grid_slot(index, phase, cell).fetch_add(1, Ordering::Relaxed);
-
-            let off_centre = (y - PITCH_WIDTH_M * 0.5).abs();
             let gap = (p.position - ball).magnitude() * M_PER_UNIT;
-            acc.samples.fetch_add(1, Ordering::Relaxed);
-            acc.sum_x_x10
-                .fetch_add((x.max(0.0) * 10.0) as u64, Ordering::Relaxed);
-            acc.sum_x2
-                .fetch_add((x * x).max(0.0) as u64, Ordering::Relaxed);
-            acc.sum_y_x10
-                .fetch_add((y.max(0.0) * 10.0) as u64, Ordering::Relaxed);
-            acc.sum_y2
-                .fetch_add((y * y).max(0.0) as u64, Ordering::Relaxed);
-            if x < PITCH_LENGTH_M * 0.5 {
-                acc.own_half.fetch_add(1, Ordering::Relaxed);
-            }
-            if x > PITCH_LENGTH_M * 2.0 / 3.0 {
-                acc.final_third.fetch_add(1, Ordering::Relaxed);
-            }
-            if x < BOX_DEPTH_M && off_centre < BOX_HALF_WIDTH_M {
-                acc.own_box.fetch_add(1, Ordering::Relaxed);
-            }
-            if x > PITCH_LENGTH_M - BOX_DEPTH_M && off_centre < BOX_HALF_WIDTH_M {
-                acc.opp_box.fetch_add(1, Ordering::Relaxed);
-            }
-            if off_centre > BOX_HALF_WIDTH_M {
-                acc.wide.fetch_add(1, Ordering::Relaxed);
-            }
-            if y < TOUCHLINE_M || y > PITCH_WIDTH_M - TOUCHLINE_M {
-                acc.touchline.fetch_add(1, Ordering::Relaxed);
-            }
-            acc.ball_gap_x10
-                .fetch_add((gap.max(0.0) * 10.0) as u64, Ordering::Relaxed);
-            if gap < BALL_RING_M {
-                acc.near_ball.fetch_add(1, Ordering::Relaxed);
-            }
-            if phase == PHASE_IN_POSSESSION {
-                acc.poss_n.fetch_add(1, Ordering::Relaxed);
-                acc.poss_x_x10
-                    .fetch_add((x.max(0.0) * 10.0) as u64, Ordering::Relaxed);
-            } else {
-                acc.oop_n.fetch_add(1, Ordering::Relaxed);
-                acc.oop_x_x10
-                    .fetch_add((x.max(0.0) * 10.0) as u64, Ordering::Relaxed);
-            }
+            HeatMapCensus::note_position(index, x, y, gap, phase);
 
             // The shape is the ten outfielders. The keeper is 40 m behind
             // everybody and would own every length in the table.
@@ -673,26 +750,18 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 continue;
             }
             let frame = if side.forward_dir_x() > 0.0 { 0 } else { 1 };
-            if count[frame] as usize >= MAX_PER_SIDE {
-                continue;
-            }
-            team_of_frame[frame] = Some(p.team_id);
-            lo_x[frame] = lo_x[frame].min(x);
-            hi_x[frame] = hi_x[frame].max(x);
-            lo_y[frame] = lo_y[frame].min(y);
-            hi_y[frame] = hi_y[frame].max(y);
-            sum_x[frame] += x;
-            count[frame] += 1;
-            if gap < BALL_RING_M {
-                swarm[frame] += 1;
-            }
+            shapes.add(frame, p.team_id, x, y, gap < BALL_RING_M);
         }
+        shapes
+    }
 
+    #[cfg(feature = "match-logs")]
+    fn note_frame_shapes(context: &MatchContext, shapes: &FrameShapes) {
         for frame in 0..2 {
-            if count[frame] < 6 {
+            if shapes.count[frame] < 6 {
                 continue;
             }
-            let Some(team) = team_of_frame[frame] else {
+            let Some(team) = shapes.team_of_frame[frame] else {
                 continue;
             };
             let tactical = context.tactical_for_team(team);
@@ -705,26 +774,32 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             } else {
                 PHASE_OUT_OF_POSSESSION
             };
-            let n = count[frame] as f32;
+            let n = shapes.count[frame] as f32;
             for slot in [PHASE_ALL, phase] {
                 let acc = &SHAPE[slot];
                 acc.samples.fetch_add(1, Ordering::Relaxed);
                 acc.length_x10.fetch_add(
-                    ((hi_x[frame] - lo_x[frame]) * 10.0).max(0.0) as u64,
+                    ((shapes.hi_x[frame] - shapes.lo_x[frame]) * 10.0).max(0.0) as u64,
                     Ordering::Relaxed,
                 );
                 acc.width_x10.fetch_add(
-                    ((hi_y[frame] - lo_y[frame]) * 10.0).max(0.0) as u64,
+                    ((shapes.hi_y[frame] - shapes.lo_y[frame]) * 10.0).max(0.0) as u64,
                     Ordering::Relaxed,
                 );
-                acc.centroid_x10
-                    .fetch_add((sum_x[frame] / n * 10.0).max(0.0) as u64, Ordering::Relaxed);
-                acc.deepest_x10
-                    .fetch_add((lo_x[frame] * 10.0).max(0.0) as u64, Ordering::Relaxed);
-                acc.highest_x10
-                    .fetch_add((hi_x[frame] * 10.0).max(0.0) as u64, Ordering::Relaxed);
+                acc.centroid_x10.fetch_add(
+                    (shapes.sum_x[frame] / n * 10.0).max(0.0) as u64,
+                    Ordering::Relaxed,
+                );
+                acc.deepest_x10.fetch_add(
+                    (shapes.lo_x[frame] * 10.0).max(0.0) as u64,
+                    Ordering::Relaxed,
+                );
+                acc.highest_x10.fetch_add(
+                    (shapes.hi_x[frame] * 10.0).max(0.0) as u64,
+                    Ordering::Relaxed,
+                );
                 acc.swarm_x10
-                    .fetch_add(swarm[frame] as u64 * 10, Ordering::Relaxed);
+                    .fetch_add(shapes.swarm[frame] as u64 * 10, Ordering::Relaxed);
             }
         }
     }

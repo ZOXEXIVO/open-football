@@ -47,9 +47,8 @@ pub mod reception_diag {
     /// Upper bound of each band, in game units (1u = 0.125m).
     pub const BAND_EDGES: [f32; BANDS] = [2.0, 15.0, 30.0, 60.0, f32::MAX];
     pub const BAND_NAMES: [&str; BANDS] = ["<2u", "2-15u", "15-30u", "30-60u", ">60u"];
-    const ZERO: AtomicU64 = AtomicU64::new(0);
     /// Receptions by receiver-to-ball distance at claim time.
-    pub static AT_DISTANCE: [AtomicU64; BANDS] = [ZERO; BANDS];
+    pub static AT_DISTANCE: [AtomicU64; BANDS] = [const { AtomicU64::new(0) }; BANDS];
     /// Ownership dropped by `move_to` because the owner was >15u away.
     pub static OWNER_TOO_FAR: AtomicU64 = AtomicU64::new(0);
     /// Passes emitted.
@@ -175,9 +174,8 @@ pub mod reception_diag {
         pub const BANDS: usize = 4;
         pub const BAND_EDGES: [f32; BANDS] = [20.0, 30.0, 60.0, f32::MAX];
         pub const BAND_NAMES: [&str; BANDS] = ["15-20u", "20-30u", "30-60u", ">60u"];
-        const ZERO: AtomicU64 = AtomicU64::new(0);
 
-        pub static AT_DISTANCE: [AtomicU64; BANDS] = [ZERO; BANDS];
+        pub static AT_DISTANCE: [AtomicU64; BANDS] = [const { AtomicU64::new(0) }; BANDS];
         /// Drops where the ball was in a keeper's gloves — a gather.
         pub static IN_HANDS: AtomicU64 = AtomicU64::new(0);
         /// Drops where a shot was still live — a save path.
@@ -232,8 +230,7 @@ pub mod reception_diag {
     pub static GATHERS: AtomicU64 = AtomicU64::new(0);
     /// Gathers split by the state that emitted `CaughtBall`:
     /// 0 catching, 1 picking up, 2 diving, 3 anything else.
-    pub static GATHER_SOURCE: [AtomicU64; 4] = [ZERO2; 4];
-    const ZERO2: AtomicU64 = AtomicU64::new(0);
+    pub static GATHER_SOURCE: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
     pub fn gather_source_snapshot() -> [u64; 4] {
         std::array::from_fn(|i| GATHER_SOURCE[i].load(Ordering::Relaxed))
     }
@@ -280,7 +277,7 @@ pub mod reception_diag {
     ///  20 ticks a player spent being steered out of a keeper's area,
     ///     21 the speed he was steered at, summed × 1000. See
     ///     `KeeperReleaseSpace`.
-    pub static KEEPER_BALL: [AtomicU64; 22] = [ZERO2; 22];
+    pub static KEEPER_BALL: [AtomicU64; 22] = [const { AtomicU64::new(0) }; 22];
 
     #[inline]
     pub fn keeper_ball_note(slot: usize) {
@@ -300,7 +297,7 @@ pub mod reception_diag {
     /// by the `GoalkeeperState` discriminant. Says WHERE to put the
     /// decision: a state that holds the ball at his feet and has no
     /// branch for an opponent arriving is the one that loses it.
-    pub static KEEPER_FEET_BY_STATE: [AtomicU64; 24] = [ZERO2; 24];
+    pub static KEEPER_FEET_BY_STATE: [AtomicU64; 24] = [const { AtomicU64::new(0) }; 24];
 
     #[inline]
     pub fn keeper_feet_state(slot: usize) {
@@ -316,7 +313,7 @@ pub mod reception_diag {
     /// The keeper state he was in when an opponent took the ball off his
     /// feet, same indexing. Answers "which state loses the ball", which is
     /// a different question from "which state holds it longest".
-    pub static KEEPER_ROBBED_BY_STATE: [AtomicU64; 24] = [ZERO2; 24];
+    pub static KEEPER_ROBBED_BY_STATE: [AtomicU64; 24] = [const { AtomicU64::new(0) }; 24];
 
     #[inline]
     pub fn keeper_robbed_state(slot: usize) {
@@ -334,7 +331,7 @@ pub mod reception_diag {
     /// without putting it in his gloves. "Which state holds it" and
     /// "which state was handed it" are different questions and the
     /// second is the one that names the granting site.
-    pub static KEEPER_FEET_START_BY_STATE: [AtomicU64; 24] = [ZERO2; 24];
+    pub static KEEPER_FEET_START_BY_STATE: [AtomicU64; 24] = [const { AtomicU64::new(0) }; 24];
 
     #[inline]
     pub fn keeper_feet_start_state(slot: usize) {
@@ -1373,14 +1370,16 @@ impl Ball {
         }
         // Check ball is moving toward passer (bounced back)
         let ball_speed = self.velocity.norm();
-        if !(ball_speed > 0.1) {
+        let rolling = ball_speed > 0.1;
+        if !rolling {
             return;
         }
         let to_passer_x = dx / dist;
         let to_passer_y = dy / dist;
         let dot = (self.velocity.x / ball_speed) * to_passer_x
             + (self.velocity.y / ball_speed) * to_passer_y;
-        if !(dot > 0.3) {
+        let heading_back = dot > 0.3;
+        if !heading_back {
             return;
         }
         // Ball moving toward passer

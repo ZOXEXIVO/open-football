@@ -51,13 +51,14 @@ pub mod helper_diag {
 /// arriving central midfielders so the dev harness can see WHY the
 /// GOALS-BY-LINE share moved (or didn't):
 ///   * `RUNNER_BOX_TICKS`   — ticks an elected runner spent in a central
-///                            shooting position (≤62u, central corridor).
+///     shooting position (≤62u, central corridor).
 ///   * `FWD_CUTBACK`        — forward laid a cutback to an arriving runner.
 ///   * `MID_CUTBACK`        — wide/advanced midfielder laid the cutback.
 #[cfg(feature = "match-logs")]
 pub mod mid_run_diag {
     use crate::r#match::goalkeepers::states::state::GoalkeeperState;
     use crate::r#match::player::strategies::passing::{CrossModel, CrossType};
+    use std::cmp::Reverse;
     use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
     pub static RUNNER_BOX_TICKS: AtomicU64 = AtomicU64::new(0);
     pub static FWD_CUTBACK: AtomicU64 = AtomicU64::new(0);
@@ -435,8 +436,8 @@ pub mod mid_run_diag {
     /// separate routes into that state across two files and no way to
     /// tell them apart from the outside.
     pub const CLEAR_REASONS: usize = 9;
-    const ZERO_C: AtomicU64 = AtomicU64::new(0);
-    pub static CLEAR_BY_REASON: [AtomicU64; CLEAR_REASONS] = [ZERO_C; CLEAR_REASONS];
+    pub static CLEAR_BY_REASON: [AtomicU64; CLEAR_REASONS] =
+        [const { AtomicU64::new(0) }; CLEAR_REASONS];
     pub const CLEAR_REASON_NAMES: [&str; CLEAR_REASONS] = [
         "run:box-pressed",
         "run:congested",
@@ -631,11 +632,9 @@ pub mod mid_run_diag {
         /// readable number at all.
         fn mean(sum: &AtomicU64, n: &AtomicU64, scale: u64) -> u64 {
             let count = n.load(Ordering::Relaxed);
-            if count == 0 {
-                0
-            } else {
-                sum.load(Ordering::Relaxed) * scale / count
-            }
+            (sum.load(Ordering::Relaxed) * scale)
+                .checked_div(count)
+                .unwrap_or(0)
         }
 
         /// `[near, spot, far, short, edge, corner_delivery_mean_x1000,
@@ -811,6 +810,10 @@ pub mod mid_run_diag {
     pub static CLOSE_BY_STATE: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
     pub static CLOSE_PARALLEL_BY_STATE: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 
+    /// `(samples, mean closing rate u/tick, mean alignment, mean gap u,
+    /// parallel share, gaining share)`.
+    pub type ClosingSummary = (u64, f32, f32, f32, f32, f32);
+
     impl DuelDiag {
         pub fn note_reach(band: usize) {
             DUEL_REACH[band].fetch_add(1, Ordering::Relaxed);
@@ -934,13 +937,9 @@ pub mod mid_run_diag {
             }
         }
 
-        /// `(samples, mean closing rate u/tick, mean alignment, mean gap u,
-        /// parallel share, gaining share)` — all, then the same restricted
-        /// to a carrier in the defending side's own third.
-        pub fn closing() -> (
-            (u64, f32, f32, f32, f32, f32),
-            (u64, f32, f32, f32, f32, f32),
-        ) {
+        /// All samples, then the same restricted to a carrier in the
+        /// defending side's own third.
+        pub fn closing() -> (ClosingSummary, ClosingSummary) {
             let pack = |n: &AtomicU64,
                         rate: &AtomicI64,
                         align: &AtomicI64,
@@ -990,7 +989,7 @@ pub mod mid_run_diag {
                 })
                 .filter(|(_, n, _)| *n > 0)
                 .collect();
-            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            rows.sort_by_key(|row| Reverse(row.1));
             rows
         }
 
@@ -1378,7 +1377,7 @@ pub mod mid_run_diag {
                 })
                 .filter(|(_, n, _)| *n > 0)
                 .collect();
-            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            rows.sort_by_key(|row| Reverse(row.1));
             rows
         }
 
@@ -1684,7 +1683,7 @@ pub mod mid_run_diag {
                 .map(|(i, label)| (*label, BOXPASS_BY_STATE[i].load(Ordering::Relaxed)))
                 .filter(|(_, n)| *n > 0)
                 .collect();
-            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            rows.sort_by_key(|row| Reverse(row.1));
             rows
         }
 
@@ -3508,13 +3507,6 @@ pub mod mid_run_diag {
             }
         }
 
-        /// One tick of a live shot, from the steering site: which way his
-        /// CURRENT belief pulls him, against which way the ball is really
-        /// going. The launch row cannot see this — by the time he leaves his
-        /// feet he has already been walking at the read for most of the
-        /// flight, so a commitment made at 20% of the flight reads as a
-        /// correct-looking dive.
-
         /// The one measurement with no model in it: how far across him the
         /// ball ACTUALLY is at the moment it reaches his depth. `wedge`
         /// answers a different question — how much of the goal mouth his
@@ -3530,6 +3522,12 @@ pub mod mid_run_diag {
                 }
             }
         }
+        /// One tick of a live shot, from the steering site: which way his
+        /// CURRENT belief pulls him, against which way the ball is really
+        /// going. The launch row cannot see this — by the time he leaves his
+        /// feet he has already been walking at the read for most of the
+        /// flight, so a commitment made at 20% of the flight reads as a
+        /// correct-looking dive.
         pub fn note_steer(belief_dy: f32, true_dy: f32) {
             Self::add(36, 1);
             Self::add(34, (true_dy.abs() * 100.0) as u64);
@@ -4499,7 +4497,7 @@ pub mod mid_run_diag {
                     (n > 0).then_some((i as u16, n))
                 })
                 .collect();
-            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            rows.sort_by_key(|row| Reverse(row.1));
             rows
         }
 
@@ -4564,7 +4562,7 @@ pub mod mid_run_diag {
                     Some((i as u16, n, run))
                 })
                 .collect();
-            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            rows.sort_by_key(|row| Reverse(row.1));
             rows
         }
     }
@@ -4751,7 +4749,7 @@ pub mod mid_run_diag {
                     (n > 0).then_some((i as u16, n))
                 })
                 .collect();
-            out.sort_by(|a, b| b.1.cmp(&a.1));
+            out.sort_by_key(|row| Reverse(row.1));
             out
         }
 
@@ -5007,7 +5005,7 @@ pub mod mid_run_diag {
                     Some((i as u16, n, FOUL_IN_BOX_BY_STATE[i].load(Ordering::Relaxed)))
                 })
                 .collect();
-            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            rows.sort_by_key(|row| Reverse(row.1));
             rows
         }
     }
@@ -5119,7 +5117,7 @@ pub mod mid_run_diag {
                     Some((i as u16, ticks, lag, axis, still))
                 })
                 .collect();
-            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            rows.sort_by_key(|row| Reverse(row.1));
             rows
         }
     }
@@ -5138,20 +5136,19 @@ pub mod time_band_diag {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     pub const BANDS: usize = 6;
-    const ZERO: AtomicU64 = AtomicU64::new(0);
 
     /// Shots struck (handle_shoot_event reached trajectory resolution).
-    pub static SHOTS_BY_BAND: [AtomicU64; BANDS] = [ZERO; BANDS];
+    pub static SHOTS_BY_BAND: [AtomicU64; BANDS] = [const { AtomicU64::new(0) }; BANDS];
     /// Shots whose final aim threatened the frame (same flag the
     /// shooter's on-target memory uses).
-    pub static ON_TARGET_BY_BAND: [AtomicU64; BANDS] = [ZERO; BANDS];
+    pub static ON_TARGET_BY_BAND: [AtomicU64; BANDS] = [const { AtomicU64::new(0) }; BANDS];
     /// Sum of shooter xG ×1000 (location/skill chance value at strike).
-    pub static XG_X1000_BY_BAND: [AtomicU64; BANDS] = [ZERO; BANDS];
+    pub static XG_X1000_BY_BAND: [AtomicU64; BANDS] = [const { AtomicU64::new(0) }; BANDS];
     /// Real goals (own goals excluded — they carry no shooter xG).
-    pub static GOALS_BY_BAND: [AtomicU64; BANDS] = [ZERO; BANDS];
+    pub static GOALS_BY_BAND: [AtomicU64; BANDS] = [const { AtomicU64::new(0) }; BANDS];
     /// Willingness-roll attempts reaching the RNG in the forward shot
     /// helper — the volume signal BEFORE gates fire.
-    pub static ROLL_REACHED_BY_BAND: [AtomicU64; BANDS] = [ZERO; BANDS];
+    pub static ROLL_REACHED_BY_BAND: [AtomicU64; BANDS] = [const { AtomicU64::new(0) }; BANDS];
 
     /// Shots / xG / goals bucketed by DISTANCE from goal rather than
     /// minute. Bands (1u = 0.125m): 0 = <6m, 1 = 6-11m, 2 = 11-16.5m
@@ -5161,11 +5158,12 @@ pub mod time_band_diag {
     /// in bands 0-1 is manufacturing sitters, which shows up as
     /// inflated xG/shot and inflated rating tails no matter how the
     /// willingness dials are set.
-    pub static SHOTS_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
+    pub static SHOTS_BY_DIST: [AtomicU64; BANDS] = [const { AtomicU64::new(0) }; BANDS];
     /// Emitted shots split by POSITION GROUP x distance band
     /// (0=GK 1=DEF 2=MID 3=FWD). Answers "do midfielders shoot from
     /// different places than forwards" — the aggregate mix cannot.
-    pub static SHOTS_BY_POS_DIST: [[AtomicU64; BANDS]; 4] = [ZERO_BAND; 4];
+    pub static SHOTS_BY_POS_DIST: [[AtomicU64; BANDS]; 4] =
+        [const { [const { AtomicU64::new(0) }; BANDS] }; 4];
     pub fn pos_dist_snapshot() -> [[u64; BANDS]; 4] {
         let mut out = [[0u64; BANDS]; 4];
         for g in 0..4 {
@@ -5175,41 +5173,40 @@ pub mod time_band_diag {
         }
         out
     }
-    pub static XG_X1000_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
+    pub static XG_X1000_BY_DIST: [AtomicU64; BANDS] = [const { AtomicU64::new(0) }; BANDS];
     /// On-target shots and GOALS by the same band. The mix above says
     /// where the engine shoots from; only these say what those shots are
     /// WORTH, and the pair is the one view that separates "too many long
     /// shots" from "long shots score too easily" — real football saves
     /// ~85-90% of what arrives on target from 22 m+ and ~40% from inside
     /// six yards.
-    pub static ON_TARGET_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
-    pub static GOALS_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
+    pub static ON_TARGET_BY_DIST: [AtomicU64; BANDS] = [const { AtomicU64::new(0) }; BANDS];
+    pub static GOALS_BY_DIST: [AtomicU64; BANDS] = [const { AtomicU64::new(0) }; BANDS];
     /// Willingness rolls that REACHED the RNG, by distance band. Read
     /// against SHOTS_BY_DIST this separates "the ball is never out
     /// there in a shooting posture" (rolls concentrated close) from
     /// "players decline long shots" (rolls spread, shots close).
-    pub static ROLLS_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
+    pub static ROLLS_BY_DIST: [AtomicU64; BANDS] = [const { AtomicU64::new(0) }; BANDS];
     /// Helper CALLS by distance, counted before any gate. Read against
     /// ROLLS_BY_DIST this separates "no shot decision is even offered
     /// out here" (calls low) from "offered but gated" (calls high,
     /// rolls low).
-    pub static CALLS_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
+    pub static CALLS_BY_DIST: [AtomicU64; BANDS] = [const { AtomicU64::new(0) }; BANDS];
     /// Shot decisions the helper APPROVED, by band. Compared against
     /// SHOTS_BY_DIST (shots actually emitted) this isolates loss that
     /// happens AFTER approval — in the caller's branch or the Shooting
     /// state — from loss inside the decision itself.
-    pub static APPROVED_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
+    pub static APPROVED_BY_DIST: [AtomicU64; BANDS] = [const { AtomicU64::new(0) }; BANDS];
     /// Queued shots destroyed: the player had a `pending_shot_reason`
     /// (an APPROVED strike waiting for the Shooting state to run) and
     /// was moved to a non-shot state before it could fire.
-    pub static QUEUED_SHOT_LOST: [AtomicU64; BANDS] = [ZERO; BANDS];
+    pub static QUEUED_SHOT_LOST: [AtomicU64; BANDS] = [const { AtomicU64::new(0) }; BANDS];
 
     /// Long-range (>176u = 22m) approvals bucketed by the call-site tag
     /// the helper was invoked with — names the caller responsible for
     /// approvals that never become shots.
     pub const TAGS: usize = 13;
-    pub static APPROVED_BY_TAG: [AtomicU64; TAGS] = [ZERO_ONE; TAGS];
-    const ZERO_ONE: AtomicU64 = AtomicU64::new(0);
+    pub static APPROVED_BY_TAG: [AtomicU64; TAGS] = [const { AtomicU64::new(0) }; TAGS];
     pub const TAG_NAMES: [&str; TAGS] = [
         "FWD_PRIO05",
         "FWD_PRIO06",
@@ -5248,13 +5245,13 @@ pub mod time_band_diag {
     /// names the producer of the close-range over-supply that no
     /// decision-layer gate reaches.
     pub const ETAGS: usize = 10;
-    pub static EMITTED_MID_BAND: [AtomicU64; ETAGS] = [ZERO_ONE; ETAGS];
+    pub static EMITTED_MID_BAND: [AtomicU64; ETAGS] = [const { AtomicU64::new(0) }; ETAGS];
     /// Same, for the <6m band. Added because the aggregate share of shots
     /// from inside six metres cannot tell a tap-in off a cross — which is
     /// real football, ~15% of all shots — from a forward who dribbled into
     /// the goalkeeper, which is not. Two fixes were aimed at that band on
     /// the strength of the share alone and neither could be evaluated.
-    pub static EMITTED_CLOSE_BAND: [AtomicU64; ETAGS] = [ZERO_ONE; ETAGS];
+    pub static EMITTED_CLOSE_BAND: [AtomicU64; ETAGS] = [const { AtomicU64::new(0) }; ETAGS];
     /// …and for 11-16.5 m, which is now the biggest single shot source in
     /// the game and the one the decision layer least controls: the band
     /// emits **5.4 shots for every one the helper approves**, 33 a team a
@@ -5262,7 +5259,7 @@ pub mod time_band_diag {
     /// barely touches it. An aggregate share cannot say which path is
     /// producing them; this names it, the same way the 6-11 m mirror named
     /// `MID_CLEAR_CHANCE`.
-    pub static EMITTED_EDGE_BAND: [AtomicU64; ETAGS] = [ZERO_ONE; ETAGS];
+    pub static EMITTED_EDGE_BAND: [AtomicU64; ETAGS] = [const { AtomicU64::new(0) }; ETAGS];
     pub const ETAG_NAMES: [&str; ETAGS] = [
         "header",
         "snapshot",
@@ -5336,7 +5333,7 @@ pub mod time_band_diag {
     /// football spends most of its possession outside 22m; if this
     /// histogram is bottom-heavy the shot mix cannot be fixed by any
     /// shot-side dial.
-    pub static POSSESSION_TICKS_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
+    pub static POSSESSION_TICKS_BY_DIST: [AtomicU64; BANDS] = [const { AtomicU64::new(0) }; BANDS];
 
     /// Per-distance-band sums (x1000) of each multiplicative factor in
     /// the willingness product, so the distance-correlated suppressor
@@ -5355,15 +5352,16 @@ pub mod time_band_diag {
     /// read it against, and the appetite-vs-bar GAP is the whole
     /// question.
     pub const WFACTORS: usize = 16;
-    const ZERO_BAND: [AtomicU64; BANDS] = [ZERO; BANDS];
-    pub static WILL_FACTOR_SUM: [[AtomicU64; BANDS]; WFACTORS] = [ZERO_BAND; WFACTORS];
+    pub static WILL_FACTOR_SUM: [[AtomicU64; BANDS]; WFACTORS] =
+        [const { [const { AtomicU64::new(0) }; BANDS] }; WFACTORS];
 
     /// Why a shot decision was rejected, PER DISTANCE BAND. Aggregate
     /// waterfall totals hide band-specific blockers: a reason that is
     /// 8% of all rejections can still be 90% of them at 22-30m.
     /// Order: 0 far, 1 min_xg, 2 inside_six_xg, 3 no_clear, 4 pass_defer.
     pub const REASONS: usize = 5;
-    pub static REJECT_BY_DIST: [[AtomicU64; BANDS]; REASONS] = [ZERO_BAND; REASONS];
+    pub static REJECT_BY_DIST: [[AtomicU64; BANDS]; REASONS] =
+        [const { [const { AtomicU64::new(0) }; BANDS] }; REASONS];
 
     #[inline]
     pub fn record_reject(reason: usize, distance: f32) {
@@ -5447,16 +5445,17 @@ pub mod time_band_diag {
     /// a coarse cadence from the engine loop so the harness can print
     /// the average condition trajectory by role — the suspected driver
     /// of the early-match attack-volume decay.
-    const ZERO_ROW: [AtomicU64; 4] = [ZERO; 4];
-    pub static COND_SUM_BY_BAND_GROUP: [[AtomicU64; 4]; BANDS] = [ZERO_ROW; BANDS];
-    pub static COND_N_BY_BAND_GROUP: [[AtomicU64; 4]; BANDS] = [ZERO_ROW; BANDS];
+    pub static COND_SUM_BY_BAND_GROUP: [[AtomicU64; 4]; BANDS] =
+        [const { [const { AtomicU64::new(0) }; 4] }; BANDS];
+    pub static COND_N_BY_BAND_GROUP: [[AtomicU64; 4]; BANDS] =
+        [const { [const { AtomicU64::new(0) }; 4] }; BANDS];
     /// Outfield velocity-band occupancy from the condition processor:
     /// 0=stationary(<5% max speed) 1=walking(5-30%) 2=jogging(30-60%)
     /// 3=running(60-85%) 4=sprinting(>85%). The fatigue calibration is
     /// a function of this distribution — net drain per tick =
     /// Σ band_share × band_rate — so the harness prints it to make
     /// drain/recovery retuning analytic instead of trial-and-error.
-    pub static VELOCITY_BAND_TICKS: [AtomicU64; 5] = [ZERO; 5];
+    pub static VELOCITY_BAND_TICKS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 
     pub fn band_for_minute(minute: u32) -> usize {
         ((minute / 15) as usize).min(BANDS - 1)
@@ -6689,18 +6688,19 @@ struct ForwardShot<'a> {
     ctx: &'a StateProcessingContext<'a>,
     tag: &'static str,
     distance: f32,
+    #[cfg(feature = "match-logs")]
     profile: ShotSkillProfile,
     selection: f32,
     execution_skill: f32,
     composure_skill: f32,
-    body_control: f32,
-    pressure_penalty: f32,
     low_condition_penalty: f32,
     decisions: f32,
     sight_angle_quality: f32,
     sight_angle_clarity: f32,
+    #[cfg(feature = "match-logs")]
     sight_lane: f32,
     sight_corridor_clarity: f32,
+    #[cfg(feature = "match-logs")]
     sight_pressure_clarity: f32,
     sight_cover: f32,
     striking_range: f32,
@@ -6714,8 +6714,11 @@ struct ForwardShot<'a> {
 /// match-log sample.
 struct ShotAppetite {
     value: f32,
+    #[cfg(feature = "match-logs")]
     urge: f32,
+    #[cfg(feature = "match-logs")]
     boldness: f32,
+    #[cfg(feature = "match-logs")]
     situational: f32,
 }
 
@@ -6795,18 +6798,19 @@ impl<'a> ForwardShot<'a> {
             ctx,
             tag,
             distance,
+            #[cfg(feature = "match-logs")]
             profile,
             selection: profile.selection_skill,
             execution_skill: profile.execution_skill,
             composure_skill: profile.composure_skill,
-            body_control: profile.body_control,
-            pressure_penalty: profile.pressure_penalty,
             low_condition_penalty: profile.low_condition_penalty,
             decisions,
             sight_angle_quality: sight.angle_quality,
             sight_angle_clarity: sight.angle_clarity,
+            #[cfg(feature = "match-logs")]
             sight_lane: sight.lane,
             sight_corridor_clarity: sight.corridor_clarity,
+            #[cfg(feature = "match-logs")]
             sight_pressure_clarity: sight.pressure_clarity,
             sight_cover: sight.cover,
             striking_range,
@@ -7051,8 +7055,11 @@ impl<'a> ForwardShot<'a> {
 
         ShotAppetite {
             value: appetite,
+            #[cfg(feature = "match-logs")]
             urge,
+            #[cfg(feature = "match-logs")]
             boldness,
+            #[cfg(feature = "match-logs")]
             situational,
         }
     }

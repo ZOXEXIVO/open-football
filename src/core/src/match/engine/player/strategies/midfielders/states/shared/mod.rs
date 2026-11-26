@@ -156,14 +156,13 @@ pub mod onball_diag {
         "pass:THROUGH-BALL",
     ];
 
-    const ZERO: AtomicU64 = AtomicU64::new(0);
-    pub static EXIT_TICKS: [AtomicU64; EXITS] = [ZERO; EXITS];
+    pub static EXIT_TICKS: [AtomicU64; EXITS] = [const { AtomicU64::new(0) }; EXITS];
 
     /// Distribution of "opponents in the take-on cone" seen at the
     /// dribble gate, bucketed 0 / 1 / 2 / 3+. The gate refuses at 0 and
     /// (without the skill) at 1, so this says whether the refusal is a
     /// geometry problem or a skill problem.
-    pub static AHEAD_BUCKETS: [AtomicU64; 4] = [ZERO; 4];
+    pub static AHEAD_BUCKETS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
     /// Ticks the dribble gate saw an opponent to beat but the carrier's
     /// skill profile refused the take-on.
     pub static DRIBBLE_SKILL_REFUSED: AtomicU64 = AtomicU64::new(0);

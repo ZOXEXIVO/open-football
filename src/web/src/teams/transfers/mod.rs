@@ -15,6 +15,7 @@ use core::transfers::{CompletedTransfer, TransferType};
 use core::utils::{DateUtils, FormattingUtils};
 use core::{Player, PlayerFieldPositionGroup, PlayerSquadStatus, SimulatorData, Team, TeamType};
 use serde::Deserialize;
+use std::cmp::Reverse;
 
 #[derive(Deserialize)]
 pub struct TeamTransfersRequest {
@@ -290,7 +291,7 @@ impl TransferLedger {
             .filter(|t| t.season_year == season)
             .filter(|t| t.to_club_id == club_id || t.from_club_id == club_id)
             .collect();
-        records.sort_by(|a, b| b.transfer_date.cmp(&a.transfer_date));
+        records.sort_by_key(|record| Reverse(record.transfer_date));
 
         let mut ledger = TransferLedger {
             incoming_transfers: Vec::new(),

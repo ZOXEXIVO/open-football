@@ -340,7 +340,7 @@ impl Language {
     /// [`Self::from_country_code`] folded into one `u64`.
     pub fn country_language_mask(code: &str) -> u64 {
         Self::from_country_code(code)
-            .into_iter()
+            .iter()
             .fold(0u64, |mask, lang| mask | lang.mask_bit())
     }
 

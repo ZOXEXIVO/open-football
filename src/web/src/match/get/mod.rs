@@ -536,7 +536,7 @@ impl<'a> MatchGetPage<'a> {
             .map(SubstitutionEventJson::from_change)
             .collect();
         ViewerConfigJson::of(
-            &self,
+            self,
             match_result,
             result_details,
             teams,

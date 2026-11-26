@@ -2493,6 +2493,10 @@ impl LaunchModel {
         })
     }
 
+    #[cfg_attr(
+        not(feature = "match-logs"),
+        expect(unused_variables, reason = "only the dive census reads the context")
+    )]
     fn is_dive(&self, ctx: &StateProcessingContext) -> bool {
         if self.gap < KeeperShotDive::STANDING_GAP {
             #[cfg(feature = "match-logs")]

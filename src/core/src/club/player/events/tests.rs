@@ -7205,7 +7205,7 @@ fn ordinary_match_at(is_friendly: bool, stats: &PlayerMatchEndStats) -> MatchOut
 fn a_friendly_settles_his_name_at_home_only() {
     let s = stats(6.5, 0, 0, 0, PlayerFieldPositionGroup::Forward);
     let mut friendly = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-    let before = friendly.player_attributes.clone();
+    let before = friendly.player_attributes;
     friendly.on_match_played(&ordinary_match_at(true, &s));
     assert_eq!(
         friendly.player_attributes.world_reputation,

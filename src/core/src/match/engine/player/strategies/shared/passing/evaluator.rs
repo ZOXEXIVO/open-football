@@ -56,7 +56,6 @@ pub struct PassEvaluator;
 struct TacticalValue<'a> {
     ctx: &'a StateProcessingContext<'a>,
     receiver: &'a MatchPlayerLite,
-    ball_position: Vector3<f32>,
     receiver_position: Vector3<f32>,
     passer_position: Vector3<f32>,
     field_height: f32,
@@ -66,7 +65,6 @@ struct TacticalValue<'a> {
     forward_progress: f32,
     is_defender: bool,
     lateral_change: f32,
-    forward_change: f32,
     sideways_penalty: f32,
     phase: GamePhase,
     phase_forward_mult: f32,
@@ -169,7 +167,6 @@ impl<'a> TacticalValue<'a> {
         Self {
             ctx,
             receiver,
-            ball_position,
             receiver_position,
             passer_position,
             field_height,
@@ -179,7 +176,6 @@ impl<'a> TacticalValue<'a> {
             forward_progress,
             is_defender,
             lateral_change,
-            forward_change,
             sideways_penalty,
             phase,
             phase_forward_mult,
@@ -193,7 +189,7 @@ impl<'a> TacticalValue<'a> {
     }
 
     fn forward_value(&self) -> f32 {
-        let forward_value = if self.forward_progress < 0.0 {
+        if self.forward_progress < 0.0 {
             // Backward pass - penalty, but softened by phase + risk.
             let composure_reduction = (self.ctx.player.skills.mental.composure / 20.0) * 0.3;
             let base_penalty = self.forward_progress * 3.0 * (1.0 - composure_reduction).max(0.5);
@@ -214,14 +210,13 @@ impl<'a> TacticalValue<'a> {
             } else {
                 self.forward_progress * 2.5 * self.phase_forward_mult * self.risk_forward_bias
             }
-        };
-        forward_value
+        }
     }
 
     fn distance_value(&self) -> f32 {
         // Distance bonus. 8u = 1 m: under 4 m is a huddle pass, 8-20 m the
         // ball that moves a defence, past 50 m a hopeful one.
-        let distance_value = if self.pass_distance < 32.0 {
+        if self.pass_distance < 32.0 {
             0.4
         } else if self.pass_distance < 64.0 {
             0.7
@@ -237,8 +232,7 @@ impl<'a> TacticalValue<'a> {
             // Extreme distance - rarely accurate
             let vision_skill = self.ctx.player.skills.mental.vision / 20.0;
             0.2 * vision_skill
-        };
-        distance_value
+        }
     }
 
     fn width_bonus(&self) -> f32 {
@@ -273,7 +267,7 @@ impl<'a> TacticalValue<'a> {
             0.0
         };
 
-        let width_bonus = if self.receiver_width_ratio > 0.7 {
+        if self.receiver_width_ratio > 0.7 {
             // Very wide (near touchline) - excellent for stretching play
             0.5 + spreading_play_bonus + midfielder_width_bonus
         } else if self.receiver_width_ratio > 0.5 {
@@ -285,8 +279,7 @@ impl<'a> TacticalValue<'a> {
         } else {
             // Central - no bonus (already gets forward progress bonus usually)
             0.0
-        };
-        width_bonus
+        }
     }
 
     fn long_pass_bonus(&self) -> f32 {
@@ -294,7 +287,7 @@ impl<'a> TacticalValue<'a> {
         let vision_skill = self.ctx.player.skills.mental.vision / 20.0;
         let technique_skill = self.ctx.player.skills.technical.technique / 20.0;
 
-        let long_pass_bonus = if self.pass_distance > 560.0 {
+        if self.pass_distance > 560.0 {
             // 70 m+ — a hopeful hoof for anyone
             (vision_skill * 0.3 + technique_skill * 0.2) * 0.2
         } else if self.pass_distance > 400.0 {
@@ -308,19 +301,17 @@ impl<'a> TacticalValue<'a> {
             vision_skill * 0.1
         } else {
             0.0
-        };
-        long_pass_bonus
+        }
     }
 
     fn position_value(&self) -> f32 {
         // Passes to advanced positions are more valuable
-        let position_value = match self.receiver.tactical_positions.position_group() {
+        match self.receiver.tactical_positions.position_group() {
             PlayerFieldPositionGroup::Forward => 1.0,
             PlayerFieldPositionGroup::Midfielder => 0.7,
             PlayerFieldPositionGroup::Defender => 0.4,
             PlayerFieldPositionGroup::Goalkeeper => 0.2,
-        };
-        position_value
+        }
     }
 
     fn cutback(&self) -> (bool, f32) {
@@ -396,7 +387,7 @@ impl<'a> TacticalValue<'a> {
             .side
             .attacking_progress_x(self.receiver_position.x, self.field_width);
         let receiver_y_offset = (self.receiver_position.y - self.field_center_y).abs();
-        let arriving_runner_bonus = if !cutback_pattern
+        if !cutback_pattern
             && self.receiver.tactical_positions.is_central_midfielder()
             && receiver_progress > 0.80
             && receiver_y_offset < self.field_height * 0.15
@@ -414,8 +405,7 @@ impl<'a> TacticalValue<'a> {
             }
         } else {
             0.0
-        };
-        arriving_runner_bonus
+        }
     }
 
     fn build_up_recycle(&self) -> f32 {
@@ -437,7 +427,7 @@ impl<'a> TacticalValue<'a> {
                 self.receiver.tactical_positions.position_group(),
                 PlayerFieldPositionGroup::Goalkeeper
             );
-        let build_up_recycle_bonus = if matches!(self.phase, GamePhase::BuildUp)
+        if matches!(self.phase, GamePhase::BuildUp)
             && (24.0..=240.0).contains(&self.pass_distance)
             && receiver_is_recycle_target
         {
@@ -457,8 +447,7 @@ impl<'a> TacticalValue<'a> {
             }
         } else {
             0.0
-        };
-        build_up_recycle_bonus
+        }
     }
 
     fn counter_first_pass(&self, forward_value: f32) -> f32 {
@@ -468,7 +457,7 @@ impl<'a> TacticalValue<'a> {
         // receiver actually having forward space and the pass not
         // running through opponents (low interception risk implied by
         // receiver_positioning > 0.5).
-        let counter_first_pass_bonus = if matches!(self.phase, GamePhase::AttackingTransition)
+        if matches!(self.phase, GamePhase::AttackingTransition)
             && forward_value > 0.0
             && self.receiver.tactical_positions.is_forward()
         {
@@ -490,8 +479,7 @@ impl<'a> TacticalValue<'a> {
             }
         } else {
             0.0
-        };
-        counter_first_pass_bonus
+        }
     }
 
     fn switch_values(&self) -> (f32, f32) {
@@ -700,7 +688,7 @@ impl PassPersonality {
 
     fn space_quality(&self, positioning: f32) -> f32 {
         // Skill-based space quality evaluation
-        let space_quality = if self.is_conservative {
+        if self.is_conservative {
             // Conservative players prefer free receivers but less extreme
             if positioning > 0.85 {
                 1.8 // Reduced from 2.0 - completely free players
@@ -742,8 +730,7 @@ impl PassPersonality {
             } else {
                 0.7 // Increased from 0.6
             }
-        };
-        space_quality
+        }
     }
 
     fn interception_penalty(&self, risk: f32) -> f32 {
@@ -758,8 +745,7 @@ impl PassPersonality {
             0.7 // Standard — significant penalty for blocked lanes
         };
 
-        let interception_penalty = 1.0 - (risk * risk_tolerance);
-        interception_penalty
+        1.0 - (risk * risk_tolerance)
     }
 
     fn distance_preference(
@@ -773,7 +759,7 @@ impl PassPersonality {
         // ultra-long multipliers smoothed via sigmoid blend so a
         // vision-14 playmaker isn't cliff-equal to a vision-9 on
         // a 250m switch — interpolates between the two extremes.
-        let distance_preference = if self.is_playmaker {
+        if self.is_playmaker {
             // Playmakers prefer through balls but not unrealistic long passes
             if pass_distance > 560.0 {
                 // 70 m+ - very risky even for elite
@@ -821,8 +807,7 @@ impl PassPersonality {
             }
         } else {
             1.0
-        };
-        distance_preference
+        }
     }
 }
 
@@ -1635,7 +1620,7 @@ impl PassEvaluator {
         let weighted_nearby =
             nearby_teammates_count + close_opponents_count * 3 + medium_opponents_count;
 
-        let congestion_penalty = match weighted_nearby {
+        match weighted_nearby {
             0 => 1.8,  // Completely isolated — excellent target
             1 => 1.3,  // One nearby player — good
             2 => 0.9,  // Normal
@@ -1643,8 +1628,7 @@ impl PassEvaluator {
             4 => 0.15, // Congested — strongly discouraged
             5 => 0.06, // Huddle — almost never pass here
             _ => 0.02, // Extremely congested — effectively blocked
-        };
-        congestion_penalty
+        }
     }
 
     fn optimal_distance_bonus(pass_distance: f32, is_under_pressure: bool) -> f32 {
@@ -1652,7 +1636,7 @@ impl PassEvaluator {
         // the short feed is how the ball moves through a structure,
         // but the fall-off with length is gentle so a 25 m ball to
         // the flank or into the box can beat a six-metre square ball.
-        let optimal_distance_bonus = if is_under_pressure {
+        if is_under_pressure {
             // Under pressure, all safe passes are good
             1.0
         } else if pass_distance < 32.0 {
@@ -1675,8 +1659,7 @@ impl PassEvaluator {
             0.7
         } else {
             0.55
-        };
-        optimal_distance_bonus
+        }
     }
 
     fn retreat_penalty(ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> f32 {
@@ -1703,7 +1686,7 @@ impl PassEvaluator {
         let side_now = ctx.player.side.unwrap_or(PlayerSide::Left);
         let goes_backward =
             side_now.forward_delta(ctx.player.position.x, teammate.position.x) < 0.0;
-        let retreat_penalty = if goes_backward {
+        if goes_backward {
             let width = ctx.context.field_size.width as f32;
             let progress = side_now.attacking_progress_x(ctx.player.position.x, width);
             // ── HOW FAR BACK, not just how far forward he is ──────
@@ -1741,8 +1724,7 @@ impl PassEvaluator {
             (1.0 - advanced * (0.55 + retreat * 3.0)).clamp(0.02, 1.0)
         } else {
             1.0
-        };
-        retreat_penalty
+        }
     }
 
     fn goalkeeper_penalty(
@@ -1753,7 +1735,7 @@ impl PassEvaluator {
     ) -> f32 {
         // GOALKEEPER PENALTY: Almost completely eliminate passing to goalkeeper
 
-        let goalkeeper_penalty = if is_goalkeeper {
+        if is_goalkeeper {
             // Side-correct math via PlayerSide helpers. The
             // previous formulas
             //   `(teammate.x - player.x) * dir < 0`
@@ -1808,8 +1790,7 @@ impl PassEvaluator {
             }
         } else {
             1.0 // No penalty for non-GK
-        };
-        goalkeeper_penalty
+        }
     }
     /// One candidate pass: the runner, the personality reading it and the
     /// shared match geometry it is scored against.

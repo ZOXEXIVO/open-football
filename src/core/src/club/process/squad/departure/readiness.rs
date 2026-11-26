@@ -126,7 +126,7 @@ impl Club {
             .iter()
             .filter(|p| p.id != player_id)
             .filter(|p| plan.entry(p.id).is_some_and(|e| e.shirt == Some(shirt)))
-            .map(|p| AbilityEstimator::observable_level(p))
+            .map(AbilityEstimator::observable_level)
             .max();
         let names = self
             .transfer_plan

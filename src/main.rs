@@ -1,3 +1,6 @@
+#![cfg_attr(not(test), forbid(clippy::too_many_lines))]
+#![cfg_attr(test, allow(clippy::too_many_lines))]
+
 #[cfg(target_os = "windows")]
 use mimalloc::MiMalloc;
 #[cfg(target_os = "linux")]

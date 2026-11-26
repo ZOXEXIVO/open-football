@@ -45,16 +45,15 @@ pub struct ArrivalRow {
     pub relocation: f64,
 }
 
-const ZERO: AtomicU64 = AtomicU64::new(0);
 const N: usize = GrantPath::COUNT;
-static GRANTS: [AtomicU64; N] = [ZERO; N];
-static PACE_BEFORE_X1000: [AtomicU64; N] = [ZERO; N];
-static PACE_AFTER_X1000: [AtomicU64; N] = [ZERO; N];
-static GAP_X1000: [AtomicU64; N] = [ZERO; N];
-static REVERSED: [AtomicU64; N] = [ZERO; N];
-static RELOCATED: [AtomicU64; N] = [ZERO; N];
-static VISIBLE_RELOCATED: [AtomicU64; N] = [ZERO; N];
-static RELOCATION_X1000: [AtomicU64; N] = [ZERO; N];
+static GRANTS: [AtomicU64; N] = [const { AtomicU64::new(0) }; N];
+static PACE_BEFORE_X1000: [AtomicU64; N] = [const { AtomicU64::new(0) }; N];
+static PACE_AFTER_X1000: [AtomicU64; N] = [const { AtomicU64::new(0) }; N];
+static GAP_X1000: [AtomicU64; N] = [const { AtomicU64::new(0) }; N];
+static REVERSED: [AtomicU64; N] = [const { AtomicU64::new(0) }; N];
+static RELOCATED: [AtomicU64; N] = [const { AtomicU64::new(0) }; N];
+static VISIBLE_RELOCATED: [AtomicU64; N] = [const { AtomicU64::new(0) }; N];
+static RELOCATION_X1000: [AtomicU64; N] = [const { AtomicU64::new(0) }; N];
 
 pub struct ArrivalCensus;
 
@@ -147,10 +146,10 @@ impl ArrivalCensus {
 pub struct ShotTiming;
 
 const TIMING: usize = 6;
-static SHOTS_SINCE_GRANT: [AtomicU64; TIMING] = [ZERO; TIMING];
-static GOALS_SINCE_GRANT: [AtomicU64; TIMING] = [ZERO; TIMING];
-static SHOTS_SINCE_PASS: [AtomicU64; TIMING] = [ZERO; TIMING];
-static GOALS_SINCE_PASS: [AtomicU64; TIMING] = [ZERO; TIMING];
+static SHOTS_SINCE_GRANT: [AtomicU64; TIMING] = [const { AtomicU64::new(0) }; TIMING];
+static GOALS_SINCE_GRANT: [AtomicU64; TIMING] = [const { AtomicU64::new(0) }; TIMING];
+static SHOTS_SINCE_PASS: [AtomicU64; TIMING] = [const { AtomicU64::new(0) }; TIMING];
+static GOALS_SINCE_PASS: [AtomicU64; TIMING] = [const { AtomicU64::new(0) }; TIMING];
 
 impl ShotTiming {
     pub const GRANT_NAMES: [&'static str; TIMING] =

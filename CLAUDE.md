@@ -38,6 +38,9 @@ layout and naming rules.
 ## Code style
 - A production function does one logical job and stays at or below 100 lines
   as measured by `clippy::too_many_lines`.
+- A change is done only when `cargo build` of the workspace and
+  `cargo test -p core --test function_structure` pass. Production code cannot
+  lift the line cap: `allow`/`expect` of it is a build error.
 - A function stays at one level of abstraction. Mixed phases, deep nesting,
   and a name that needs "and" are signals to extract; prefer guard clauses and
   small predicate methods over nested branches.

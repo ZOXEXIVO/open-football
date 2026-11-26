@@ -309,7 +309,7 @@ impl Club {
         // the ratios whose denominator is a year of revenue fail closed
         // instead of dividing by nothing.
         board_ctx.projected_annual_income =
-            self.projected_annual_income(&ctx, board_ctx.league_tier, date);
+            self.projected_annual_income(ctx, board_ctx.league_tier, date);
         board_ctx.ffp_status = if self.finance.is_ffp_breach(date) {
             FfpStatus::Breach
         } else if self.finance.is_ffp_watchlist(date) {

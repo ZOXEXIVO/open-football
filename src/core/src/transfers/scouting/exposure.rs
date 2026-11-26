@@ -350,11 +350,7 @@ impl OpportunisticFreeAgentScout {
         }
         // Soon-free or already-free only — a player years from the end of
         // his deal isn't a free-agent target.
-        let nearly_free = fa.contract_months_remaining == 0 || fa.contract_months_remaining <= 6;
-        if !nearly_free {
-            return false;
-        }
-        true
+        fa.contract_months_remaining == 0 || fa.contract_months_remaining <= 6
     }
 }
 

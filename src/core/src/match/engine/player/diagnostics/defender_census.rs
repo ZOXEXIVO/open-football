@@ -555,76 +555,91 @@ pub struct DefenderCensusSnapshot {
     pub deflection_travel: [[u64; DefenderCensus::TRAVEL_BINS]; DeflectionKind::COUNT],
 }
 
-const ZERO: AtomicU64 = AtomicU64::new(0);
 const SLOTS: usize = DefenderState::SLOTS;
 
-static TURNOVERS: [[AtomicU64; 2]; TakeRule::COUNT] = [const { [ZERO; 2] }; TakeRule::COUNT];
-static TAKE_ROLE: [[AtomicU64; 4]; TakeRule::COUNT] = [const { [ZERO; 4] }; TakeRule::COUNT];
+static TURNOVERS: [[AtomicU64; 2]; TakeRule::COUNT] =
+    [const { [const { AtomicU64::new(0) }; 2] }; TakeRule::COUNT];
+static TAKE_ROLE: [[AtomicU64; 4]; TakeRule::COUNT] =
+    [const { [const { AtomicU64::new(0) }; 4] }; TakeRule::COUNT];
 static TAKE_DEF_STATE: [[AtomicU64; SLOTS]; TakeRule::COUNT] =
-    [const { [ZERO; SLOTS] }; TakeRule::COUNT];
-static TAKE_GAP_MM: [AtomicU64; TakeRule::COUNT] = [ZERO; TakeRule::COUNT];
-static TAKE_TENURE_TICKS: [AtomicU64; TakeRule::COUNT] = [ZERO; TakeRule::COUNT];
-static TAKE_PRIOR: [[AtomicU64; 4]; TakeRule::COUNT] = [const { [ZERO; 4] }; TakeRule::COUNT];
+    [const { [const { AtomicU64::new(0) }; SLOTS] }; TakeRule::COUNT];
+static TAKE_GAP_MM: [AtomicU64; TakeRule::COUNT] = [const { AtomicU64::new(0) }; TakeRule::COUNT];
+static TAKE_TENURE_TICKS: [AtomicU64; TakeRule::COUNT] =
+    [const { AtomicU64::new(0) }; TakeRule::COUNT];
+static TAKE_PRIOR: [[AtomicU64; 4]; TakeRule::COUNT] =
+    [const { [const { AtomicU64::new(0) }; 4] }; TakeRule::COUNT];
 static TAKE_CREDIT: [[AtomicU64; Credit::COUNT]; TakeRule::COUNT] =
-    [const { [ZERO; Credit::COUNT] }; TakeRule::COUNT];
-static SPELLS: AtomicU64 = ZERO;
-static SPELL_PRESSING_TICKS: AtomicU64 = ZERO;
-static SPELL_TACKLING_TICKS: AtomicU64 = ZERO;
-static SPELL_ENDS: [AtomicU64; SpellEnd::COUNT] = [ZERO; SpellEnd::COUNT];
-static TACKLING_ENTRIES: AtomicU64 = ZERO;
-static CHALLENGES: [AtomicU64; 2] = [ZERO; 2];
-static CHALLENGE_OUTCOMES: [[AtomicU64; 3]; 2] = [const { [ZERO; 3] }; 2];
-static CHALLENGE_SPEED_CMPS: AtomicU64 = ZERO;
-static CHALLENGE_GOAL_SIDE: AtomicU64 = ZERO;
-static HEADERS: [AtomicU64; HeaderRule::COUNT] = [ZERO; HeaderRule::COUNT];
+    [const { [const { AtomicU64::new(0) }; Credit::COUNT] }; TakeRule::COUNT];
+static SPELLS: AtomicU64 = AtomicU64::new(0);
+static SPELL_PRESSING_TICKS: AtomicU64 = AtomicU64::new(0);
+static SPELL_TACKLING_TICKS: AtomicU64 = AtomicU64::new(0);
+static SPELL_ENDS: [AtomicU64; SpellEnd::COUNT] = [const { AtomicU64::new(0) }; SpellEnd::COUNT];
+static TACKLING_ENTRIES: AtomicU64 = AtomicU64::new(0);
+static CHALLENGES: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+static CHALLENGE_OUTCOMES: [[AtomicU64; 3]; 2] = [const { [const { AtomicU64::new(0) }; 3] }; 2];
+static CHALLENGE_SPEED_CMPS: AtomicU64 = AtomicU64::new(0);
+static CHALLENGE_GOAL_SIDE: AtomicU64 = AtomicU64::new(0);
+static HEADERS: [AtomicU64; HeaderRule::COUNT] = [const { AtomicU64::new(0) }; HeaderRule::COUNT];
 static HEADER_STATE: [[AtomicU64; DefenderCensus::HEADER_STATES]; HeaderRule::COUNT] =
-    [const { [ZERO; DefenderCensus::HEADER_STATES] }; HeaderRule::COUNT];
-static HEADER_LEAP: [AtomicU64; HeaderRule::COUNT] = [ZERO; HeaderRule::COUNT];
+    [const { [const { AtomicU64::new(0) }; DefenderCensus::HEADER_STATES] }; HeaderRule::COUNT];
+static HEADER_LEAP: [AtomicU64; HeaderRule::COUNT] =
+    [const { AtomicU64::new(0) }; HeaderRule::COUNT];
 static HEADER_BOOKED: [[AtomicU64; HeaderBooking::COUNT]; HeaderRule::COUNT] =
-    [const { [ZERO; HeaderBooking::COUNT] }; HeaderRule::COUNT];
-static FLIGHTS_BOTH: AtomicU64 = ZERO;
-static HEADING_ROLLS: AtomicU64 = ZERO;
-static HEADING_REROLLS: AtomicU64 = ZERO;
+    [const { [const { AtomicU64::new(0) }; HeaderBooking::COUNT] }; HeaderRule::COUNT];
+static FLIGHTS_BOTH: AtomicU64 = AtomicU64::new(0);
+static HEADING_ROLLS: AtomicU64 = AtomicU64::new(0);
+static HEADING_REROLLS: AtomicU64 = AtomicU64::new(0);
 static ASSIGNMENT: [[AtomicU64; Rank::COUNT]; Duty::COUNT] =
-    [const { [ZERO; Rank::COUNT] }; Duty::COUNT];
-static ASSIGNMENT_STATE: [[AtomicU64; SLOTS]; Duty::COUNT] = [const { [ZERO; SLOTS] }; Duty::COUNT];
-static CHANGES_OUT_OF_POSSESSION: AtomicU64 = ZERO;
-static CHANGES_AFTER_RANK: AtomicU64 = ZERO;
-static CHANGES_AFTER_DUTY: AtomicU64 = ZERO;
-static CHANGES_AFTER_BOTH: AtomicU64 = ZERO;
-static PRESS_HANDS: AtomicU64 = ZERO;
-static COVER_HANDS: AtomicU64 = ZERO;
-static COVER_TO_PRESS: AtomicU64 = ZERO;
-static PLAN_TICKS: AtomicU64 = ZERO;
-static CARRIER_TICKS: [AtomicU64; 2] = [ZERO; 2];
-static CROWDED_TICKS: [AtomicU64; 2] = [ZERO; 2];
+    [const { [const { AtomicU64::new(0) }; Rank::COUNT] }; Duty::COUNT];
+static ASSIGNMENT_STATE: [[AtomicU64; SLOTS]; Duty::COUNT] =
+    [const { [const { AtomicU64::new(0) }; SLOTS] }; Duty::COUNT];
+static CHANGES_OUT_OF_POSSESSION: AtomicU64 = AtomicU64::new(0);
+static CHANGES_AFTER_RANK: AtomicU64 = AtomicU64::new(0);
+static CHANGES_AFTER_DUTY: AtomicU64 = AtomicU64::new(0);
+static CHANGES_AFTER_BOTH: AtomicU64 = AtomicU64::new(0);
+static PRESS_HANDS: AtomicU64 = AtomicU64::new(0);
+static COVER_HANDS: AtomicU64 = AtomicU64::new(0);
+static COVER_TO_PRESS: AtomicU64 = AtomicU64::new(0);
+static PLAN_TICKS: AtomicU64 = AtomicU64::new(0);
+static CARRIER_TICKS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+static CROWDED_TICKS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 static DOORS: [[[AtomicU64; 2]; SLOTS]; Situation::COUNT] =
-    [const { [const { [ZERO; 2] }; SLOTS] }; Situation::COUNT];
-static MOTION_TICKS: [[AtomicU64; 2]; BackLine::COUNT] = [const { [ZERO; 2] }; BackLine::COUNT];
-static MOTION_PATH_MM: [[AtomicU64; 2]; BackLine::COUNT] = [const { [ZERO; 2] }; BackLine::COUNT];
+    [const { [const { [const { AtomicU64::new(0) }; 2] }; SLOTS] }; Situation::COUNT];
+static MOTION_TICKS: [[AtomicU64; 2]; BackLine::COUNT] =
+    [const { [const { AtomicU64::new(0) }; 2] }; BackLine::COUNT];
+static MOTION_PATH_MM: [[AtomicU64; 2]; BackLine::COUNT] =
+    [const { [const { AtomicU64::new(0) }; 2] }; BackLine::COUNT];
 static MOTION_BANDS: [[[AtomicU64; DefenderCensus::BANDS]; 2]; BackLine::COUNT] =
-    [const { [const { [ZERO; DefenderCensus::BANDS] }; 2] }; BackLine::COUNT];
-static SPRINTS: [[AtomicU64; 2]; BackLine::COUNT] = [const { [ZERO; 2] }; BackLine::COUNT];
-static STATE_TICKS: [AtomicU64; SLOTS + 1] = [ZERO; SLOTS + 1];
-static STATE_BALL_TICKS: [AtomicU64; SLOTS + 1] = [ZERO; SLOTS + 1];
-static OFFSIDE_LINE: [AtomicU64; SLOTS + 1] = [ZERO; SLOTS + 1];
-static STATE_SPEED_CMPS: [AtomicU64; SLOTS + 1] = [ZERO; SLOTS + 1];
-static PHASE_TICKS: [AtomicU64; Phase::COUNT] = [ZERO; Phase::COUNT];
-static RELAXED_ALERT_CHANGES: AtomicU64 = ZERO;
-static RELAXED_ALERT_REVERSED: AtomicU64 = ZERO;
-static CHASE_ENTRIES: [AtomicU64; SLOTS] = [ZERO; SLOTS];
+    [const { [const { [const { AtomicU64::new(0) }; DefenderCensus::BANDS] }; 2] };
+        BackLine::COUNT];
+static SPRINTS: [[AtomicU64; 2]; BackLine::COUNT] =
+    [const { [const { AtomicU64::new(0) }; 2] }; BackLine::COUNT];
+static STATE_TICKS: [AtomicU64; SLOTS + 1] = [const { AtomicU64::new(0) }; SLOTS + 1];
+static STATE_BALL_TICKS: [AtomicU64; SLOTS + 1] = [const { AtomicU64::new(0) }; SLOTS + 1];
+static OFFSIDE_LINE: [AtomicU64; SLOTS + 1] = [const { AtomicU64::new(0) }; SLOTS + 1];
+static STATE_SPEED_CMPS: [AtomicU64; SLOTS + 1] = [const { AtomicU64::new(0) }; SLOTS + 1];
+static PHASE_TICKS: [AtomicU64; Phase::COUNT] = [const { AtomicU64::new(0) }; Phase::COUNT];
+static RELAXED_ALERT_CHANGES: AtomicU64 = AtomicU64::new(0);
+static RELAXED_ALERT_REVERSED: AtomicU64 = AtomicU64::new(0);
+static CHASE_ENTRIES: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
 static CHASE_REVERSED: [[AtomicU64; ChaseYield::COUNT]; SLOTS] =
-    [const { [ZERO; ChaseYield::COUNT] }; SLOTS];
-static DEFLECTIONS: [AtomicU64; DeflectionKind::COUNT] = [ZERO; DeflectionKind::COUNT];
-static DEFLECTION_SPEED_X1000: [AtomicU64; DeflectionKind::COUNT] = [ZERO; DeflectionKind::COUNT];
-static DEFLECTION_FAST: [AtomicU64; DeflectionKind::COUNT] = [ZERO; DeflectionKind::COUNT];
-static DEFLECTION_GAP_MM: [AtomicU64; DeflectionKind::COUNT] = [ZERO; DeflectionKind::COUNT];
-static DEFLECTION_BEYOND_LUNGE: [AtomicU64; DeflectionKind::COUNT] = [ZERO; DeflectionKind::COUNT];
-static DEFLECTION_TRAVEL_MM: [AtomicU64; DeflectionKind::COUNT] = [ZERO; DeflectionKind::COUNT];
+    [const { [const { AtomicU64::new(0) }; ChaseYield::COUNT] }; SLOTS];
+static DEFLECTIONS: [AtomicU64; DeflectionKind::COUNT] =
+    [const { AtomicU64::new(0) }; DeflectionKind::COUNT];
+static DEFLECTION_SPEED_X1000: [AtomicU64; DeflectionKind::COUNT] =
+    [const { AtomicU64::new(0) }; DeflectionKind::COUNT];
+static DEFLECTION_FAST: [AtomicU64; DeflectionKind::COUNT] =
+    [const { AtomicU64::new(0) }; DeflectionKind::COUNT];
+static DEFLECTION_GAP_MM: [AtomicU64; DeflectionKind::COUNT] =
+    [const { AtomicU64::new(0) }; DeflectionKind::COUNT];
+static DEFLECTION_BEYOND_LUNGE: [AtomicU64; DeflectionKind::COUNT] =
+    [const { AtomicU64::new(0) }; DeflectionKind::COUNT];
+static DEFLECTION_TRAVEL_MM: [AtomicU64; DeflectionKind::COUNT] =
+    [const { AtomicU64::new(0) }; DeflectionKind::COUNT];
 static DEFLECTION_ENDS: [[AtomicU64; DeflectionEnd::COUNT]; DeflectionKind::COUNT] =
-    [const { [ZERO; DeflectionEnd::COUNT] }; DeflectionKind::COUNT];
+    [const { [const { AtomicU64::new(0) }; DeflectionEnd::COUNT] }; DeflectionKind::COUNT];
 static DEFLECTION_TRAVEL: [[AtomicU64; DefenderCensus::TRAVEL_BINS]; DeflectionKind::COUNT] =
-    [const { [ZERO; DefenderCensus::TRAVEL_BINS] }; DeflectionKind::COUNT];
+    [const { [const { AtomicU64::new(0) }; DefenderCensus::TRAVEL_BINS] }; DeflectionKind::COUNT];
 
 /// The open episodes of one match.
 #[derive(Debug, Default)]

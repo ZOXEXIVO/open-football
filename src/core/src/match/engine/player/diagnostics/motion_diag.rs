@@ -837,6 +837,12 @@ impl PossessionCensus {
     }
 }
 
+impl Default for PossessionCensus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// In-state velocity reversals per state, indexed by
 /// `PlayerState::compact_id` (max 418). Lock-free so the per-tick sampler
 /// can attribute every reversal to the exact state whose velocity fn

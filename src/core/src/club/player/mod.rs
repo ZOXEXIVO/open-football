@@ -45,7 +45,6 @@ pub use collection::*;
 pub use contract::*;
 pub use decisions::*;
 pub use generators::*;
-pub use growth::*;
 pub use happiness::*;
 pub use injury::*;
 pub use interaction::*;

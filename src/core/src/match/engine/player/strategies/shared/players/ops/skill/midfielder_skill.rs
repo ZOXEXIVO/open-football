@@ -164,13 +164,12 @@ impl MidfielderSkillReads {
     }
 
     fn core01(&self) -> f32 {
-        let core01 = (self.passing01 * 0.30
+        (self.passing01 * 0.30
             + self.decisions01 * 0.25
             + self.vision01 * 0.20
             + self.composure01 * 0.15
             + self.technique01 * 0.10)
-            .clamp(0.0, 1.0);
-        core01
+            .clamp(0.0, 1.0)
     }
 }
 
@@ -399,7 +398,7 @@ impl MidfielderSkillReads {
 
     fn support(&self, off_ball_condition_mult: f32) -> f32 {
         // ── Off-ball support ─────────────────────────────────────────
-        let support_profile = ((MidfielderSkillProfile::pow_curve(self.off_ball01, 1.45) * 0.22
+        ((MidfielderSkillProfile::pow_curve(self.off_ball01, 1.45) * 0.22
             + MidfielderSkillProfile::pow_curve(self.anticipation01, 1.35) * 0.18
             + MidfielderSkillProfile::pow_curve(self.decisions01, 1.35) * 0.18
             + MidfielderSkillProfile::pow_curve(self.teamwork01, 1.25) * 0.12
@@ -408,8 +407,7 @@ impl MidfielderSkillReads {
             + MidfielderSkillProfile::pow_curve(self.composure01, 1.20) * 0.06
             + MidfielderSkillProfile::pow_curve(self.concentration01, 1.15) * 0.06)
             * off_ball_condition_mult)
-            .clamp(0.0, 1.0);
-        support_profile
+            .clamp(0.0, 1.0)
     }
 }
 

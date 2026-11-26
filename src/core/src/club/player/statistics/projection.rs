@@ -374,6 +374,14 @@ impl HistoryNoiseFilter {
     }
 }
 
+/// The grouped rows, their first-seen order, and the latest League spell's
+/// sequence id per row.
+type HistoryRows = (
+    FxHashMap<RowKey, PlayerHistoryRow>,
+    Vec<RowKey>,
+    FxHashMap<RowKey, Option<u16>>,
+);
+
 /// Precomputed bands for within-season row ordering.
 struct HistoryRowOrder {
     active_row_key: Option<(u16, String, String)>,
@@ -1069,13 +1077,7 @@ impl PlayerStatisticsProjection {
     /// Group the ledger into one row per `(season, team, league)`, in
     /// first-seen order, while accumulating League coverage and the
     /// latest League spell metadata per row.
-    fn collect_history_rows(
-        ledger: Vec<PlayerStatLedgerEntry>,
-    ) -> (
-        FxHashMap<RowKey, PlayerHistoryRow>,
-        Vec<RowKey>,
-        FxHashMap<RowKey, Option<u16>>,
-    ) {
+    fn collect_history_rows(ledger: Vec<PlayerStatLedgerEntry>) -> HistoryRows {
         let mut rows: FxHashMap<RowKey, PlayerHistoryRow> = FxHashMap::default();
         let mut order: Vec<RowKey> = Vec::new();
         // Highest seq_id of a LEAGUE entry seen per row. League entries

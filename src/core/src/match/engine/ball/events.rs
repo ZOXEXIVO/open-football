@@ -525,12 +525,10 @@ impl BallEventDispatcher {
         field: &MatchField,
         context: &MatchContext,
     ) -> Option<CarryProgress> {
-        let (side, carrier_team_id) = match field.get_player(carrier_id) {
-            Some(p) => match p.side {
-                Some(s) => (s, p.team_id),
-                None => return None,
-            },
-            None => return None,
+        let (side, carrier_team_id) = {
+            let p = field.get_player(carrier_id)?;
+            let s = p.side?;
+            (s, p.team_id)
         };
         let field_w = context.field_size.width as f32;
         let forward_progress = side.forward_delta(start.x, end.x);

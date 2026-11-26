@@ -1993,7 +1993,7 @@ impl DepthPipelineFixtures {
         let code = if same_country { "en" } else { "ar" };
         GlobalFreeAgentSummary {
             player_id,
-            player_name: format!("Pool{player_id}").into(),
+            player_name: format!("Pool{player_id}"),
             ability,
             potential: ability.saturating_add(5),
             age,

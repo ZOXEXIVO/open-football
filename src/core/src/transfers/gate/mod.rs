@@ -2232,7 +2232,7 @@ mod tests {
         inputs.is_unsolicited = false;
         inputs.buyer_rep = 0.62;
         let v = Fx::verdict(&inputs);
-        assert!(matches!(v, Ok(_)), "{:?}", v);
+        assert!(v.is_ok(), "{:?}", v);
     }
 
     #[test]
@@ -2274,7 +2274,7 @@ mod tests {
         inputs.player_current_rep = 2000;
         inputs.player_home_rep = 2000;
         let v = Fx::verdict(&inputs);
-        assert!(matches!(v, Ok(_)), "{:?}", v);
+        assert!(v.is_ok(), "{:?}", v);
     }
 
     /// The Zobnin shape: a 300-appearance veteran at a domestic giant
@@ -2413,7 +2413,7 @@ mod tests {
         inputs.level_floor = Fx::floor(&inputs);
         let resigned = Fx::verdict(&inputs);
         assert!(
-            matches!(resigned, Ok(_)),
+            resigned.is_ok(),
             "resignation must widen the band continuously; got {:?}",
             resigned
         );
@@ -2461,14 +2461,14 @@ mod tests {
         reachable.buyer_league_rep = between.max(0) as u16;
         reachable.buyer_rep = 0.42;
         assert!(
-            matches!(Fx::verdict(&reachable), Ok(_)),
+            Fx::verdict(&reachable).is_ok(),
             "the widened band is what the development pathway actually gets"
         );
         let mut veteran = reachable.clone();
         veteran.player_age = 33;
         veteran.level_floor = Fx::floor(&veteran);
         assert!(
-            matches!(Fx::verdict(&veteran), Err(_)),
+            Fx::verdict(&veteran).is_err(),
             "the same destination sits outside a 33-year-old's band"
         );
     }
@@ -2480,7 +2480,7 @@ mod tests {
         let mut inputs = declined_veteran_foreign_loan_inputs();
         inputs.is_transfer_requested = true;
         let v = Fx::verdict(&inputs);
-        assert!(matches!(v, Ok(_)), "got {:?}", v);
+        assert!(v.is_ok(), "got {:?}", v);
     }
 
     #[test]
@@ -2504,7 +2504,7 @@ mod tests {
         inputs.estimated_value = 1_000_000.0;
         inputs.expected_annual_wage = 600_000;
         let v = Fx::verdict(&inputs);
-        assert!(matches!(v, Ok(_)), "{:?}", v);
+        assert!(v.is_ok(), "{:?}", v);
     }
 
     #[test]
@@ -2516,7 +2516,7 @@ mod tests {
         inputs.squad_status = PlayerSquadStatus::MainBackupPlayer;
         inputs.player_ca = 110;
         let v = Fx::verdict(&inputs);
-        assert!(matches!(v, Ok(_)), "{:?}", v);
+        assert!(v.is_ok(), "{:?}", v);
     }
 
     #[test]
@@ -2564,7 +2564,7 @@ mod tests {
         inputs.buyer_league_rep = 5500;
         inputs.seller_league_rep = 5500;
         let v = Fx::verdict(&inputs);
-        assert!(matches!(v, Ok(_)), "{:?}", v);
+        assert!(v.is_ok(), "{:?}", v);
     }
 
     #[test]
@@ -2574,7 +2574,7 @@ mod tests {
         let mut inputs = base_inputs();
         inputs.is_listed = true;
         let v = Fx::verdict(&inputs);
-        assert!(matches!(v, Ok(_)), "{:?}", v);
+        assert!(v.is_ok(), "{:?}", v);
     }
 
     // ── A *huge* permanent sporting drop is not publicly credible on a passive
@@ -2871,7 +2871,7 @@ mod tests {
         inputs.buyer_wage_budget = 1_000_000; // wage floor = 250k > 150k
         inputs.buyer_total_wages = 900_000;
         let v = Fx::verdict(&inputs);
-        assert!(matches!(v, Ok(_)), "{:?}", v);
+        assert!(v.is_ok(), "{:?}", v);
     }
 
     #[test]
@@ -2884,7 +2884,7 @@ mod tests {
         inputs.estimated_value = 9_200_000.0;
         inputs.buyer_transfer_budget = 40_000_000.0;
         let v = Fx::verdict(&inputs);
-        assert!(matches!(v, Ok(_)), "{:?}", v);
+        assert!(v.is_ok(), "{:?}", v);
     }
 
     #[test]
@@ -2950,7 +2950,7 @@ mod tests {
         let mut inputs = base_inputs();
         inputs.squad_status = PlayerSquadStatus::NotNeeded;
         let v = Fx::verdict(&inputs);
-        assert!(matches!(v, Ok(_)), "{:?}", v);
+        assert!(v.is_ok(), "{:?}", v);
     }
 
     #[test]
@@ -2961,7 +2961,7 @@ mod tests {
         inputs.seller_in_debt = true;
         // estimated_value 5M; buyer_transfer_budget*1.40 = 14M; ratio 2.8 → >= 1.35
         let v = Fx::verdict(&inputs);
-        assert!(matches!(v, Ok(_)), "{:?}", v);
+        assert!(v.is_ok(), "{:?}", v);
     }
 
     #[test]

@@ -172,7 +172,7 @@ fn a_second_foul_inside_the_window_still_books_the_first() {
     // whistled.
     context.referee.foul_detection = 1.0;
     context.referee.strictness = 1.0;
-    context.rng = MatchRng::from_seed(0x2AD_F0);
+    context.rng = MatchRng::from_seed(0x2_ADF0);
 
     let mut events = EventCollection::with_capacity(4);
     let fouled = field

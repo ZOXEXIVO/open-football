@@ -1273,11 +1273,7 @@ impl ListingPass {
         // protected the fourth keeper of a glut as firmly as Juventus's
         // long-serving number two.
         let group = player.position().position_group();
-        if group == PlayerFieldPositionGroup::Goalkeeper && age >= 30 && standing_earned {
-            return true;
-        }
-
-        false
+        group == PlayerFieldPositionGroup::Goalkeeper && age >= 30 && standing_earned
     }
 
     /// What this club expects of a starter, read off its main team's

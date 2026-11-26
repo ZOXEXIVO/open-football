@@ -166,13 +166,12 @@ impl DefenderSkillReads {
     }
 
     fn core01(&self) -> f32 {
-        let core01 = (self.positioning01 * 0.28
+        (self.positioning01 * 0.28
             + self.tackling01 * 0.22
             + self.marking01 * 0.20
             + self.anticipation01 * 0.18
             + self.concentration01 * 0.12)
-            .clamp(0.0, 1.0);
-        core01
+            .clamp(0.0, 1.0)
     }
 
     fn defensive_reading(&self, fatigue: f32) -> (f32, f32) {
@@ -233,7 +232,7 @@ impl DefenderSkillReads {
 
     fn tackle(&self, tackling_condition_mult: f32) -> f32 {
         // ── Tackle ───────────────────────────────────────────────────
-        let tackle_profile = ((DefenderSkillProfile::pow_curve(self.tackling01, 1.65) * 0.28
+        ((DefenderSkillProfile::pow_curve(self.tackling01, 1.65) * 0.28
             + DefenderSkillProfile::pow_curve(self.positioning01, 1.45) * 0.16
             + DefenderSkillProfile::pow_curve(self.anticipation01, 1.40) * 0.14
             + DefenderSkillProfile::pow_curve(self.composure01, 1.35) * 0.12
@@ -242,9 +241,7 @@ impl DefenderSkillReads {
             + DefenderSkillProfile::pow_curve(self.agility01, 1.20) * 0.06
             + DefenderSkillProfile::pow_curve(self.concentration01, 1.20) * 0.06)
             * tackling_condition_mult)
-            .clamp(0.0, 1.0);
-
-        tackle_profile
+            .clamp(0.0, 1.0)
     }
 
     fn discipline(&self) -> f32 {
@@ -252,21 +249,19 @@ impl DefenderSkillReads {
         // No `temperament` attribute — proxy with composure+concentration.
         let temperament_proxy = (self.composure01 + self.concentration01) * 0.5;
         let aggression_inverse = 1.0 - self.aggression01;
-        let discipline = (DefenderSkillProfile::pow_curve(self.composure01, 1.35) * 0.24
+        (DefenderSkillProfile::pow_curve(self.composure01, 1.35) * 0.24
             + DefenderSkillProfile::pow_curve(self.decisions01, 1.35) * 0.22
             + DefenderSkillProfile::pow_curve(self.tackling01, 1.35) * 0.18
             + DefenderSkillProfile::pow_curve(self.concentration01, 1.20) * 0.12
             + temperament_proxy * 0.10
             + aggression_inverse * 0.10
             + DefenderSkillProfile::pow_curve(self.bravery01, 1.10) * 0.04)
-            .clamp(0.0, 1.0);
-
-        discipline
+            .clamp(0.0, 1.0)
     }
 
     fn press(&self, pressing_condition_mult: f32) -> f32 {
         // ── Press ────────────────────────────────────────────────────
-        let press_profile = ((DefenderSkillProfile::pow_curve(self.work_rate01, 1.35) * 0.20
+        ((DefenderSkillProfile::pow_curve(self.work_rate01, 1.35) * 0.20
             + DefenderSkillProfile::pow_curve(self.acceleration01, 1.25) * 0.16
             + DefenderSkillProfile::pow_curve(self.stamina01, 1.25) * 0.14
             + DefenderSkillProfile::pow_curve(self.anticipation01, 1.35) * 0.14
@@ -275,8 +270,7 @@ impl DefenderSkillReads {
             + DefenderSkillProfile::pow_curve(self.decisions01, 1.25) * 0.08
             + DefenderSkillProfile::pow_curve(self.teamwork01, 1.15) * 0.08)
             * pressing_condition_mult)
-            .clamp(0.0, 1.0);
-        press_profile
+            .clamp(0.0, 1.0)
     }
 
     fn clearance(
@@ -323,35 +317,30 @@ impl DefenderSkillReads {
     }
 
     fn press_resistance(&self) -> f32 {
-        let press_resistance = (DefenderSkillProfile::pow_curve(self.first_touch01, 1.40) * 0.24
+        (DefenderSkillProfile::pow_curve(self.first_touch01, 1.40) * 0.24
             + DefenderSkillProfile::pow_curve(self.technique01, 1.35) * 0.18
             + DefenderSkillProfile::pow_curve(self.composure01, 1.45) * 0.18
             + DefenderSkillProfile::pow_curve(self.balance01, 1.30) * 0.14
             + DefenderSkillProfile::pow_curve(self.strength01, 1.10) * 0.10
             + DefenderSkillProfile::pow_curve(self.decisions01, 1.30) * 0.10
             + DefenderSkillProfile::pow_curve(self.concentration01, 1.15) * 0.06)
-            .clamp(0.0, 1.0);
-
-        press_resistance
+            .clamp(0.0, 1.0)
     }
 
     fn defender_switch_profile(&self) -> f32 {
-        let defender_switch_profile = (DefenderSkillProfile::pow_curve(self.passing01, 1.45)
-            * 0.24
+        (DefenderSkillProfile::pow_curve(self.passing01, 1.45) * 0.24
             + DefenderSkillProfile::pow_curve(self.vision01, 1.50) * 0.24
             + DefenderSkillProfile::pow_curve(self.technique01, 1.40) * 0.18
             + DefenderSkillProfile::pow_curve(self.decisions01, 1.35) * 0.14
             + DefenderSkillProfile::pow_curve(self.composure01, 1.30) * 0.10
             + DefenderSkillProfile::pow_curve(self.strength01, 1.10) * 0.05
             + DefenderSkillProfile::pow_curve(self.concentration01, 1.15) * 0.05)
-            .clamp(0.0, 1.0);
-
-        defender_switch_profile
+            .clamp(0.0, 1.0)
     }
 
     fn overlap(&self, recovery_run_mult: f32) -> f32 {
         // ── Overlap (fullback) ───────────────────────────────────────
-        let overlap_profile = ((DefenderSkillProfile::pow_curve(self.stamina01, 1.25) * 0.18
+        ((DefenderSkillProfile::pow_curve(self.stamina01, 1.25) * 0.18
             + DefenderSkillProfile::pow_curve(self.work_rate01, 1.30) * 0.18
             + DefenderSkillProfile::pow_curve(self.pace01, 1.20) * 0.14
             + DefenderSkillProfile::pow_curve(self.acceleration01, 1.20) * 0.12
@@ -360,9 +349,7 @@ impl DefenderSkillReads {
             + DefenderSkillProfile::pow_curve(self.crossing01, 1.35) * 0.08
             + DefenderSkillProfile::pow_curve(self.teamwork01, 1.15) * 0.08)
             * recovery_run_mult)
-            .clamp(0.0, 1.0);
-
-        overlap_profile
+            .clamp(0.0, 1.0)
     }
 }
 

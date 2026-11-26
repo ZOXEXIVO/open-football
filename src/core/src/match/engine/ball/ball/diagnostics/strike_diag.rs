@@ -80,31 +80,31 @@ impl GrantPath {
     pub const NAMES: [&'static str; Self::COUNT] = ["scan", "receiver", "event", "contest"];
 }
 
-const ZERO: AtomicU64 = AtomicU64::new(0);
-
 /// Strikes by handler × height band.
-static STRIKES: [AtomicU64; Handler::COUNT * Band::COUNT] = [ZERO; Handler::COUNT * Band::COUNT];
+static STRIKES: [AtomicU64; Handler::COUNT * Band::COUNT] =
+    [const { AtomicU64::new(0) }; Handler::COUNT * Band::COUNT];
 /// …the outfield subset struck above [`AerialReach::VOLLEY`], split by
 /// whether the striker's state had declared itself aerial. The second of
 /// those is a header; the first is the artefact.
-static HEAD_BAND_STRIKES: [AtomicU64; 2] = [ZERO; 2];
+static HEAD_BAND_STRIKES: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 /// Grants by path × height band.
-static GRANTS: [AtomicU64; GrantPath::COUNT * Band::COUNT] = [ZERO; GrantPath::COUNT * Band::COUNT];
+static GRANTS: [AtomicU64; GrantPath::COUNT * Band::COUNT] =
+    [const { AtomicU64::new(0) }; GrantPath::COUNT * Band::COUNT];
 /// Balls taken out of the air: count, and the height each was taken at
 /// summed × 1000 so a mean can be read back.
-static CONTROLS: [AtomicU64; Band::COUNT] = [ZERO; Band::COUNT];
+static CONTROLS: [AtomicU64; Band::COUNT] = [const { AtomicU64::new(0) }; Band::COUNT];
 static CONTROL_HEIGHT_MM: AtomicU64 = AtomicU64::new(0);
 /// Controls that reached the deck with nobody under them — a loose ball,
 /// the same shape as a failed first touch.
 static CONTROLS_LOST: AtomicU64 = AtomicU64::new(0);
 /// Strikes refused for being out of reach, by handler.
-static REFUSED: [AtomicU64; Handler::COUNT] = [ZERO; Handler::COUNT];
+static REFUSED: [AtomicU64; Handler::COUNT] = [const { AtomicU64::new(0) }; Handler::COUNT];
 /// …and how many of those the same player went on to strike for real,
 /// with the ticks it took him summed against them. This is the
 /// deadlock proof: a refusal that is never re-struck is a state stuck
 /// asking for a ball it cannot have.
-static RESTRUCK: [AtomicU64; Handler::COUNT] = [ZERO; Handler::COUNT];
-static RESTRIKE_TICKS: [AtomicU64; Handler::COUNT] = [ZERO; Handler::COUNT];
+static RESTRUCK: [AtomicU64; Handler::COUNT] = [const { AtomicU64::new(0) }; Handler::COUNT];
+static RESTRIKE_TICKS: [AtomicU64; Handler::COUNT] = [const { AtomicU64::new(0) }; Handler::COUNT];
 
 /// Pending refusals, so a re-strike can be timed without a map.
 ///
@@ -113,7 +113,7 @@ static RESTRIKE_TICKS: [AtomicU64; Handler::COUNT] = [ZERO; Handler::COUNT];
 /// trade for a counter that runs inside the event dispatcher. Each slot
 /// holds `(handler << 56) | tick`, or 0 for empty.
 const SLOTS: usize = 64;
-static PENDING: [AtomicU64; SLOTS] = [ZERO; SLOTS];
+static PENDING: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
 
 /// How long a refusal stays open, in ticks.
 ///

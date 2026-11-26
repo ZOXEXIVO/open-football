@@ -1,3 +1,5 @@
+#![forbid(clippy::too_many_lines)]
+
 use match_viewer_build::MatchViewer;
 use std::collections::hash_map::DefaultHasher;
 use std::env;

@@ -389,19 +389,18 @@ impl DefenderRunningState {
         if ctx.team().prefers_keeping_the_ball()
             && !self.is_opponent_closing_fast(ctx)
             && !ctx.team().counter_window()
+            && let Some(safe_target) = self.find_safe_backward_pass(ctx)
         {
-            if let Some(safe_target) = self.find_safe_backward_pass(ctx) {
-                return Some(StateChangeResult::with_defender_state_and_event(
-                    DefenderRead::released(ctx),
-                    Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::builder()
-                            .with_from_player_id(ctx.player.id)
-                            .with_to_player_id(safe_target.id)
-                            .with_reason("DEF_COACH_TEMPO_PASS_BACK")
-                            .build(ctx),
-                    )),
-                ));
-            }
+            return Some(StateChangeResult::with_defender_state_and_event(
+                DefenderRead::released(ctx),
+                Event::PlayerEvent(PlayerEvent::PassTo(
+                    PassingEventContext::builder()
+                        .with_from_player_id(ctx.player.id)
+                        .with_to_player_id(safe_target.id)
+                        .with_reason("DEF_COACH_TEMPO_PASS_BACK")
+                        .build(ctx),
+                )),
+            ));
         }
 
         // EMERGENCY PASS: Opponent closing fast — pass immediately before they arrive
@@ -697,24 +696,19 @@ impl DefenderRunningState {
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
         let carry_ability = sc::dribble_attack(ctx.player, minute);
 
-        if has_space_ahead && carry_ability > 0.55 {
-            return true;
-        }
-
-        false
+        has_space_ahead && carry_ability > 0.55
     }
 
     /// Clear it because he is stuck, not because he is in his own area —
     /// that call belongs to [`ClearanceCall::decide`], which runs before
     /// every other on-ball branch in this state.
     pub fn should_clear(&self, ctx: &StateProcessingContext) -> bool {
-        if self.is_congested_near_boundary(ctx) || ctx.player().movement().is_congested() {
-            #[cfg(feature = "match-logs")]
+        let stuck = self.is_congested_near_boundary(ctx) || ctx.player().movement().is_congested();
+        #[cfg(feature = "match-logs")]
+        if stuck {
             crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(1);
-            return true;
         }
-
-        false
+        stuck
     }
 
     /// Check if player is stuck in a corner/boundary with multiple players around

@@ -27,7 +27,32 @@ impl LocaleCatalog {
 
     /// Missing country bundles resolve through the default-language fallback.
     pub(super) fn countries(languages: &[&str]) -> Self {
-        Self::load(Some("countries"), languages, false, parse_country_bundle)
+        Self::load(
+            Some("countries"),
+            languages,
+            false,
+            Self::parse_country_bundle,
+        )
+    }
+
+    pub(super) fn country_name_key(code: &str) -> String {
+        format!("name.{code}")
+    }
+
+    fn parse_country_bundle(json: &str) -> serde_json::Result<HashMap<String, String>> {
+        let entries: HashMap<String, CountryEntry> = serde_json::from_str(json)?;
+        let mut translations = HashMap::with_capacity(entries.len() * 2);
+        for (code, entry) in entries {
+            let (name, nationality) = match entry {
+                CountryEntry::Shared(value) => (value.clone(), Some(value)),
+                CountryEntry::Named { name, nationality } => (name, nationality),
+            };
+            translations.insert(Self::country_name_key(&code), name);
+            if let Some(nationality) = nationality {
+                translations.insert(code, nationality);
+            }
+        }
+        Ok(translations)
     }
 
     fn load(
@@ -106,26 +131,6 @@ enum CountryEntry {
     },
 }
 
-fn parse_country_bundle(json: &str) -> serde_json::Result<HashMap<String, String>> {
-    let entries: HashMap<String, CountryEntry> = serde_json::from_str(json)?;
-    let mut translations = HashMap::with_capacity(entries.len() * 2);
-    for (code, entry) in entries {
-        let (name, nationality) = match entry {
-            CountryEntry::Shared(value) => (value.clone(), Some(value)),
-            CountryEntry::Named { name, nationality } => (name, nationality),
-        };
-        translations.insert(country_name_key(&code), name);
-        if let Some(nationality) = nationality {
-            translations.insert(code, nationality);
-        }
-    }
-    Ok(translations)
-}
-
-pub(super) fn country_name_key(code: &str) -> String {
-    format!("name.{code}")
-}
-
 /// The bundles one request resolves against inside a single scope: the
 /// requested language, then the default language behind it.
 #[derive(Clone)]
@@ -183,11 +188,11 @@ mod tests {
 
     #[test]
     fn country_names_fall_back_independently_of_nationality() {
-        let english = parse_country_bundle(
+        let english = LocaleCatalog::parse_country_bundle(
             r#"{"gb":{"name":"England","nationality":"English"},"ss":{"name":"South Sudan"}}"#,
         )
         .unwrap();
-        let japanese = parse_country_bundle(r#"{"gb":"イングランド"}"#).unwrap();
+        let japanese = LocaleCatalog::parse_country_bundle(r#"{"gb":"イングランド"}"#).unwrap();
         let catalog = LocaleCatalog {
             bundles: HashMap::from([
                 ("en".to_string(), Arc::new(english)),
@@ -196,12 +201,21 @@ mod tests {
         };
         let lookup = catalog.resolve("ja", "en");
 
-        assert_eq!(lookup.get(&country_name_key("gb")), Some("イングランド"));
+        assert_eq!(
+            lookup.get(&LocaleCatalog::country_name_key("gb")),
+            Some("イングランド")
+        );
         assert_eq!(lookup.get("gb"), Some("イングランド"));
-        assert_eq!(lookup.default_get(&country_name_key("gb")), Some("England"));
+        assert_eq!(
+            lookup.default_get(&LocaleCatalog::country_name_key("gb")),
+            Some("England")
+        );
         assert_eq!(lookup.default_get("gb"), Some("English"));
-        assert_eq!(lookup.get(&country_name_key("ss")), Some("South Sudan"));
+        assert_eq!(
+            lookup.get(&LocaleCatalog::country_name_key("ss")),
+            Some("South Sudan")
+        );
         assert_eq!(lookup.t("ss"), "ss");
-        assert_eq!(lookup.get(&country_name_key("zz")), None);
+        assert_eq!(lookup.get(&LocaleCatalog::country_name_key("zz")), None);
     }
 }

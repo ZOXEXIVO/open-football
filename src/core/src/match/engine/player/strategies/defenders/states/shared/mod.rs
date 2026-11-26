@@ -562,8 +562,6 @@ impl DefensiveLine {
         blended
     }
 
-    /// How far this defender is off the line, along the goal-to-goal axis.
-
     /// How far a defender may stray LATERALLY from his compact slot while
     /// doing an individual job. 60u = 7.5 m — enough to track a man
     /// through his own zone and into the edge of his neighbour's, not

@@ -117,7 +117,7 @@ impl Clone for SimulatorData {
             match_store: self.match_store.clone(),
             daily_world_player_pool: self.daily_world_player_pool.clone(),
             daily_global_free_agents: self.daily_global_free_agents.clone(),
-            free_agent_flow: self.free_agent_flow.clone(),
+            free_agent_flow: self.free_agent_flow,
         }
     }
 }

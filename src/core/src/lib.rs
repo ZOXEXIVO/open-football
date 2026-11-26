@@ -1,3 +1,6 @@
+#![cfg_attr(not(test), forbid(clippy::too_many_lines))]
+#![cfg_attr(test, allow(clippy::too_many_lines))]
+
 pub(crate) mod awards;
 pub mod club;
 pub mod competitions;

@@ -1282,13 +1282,15 @@ mod tests {
             appearances_tracked: 30,
             ..MindSituation::neutral()
         };
-        let mut anchors = CareerAnchors::default();
-        anchors.dream = Some(CareerDream {
-            kind: DreamKind::ReachTheTop,
-            target_standing: 0.9,
-            conviction: 0.8,
-            ..CareerDreamReview::formed_as(DreamKind::ReachTheTop, &s(27), 7, day(0))
-        });
+        let mut anchors = CareerAnchors {
+            dream: Some(CareerDream {
+                kind: DreamKind::ReachTheTop,
+                target_standing: 0.9,
+                conviction: 0.8,
+                ..CareerDreamReview::formed_as(DreamKind::ReachTheTop, &s(27), 7, day(0))
+            }),
+            ..CareerAnchors::default()
+        };
 
         let mut lowered = false;
         for year in 1..=8u16 {
@@ -1352,13 +1354,15 @@ mod tests {
             appearances_tracked: 30,
             ..MindSituation::neutral()
         };
-        let mut anchors = CareerAnchors::default();
-        anchors.dream = Some(CareerDreamReview::formed_as(
-            DreamKind::MakeACareer,
-            &s,
-            7,
-            day(0),
-        ));
+        let mut anchors = CareerAnchors {
+            dream: Some(CareerDreamReview::formed_as(
+                DreamKind::MakeACareer,
+                &s,
+                7,
+                day(0),
+            )),
+            ..CareerAnchors::default()
+        };
         reviewed(&mut anchors, &s, 7, 0.5, 1);
         let dream = anchors.dream.unwrap();
         assert_eq!(dream.kind, DreamKind::ReachTheTop);
@@ -1419,13 +1423,14 @@ mod tests {
 
     fn at_the_top(dream_kind: DreamKind, target: f32) -> CareerAnchors {
         let s = regular(9300, 0.5);
-        let mut anchors = CareerAnchors::default();
-        anchors.dream = Some(CareerDream {
-            target_standing: target,
-            target_club: 7,
-            ..CareerDreamReview::formed_as(dream_kind, &s, 7, day(0))
-        });
-        anchors
+        CareerAnchors {
+            dream: Some(CareerDream {
+                target_standing: target,
+                target_club: 7,
+                ..CareerDreamReview::formed_as(dream_kind, &s, 7, day(0))
+            }),
+            ..CareerAnchors::default()
+        }
     }
 
     #[test]

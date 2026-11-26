@@ -47,6 +47,9 @@ pub struct MentorshipPairing {
     pub mentee_id: u32,
 }
 
+/// `(index in the squad, score, position group)` per candidate.
+type Candidates = Vec<(usize, f32, PlayerFieldPositionGroup)>;
+
 /// Pure scoring helpers — mentor fitness, mentee need, and pair compatibility.
 /// Stateless namespace; the orchestrator pulls from here while ranking
 /// candidates and matching them.
@@ -289,15 +292,9 @@ impl MentorshipProcessor {
         applied
     }
 
-    fn score_candidates(
-        players: &[Player],
-        date: NaiveDate,
-    ) -> (
-        Vec<(usize, f32, PlayerFieldPositionGroup)>,
-        Vec<(usize, f32, PlayerFieldPositionGroup)>,
-    ) {
-        let mut mentors: Vec<(usize, f32, PlayerFieldPositionGroup)> = Vec::new();
-        let mut mentees: Vec<(usize, f32, PlayerFieldPositionGroup)> = Vec::new();
+    fn score_candidates(players: &[Player], date: NaiveDate) -> (Candidates, Candidates) {
+        let mut mentors = Candidates::new();
+        let mut mentees = Candidates::new();
         for (idx, p) in players.iter().enumerate() {
             // Already paired? Let the existing pairing finish before
             // re-pairing.

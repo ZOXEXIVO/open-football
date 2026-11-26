@@ -149,27 +149,21 @@ impl Club {
         annual_wage_bill: u32,
         pressure: &LedgerPressure,
     ) -> Option<StrandedOutcome> {
-        let Some(team) = self
+        let team = self
             .teams
             .teams
             .iter_mut()
-            .find(|t| t.players.players.iter().any(|p| p.id == listing.player_id))
-        else {
-            return None;
-        };
+            .find(|t| t.players.players.iter().any(|p| p.id == listing.player_id))?;
         let team_slug = team.slug.clone();
-        let Some(player) = team
+        let player = team
             .players
             .players
             .iter_mut()
-            .find(|p| p.id == listing.player_id)
-        else {
-            return None;
-        };
+            .find(|p| p.id == listing.player_id)?;
         if player.is_on_loan() {
             return None;
         }
-        let Some(case) = StrandedCase::read(
+        let case = StrandedCase::read(
             player,
             &team_slug,
             listing,
@@ -178,9 +172,7 @@ impl Club {
             date,
             average_wage,
             annual_wage_bill,
-        ) else {
-            return None;
-        };
+        )?;
         let verdict = self.board.review_stranded(&case, pressure);
         if verdict.route == StrandedRoute::KeepHim {
             self.transfer_plan

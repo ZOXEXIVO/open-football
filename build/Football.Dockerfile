@@ -17,9 +17,9 @@ WORKDIR /src
 # image serves match pages with no replay.
 #
 # Clippy is NOT part of the image: the official `rust` image installs the
-# minimal rustup profile, which ships rustc/cargo only. The `lint` stage below
-# inherits this stage, so the component has to be added here — otherwise it
-# fails with "'cargo-clippy' is not installed for the toolchain".
+# minimal rustup profile, which ships rustc/cargo only. Every stage that
+# inherits this one needs it, because `.cargo/config.toml` makes clippy the
+# workspace's compiler.
 RUN rustup target add wasm32-unknown-unknown \
     && rustup component add clippy
 
@@ -27,8 +27,10 @@ COPY ./ ./
 
 # ── LINT ──────────────────────────────────────────────────────────────
 #
-# Clippy gates the production tree. It compiles a different profile from the
-# test and release stages, so it gets its own target dir and cache ids.
+# Every build already runs clippy on the crates it compiles. This stage is the
+# backstop: it covers the wasm viewer, whose nested build only warns when it
+# fails, and a tree committed with the local compiler wrapper cleared. It compiles a different profile from the test and release
+# stages, so it gets its own target dir and cache ids.
 
 FROM source AS lint
 RUN --mount=type=cache,id=cargo-registry-lint,target=/usr/local/cargo/registry \

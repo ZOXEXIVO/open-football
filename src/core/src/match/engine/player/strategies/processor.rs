@@ -419,12 +419,8 @@ impl PlayerFieldPositionGroup {
                 return Some(TakeBallYield::TeammatesPass);
             }
         }
-        let Some(my_side) = player.side else {
-            return None;
-        };
-        let Some(my_cost) = tick_context.chase.cost_of(player.id) else {
-            return None;
-        };
+        let my_side = player.side?;
+        let my_cost = tick_context.chase.cost_of(player.id)?;
         // Hysteresis: only yield if a teammate is MEANINGFULLY quicker
         // to the ball. Otherwise tick-to-tick jitter in movement swaps
         // the designation between teammates every tick, turning the

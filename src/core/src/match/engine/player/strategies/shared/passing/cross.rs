@@ -527,10 +527,7 @@ impl CrossModel {
         // A cut-back is a ground ball to his feet: its lane is priced
         // the way every choice between lanes is.
         let lane = if matches!(cross_type, CrossType::Cutback) {
-            let Some(odds) = ctx.player().clear_pass(teammate.id) else {
-                return None;
-            };
-            Some(odds)
+            Some(ctx.player().clear_pass(teammate.id)?)
         } else {
             None
         };

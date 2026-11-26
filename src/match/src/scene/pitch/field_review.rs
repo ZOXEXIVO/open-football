@@ -116,7 +116,7 @@ fn candidate_surfaces_are_complete_and_finite() {
             panic!()
         };
         let mut area = 0.0;
-        for triangle in indices.chunks_exact(3) {
+        for triangle in indices.as_chunks::<3>().0 {
             let [a, b, c] = [
                 positions[triangle[0] as usize],
                 positions[triangle[1] as usize],
@@ -157,7 +157,7 @@ fn dump_field_candidates() {
             5,
         );
         assert!(
-            pixels.chunks_exact(4).all(|p| p[3] == 255),
+            pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 255),
             "{id}: uncovered pixels"
         );
         std::fs::write(directory.join(format!("{id}.rgba")), pixels).unwrap();

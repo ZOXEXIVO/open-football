@@ -29,6 +29,9 @@
 //! one schedule every system in those groups is registered into, which is the
 //! only place their order relative to each other is stated.
 
+#![cfg_attr(not(test), forbid(clippy::too_many_lines))]
+#![cfg_attr(test, allow(clippy::too_many_lines))]
+
 mod app;
 mod art;
 mod broadcast;

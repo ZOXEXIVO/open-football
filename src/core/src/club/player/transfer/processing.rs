@@ -1274,10 +1274,7 @@ impl Player {
         // suppress — the request once the mood persists past 120 days.
         let loyalty = self.attributes.loyalty.clamp(0.0, 20.0);
         let prof = self.attributes.professionalism.clamp(0.0, 20.0);
-        if (loyalty >= 16.0 || prof >= 16.0) && days < 150 && return_home_count < 2 {
-            return false;
-        }
-        true
+        !((loyalty >= 16.0 || prof >= 16.0) && days < 150 && return_home_count < 2)
     }
 
     /// True when the European-competition mood has lingered long
@@ -1377,13 +1374,7 @@ impl Player {
                     is_loan: self.is_on_loan(),
                     is_favorite_club: ctx.destination_is_favourite,
                 };
-                self.adaptation_score(
-                    now,
-                    &ctx.country_code,
-                    ctx.club_reputation,
-                    None,
-                    &squad_ctx,
-                )
+                self.adaptation_score(now, ctx.country_code, ctx.club_reputation, None, &squad_ctx)
             } else {
                 0.0
             };
@@ -1396,7 +1387,7 @@ impl Player {
                 adaptation_score,
                 club_fit: self.happiness.factors.club_fit,
             };
-            self.process_chronic_adaptation_failure(now, &ctx.country_code, &signals);
+            self.process_chronic_adaptation_failure(now, ctx.country_code, &signals);
             self.detect_career_desire_priority(now, ctx);
             // Post-relegation exodus — independent of the continental
             // priority resolution; keyed off the `Relegated` team event
@@ -1716,7 +1707,7 @@ impl LifeSimulationDesireDetector {
             Some(d) if (45..=300).contains(&d) => d,
             _ => return,
         };
-        if player.speaks_local_language(&ctx.country_code) {
+        if player.speaks_local_language(ctx.country_code) {
             return;
         }
         let adapt = player.attributes.adaptability.clamp(0.0, 20.0);
@@ -1865,7 +1856,7 @@ impl LifeSimulationDesireDetector {
         if ctx.club_in_home_country {
             return;
         }
-        if !player.speaks_local_language(&ctx.country_code) {
+        if !player.speaks_local_language(ctx.country_code) {
             return;
         }
         // Limit to South-American → Spain / Portugal-style affinity:

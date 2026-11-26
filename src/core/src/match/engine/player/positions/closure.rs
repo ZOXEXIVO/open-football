@@ -96,9 +96,7 @@ impl PlayerDistanceClosure {
         }
 
         // Reset per-player counts
-        for i in 0..n {
-            self.per_player_len[i] = 0;
-        }
+        self.per_player_len[..n].fill(0);
 
         // SoA scratch so the AVX2 kernel can do contiguous 8-wide loads.
         // Padding past n is zeroed; matrix cells touching those lanes are
@@ -383,8 +381,8 @@ unsafe fn compute_dist_matrix_neon(
                 // Column mirror: scalar scatter to column i.
                 let mut tmp = [0.0f32; 4];
                 vst1q_f32(tmp.as_mut_ptr(), d);
-                for k in 0..4 {
-                    *matrix.get_unchecked_mut((j + k) * MAX_PLAYERS + i) = tmp[k];
+                for (k, &distance) in tmp.iter().enumerate() {
+                    *matrix.get_unchecked_mut((j + k) * MAX_PLAYERS + i) = distance;
                 }
 
                 j += 4;

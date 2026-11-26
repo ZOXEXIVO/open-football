@@ -41,13 +41,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         field: &MatchField,
         context: &MatchContext,
     ) {
-        use crate::mid_run_diag::DefenceDiag;
-
         const SAMPLE_INTERVAL_TICKS: u64 = 25;
-        /// A defender this close is contesting the attacker. 24u = 3 m.
-        const MARKED_RADIUS: f32 = 24.0;
 
-        if context.current_tick() % SAMPLE_INTERVAL_TICKS != 0 {
+        if !context.current_tick().is_multiple_of(SAMPLE_INTERVAL_TICKS) {
             return;
         }
         let Some(carrier) = field
@@ -77,6 +73,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         if (field.ball.position.x - own_goal_x).abs() > field_width * 0.5 {
             return;
         }
+
+        Self::note_back_line(field, attacking_team);
+        Self::note_unmet_attackers(field, attacking_team, own_goal_x);
+        Self::note_marking_duels(field, context, attacking_team);
+    }
+
+    #[cfg(feature = "match-logs")]
+    fn note_back_line(field: &MatchField, attacking_team: u32) {
+        use crate::mid_run_diag::DefenceDiag;
 
         // ── Back-line shape ──────────────────────────────────────────
         let mut xs = [0.0f32; 8];
@@ -153,9 +158,17 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
             DefenceDiag::note_shape(max_x - min_x, max_gap);
         }
+    }
 
-        // ── Is anybody meeting the attackers? ────────────────────────
-        let third = field_width / 3.0;
+    /// Is anybody meeting the attackers in the defending third?
+    #[cfg(feature = "match-logs")]
+    fn note_unmet_attackers(field: &MatchField, attacking_team: u32, own_goal_x: f32) {
+        use crate::mid_run_diag::DefenceDiag;
+
+        /// A defender this close is contesting the attacker. 24u = 3 m.
+        const MARKED_RADIUS: f32 = 24.0;
+
+        let third = field.size.width as f32 / 3.0;
         for a in field.players.iter() {
             if a.team_id != attacking_team {
                 continue;
@@ -179,16 +192,21 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 DefenceDiag::note_attacker(nearest, nearest > MARKED_RADIUS);
             }
         }
+    }
 
-        // ── The marking duel itself ──────────────────────────────────
-        //
-        // The measure above is every defender against every attacker, and
-        // it is dominated by sheer density: the goal-side recovery rule
-        // puts bodies near attackers whether or not anybody is marking
-        // them, so it cannot tell you whether marking is being BEATEN.
-        // This one reads the assigned pairs only — the distance between a
-        // marker and the man he was actually given — which is the number
-        // the evasion work moves or does not.
+    /// **The marking duel itself.**
+    ///
+    /// [`Self::note_unmet_attackers`] is every defender against every attacker, and
+    /// it is dominated by sheer density: the goal-side recovery rule
+    /// puts bodies near attackers whether or not anybody is marking
+    /// them, so it cannot tell you whether marking is being BEATEN.
+    /// This one reads the assigned pairs only — the distance between a
+    /// marker and the man he was actually given — which is the number
+    /// the evasion work moves or does not.
+    #[cfg(feature = "match-logs")]
+    fn note_marking_duels(field: &MatchField, context: &MatchContext, attacking_team: u32) {
+        use crate::mid_run_diag::DefenceDiag;
+
         let plan = context.defence_plan_for_team(
             field
                 .players
@@ -197,95 +215,108 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 .map(|p| p.team_id)
                 .unwrap_or(attacking_team),
         );
-        if plan.active {
-            for d in field.players.iter() {
-                let Some(target) = plan.mark_of(d.id) else {
-                    continue;
-                };
-                if let Some(man) = field.players.iter().find(|p| p.id == target) {
-                    let pos = man.tactical_position.current_position;
-                    let line = if pos.is_forward() {
-                        2
-                    } else if pos.is_midfielder() {
-                        1
-                    } else {
-                        0
-                    };
-                    // Is the assigned marker in a state that actually
-                    // HONOURS the assignment? The plan hands out duties
-                    // to the whole unit, but only two states read them —
-                    // `Marking` for a defender and `Guarding` for a
-                    // midfielder — so a marker in any other state is
-                    // carrying a duty nothing acts on, and tuning the
-                    // marking distance reaches none of those ticks. Same
-                    // failure shape as the back line's shape code living
-                    // in `HoldingLine`.
-                    // 0 marking, 1 playing the ball (legitimate), 2
-                    // pressing/covering, 3 running/recovering, 4 idle.
-                    // Only bucket 4 — and most of 3 — is a duty nobody
-                    // is acting on.
-                    let bucket = match d.state {
-                        PlayerState::Midfielder(s) => match s.family() {
-                            MidfielderFamily::Mark => 0,
-                            MidfielderFamily::Duel
-                            | MidfielderFamily::Chase
-                            | MidfielderFamily::Intercept
-                            | MidfielderFamily::Aerial
-                            | MidfielderFamily::Play => 1,
-                            MidfielderFamily::Close => 2,
-                            MidfielderFamily::Carry | MidfielderFamily::Recover => 3,
-                            MidfielderFamily::Start
-                            | MidfielderFamily::Shape
-                            | MidfielderFamily::Support => 4,
-                        },
-                        PlayerState::Defender(DefenderState::Marking) => 0,
-                        PlayerState::Defender(
-                            DefenderState::Jockeying
-                            | DefenderState::Tackling
-                            | DefenderState::Intercepting
-                            | DefenderState::TakeBall
-                            | DefenderState::Clearing
-                            | DefenderState::Heading
-                            | DefenderState::Passing,
-                        ) => 1,
-                        PlayerState::Defender(
-                            DefenderState::Pressing | DefenderState::Covering,
-                        ) => 2,
-                        PlayerState::Defender(
-                            DefenderState::Running
-                            | DefenderState::Returning
-                            | DefenderState::TrackingBack,
-                        ) => 3,
-                        _ => 4,
-                    };
-                    DefenceDiag::note_duel((d.position - man.position).magnitude(), line, bucket);
+        if !plan.active {
+            return;
+        }
+        for d in field.players.iter() {
+            let Some(target) = plan.mark_of(d.id) else {
+                continue;
+            };
+            let Some(man) = field.players.iter().find(|p| p.id == target) else {
+                continue;
+            };
+            let pos = man.tactical_position.current_position;
+            let line = if pos.is_forward() {
+                2
+            } else if pos.is_midfielder() {
+                1
+            } else {
+                0
+            };
+            DefenceDiag::note_duel(
+                (d.position - man.position).magnitude(),
+                line,
+                Self::duel_bucket(d.state),
+            );
+            Self::note_mark_lane(field, context, d, man);
+        }
+    }
 
-                    // …and WHERE he is standing relative to the pass that
-                    // would reach his man. "Goal-side of him" and "in
-                    // front of him" are different things, and only the
-                    // second one stops the ball arriving. See
-                    // `mid_run_diag::MARKLANE_PERP_X100`.
-                    let ball = field.ball.position;
-                    let to_man = man.position - ball;
-                    let span = to_man.magnitude();
-                    if span > 1.0 {
-                        let dir = to_man / span;
-                        let rel = d.position - ball;
-                        let along = rel.dot(&dir);
-                        let perp = (rel - dir * along).magnitude();
-                        let voice = if d.team_id == context.field_home_team_id {
-                            context.home_skill_aggregates.keeper_voice
-                        } else {
-                            context.away_skill_aggregates.keeper_voice
-                        };
-                        // In the lane means between the two AND near the
-                        // line — a man level with either end is not in the
-                        // way of anything.
-                        let in_lane = along > 0.0 && along < span && perp < 12.0;
-                        crate::mid_run_diag::BoxPassDiag::note_mark_lane(perp, in_lane, voice);
-                    }
-                }
-            }
+    /// Is the assigned marker in a state that actually
+    /// HONOURS the assignment? The plan hands out duties
+    /// to the whole unit, but only two states read them —
+    /// `Marking` for a defender and `Guarding` for a
+    /// midfielder — so a marker in any other state is
+    /// carrying a duty nothing acts on, and tuning the
+    /// marking distance reaches none of those ticks. Same
+    /// failure shape as the back line's shape code living
+    /// in `HoldingLine`.
+    /// 0 marking, 1 playing the ball (legitimate), 2
+    /// pressing/covering, 3 running/recovering, 4 idle.
+    /// Only bucket 4 — and most of 3 — is a duty nobody
+    /// is acting on.
+    #[cfg(feature = "match-logs")]
+    fn duel_bucket(state: PlayerState) -> usize {
+        match state {
+            PlayerState::Midfielder(s) => match s.family() {
+                MidfielderFamily::Mark => 0,
+                MidfielderFamily::Duel
+                | MidfielderFamily::Chase
+                | MidfielderFamily::Intercept
+                | MidfielderFamily::Aerial
+                | MidfielderFamily::Play => 1,
+                MidfielderFamily::Close => 2,
+                MidfielderFamily::Carry | MidfielderFamily::Recover => 3,
+                MidfielderFamily::Start | MidfielderFamily::Shape | MidfielderFamily::Support => 4,
+            },
+            PlayerState::Defender(DefenderState::Marking) => 0,
+            PlayerState::Defender(
+                DefenderState::Jockeying
+                | DefenderState::Tackling
+                | DefenderState::Intercepting
+                | DefenderState::TakeBall
+                | DefenderState::Clearing
+                | DefenderState::Heading
+                | DefenderState::Passing,
+            ) => 1,
+            PlayerState::Defender(DefenderState::Pressing | DefenderState::Covering) => 2,
+            PlayerState::Defender(
+                DefenderState::Running | DefenderState::Returning | DefenderState::TrackingBack,
+            ) => 3,
+            _ => 4,
+        }
+    }
+
+    /// …and WHERE he is standing relative to the pass that
+    /// would reach his man. "Goal-side of him" and "in
+    /// front of him" are different things, and only the
+    /// second one stops the ball arriving. See
+    /// `mid_run_diag::MARKLANE_PERP_X100`.
+    #[cfg(feature = "match-logs")]
+    fn note_mark_lane(
+        field: &MatchField,
+        context: &MatchContext,
+        d: &MatchPlayer,
+        man: &MatchPlayer,
+    ) {
+        let ball = field.ball.position;
+        let to_man = man.position - ball;
+        let span = to_man.magnitude();
+        if span > 1.0 {
+            let dir = to_man / span;
+            let rel = d.position - ball;
+            let along = rel.dot(&dir);
+            let perp = (rel - dir * along).magnitude();
+            let voice = if d.team_id == context.field_home_team_id {
+                context.home_skill_aggregates.keeper_voice
+            } else {
+                context.away_skill_aggregates.keeper_voice
+            };
+            // In the lane means between the two AND near the
+            // line — a man level with either end is not in the
+            // way of anything.
+            let in_lane = along > 0.0 && along < span && perp < 12.0;
+            crate::mid_run_diag::BoxPassDiag::note_mark_lane(perp, in_lane, voice);
         }
     }
 
@@ -410,103 +441,125 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             DuelDiag::note_box_carry(bodies, contested);
         }
 
-        // ── IS HE ACTUALLY GETTING ANY CLOSER? ────────────────────────
-        //
-        // See the note on `mid_run_diag::CLOSE_SAMPLES`. Everything above
-        // buckets a defender by whether he is ALLOWED to challenge; this
-        // asks whether the man nearest the carrier is converging on him or
-        // merely travelling alongside, which is the difference the report
-        // is about and which no other counter here can see.
-        //
-        // Only sampled while the carrier is genuinely moving — a defender
-        // holding his ground against a man shielding the ball is
-        // jockeying, and counting that as a failure to close would bury
-        // the signal under correct defending.
+        Self::note_closing_run(context, carrier, nearest, defending_side);
+    }
+
+    /// **Is he actually getting any closer?**
+    ///
+    /// See the note on `mid_run_diag::CLOSE_SAMPLES`. [`Self::sample_duel_gates`]
+    /// buckets a defender by whether he is ALLOWED to challenge; this
+    /// asks whether the man nearest the carrier is converging on him or
+    /// merely travelling alongside, which is the difference the report
+    /// is about and which no other counter here can see.
+    ///
+    /// Only sampled while the carrier is genuinely moving — a defender
+    /// holding his ground against a man shielding the ball is
+    /// jockeying, and counting that as a failure to close would bury
+    /// the signal under correct defending.
+    #[cfg(feature = "match-logs")]
+    fn note_closing_run(
+        context: &MatchContext,
+        carrier: &MatchPlayer,
+        nearest: Option<(f32, &MatchPlayer)>,
+        defending_side: PlayerSide,
+    ) {
+        use crate::mid_run_diag::DuelDiag;
+
         let carrier_v = carrier.velocity;
         let carrier_speed = carrier_v.magnitude();
-        if carrier_speed > 0.05 {
-            if let Some((gap, d)) = nearest {
-                if gap > 0.5 && gap <= 200.0 {
-                    let to_carrier = (carrier.position - d.position) / gap;
-                    // Closing rate: how fast the gap shrinks. The carrier's
-                    // own motion counts — running at a man who is running
-                    // away is not closing on him.
-                    let rate = (d.velocity - carrier_v).dot(&to_carrier);
-                    let d_speed = d.velocity.magnitude();
-                    let align = if d_speed > 0.01 {
-                        d.velocity.dot(&carrier_v) / (d_speed * carrier_speed)
-                    } else {
-                        0.0
-                    };
-                    let own_goal_x = if defending_side == PlayerSide::Left {
-                        0.0
-                    } else {
-                        context.field_size.width as f32
-                    };
-                    // ── GOAL-SIDE SHADOWING IS NOT THE DEFECT ─────────
-                    //
-                    // A defender jockeying a carrier who is running at
-                    // goal retreats in front of him: same heading, gap
-                    // held, closing rate ~0. That is textbook defending
-                    // and the naive "same heading and not closing" test
-                    // counts every second of it as a failure — which is
-                    // why the first cut of this census read a flat 50%
-                    // whatever was changed underneath it.
-                    //
-                    // What the report describes is the other one: a
-                    // defender LEVEL WITH or BEHIND the man, matching his
-                    // speed shoulder to shoulder, with the goal open past
-                    // him. So the parallel test is restricted to a
-                    // defender who is not goal-side — the ball is already
-                    // nearer his goal than he is.
-                    let goal_side =
-                        (d.position.x - own_goal_x).abs() < (carrier.position.x - own_goal_x).abs();
-                    let parallel = align > 0.5 && rate < carrier_speed * 0.10 && !goal_side;
-                    let gaining = rate > carrier_speed * 0.10;
-                    let deep = (carrier.position.x - own_goal_x).abs()
-                        < context.field_size.width as f32 / 3.0;
-                    let state = match d.state {
-                        PlayerState::Midfielder(s) => match s.family() {
-                            MidfielderFamily::Duel => 0,
-                            MidfielderFamily::Close => 1,
-                            MidfielderFamily::Mark => 2,
-                            MidfielderFamily::Carry => 4,
-                            MidfielderFamily::Recover => 6,
-                            MidfielderFamily::Start
-                            | MidfielderFamily::Shape
-                            | MidfielderFamily::Support
-                            | MidfielderFamily::Chase
-                            | MidfielderFamily::Intercept
-                            | MidfielderFamily::Aerial
-                            | MidfielderFamily::Play => 7,
-                        },
-                        PlayerState::Forward(s) => match s.family() {
-                            ForwardFamily::Duel => 0,
-                            ForwardFamily::Close => 1,
-                            ForwardFamily::Carry => 4,
-                            ForwardFamily::Recover => 6,
-                            ForwardFamily::Start
-                            | ForwardFamily::Shape
-                            | ForwardFamily::Job
-                            | ForwardFamily::Chase
-                            | ForwardFamily::Intercept
-                            | ForwardFamily::Aerial
-                            | ForwardFamily::Play => 7,
-                        },
-                        PlayerState::Defender(
-                            DefenderState::Jockeying | DefenderState::Tackling,
-                        ) => 0,
-                        PlayerState::Defender(DefenderState::Pressing) => 1,
-                        PlayerState::Defender(DefenderState::Marking) => 2,
-                        PlayerState::Defender(DefenderState::Covering) => 3,
-                        PlayerState::Defender(DefenderState::Running) => 4,
-                        PlayerState::Defender(DefenderState::HoldingLine) => 5,
-                        PlayerState::Defender(DefenderState::TrackingBack) => 6,
-                        _ => 7,
-                    };
-                    DuelDiag::note_closing(rate, align, gap, deep, parallel, gaining, state);
-                }
-            }
+        if carrier_speed > 0.05
+            && let Some((gap, d)) = nearest
+            && gap > 0.5
+            && gap <= 200.0
+        {
+            let to_carrier = (carrier.position - d.position) / gap;
+            // Closing rate: how fast the gap shrinks. The carrier's
+            // own motion counts — running at a man who is running
+            // away is not closing on him.
+            let rate = (d.velocity - carrier_v).dot(&to_carrier);
+            let d_speed = d.velocity.magnitude();
+            let align = if d_speed > 0.01 {
+                d.velocity.dot(&carrier_v) / (d_speed * carrier_speed)
+            } else {
+                0.0
+            };
+            let own_goal_x = if defending_side == PlayerSide::Left {
+                0.0
+            } else {
+                context.field_size.width as f32
+            };
+            // ── GOAL-SIDE SHADOWING IS NOT THE DEFECT ─────────
+            //
+            // A defender jockeying a carrier who is running at
+            // goal retreats in front of him: same heading, gap
+            // held, closing rate ~0. That is textbook defending
+            // and the naive "same heading and not closing" test
+            // counts every second of it as a failure — which is
+            // why the first cut of this census read a flat 50%
+            // whatever was changed underneath it.
+            //
+            // What the report describes is the other one: a
+            // defender LEVEL WITH or BEHIND the man, matching his
+            // speed shoulder to shoulder, with the goal open past
+            // him. So the parallel test is restricted to a
+            // defender who is not goal-side — the ball is already
+            // nearer his goal than he is.
+            let goal_side =
+                (d.position.x - own_goal_x).abs() < (carrier.position.x - own_goal_x).abs();
+            let parallel = align > 0.5 && rate < carrier_speed * 0.10 && !goal_side;
+            let gaining = rate > carrier_speed * 0.10;
+            let deep =
+                (carrier.position.x - own_goal_x).abs() < context.field_size.width as f32 / 3.0;
+            DuelDiag::note_closing(
+                rate,
+                align,
+                gap,
+                deep,
+                parallel,
+                gaining,
+                Self::closing_state_slot(d.state),
+            );
+        }
+    }
+
+    #[cfg(feature = "match-logs")]
+    fn closing_state_slot(state: PlayerState) -> usize {
+        match state {
+            PlayerState::Midfielder(s) => match s.family() {
+                MidfielderFamily::Duel => 0,
+                MidfielderFamily::Close => 1,
+                MidfielderFamily::Mark => 2,
+                MidfielderFamily::Carry => 4,
+                MidfielderFamily::Recover => 6,
+                MidfielderFamily::Start
+                | MidfielderFamily::Shape
+                | MidfielderFamily::Support
+                | MidfielderFamily::Chase
+                | MidfielderFamily::Intercept
+                | MidfielderFamily::Aerial
+                | MidfielderFamily::Play => 7,
+            },
+            PlayerState::Forward(s) => match s.family() {
+                ForwardFamily::Duel => 0,
+                ForwardFamily::Close => 1,
+                ForwardFamily::Carry => 4,
+                ForwardFamily::Recover => 6,
+                ForwardFamily::Start
+                | ForwardFamily::Shape
+                | ForwardFamily::Job
+                | ForwardFamily::Chase
+                | ForwardFamily::Intercept
+                | ForwardFamily::Aerial
+                | ForwardFamily::Play => 7,
+            },
+            PlayerState::Defender(DefenderState::Jockeying | DefenderState::Tackling) => 0,
+            PlayerState::Defender(DefenderState::Pressing) => 1,
+            PlayerState::Defender(DefenderState::Marking) => 2,
+            PlayerState::Defender(DefenderState::Covering) => 3,
+            PlayerState::Defender(DefenderState::Running) => 4,
+            PlayerState::Defender(DefenderState::HoldingLine) => 5,
+            PlayerState::Defender(DefenderState::TrackingBack) => 6,
+            _ => 7,
         }
     }
 
@@ -783,7 +836,31 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             return;
         };
 
-        let state = match d.state {
+        BoxPassDiag::note(
+            gap,
+            lane,
+            ball.position.z,
+            bodies,
+            gap < WITHIN_2M,
+            gap < WITHIN_4M,
+            gap < INTERCEPT_RADIUS,
+            lane < LANE_HALF_WIDTH,
+            Self::box_pass_state_slot(d.state),
+        );
+        // …and the same lane distance banded by the voice behind this
+        // back line, which is the only read-out `KeeperVoice::front_foot`
+        // has. See `mid_run_diag::BOXPASS_LANE_BY_VOICE`.
+        let aggregates = if d.team_id == context.field_home_team_id {
+            &context.home_skill_aggregates
+        } else {
+            &context.away_skill_aggregates
+        };
+        BoxPassDiag::note_voice(lane, aggregates.keeper_voice);
+    }
+
+    #[cfg(feature = "match-logs")]
+    fn box_pass_state_slot(state: PlayerState) -> usize {
+        match state {
             PlayerState::Midfielder(s) => match s.family() {
                 MidfielderFamily::Mark => 0,
                 MidfielderFamily::Start => 1,
@@ -822,28 +899,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 | DefenderState::TakeBall,
             ) => 6,
             _ => 7,
-        };
-
-        BoxPassDiag::note(
-            gap,
-            lane,
-            ball.position.z,
-            bodies,
-            gap < WITHIN_2M,
-            gap < WITHIN_4M,
-            gap < INTERCEPT_RADIUS,
-            lane < LANE_HALF_WIDTH,
-            state,
-        );
-        // …and the same lane distance banded by the voice behind this
-        // back line, which is the only read-out `KeeperVoice::front_foot`
-        // has. See `mid_run_diag::BOXPASS_LANE_BY_VOICE`.
-        let aggregates = if d.team_id == context.field_home_team_id {
-            &context.home_skill_aggregates
-        } else {
-            &context.away_skill_aggregates
-        };
-        BoxPassDiag::note_voice(lane, aggregates.keeper_voice);
+        }
     }
 }
 

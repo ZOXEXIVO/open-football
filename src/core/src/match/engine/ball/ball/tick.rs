@@ -545,7 +545,8 @@ impl Ball {
                 engagers += 1;
             }
         }
-        if !(nearest < f32::MAX) {
+        let engaged = nearest < f32::MAX;
+        if !engaged {
             return;
         }
         let m = nearest * 0.125;
@@ -732,17 +733,17 @@ impl Ball {
         // How the possession ENDED. Read against the owner at entry so a
         // hand-off resolved anywhere inside this tick is caught, whichever
         // of the fifteen ownership-granting sites did it.
-        if owner_at_entry != self.current_owner {
-            if let (Some(was), Some(now_id)) = (keeper_of(owner_at_entry), self.current_owner) {
-                let stolen = players
-                    .iter()
-                    .find(|p| p.id == now_id)
-                    .is_some_and(|p| p.team_id != was.team_id);
-                if stolen {
-                    d::keeper_ball_note(if held_at_entry { 9 } else { 8 });
-                    if let crate::r#match::player::state::PlayerState::Goalkeeper(gk) = was.state {
-                        d::keeper_robbed_state(gk as usize);
-                    }
+        if owner_at_entry != self.current_owner
+            && let (Some(was), Some(now_id)) = (keeper_of(owner_at_entry), self.current_owner)
+        {
+            let stolen = players
+                .iter()
+                .find(|p| p.id == now_id)
+                .is_some_and(|p| p.team_id != was.team_id);
+            if stolen {
+                d::keeper_ball_note(if held_at_entry { 9 } else { 8 });
+                if let crate::r#match::player::state::PlayerState::Goalkeeper(gk) = was.state {
+                    d::keeper_robbed_state(gk as usize);
                 }
             }
         }

@@ -275,7 +275,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         field: &MatchField,
         context: &MatchContext,
     ) {
-        if context.current_tick() % SAMPLE_INTERVAL_TICKS != 0 {
+        if !context.current_tick().is_multiple_of(SAMPLE_INTERVAL_TICKS) {
             return;
         }
         let Some(carrier) = field
@@ -330,21 +330,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         SpacingCensus::note(&sample, progress >= 2.0 / 3.0);
     }
 
-    /// The geometry itself, split out so it is a pure function of a set
-    /// of bodies and can be reasoned about (and tested) without a match.
-    fn spacing_sample(
-        pos: &[Vector3<f32>],
-        ours: &[bool],
-        line: &[u8],
-        ball: Vector3<f32>,
-        forward: Vector3<f32>,
-    ) -> SpacingSample {
+    /// Single-linkage at `CLUMP_LINK`, by flood fill: the seed and size of
+    /// the largest clump, and every body's seed.
+    fn largest_clump(pos: &[Vector3<f32>]) -> (usize, usize, [usize; MAX_OUTFIELD]) {
         let n = pos.len();
 
-        // ── The clump ────────────────────────────────────────────────
-        // Single-linkage at `CLUMP_LINK`, by flood fill. Twenty-one
-        // bodies four times a second: the quadratic is cheaper than the
-        // bookkeeping a union-find would need.
+        // Twenty-one bodies four times a second: the quadratic is cheaper
+        // than the bookkeeping a union-find would need.
         let mut label = [usize::MAX; MAX_OUTFIELD];
         let mut stack = [0usize; MAX_OUTFIELD];
         let mut best_size = 0usize;
@@ -380,6 +372,22 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 best_label = seed;
             }
         }
+
+        (best_label, best_size, label)
+    }
+
+    /// The geometry itself, split out so it is a pure function of a set
+    /// of bodies and can be reasoned about (and tested) without a match.
+    fn spacing_sample(
+        pos: &[Vector3<f32>],
+        ours: &[bool],
+        line: &[u8],
+        ball: Vector3<f32>,
+        forward: Vector3<f32>,
+    ) -> SpacingSample {
+        let n = pos.len();
+
+        let (best_label, best_size, label) = Self::largest_clump(pos);
 
         let mut clump_by_line = [0u32; 4];
         let mut clump_attacking = 0u32;

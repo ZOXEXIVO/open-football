@@ -102,7 +102,7 @@ impl TeamCensus {
             Self::progress(ball_x, sides[1], length),
         ];
 
-        let spatial = inputs.tick % Self::SAMPLE_TICKS == 0;
+        let spatial = inputs.tick.is_multiple_of(Self::SAMPLE_TICKS);
         for side in 0..2 {
             let other = 1 - side;
             let state = LedgerState::from_goal_difference(goals[side] as i32 - goals[other] as i32);

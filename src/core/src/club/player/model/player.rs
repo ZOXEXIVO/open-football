@@ -579,6 +579,9 @@ impl ManagerPromiseKind {
     }
 }
 
+/// `(kept weight, kept by coach, broken weight, broken by coach)`.
+type PromiseOutcomes = (f32, Vec<(u32, f32)>, f32, Vec<(u32, f32)>);
+
 /// What the manager committed to. The historical signature only stored
 /// `baseline_apps`; new kinds reach for `target_value` (a kind-specific
 /// metric — share of starts, minutes, capacity %), `made_by_staff_id`
@@ -986,11 +989,7 @@ impl Player {
         }
 
         // Club has a signing plan — don't poach until the plan concludes
-        if self.signing_protection_active(date) {
-            return true;
-        }
-
-        false
+        self.signing_protection_active(date)
     }
 
     /// Record a new manager promise — minimal-info path. Kept for legacy
@@ -1157,10 +1156,7 @@ impl Player {
 
     /// Evaluate and drain every promise whose deadline has passed, keeping
     /// the aggregate morale weights and the coaches each outcome belongs to.
-    fn evaluate_promises(
-        &mut self,
-        now: NaiveDate,
-    ) -> (f32, Vec<(u32, f32)>, f32, Vec<(u32, f32)>) {
+    fn evaluate_promises(&mut self, now: NaiveDate) -> PromiseOutcomes {
         let usage = super::usage::PlayerUsage::of(self);
         let mut kept_weight: f32 = 0.0;
         let mut broken_weight: f32 = 0.0;

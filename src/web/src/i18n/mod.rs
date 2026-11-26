@@ -2,7 +2,7 @@ mod catalog;
 pub mod events;
 pub mod news;
 
-use crate::i18n::catalog::{LocaleCatalog, ScopeLookup, country_name_key};
+use crate::i18n::catalog::{LocaleCatalog, ScopeLookup};
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use std::borrow::Borrow;
 #[cfg(test)]
@@ -249,7 +249,7 @@ impl I18n {
 
     /// The country itself, for labels such as the accessible name of its flag.
     pub(crate) fn country_name(&self, code: &str) -> Option<&str> {
-        self.countries.get(&country_name_key(code))
+        self.countries.get(&LocaleCatalog::country_name_key(code))
     }
 
     pub fn current_flag(&self) -> &'static str {

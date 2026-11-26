@@ -774,7 +774,6 @@ pub struct ForwardCensusSnapshot {
     pub release_limits: [u64; FwdLimit::COUNT],
 }
 
-const ZERO: AtomicU64 = AtomicU64::new(0);
 const SLOTS: usize = ForwardState::SLOTS;
 const PLACES: usize = FrontPlace::COUNT;
 const HELD: usize = BallHeld::COUNT;
@@ -782,83 +781,91 @@ const BANDS: usize = DefenderCensus::BANDS;
 const REQUESTS_N: usize = FwdRequest::COUNT;
 
 static MOTION_TICKS: [[[AtomicU64; 2]; HELD]; PLACES] =
-    [const { [const { [ZERO; 2] }; HELD] }; PLACES];
+    [const { [const { [const { AtomicU64::new(0) }; 2] }; HELD] }; PLACES];
 static MOTION_PATH_MM: [[[AtomicU64; 2]; HELD]; PLACES] =
-    [const { [const { [ZERO; 2] }; HELD] }; PLACES];
+    [const { [const { [const { AtomicU64::new(0) }; 2] }; HELD] }; PLACES];
 static MOTION_BANDS: [[[[AtomicU64; BANDS]; 2]; HELD]; PLACES] =
-    [const { [const { [const { [ZERO; BANDS] }; 2] }; HELD] }; PLACES];
-static SPRINTS: [[[AtomicU64; 2]; HELD]; PLACES] = [const { [const { [ZERO; 2] }; HELD] }; PLACES];
-static STATE_TICKS: [AtomicU64; SLOTS + 1] = [ZERO; SLOTS + 1];
-static STATE_BALL_TICKS: [AtomicU64; SLOTS + 1] = [ZERO; SLOTS + 1];
+    [const { [const { [const { [const { AtomicU64::new(0) }; BANDS] }; 2] }; HELD] }; PLACES];
+static SPRINTS: [[[AtomicU64; 2]; HELD]; PLACES] =
+    [const { [const { [const { AtomicU64::new(0) }; 2] }; HELD] }; PLACES];
+static STATE_TICKS: [AtomicU64; SLOTS + 1] = [const { AtomicU64::new(0) }; SLOTS + 1];
+static STATE_BALL_TICKS: [AtomicU64; SLOTS + 1] = [const { AtomicU64::new(0) }; SLOTS + 1];
 static STATE_HELD_TICKS: [[AtomicU64; HELD + 1]; SLOTS + 1] =
-    [const { [ZERO; HELD + 1] }; SLOTS + 1];
-static STATE_SPEED_CMPS: [AtomicU64; SLOTS + 1] = [ZERO; SLOTS + 1];
-static PLACE_STATE_TICKS: [[AtomicU64; SLOTS + 1]; PLACES] = [const { [ZERO; SLOTS + 1] }; PLACES];
-static OUT_TICKS: [AtomicU64; 8] = [ZERO; 8];
-static OUT_STATE: [[AtomicU64; SLOTS]; 2] = [const { [ZERO; SLOTS] }; 2];
-static CARRIER_TICKS: AtomicU64 = ZERO;
-static CROWDED_TICKS: AtomicU64 = ZERO;
-static PRESS_DOORS: [[AtomicU64; 2]; PressDoor::COUNT] = [const { [ZERO; 2] }; PressDoor::COUNT];
-static JOB_TICKS: [AtomicU64; FwdJob::COUNT] = [ZERO; FwdJob::COUNT];
+    [const { [const { AtomicU64::new(0) }; HELD + 1] }; SLOTS + 1];
+static STATE_SPEED_CMPS: [AtomicU64; SLOTS + 1] = [const { AtomicU64::new(0) }; SLOTS + 1];
+static PLACE_STATE_TICKS: [[AtomicU64; SLOTS + 1]; PLACES] =
+    [const { [const { AtomicU64::new(0) }; SLOTS + 1] }; PLACES];
+static OUT_TICKS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+static OUT_STATE: [[AtomicU64; SLOTS]; 2] = [const { [const { AtomicU64::new(0) }; SLOTS] }; 2];
+static CARRIER_TICKS: AtomicU64 = AtomicU64::new(0);
+static CROWDED_TICKS: AtomicU64 = AtomicU64::new(0);
+static PRESS_DOORS: [[AtomicU64; 2]; PressDoor::COUNT] =
+    [const { [const { AtomicU64::new(0) }; 2] }; PressDoor::COUNT];
+static JOB_TICKS: [AtomicU64; FwdJob::COUNT] = [const { AtomicU64::new(0) }; FwdJob::COUNT];
 static JOB_STATE: [[AtomicU64; SLOTS + 1]; FwdJob::COUNT] =
-    [const { [ZERO; SLOTS + 1] }; FwdJob::COUNT];
-static RIB_TICKS: AtomicU64 = ZERO;
-static RIB_UNNAMED_TICKS: AtomicU64 = ZERO;
-static RUNNER_NAMED_TICKS: AtomicU64 = ZERO;
-static RUNNER_IN_RIB_TICKS: AtomicU64 = ZERO;
-static STRIKER_POSSESSION_TICKS: AtomicU64 = ZERO;
-static STRIKER_BOX_TICKS: [AtomicU64; 2] = [ZERO; 2];
-static SIDE_POSSESSION_TICKS: AtomicU64 = ZERO;
-static BOTH_IN_RIB_TICKS: AtomicU64 = ZERO;
-static RUNS: [AtomicU64; PLACES] = [ZERO; PLACES];
-static RUNS_NAMED: [AtomicU64; PLACES] = [ZERO; PLACES];
-static RUN_DOORS: [AtomicU64; RunDoor::COUNT] = [ZERO; RunDoor::COUNT];
-static RUN_ENDS: [AtomicU64; RunEnd::COUNT] = [ZERO; RunEnd::COUNT];
-static RUN_TICKS: AtomicU64 = ZERO;
-static RUN_HELD_TICKS: AtomicU64 = ZERO;
-static RUN_HELD_SPEED_CMPS: AtomicU64 = ZERO;
-static RUN_PLAYED: AtomicU64 = ZERO;
-static RUN_FLAGGED: AtomicU64 = ZERO;
-static RUN_LINE_GAP: [AtomicU64; LineGap::COUNT] = [ZERO; LineGap::COUNT];
-static SPELLS: [AtomicU64; PLACES] = [ZERO; PLACES];
-static SPELL_CLOSING_TICKS: [AtomicU64; PLACES] = [ZERO; PLACES];
-static SPELL_CONTAINING_TICKS: [AtomicU64; PLACES] = [ZERO; PLACES];
+    [const { [const { AtomicU64::new(0) }; SLOTS + 1] }; FwdJob::COUNT];
+static RIB_TICKS: AtomicU64 = AtomicU64::new(0);
+static RIB_UNNAMED_TICKS: AtomicU64 = AtomicU64::new(0);
+static RUNNER_NAMED_TICKS: AtomicU64 = AtomicU64::new(0);
+static RUNNER_IN_RIB_TICKS: AtomicU64 = AtomicU64::new(0);
+static STRIKER_POSSESSION_TICKS: AtomicU64 = AtomicU64::new(0);
+static STRIKER_BOX_TICKS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+static SIDE_POSSESSION_TICKS: AtomicU64 = AtomicU64::new(0);
+static BOTH_IN_RIB_TICKS: AtomicU64 = AtomicU64::new(0);
+static RUNS: [AtomicU64; PLACES] = [const { AtomicU64::new(0) }; PLACES];
+static RUNS_NAMED: [AtomicU64; PLACES] = [const { AtomicU64::new(0) }; PLACES];
+static RUN_DOORS: [AtomicU64; RunDoor::COUNT] = [const { AtomicU64::new(0) }; RunDoor::COUNT];
+static RUN_ENDS: [AtomicU64; RunEnd::COUNT] = [const { AtomicU64::new(0) }; RunEnd::COUNT];
+static RUN_TICKS: AtomicU64 = AtomicU64::new(0);
+static RUN_HELD_TICKS: AtomicU64 = AtomicU64::new(0);
+static RUN_HELD_SPEED_CMPS: AtomicU64 = AtomicU64::new(0);
+static RUN_PLAYED: AtomicU64 = AtomicU64::new(0);
+static RUN_FLAGGED: AtomicU64 = AtomicU64::new(0);
+static RUN_LINE_GAP: [AtomicU64; LineGap::COUNT] = [const { AtomicU64::new(0) }; LineGap::COUNT];
+static SPELLS: [AtomicU64; PLACES] = [const { AtomicU64::new(0) }; PLACES];
+static SPELL_CLOSING_TICKS: [AtomicU64; PLACES] = [const { AtomicU64::new(0) }; PLACES];
+static SPELL_CONTAINING_TICKS: [AtomicU64; PLACES] = [const { AtomicU64::new(0) }; PLACES];
 static SPELL_ENDS: [[AtomicU64; SpellEnd::COUNT]; PLACES] =
-    [const { [ZERO; SpellEnd::COUNT] }; PLACES];
-static TACKLING_ENTRIES: AtomicU64 = ZERO;
-static CHALLENGES: [AtomicU64; 2] = [ZERO; 2];
-static CHALLENGE_OUTCOMES: [[AtomicU64; 3]; 2] = [const { [ZERO; 3] }; 2];
-static CHALLENGE_SPEED_CMPS: AtomicU64 = ZERO;
-static CHALLENGE_GOAL_SIDE: AtomicU64 = ZERO;
-static TACKLE_TAKES: [AtomicU64; FwdTackleTake::COUNT] = [ZERO; FwdTackleTake::COUNT];
-static HEADERS: [AtomicU64; FwdHeaderRule::COUNT] = [ZERO; FwdHeaderRule::COUNT];
+    [const { [const { AtomicU64::new(0) }; SpellEnd::COUNT] }; PLACES];
+static TACKLING_ENTRIES: AtomicU64 = AtomicU64::new(0);
+static CHALLENGES: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+static CHALLENGE_OUTCOMES: [[AtomicU64; 3]; 2] = [const { [const { AtomicU64::new(0) }; 3] }; 2];
+static CHALLENGE_SPEED_CMPS: AtomicU64 = AtomicU64::new(0);
+static CHALLENGE_GOAL_SIDE: AtomicU64 = AtomicU64::new(0);
+static TACKLE_TAKES: [AtomicU64; FwdTackleTake::COUNT] =
+    [const { AtomicU64::new(0) }; FwdTackleTake::COUNT];
+static HEADERS: [AtomicU64; FwdHeaderRule::COUNT] =
+    [const { AtomicU64::new(0) }; FwdHeaderRule::COUNT];
 static HEADER_STATE: [[AtomicU64; SLOTS + 1]; FwdHeaderRule::COUNT] =
-    [const { [ZERO; SLOTS + 1] }; FwdHeaderRule::COUNT];
-static HEADER_LEAP: [AtomicU64; FwdHeaderRule::COUNT] = [ZERO; FwdHeaderRule::COUNT];
+    [const { [const { AtomicU64::new(0) }; SLOTS + 1] }; FwdHeaderRule::COUNT];
+static HEADER_LEAP: [AtomicU64; FwdHeaderRule::COUNT] =
+    [const { AtomicU64::new(0) }; FwdHeaderRule::COUNT];
 static HEADER_BOOKED: [[AtomicU64; HeaderBooking::COUNT]; FwdHeaderRule::COUNT] =
-    [const { [ZERO; HeaderBooking::COUNT] }; FwdHeaderRule::COUNT];
-static HEADING_ENTRIES: AtomicU64 = ZERO;
-static HEADING_EXITS: [AtomicU64; FwdHeadingExit::COUNT] = [ZERO; FwdHeadingExit::COUNT];
-static REQUESTS: [AtomicU64; REQUESTS_N] = [ZERO; REQUESTS_N];
-static APPROVED: [AtomicU64; REQUESTS_N] = [ZERO; REQUESTS_N];
-static TAKEN: [AtomicU64; REQUESTS_N] = [ZERO; REQUESTS_N];
+    [const { [const { AtomicU64::new(0) }; HeaderBooking::COUNT] }; FwdHeaderRule::COUNT];
+static HEADING_ENTRIES: AtomicU64 = AtomicU64::new(0);
+static HEADING_EXITS: [AtomicU64; FwdHeadingExit::COUNT] =
+    [const { AtomicU64::new(0) }; FwdHeadingExit::COUNT];
+static REQUESTS: [AtomicU64; REQUESTS_N] = [const { AtomicU64::new(0) }; REQUESTS_N];
+static APPROVED: [AtomicU64; REQUESTS_N] = [const { AtomicU64::new(0) }; REQUESTS_N];
+static TAKEN: [AtomicU64; REQUESTS_N] = [const { AtomicU64::new(0) }; REQUESTS_N];
 static REFUSED: [[AtomicU64; FwdRefusal::COUNT]; REQUESTS_N] =
-    [const { [ZERO; FwdRefusal::COUNT] }; REQUESTS_N];
+    [const { [const { AtomicU64::new(0) }; FwdRefusal::COUNT] }; REQUESTS_N];
 static DOORS: [[[AtomicU64; 2]; SLOTS]; FwdSituation::COUNT] =
-    [const { [const { [ZERO; 2] }; SLOTS] }; FwdSituation::COUNT];
-static PHASE_TICKS: [AtomicU64; FwdPhase::COUNT] = [ZERO; FwdPhase::COUNT];
-static RELAXED_ALERT_CHANGES: AtomicU64 = ZERO;
-static RELAXED_ALERT_REVERSED: AtomicU64 = ZERO;
-static CHASE_ENTRIES: [AtomicU64; SLOTS] = [ZERO; SLOTS];
+    [const { [const { [const { AtomicU64::new(0) }; 2] }; SLOTS] }; FwdSituation::COUNT];
+static PHASE_TICKS: [AtomicU64; FwdPhase::COUNT] = [const { AtomicU64::new(0) }; FwdPhase::COUNT];
+static RELAXED_ALERT_CHANGES: AtomicU64 = AtomicU64::new(0);
+static RELAXED_ALERT_REVERSED: AtomicU64 = AtomicU64::new(0);
+static CHASE_ENTRIES: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
 static CHASE_REVERSED: [[AtomicU64; ChaseYield::COUNT]; SLOTS] =
-    [const { [ZERO; ChaseYield::COUNT] }; SLOTS];
-static RECEPTIONS: [AtomicU64; SLOTS + 1] = [ZERO; SLOTS + 1];
-static RECEPTION_RUNNING_AGE: [AtomicU64; 3] = [ZERO; 3];
-static RECEPTION_PRESSED: AtomicU64 = ZERO;
-static RELEASES: [AtomicU64; 2] = [ZERO; 2];
-static RELEASE_TICKS: [AtomicU64; 2] = [ZERO; 2];
-static LIMITS: [AtomicU64; FwdLimit::COUNT] = [ZERO; FwdLimit::COUNT];
-static RELEASE_LIMITS: [AtomicU64; FwdLimit::COUNT] = [ZERO; FwdLimit::COUNT];
+    [const { [const { AtomicU64::new(0) }; ChaseYield::COUNT] }; SLOTS];
+static RECEPTIONS: [AtomicU64; SLOTS + 1] = [const { AtomicU64::new(0) }; SLOTS + 1];
+static RECEPTION_RUNNING_AGE: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+static RECEPTION_PRESSED: AtomicU64 = AtomicU64::new(0);
+static RELEASES: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+static RELEASE_TICKS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+static LIMITS: [AtomicU64; FwdLimit::COUNT] = [const { AtomicU64::new(0) }; FwdLimit::COUNT];
+static RELEASE_LIMITS: [AtomicU64; FwdLimit::COUNT] =
+    [const { AtomicU64::new(0) }; FwdLimit::COUNT];
 
 /// The open episodes of one match.
 #[derive(Debug, Default)]
@@ -1404,21 +1411,7 @@ impl ForwardCensus {
                     slow_live_ticks += 1;
                 }
             }
-            let live = usize::from(!dead);
-            Self::bump(&MOTION_TICKS[place][held][live]);
-            MOTION_PATH_MM[place][held][live].fetch_add(
-                (step * Self::METRES_PER_UNIT * 1000.0) as u64,
-                Ordering::Relaxed,
-            );
-            Self::bump(&MOTION_BANDS[place][held][live][Self::band(speed)]);
-            if speed > DefenderCensus::BAND_EDGES[3] {
-                watch.sprint_ticks += 1;
-                if watch.sprint_ticks == Self::SPRINT_TICKS {
-                    Self::bump(&SPRINTS[place][held][live]);
-                }
-            } else if speed < DefenderCensus::BAND_EDGES[2] {
-                watch.sprint_ticks = 0;
-            }
+            Self::follow_motion(watch, place, held, usize::from(!dead), step, speed);
 
             if received == Some(player.id) {
                 Self::open_reception(watch, field, player, tick);
@@ -1461,6 +1454,31 @@ impl ForwardCensus {
         }
         self.live_ticks += live_ticks;
         self.slow_live_ticks += slow_live_ticks;
+    }
+
+    /// Ground covered, the speed band, and whether this tick opens a sprint.
+    fn follow_motion(
+        watch: &mut ForwardWatch,
+        place: usize,
+        held: usize,
+        live: usize,
+        step: f32,
+        speed: f32,
+    ) {
+        Self::bump(&MOTION_TICKS[place][held][live]);
+        MOTION_PATH_MM[place][held][live].fetch_add(
+            (step * Self::METRES_PER_UNIT * 1000.0) as u64,
+            Ordering::Relaxed,
+        );
+        Self::bump(&MOTION_BANDS[place][held][live][Self::band(speed)]);
+        if speed > DefenderCensus::BAND_EDGES[3] {
+            watch.sprint_ticks += 1;
+            if watch.sprint_ticks == Self::SPRINT_TICKS {
+                Self::bump(&SPRINTS[place][held][live]);
+            }
+        } else if speed < DefenderCensus::BAND_EDGES[2] {
+            watch.sprint_ticks = 0;
+        }
     }
 
     fn band(speed_mps: f32) -> usize {

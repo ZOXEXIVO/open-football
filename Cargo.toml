@@ -33,15 +33,18 @@ version = "1.8.700"
 authors = ["Artemov Ivan (ZOXEXIVO) <zoxexivo@gmail.com>"]
 edition = "2024"
 
-# Style lints whose "fix" is a layout or API change, not a code fix: the tree
-# nests `ball/ball.rs`-style modules on purpose, and the simulation's context
-# passing is wide by nature.
+# A build is warning-free: clippy's default groups and every rustc warning
+# fail it. The two allowed lints are ones whose "fix" is a layout or API change,
+# not a code fix: the tree nests `ball/ball.rs`-style modules on purpose, and
+# the simulation's context passing is wide by nature.
 [workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
 module_inception = "allow"
 too_many_arguments = "allow"
 too_many_lines = "deny"
 
 [workspace.lints.rust]
+warnings = "deny"
 unfulfilled_lint_expectations = "deny"
 
 [package]

@@ -974,14 +974,13 @@ impl MidfielderRunningState {
         // each man his own reach off `long_shots` / technique /
         // strength — this gate is the ROLE on top of that, and the
         // role is the half that was missing.
-        let strike_range = if MidfieldPlay::legacy() {
+        if MidfieldPlay::legacy() {
             MAX_SHOOTING_DISTANCE
         } else {
             (STANDARD_SHOOTING_DISTANCE
                 + role.shooting * (MAX_SHOOTING_DISTANCE - STANDARD_SHOOTING_DISTANCE))
                 .min(MAX_SHOOTING_DISTANCE)
-        };
-        strike_range
+        }
     }
 
     /// Patient possession while the shape reforms.
@@ -1201,7 +1200,7 @@ impl MidfielderRunningState {
         // exactly when a driving run meets the covering midfielder.
         // The one thing worth waiting for is his first touch.
         if settled && lane.has_man_to_beat() && goal_dist < field_width * 0.88 {
-            let go = TakeOn::decide(ctx, &lane, &mid_profile);
+            let go = TakeOn::decide(ctx, lane, mid_profile);
             onball_diag::record_ahead(lane.occupancy, go);
             if go {
                 onball_diag::record(Exit::Dribble);
@@ -1670,7 +1669,7 @@ impl MidfielderRunningState {
         // Enhanced passing decision — look for a good pass
         if ownership_ticks > 15
             && ctx.ball().has_stable_possession()
-            && self.should_pass(ctx, &mid_profile, &lane)
+            && self.should_pass(ctx, mid_profile, lane)
             && let Some((target_teammate, _reason)) = self.find_best_pass_option(ctx)
         {
             onball_diag::record(Exit::ShouldPass);

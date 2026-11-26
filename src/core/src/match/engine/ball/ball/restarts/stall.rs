@@ -30,21 +30,22 @@ use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 pub mod dead_ball_diag {
     use crate::r#match::ActivityIntensity;
+    use std::cmp::Reverse;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// Widest `PlayerState::compact_id()` plus headroom (forwards top
     /// out at 418 today).
     pub const STATES: usize = 448;
-    const ZERO: AtomicU64 = AtomicU64::new(0);
 
     /// Full ticks the ball spent stuck while a player in this state held
     /// it, and how many separate episodes that was.
-    pub static STUCK_TICKS_BY_STATE: [AtomicU64; STATES] = [ZERO; STATES];
-    pub static STUCK_EPISODES_BY_STATE: [AtomicU64; STATES] = [ZERO; STATES];
+    pub static STUCK_TICKS_BY_STATE: [AtomicU64; STATES] = [const { AtomicU64::new(0) }; STATES];
+    pub static STUCK_EPISODES_BY_STATE: [AtomicU64; STATES] = [const { AtomicU64::new(0) }; STATES];
     /// The dwell split, per state. Without it a row in the stuck table
     /// does not say which of the two failures it is — see the module
     /// note on `OWNER_DWELL`. Flattened `state * 5 + bucket`.
-    pub static STUCK_DWELL_BY_STATE: [AtomicU64; STATES * 5] = [ZERO; STATES * 5];
+    pub static STUCK_DWELL_BY_STATE: [AtomicU64; STATES * 5] =
+        [const { AtomicU64::new(0) }; STATES * 5];
     /// Same, for a stall nobody owned — a loose ball sitting untouched.
     pub static STUCK_TICKS_UNOWNED: AtomicU64 = AtomicU64::new(0);
     pub static STUCK_EPISODES_UNOWNED: AtomicU64 = AtomicU64::new(0);
@@ -58,9 +59,9 @@ pub mod dead_ball_diag {
     /// THROUGH on the way into possession collects one tick per
     /// ownership grant and reads 0-1; a state that genuinely holds the
     /// ball and does nothing reads high.
-    pub static OWNER_DWELL: [AtomicU64; 5] = [ZERO; 5];
+    pub static OWNER_DWELL: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
     /// Same split, restricted to the four TakeBall states.
-    pub static TAKEBALL_DWELL: [AtomicU64; 5] = [ZERO; 5];
+    pub static TAKEBALL_DWELL: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
     /// Distance from the attributed owner to the ball, in tenths of a
     /// unit, summed — so the mean says whether he is standing on it.
     pub static TAKEBALL_OWNER_DIST_X10: AtomicU64 = AtomicU64::new(0);
@@ -85,12 +86,12 @@ pub mod dead_ball_diag {
     /// full tick he holds it, bucketed in metres.
     ///
     /// 0 <2m, 1 2-5m, 2 5-10m, 3 10-20m, 4 20m+.
-    pub static CARRIER_PRESSURE: [AtomicU64; 5] = [ZERO; 5];
+    pub static CARRIER_PRESSURE: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
     pub const PRESSURE_LABELS: [&str; 5] = ["<2m", "2-5m", "5-10m", "10-20m", "20m+"];
     /// Same, split by which third of the pitch the carrier is in
     /// (own / middle / attacking, from the CARRIER's point of view),
     /// flattened `third * 5 + bucket`.
-    pub static CARRIER_PRESSURE_BY_THIRD: [AtomicU64; 15] = [ZERO; 15];
+    pub static CARRIER_PRESSURE_BY_THIRD: [AtomicU64; 15] = [const { AtomicU64::new(0) }; 15];
     /// Summed nearest-opponent distance in tenths of a unit, for a mean.
     pub static CARRIER_NEAREST_X10: AtomicU64 = AtomicU64::new(0);
     pub static CARRIER_SAMPLES: AtomicU64 = AtomicU64::new(0);
@@ -133,7 +134,7 @@ pub mod dead_ball_diag {
     /// `ActivityIntensity` (0 VeryHigh … 4 Recovery). A chase run in a
     /// `High` or `Moderate` state is a mislabelled state, not a slow
     /// player.
-    pub static CHASE_TIER: [AtomicU64; 5] = [ZERO; 5];
+    pub static CHASE_TIER: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
     pub const CHASE_TIER_LABELS: [&str; 5] = ["VeryHigh", "High", "Moderate", "Low", "Recovery"];
 
     /// **How far a footballer actually runs, and at what effort.**
@@ -279,15 +280,16 @@ pub mod dead_ball_diag {
     pub static MOTION_TICKS: AtomicU64 = AtomicU64::new(0);
     /// `MOTION_TICKS` and `MOTION_DISTANCE_X1000` split by
     /// [`MotionCensus::back_line_split`]'s rows.
-    pub static MOTION_LINE_TICKS: [AtomicU64; MotionCensus::LINES] = [ZERO; MotionCensus::LINES];
+    pub static MOTION_LINE_TICKS: [AtomicU64; MotionCensus::LINES] =
+        [const { AtomicU64::new(0) }; MotionCensus::LINES];
     pub static MOTION_LINE_DISTANCE_X1000: [AtomicU64; MotionCensus::LINES] =
-        [ZERO; MotionCensus::LINES];
+        [const { AtomicU64::new(0) }; MotionCensus::LINES];
     /// Ground covered, in thousandths of a game unit (a unit is 0.125 m).
     pub static MOTION_DISTANCE_X1000: AtomicU64 = AtomicU64::new(0);
     /// Ticks spent below a walking pace — 1.2 m/s, or 0.096 u/tick.
     pub static MOTION_STILL: AtomicU64 = AtomicU64::new(0);
     /// …and the declared effort tier, indexed like `ActivityIntensity`.
-    pub static MOTION_TIER: [AtomicU64; 5] = [ZERO; 5];
+    pub static MOTION_TIER: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
     /// Ticks the player is at his own speed CEILING — which decides
     /// whether `ActivityIntensity` is even the lever for total distance.
     /// A ceiling that rarely binds cannot be lowered to slow anybody down;
@@ -365,7 +367,7 @@ pub mod dead_ball_diag {
     pub static STALL_TURNOVERS_CROSS_TEAM: AtomicU64 = AtomicU64::new(0);
     /// Stall ticks by zone: 0 near a corner flag, 1 in either penalty
     /// area, 2 near a touchline, 3 open play.
-    pub static STALL_ZONE: [AtomicU64; 4] = [ZERO; 4];
+    pub static STALL_ZONE: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
     pub const ZONE_LABELS: [&str; 4] = ["corner flag", "penalty area", "touchline", "open play"];
     /// Stall ticks where the ball was in a protected flight window (a
     /// pass or set-piece delivery in progress).
@@ -396,7 +398,7 @@ pub mod dead_ball_diag {
     pub static OWNERSHIP_RECLAIMED_SELF: AtomicU64 = AtomicU64::new(0);
     /// How long each spell of possession lasted, bucketed in full ticks:
     /// 1 / 2-5 / 6-25 / 26-100 / 100+.
-    pub static SPELL_LENGTH: [AtomicU64; 5] = [ZERO; 5];
+    pub static SPELL_LENGTH: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 
     #[inline]
     pub fn spell_bucket(ticks: u32) -> usize {
@@ -544,7 +546,7 @@ pub mod dead_ball_diag {
                 ));
             }
         }
-        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        rows.sort_by_key(|row| Reverse(row.1));
         (
             rows,
             STUCK_TICKS_UNOWNED.load(Ordering::Relaxed),

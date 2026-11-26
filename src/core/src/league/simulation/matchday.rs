@@ -2466,7 +2466,7 @@ mod tests {
 
     #[test]
     fn a_club_in_a_continental_group_has_the_tie_in_its_window() {
-        let clubs = vec![
+        let clubs = [
             md_club(100, vec![md_first_team(1, 100, 8000)]),
             md_club(200, vec![md_first_team(2, 200, 8000)]),
         ];

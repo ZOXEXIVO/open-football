@@ -878,7 +878,7 @@ fn diving_in_wins_less_and_fouls_more_than_being_set() {
 #[test]
 fn pace_can_beat_a_defender_backing_off() {
     let mut pitch = duel(TackleEngagement::COMMIT - 2.0);
-    let conditions = pitch.context.conditions.clone();
+    let conditions = pitch.context.conditions;
     let defender = pitch.field.get_player_mut(DCL).unwrap();
     DefenderJockeyingState::default().process_conditions(ConditionContext {
         in_state_time: 10,

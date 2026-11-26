@@ -117,7 +117,7 @@ impl Club {
 
         if has_main_team {
             let (recent_wins_ratio, league_pos, total_teams) =
-                self.compute_team_form_and_position(&ctx);
+                self.compute_team_form_and_position(ctx);
             let league_tier = ctx
                 .club
                 .as_ref()

@@ -1184,12 +1184,8 @@ impl ContractRenewalManager {
             return true;
         }
         // Honours a longer contract when length was the sticking point.
-        if matches!(ask.rejection_reason, Some(RejectionReason::ShortContract))
+        matches!(ask.rejection_reason, Some(RejectionReason::ShortContract))
             && proposal.years >= ask.desired_years
-        {
-            return true;
-        }
-        false
     }
 
     /// Classify why a player the club is no longer chasing on expiry day
