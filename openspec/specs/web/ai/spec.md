@@ -1,7 +1,7 @@
 # web/ai Specification
 
 ## Purpose
-Captures the web layer's decision-model connection: an in-memory endpoint URL and optional API key, verified with a probe request before it is stored, configured from the landing page's AI settings dialog. No game page uses the model yet.
+Describes the web layer's Decision connection, which users configure from the landing page and the system verifies before storing in memory. The domestic league overview uses the connection to rank completed matches for highlights.
 
 ## Requirements
 
@@ -86,18 +86,41 @@ a page reload.
 - **THEN** the dialog shows an error message, including the server's detail when one is returned, and keeps
   the dialog open with its actions re-enabled
 
-### Requirement: Saved connection adds no page features
-The system SHALL NOT expose any model-driven feature on team, player or other game pages. A saved
-connection SHALL only change the landing page's AI badge state and the dialog's pre-filled values.
+### Requirement: Decision features on game pages
+
+The system SHALL limit game-page features using the saved Decision connection to completed-match highlights on the domestic league overview.
 
 #### Scenario: Team page with a saved connection
+
 - **WHEN** a connection is saved and a user opens a main team's squad page
-- **THEN** the page renders no AI report button or AI report dialog
+- **THEN** the page SHALL render with neither an AI report button nor an AI report dialog
 
 #### Scenario: Player page with a saved connection
+
 - **WHEN** a connection is saved and a user opens an active or retired player's page
-- **THEN** the attributes panel renders no AI report button and the page carries no AI report dialog
+- **THEN** the attributes panel SHALL render without an AI report button and the page SHALL carry no AI report dialog
 
 #### Scenario: Removed report endpoints
+
 - **WHEN** a client calls `POST /api/ai/team-report`, `POST /api/ai/player-report` or `GET /api/ai/progress`
-- **THEN** the system responds as for any unknown route
+- **THEN** the system SHALL respond as for any unknown route
+
+### Requirement: Decision scoring of completed league matches
+
+When a Decision connection is saved, the system SHALL score every completed match shown together in the domestic league overview's Fixtures & Results panel. The server SHALL send the league name and a list of completed matches with a match identifier, both team names, both teams' final goals, both teams' national reputations, and whether either club lists the other as a rival. It SHALL ask one typed interest-score question per match using a shared rubric that considers derbies, major matchups, upsets, and unusual scorelines from a fan's perspective. The request SHALL use the saved endpoint URL as entered and the saved API key as a bearer token when present.
+
+#### Scenario: A panel groups fixtures across dates
+
+- **WHEN** a league overview shows completed matches under several date headings alongside fixtures with no result
+- **THEN** the server SHALL send one Decision request containing all the completed matches across those dates, including any completed 0–0 draw, and SHALL omit fixtures without a result
+- **AND** each completed match SHALL have its own score question, keyed so its answer can be matched to that result
+
+#### Scenario: No scoring input or saved connection
+
+- **WHEN** a league overview has no completed match in its Fixtures & Results panel, or there is no saved Decision connection
+- **THEN** the system SHALL make no Decision scoring request
+
+#### Scenario: Scoring fails
+
+- **WHEN** the Decision request times out, returns a non-200 status, cannot be decoded, or lacks a valid score for any requested match
+- **THEN** the system SHALL return no highlights for that batch and the fixtures and results SHALL remain available

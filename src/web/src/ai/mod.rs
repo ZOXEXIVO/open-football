@@ -4,12 +4,40 @@ use crate::GameAppData;
 use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
-use reqwest::StatusCode;
+use reqwest::{RequestBuilder, StatusCode, redirect};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+
+const DECISION_TIMEOUT: Duration = Duration::from_secs(15);
+
+#[derive(Serialize)]
+struct ScoreRequest<'a, T> {
+    state: T,
+    questions: BTreeMap<&'a str, ScoreQuestion<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum ScoreQuestion<'a> {
+    Score {
+        instructions: String,
+        criteria: &'a [&'a str],
+    },
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ScoreAnswers {
+    answers: HashMap<String, serde_json::Value>,
+}
+
+impl ScoreAnswers {
+    pub(crate) fn score(&self, id: &str) -> Option<f64> {
+        self.answers.get(id)?.get("score")?.as_f64()
+    }
+}
 
 /// Decision-model connection entered from the home-page "AI" badge dialog.
 /// `url` is the full endpoint address, used as typed. Held in memory only for
@@ -33,24 +61,21 @@ impl ModelSettings {
     /// two-level score question — and accepts the connection only on 200.
     pub async fn probe(&self) -> Result<(), String> {
         let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(15))
+            .timeout(DECISION_TIMEOUT)
             .build()
             .map_err(|e| format!("could not create HTTP client: {e}"))?;
-        let body = json!({
-            "state": "ping",
-            "questions": {
-                "ping": {
-                    "type": "score",
-                    "instructions": "Is the connection up?",
-                    "criteria": ["no", "yes"],
-                }
-            }
-        });
-        let mut request = http.post(&self.url).json(&body);
-        if !self.api_key.is_empty() {
-            request = request.bearer_auth(&self.api_key);
-        }
-        let response = request
+        let body = ScoreRequest {
+            state: "ping",
+            questions: BTreeMap::from([(
+                "ping",
+                ScoreQuestion::Score {
+                    instructions: "Is the connection up?".to_string(),
+                    criteria: &["no", "yes"],
+                },
+            )]),
+        };
+        let response = self
+            .post(&http, &body)
             .send()
             .await
             .map_err(|e| format!("endpoint is not reachable: {e}"))?;
@@ -62,6 +87,33 @@ impl ModelSettings {
         let snippet: String = text.chars().take(200).collect();
         Err(format!("endpoint returned {status}: {snippet}"))
     }
+
+    pub(crate) async fn score<T: Serialize>(
+        &self,
+        state: &T,
+        questions: BTreeMap<&str, ScoreQuestion<'_>>,
+    ) -> Option<ScoreAnswers> {
+        let http = reqwest::Client::builder()
+            .timeout(DECISION_TIMEOUT)
+            .redirect(redirect::Policy::none())
+            .build()
+            .ok()?;
+        let body = ScoreRequest { state, questions };
+        let response = self.post(&http, &body).send().await.ok()?;
+        if response.status() != StatusCode::OK {
+            return None;
+        }
+        response.json().await.ok()
+    }
+
+    fn post<T: Serialize>(&self, http: &reqwest::Client, body: &T) -> RequestBuilder {
+        let request = http.post(&self.url).json(body);
+        if self.api_key.is_empty() {
+            request
+        } else {
+            request.bearer_auth(&self.api_key)
+        }
+    }
 }
 
 /// Cloneable, Arc-backed handle to the process-wide model connection. Mirrors
@@ -69,7 +121,7 @@ impl ModelSettings {
 /// from one request is visible to the next page render.
 #[derive(Clone, Default)]
 pub struct AiConfig {
-    inner: Arc<RwLock<Option<ModelSettings>>>,
+    inner: Arc<RwLock<Option<Arc<ModelSettings>>>>,
 }
 
 impl AiConfig {
@@ -78,11 +130,23 @@ impl AiConfig {
     }
 
     pub async fn get(&self) -> Option<ModelSettings> {
+        self.inner.read().await.as_deref().cloned()
+    }
+
+    pub(crate) async fn connection(&self) -> Option<Arc<ModelSettings>> {
         self.inner.read().await.clone()
     }
 
+    pub(crate) async fn is_current(&self, connection: &Arc<ModelSettings>) -> bool {
+        self.inner
+            .read()
+            .await
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, connection))
+    }
+
     pub async fn set(&self, settings: ModelSettings) {
-        *self.inner.write().await = Some(settings);
+        *self.inner.write().await = Some(Arc::new(settings));
     }
 
     pub async fn clear(&self) {

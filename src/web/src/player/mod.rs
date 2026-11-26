@@ -16,6 +16,7 @@ use crate::player::events::PlayerEventsCounter;
 use crate::player::newspaper::PlayerNewsCounter;
 use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
+use crate::watchlist::key::WatchKey;
 use crate::{ApiError, GameAppData, I18n};
 use axum::Router;
 use core::{Player, SimulatorData, Team};
@@ -118,7 +119,7 @@ pub struct PlayerPageChrome {
     pub is_injured: bool,
     pub is_unhappy: bool,
     pub is_force_match_selection: bool,
-    pub is_on_watchlist: bool,
+    pub watch_key: String,
     pub events_count: usize,
     pub interested_clubs_count: usize,
     pub awards_count: u32,
@@ -211,7 +212,7 @@ impl PlayerPageChrome {
             is_injured: player.player_attributes.is_injured,
             is_unhappy: player.statuses.get().contains(&core::PlayerStatusType::Unh),
             is_force_match_selection: player.is_force_match_selection,
-            is_on_watchlist: data.watchlist.contains(&player.id),
+            watch_key: WatchKey::of(player).to_string(),
             events_count: PlayerEventsCounter::count(player),
             interested_clubs_count: data.clubs_interested_in_player(player.id).len(),
             awards_count: player.awards_count.total(),

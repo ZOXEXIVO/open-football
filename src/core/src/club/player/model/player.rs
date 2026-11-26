@@ -955,6 +955,23 @@ impl Player {
         }
     }
 
+    /// FNV-1a rather than `DefaultHasher`: browsers keep keys built from it
+    /// across builds, and std does not promise a stable `DefaultHasher`.
+    pub fn identity_fingerprint(&self) -> u64 {
+        let birth_date = self.birth_date.format("%Y-%m-%d").to_string();
+        [
+            self.full_name.last_name.as_str(),
+            self.full_name.first_name.as_str(),
+            self.full_name.middle_name.as_deref().unwrap_or(""),
+            birth_date.as_str(),
+        ]
+        .join("\u{1f}")
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+            (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
     /// Is this player protected from being targeted by other clubs?
     ///
     /// A player signed during the currently open transfer window cannot be
@@ -2168,6 +2185,45 @@ mod tests {
     #[test]
     fn player_is_correct() {
         assert_eq!(10, 10);
+    }
+
+    fn identity(first: &str, last: &str, birth: NaiveDate) -> Player {
+        PlayerBuilder::new()
+            .id(7)
+            .full_name(FullName::new(first.to_string(), last.to_string()))
+            .birth_date(birth)
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions { positions: vec![] })
+            .player_attributes(PlayerAttributes::default())
+            .build()
+            .unwrap()
+    }
+
+    fn born(year: i32, month: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(year, month, day).unwrap()
+    }
+
+    #[test]
+    fn identity_fingerprint_is_pinned() {
+        let player = identity("John", "Smith", born(1990, 5, 17));
+        assert_eq!(player.identity_fingerprint(), 0x9da3_dc37_44d3_5992);
+    }
+
+    #[test]
+    fn identity_fingerprint_changes_with_birth_date() {
+        let earlier = identity("John", "Smith", born(1990, 5, 17));
+        let later = identity("John", "Smith", born(1990, 5, 18));
+        assert_ne!(earlier.identity_fingerprint(), later.identity_fingerprint());
+    }
+
+    #[test]
+    fn identity_fingerprint_separates_name_fields() {
+        let birth = born(1990, 5, 17);
+        let left = identity("c", "Ab", birth);
+        let right = identity("bc", "A", birth);
+        assert_ne!(left.identity_fingerprint(), right.identity_fingerprint());
     }
 
     #[test]

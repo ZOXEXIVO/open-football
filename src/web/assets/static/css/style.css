@@ -2288,6 +2288,10 @@ a.fm-seasonstep-arrow:hover {
     background: rgba(255, 255, 255, 0.03);
 }
 
+.fm-fixture.is-highlighted {
+    background: #29463f;
+}
+
 .fx-home {
     flex: 1;
     text-align: right;

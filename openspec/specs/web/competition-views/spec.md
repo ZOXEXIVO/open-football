@@ -72,6 +72,35 @@ scorers/assisters/rated players for that league and season.
 - **THEN** the system SHALL label the live standings with the current tournament name and additionally provide an
   annual aggregate table across every zone of the competition
 
+### Requirement: Domestic league match highlights
+
+The domestic league overview SHALL display Fixtures & Results without waiting for Decision scoring. With a valid scoring batch, it SHALL tint the full row of the completed match with the highest fan-interest score on the ordered 0–3 scale. It SHALL also tint the runner-up's row when the next-highest score is at least 2. It SHALL provide a localized accessible label on each highlighted match's score link, resolve ties in panel order, and preserve the placement, score, and links of each fixture.
+
+#### Scenario: More than two matches qualify
+
+- **WHEN** the completed rows in display order receive scores of 2.4, 2.4, 2.8, and 1.9
+- **THEN** the first and third rows SHALL be tinted in their original positions
+
+#### Scenario: One match qualifies
+
+- **WHEN** exactly one completed match scores 2 or higher
+- **THEN** only that match's row SHALL be tinted
+
+#### Scenario: All matches score below the noteworthy threshold
+
+- **WHEN** all completed matches score below 2
+- **THEN** only the highest-rated match's row SHALL be tinted
+
+#### Scenario: Highlights are unavailable
+
+- **WHEN** no Decision connection is saved, scoring is pending, or the scoring batch is unusable
+- **THEN** the panel SHALL show the fixtures and results with their default row backgrounds
+
+#### Scenario: Results change before the highlight lookup
+
+- **WHEN** the displayed result set differs from the set available to score when the highlight lookup starts
+- **THEN** the page SHALL show no highlights from the different result set
+
 ### Requirement: Domestic league awards page
 The system SHALL provide, for a league, a page of individual and team awards: the latest Player of the Week /
 Young Player of the Week, latest Team of the Week / Young Team of the Week, Team of the Year, the current

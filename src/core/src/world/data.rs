@@ -38,8 +38,6 @@ pub struct SimulatorData {
     /// either resolving in a signing (with cascade) or being rejected.
     pub pending_manager_approaches: Vec<ManagerApproach>,
 
-    pub watchlist: Vec<u32>,
-
     pub global_competitions: GlobalCompetitions,
 
     /// All countries by id (for nationality lookups — includes countries without active leagues)
@@ -110,7 +108,6 @@ impl Clone for SimulatorData {
             free_agents,
             free_agent_staff: self.free_agent_staff.clone(),
             pending_manager_approaches: self.pending_manager_approaches.clone(),
-            watchlist: self.watchlist.clone(),
             global_competitions: self.global_competitions.clone(),
             country_info: self.country_info.clone(),
             market_map: Arc::clone(&self.market_map),
@@ -209,7 +206,6 @@ impl SimulatorData {
             free_agents: FreeAgentPool::default(),
             free_agent_staff: Vec::new(),
             pending_manager_approaches: Vec::new(),
-            watchlist: Vec::new(),
             global_competitions,
             country_info,
             market_map: Arc::new(MarketMap::default()),

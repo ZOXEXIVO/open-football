@@ -110,14 +110,15 @@
                 <div class="fm-panel-head">
                     <h3>{{ i18n.t("fixtures_results") }}</h3>
                 </div>
-                <div class="fm-fixtures">
+                <div class="fm-fixtures"{% if let Some(url) = highlights_url %} data-match-highlights="{{ url }}"{% endif %}>
                     {% if current_tour_schedule.is_empty() %}
                     <div class="fm-empty">{{ i18n.t("no_fixtures") }}</div>
                     {% else %}
                     {% for tour_schedule in current_tour_schedule %}
                     <div class="fm-matchday-hd">{{ tour_schedule.date }}</div>
                     {% for item in tour_schedule.matches %}
-                    <div class="fm-fixture">
+                    {% let can_highlight = highlights_url.is_some() && item.result.is_some() %}
+                    <div class="fm-fixture"{% if can_highlight %} data-highlight-match="{{ item.match_id }}"{% endif %}>
                         <div class="fx-home">
                             <a href="/{{ lang }}/teams/{{ item.home_team_slug }}">{{ item.home_team_name }}</a>
                         </div>
@@ -126,6 +127,9 @@
                             {{ result.home_goals }} – {{ result.away_goals }}
                             {% else %}
                             –
+                            {% endif %}
+                            {% if can_highlight %}
+                            <span class="visually-hidden fx-highlight-label" hidden>{{ i18n.t("match_highlight") }}</span>
                             {% endif %}
                         </a>
                         <div class="fx-away">
@@ -269,4 +273,29 @@
     </div>
     {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+{% if highlights_url.is_some() %}
+<script>
+    (async function () {
+        const panel = document.querySelector('[data-match-highlights]');
+        if (!panel) return;
+        try {
+            const response = await fetch(panel.dataset.matchHighlights, { mode: 'same-origin' });
+            if (!response.ok) return;
+            const ids = await response.json();
+            if (!panel.isConnected || !Array.isArray(ids)) return;
+            const selected = new Set(ids);
+            panel.querySelectorAll('[data-highlight-match]').forEach(function (row) {
+                const highlighted = selected.has(row.dataset.highlightMatch);
+                row.classList.toggle('is-highlighted', highlighted);
+                row.querySelector('.fx-highlight-label').hidden = !highlighted;
+            });
+        } catch {
+            // The fixtures are already available when scoring fails.
+        }
+    })();
+</script>
+{% endif %}
 {% endblock %}

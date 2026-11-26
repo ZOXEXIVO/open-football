@@ -1,26 +1,31 @@
+pub mod key;
 pub mod routes;
+#[cfg(test)]
+mod tests;
 
 use crate::leagues::address::LeagueAddress;
 use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::shared::potential_stars::{PotentialStarsView, StarRating};
 use crate::views::{self, MenuSection, SubTitleFlag};
+use crate::watchlist::key::WatchKey;
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
+use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use chrono::NaiveDate;
 use core::Player;
 use core::PlayerPositionType;
 use core::PlayerStatusType;
 use core::SimulatorData;
+use core::Team;
 use core::TeamType;
 use core::utils::{DateUtils, FormattingUtils};
 use serde::Deserialize;
-use std::sync::Arc;
+use std::collections::HashSet;
 
 pub struct WatchlistPlayerDto {
-    pub id: u32,
+    pub watch_key: String,
     pub slug: String,
     pub last_name: String,
     pub first_name: String,
@@ -51,6 +56,11 @@ pub struct WatchlistPageRequest {
     pub lang: String,
 }
 
+#[derive(Deserialize)]
+pub struct WatchlistRowsRequest {
+    pub keys: Vec<String>,
+}
+
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "watchlist/index.html")]
 pub struct WatchlistPageTemplate {
@@ -69,7 +79,6 @@ pub struct WatchlistPageTemplate {
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
-    pub players: Vec<WatchlistPlayerDto>,
 }
 
 impl WatchlistPageTemplate {
@@ -77,73 +86,14 @@ impl WatchlistPageTemplate {
         State(state): State<GameAppData>,
         Path(route_params): Path<WatchlistPageRequest>,
     ) -> ApiResult<impl IntoResponse> {
-        let guard = state.data.read().await;
-
-        let simulator_data = guard
-            .as_ref()
-            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+        if state.data.read().await.is_none() {
+            return Err(ApiError::InternalError(
+                "Simulator data not loaded".to_string(),
+            ));
+        }
 
         let i18n = state.i18n.for_lang(&route_params.lang);
-
-        let now = simulator_data.date.date();
         let current_path = format!("/{}/watchlist", route_params.lang);
-
-        let mut players: Vec<WatchlistPlayerDto> = simulator_data
-            .watchlist
-            .iter()
-            .filter_map(|&player_id| {
-                if let Some((player, team)) = simulator_data.player_with_team(player_id) {
-                    let league = team.league_id.and_then(|id| simulator_data.league(id));
-                    let head_coach = team.staffs.head_coach();
-                    Some(WatchlistPlayerDto {
-                        current_ability: PotentialStarsView::current(player),
-                        potential_ability: PotentialStarsView::potential_by_staff(
-                            player,
-                            head_coach,
-                            team.team_type == TeamType::Main,
-                            now,
-                        ),
-                        team_name: team.name.clone(),
-                        team_slug: team.slug.clone(),
-                        league_name: league.map(|l| l.name.clone()).unwrap_or_default(),
-                        league_url: league
-                            .map(|l| LeagueAddress::of(simulator_data, l).url(&route_params.lang))
-                            .unwrap_or_default(),
-                        value: FormattingUtils::format_money(player.value(
-                            now,
-                            league.map(|l| l.reputation).unwrap_or(0),
-                            team.reputation.market_value_score(),
-                        )),
-                        unhappy: !player.happiness.is_happy(),
-                        transfer_listed: player.statuses.get().contains(&PlayerStatusType::Lst),
-                        ..WatchlistPlayerDto::from_player(player, simulator_data, now)
-                    })
-                } else if let Some(player) = simulator_data.retired_player(player_id) {
-                    Some(WatchlistPlayerDto {
-                        conditions: 0,
-                        team_name: i18n.t("retired").to_string(),
-                        retired: true,
-                        ..WatchlistPlayerDto::from_player(player, simulator_data, now)
-                    })
-                } else {
-                    simulator_data
-                        .free_agents
-                        .iter()
-                        .find(|p| p.id == player_id)
-                        .map(|player| WatchlistPlayerDto {
-                            team_name: i18n.t("free_agent").to_string(),
-                            ..WatchlistPlayerDto::from_player(player, simulator_data, now)
-                        })
-                }
-            })
-            .collect();
-
-        players.sort_by(|a, b| {
-            a.position_sort
-                .partial_cmp(&b.position_sort)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
         let menu_sections = views::Menus::watchlist_menu(&i18n, &route_params.lang, &current_path);
 
         Ok(Self {
@@ -153,7 +103,7 @@ impl WatchlistPageTemplate {
             cores_count: *CPU_CORES,
             title: i18n.t("watchlist").to_string(),
             i18n,
-            lang: route_params.lang.clone(),
+            lang: route_params.lang,
             sub_title_prefix: String::new(),
             sub_title_suffix: String::new(),
             sub_title: String::new(),
@@ -162,52 +112,132 @@ impl WatchlistPageTemplate {
             header_color: String::new(),
             foreground_color: String::new(),
             menu_sections,
+        })
+    }
+}
+
+#[derive(Template, askama_web::WebTemplate)]
+#[template(path = "watchlist/rows.html")]
+pub struct WatchlistRowsTemplate {
+    pub i18n: I18n,
+    pub lang: String,
+    pub players: Vec<WatchlistPlayerDto>,
+}
+
+impl WatchlistRowsTemplate {
+    pub async fn action(
+        State(state): State<GameAppData>,
+        Path(route_params): Path<WatchlistPageRequest>,
+        Json(body): Json<WatchlistRowsRequest>,
+    ) -> ApiResult<impl IntoResponse> {
+        let guard = state.data.read().await;
+        let simulator_data = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+
+        let i18n = state.i18n.for_lang(&route_params.lang);
+        let players = WatchlistRows::resolve(simulator_data, &body.keys, &i18n, &route_params.lang);
+
+        Ok(Self {
+            i18n,
+            lang: route_params.lang,
             players,
         })
     }
 }
 
-#[derive(Deserialize)]
-pub struct WatchlistModifyRequest {
-    pub player_id: u32,
+/// Resolves browser-held watch keys against the current world. A key yields
+/// a row only when its id still belongs to the same person.
+pub struct WatchlistRows<'a> {
+    data: &'a SimulatorData,
+    i18n: &'a I18n,
+    lang: &'a str,
+    now: NaiveDate,
 }
 
-pub struct WatchlistApi;
-
-impl WatchlistApi {
-    pub async fn add(
-        State(state): State<GameAppData>,
-        Path(route_params): Path<WatchlistModifyRequest>,
-    ) -> impl IntoResponse {
-        let data = Arc::clone(&state.data);
-        let mut guard = data.write().await;
-
-        if let Some(ref mut arc_data) = *guard {
-            let player_id = route_params.player_id;
-            let simulator_data = Arc::make_mut(arc_data);
-            if !simulator_data.watchlist.contains(&player_id) {
-                simulator_data.watchlist.push(player_id);
-            }
-        }
-
-        StatusCode::OK
+impl<'a> WatchlistRows<'a> {
+    pub fn resolve(
+        data: &'a SimulatorData,
+        keys: &[String],
+        i18n: &'a I18n,
+        lang: &'a str,
+    ) -> Vec<WatchlistPlayerDto> {
+        let rows = WatchlistRows {
+            data,
+            i18n,
+            lang,
+            now: data.date.date(),
+        };
+        let mut seen = HashSet::new();
+        let mut players: Vec<WatchlistPlayerDto> = keys
+            .iter()
+            .filter_map(|raw| raw.parse::<WatchKey>().ok())
+            .filter(|key| seen.insert(*key))
+            .filter_map(|key| rows.row(key))
+            .collect();
+        players.sort_by(|a, b| {
+            a.position_sort
+                .partial_cmp(&b.position_sort)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        players
     }
 
-    pub async fn remove(
-        State(state): State<GameAppData>,
-        Path(route_params): Path<WatchlistModifyRequest>,
-    ) -> impl IntoResponse {
-        let data = Arc::clone(&state.data);
-        let mut guard = data.write().await;
-
-        if let Some(ref mut arc_data) = *guard {
-            let simulator_data = Arc::make_mut(arc_data);
-            simulator_data
-                .watchlist
-                .retain(|&id| id != route_params.player_id);
+    fn row(&self, key: WatchKey) -> Option<WatchlistPlayerDto> {
+        if let Some((player, team)) = self.data.player_with_team(key.id) {
+            return key.matches(player).then(|| self.on_team(player, team));
         }
+        let player = self
+            .data
+            .player(key.id)
+            .filter(|player| key.matches(player))?;
+        Some(if player.is_retired() {
+            self.retired(player)
+        } else {
+            self.teamless(player)
+        })
+    }
 
-        StatusCode::OK
+    fn on_team(&self, player: &Player, team: &Team) -> WatchlistPlayerDto {
+        let league = team.league_id.and_then(|id| self.data.league(id));
+        WatchlistPlayerDto {
+            potential_ability: PotentialStarsView::potential_by_staff(
+                player,
+                team.staffs.head_coach(),
+                team.team_type == TeamType::Main,
+                self.now,
+            ),
+            team_name: team.name.clone(),
+            team_slug: team.slug.clone(),
+            league_name: league.map(|l| l.name.clone()).unwrap_or_default(),
+            league_url: league
+                .map(|l| LeagueAddress::of(self.data, l).url(self.lang))
+                .unwrap_or_default(),
+            value: FormattingUtils::format_money(player.value(
+                self.now,
+                league.map(|l| l.reputation).unwrap_or(0),
+                team.reputation.market_value_score(),
+            )),
+            unhappy: !player.happiness.is_happy(),
+            transfer_listed: player.statuses.get().contains(&PlayerStatusType::Lst),
+            ..WatchlistPlayerDto::from_player(player, self.data, self.now)
+        }
+    }
+
+    fn retired(&self, player: &Player) -> WatchlistPlayerDto {
+        WatchlistPlayerDto {
+            conditions: 0,
+            team_name: self.i18n.t("retired").to_string(),
+            retired: true,
+            ..WatchlistPlayerDto::from_player(player, self.data, self.now)
+        }
+    }
+
+    fn teamless(&self, player: &Player) -> WatchlistPlayerDto {
+        WatchlistPlayerDto {
+            team_name: self.i18n.t("free_agent").to_string(),
+            ..WatchlistPlayerDto::from_player(player, self.data, self.now)
+        }
     }
 }
 
@@ -227,7 +257,7 @@ impl WatchlistPlayerDto {
             .unwrap_or_default();
 
         Self {
-            id: player.id,
+            watch_key: WatchKey::of(player).to_string(),
             slug: player.slug(),
             first_name: player.full_name.display_first_name().to_string(),
             last_name: player.full_name.display_last_name().to_string(),

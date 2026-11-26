@@ -1,5 +1,11 @@
+mod fixtures;
+mod highlights;
 pub mod routes;
+#[cfg(test)]
+mod tests;
 
+use self::fixtures::{LeagueFixtures, MatchFanContext};
+use self::highlights::LeagueHighlights;
 use crate::leagues::address::{LeagueAddress, LeaguePage};
 use crate::leagues::newspaper::LeagueNewspaperCounter;
 use crate::shared::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
@@ -12,13 +18,12 @@ use axum::response::IntoResponse;
 use chrono::Duration;
 use core::continent::{CompetitionTier, ContinentalQualification, QualificationBand};
 use core::league::{
-    League, LeagueLadder, LeagueTableRow as CoreTableRow, PlayoffStage, ScheduleItem, ScheduleTour,
+    League, LeagueLadder, LeagueTableRow as CoreTableRow, PlayoffStage, ScheduleItem,
     TieBreakPolicy,
 };
 use core::r#match::GoalDetail;
 use core::r#match::player::statistics::MatchStatisticType;
 use core::{Country, SimulatorData};
-use itertools::*;
 use serde::Deserialize;
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -64,6 +69,7 @@ pub struct LeagueGetTemplate {
     pub table_rows: Vec<LeagueTableRow>,
     pub legend: Vec<StandingsLegendItem>,
     pub current_tour_schedule: Vec<TourSchedule>,
+    pub highlights_url: Option<String>,
     pub competition_reputation: Vec<CompetitionReputationItem>,
     pub top_scorers: Vec<LeaguePlayerStatItem>,
     pub top_assisters: Vec<LeaguePlayerStatItem>,
@@ -106,6 +112,7 @@ pub struct LeagueScheduleItemResult {
     pub home_goalscorers: Vec<LeagueTableGoalscorer>,
     pub away_goals: u8,
     pub away_goalscorers: Vec<LeagueTableGoalscorer>,
+    fan_context: MatchFanContext,
 }
 
 #[allow(dead_code)]
@@ -219,6 +226,7 @@ impl<'a> LeagueGetPage<'a> {
         Path(route_params): Path<LeagueGetRequest>,
     ) -> ApiResult<axum::response::Response> {
         let i18n = state.i18n.for_lang(&route_params.lang);
+        let highlights_enabled = state.ai.connection().await.is_some();
         let guard = state.data.read().await;
 
         let simulator_data = guard.as_ref().unwrap();
@@ -258,10 +266,10 @@ impl<'a> LeagueGetPage<'a> {
             league,
             country,
         };
-        Ok(page.render().into_response())
+        Ok(page.render(highlights_enabled).into_response())
     }
 
-    fn render(self) -> LeagueGetTemplate {
+    fn render(self, highlights_enabled: bool) -> LeagueGetTemplate {
         let ladder = LeagueLadder::new(&self.country.leagues.leagues);
         let continental = self
             .data
@@ -298,12 +306,18 @@ impl<'a> LeagueGetPage<'a> {
         }
         .apply(&mut annual_table_rows, &self.i18n);
 
-        let current_tour_schedule = self.schedule();
+        let current_tour_schedule = LeagueFixtures::schedule(self.data, self.league);
         let competition_reputation = self.competition_reputation();
         let stats = LeaguePlayerStats::collect(&self);
 
         let league_title = views::Menus::league_display_name(self.league, &self.i18n, self.data);
         let league_url = LeagueAddress::new(&self.country.slug, &self.league.slug).url(&self.lang);
+        let highlights_url = if highlights_enabled {
+            LeagueHighlights::from_schedule(self.league, &current_tour_schedule)
+                .map(|highlights| highlights.url(&league_url))
+        } else {
+            None
+        };
 
         LeagueGetTemplate {
             css_version: CSS_VERSION,
@@ -328,6 +342,7 @@ impl<'a> LeagueGetPage<'a> {
             table_rows,
             legend,
             current_tour_schedule,
+            highlights_url,
             competition_reputation,
             top_scorers: stats.top_scorers,
             top_assisters: stats.top_assisters,
@@ -392,52 +407,6 @@ impl<'a> LeagueGetPage<'a> {
             })
             .collect();
         (tournament_label, annual_rows)
-    }
-
-    fn schedule(&self) -> Vec<TourSchedule> {
-        let mut current_tour_schedule = Vec::new();
-
-        let today = self.data.date.date();
-
-        // A round is unveiled on its eve. Reaching further ahead than that
-        // swapped the last matchday's scorelines for a column of dashes days
-        // before anyone had kicked a ball, so the division's board stood empty
-        // through the gap week.
-        let reveal_date = today + Duration::days(1);
-
-        let tours = &self.league.schedule.tours;
-
-        // The round in play, or the last one to have kicked off. Its results
-        // hold the panel for as long as nothing newer has started.
-        let latest_started = tours.iter().rfind(|t| t.start_date() <= today);
-
-        // The round to come, once it is within a day of its first kick-off.
-        // Disjoint from the one above, so a matchday never lists twice.
-        let next_up = tours
-            .iter()
-            .find(|t| t.start_date() > today && t.start_date() <= reveal_date);
-
-        let mut shown_tours: Vec<&ScheduleTour> = Vec::new();
-        shown_tours.extend(latest_started);
-        shown_tours.extend(next_up);
-
-        // Pre-season: nothing has kicked off yet, so the opening round stands
-        // in rather than leaving the board blank until the eve of matchday 1.
-        if shown_tours.is_empty() {
-            shown_tours.extend(tours.first());
-        }
-
-        for tour in shown_tours {
-            for (key, group) in &tour.items.iter().chunk_by(|t| t.date.date()) {
-                current_tour_schedule.push(TourSchedule {
-                    date: key.format("%d.%m.%Y").to_string(),
-                    matches: group
-                        .map(|item| LeagueScheduleItem::from_item(self.data, item))
-                        .collect(),
-                });
-            }
-        }
-        current_tour_schedule
     }
 
     fn competition_reputation(&self) -> Vec<CompetitionReputationItem> {
@@ -591,6 +560,7 @@ impl LeagueScheduleItemResult {
             .collect();
 
         LeagueScheduleItemResult {
+            fan_context: MatchFanContext::for_teams(data, home_team, away_team),
             home_goals: if item.home_team_id == res.home_team.team_id {
                 res.home_team.get()
             } else {
