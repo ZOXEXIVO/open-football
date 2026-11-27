@@ -1230,7 +1230,7 @@ impl Census {
         };
         for continent in &data.continents {
             for country in &continent.countries {
-                for p in &country.retired_players.players {
+                for p in &country.retired_players {
                     read_turns(p);
                 }
                 for club in &country.clubs {

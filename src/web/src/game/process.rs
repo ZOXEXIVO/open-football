@@ -1,6 +1,6 @@
 use crate::GameAppData;
-use crate::I18nManager;
 use crate::r#match::stores::MatchStore;
+use crate::world::{ProcessOutcome, WorldSession};
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -8,16 +8,14 @@ use axum::response::IntoResponse;
 use core::FootballSimulator;
 use core::MatchRuntime;
 use core::SimulationResult;
-use core::SimulatorData;
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::runtime::Handle;
-use tokio::sync::{RwLock, Semaphore};
-use tokio::task::{JoinHandle, JoinSet, spawn_blocking};
+use tokio::sync::Semaphore;
+use tokio::task::{JoinHandle, JoinSet};
 
 #[derive(Deserialize)]
 pub struct ProcessQuery {
@@ -27,52 +25,27 @@ pub struct ProcessQuery {
 pub struct GameProcess;
 
 impl GameProcess {
+    /// Answers at once when a run is already in progress; otherwise once the
+    /// run's last world is published.
     pub async fn process(
         State(state): State<GameAppData>,
         Query(query): Query<ProcessQuery>,
     ) -> impl IntoResponse {
-        let days = query.days.unwrap_or(1);
-
-        // If already processing, return immediately
-        let process_guard = match Arc::clone(&state.process_lock).try_lock_owned() {
-            Ok(guard) => guard,
-            Err(_) => return StatusCode::OK,
-        };
-
-        // Reset cancel flag at start
-        state.cancel_flag.store(false, Ordering::SeqCst);
-
-        // Clone data under read lock (cheap Arc clone), then release lock immediately
-        let data_arc = {
-            let guard = state.data.read().await;
-            Arc::clone(guard.as_ref().unwrap())
-        };
-
         let run = ProcessingRun {
             handle: Handle::current(),
-            data: Arc::clone(&state.data),
-            i18n: Arc::clone(&state.i18n),
-            cancel_flag: Arc::clone(&state.cancel_flag),
+            days: query.days.unwrap_or(1),
         };
-
-        // Run CPU-bound simulation on the blocking thread pool so tokio worker
-        // threads stay free to serve HTTP requests while processing runs.
-        // Await completion so the client knows when processing is done.
-        let join_result = spawn_blocking(move || {
-            let _guard = process_guard;
-
-            // Deep clone outside any lock (the shared slot still holds a
-            // reference, so unwrap_or_clone always clones here).
-            run.execute(Arc::unwrap_or_clone(data_arc), days);
-        })
-        .await;
-
-        if let Err(err) = join_result {
-            error!("game process task failed: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR;
+        match state
+            .world
+            .process(move |session| run.execute(session))
+            .await
+        {
+            ProcessOutcome::AlreadyRunning | ProcessOutcome::Finished => StatusCode::OK,
+            ProcessOutcome::Failed => {
+                error!("game process run failed");
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         }
-
-        StatusCode::OK
     }
 }
 
@@ -100,94 +73,44 @@ impl ReplayBaking {
     }
 }
 
-/// One processing run behind `POST /api/game/process`: simulates an owned
-/// deep copy of the world on a blocking thread and publishes snapshots
-/// into the shared slot without stalling readers.
+/// One processing run behind `POST /api/game/process`, executed by the world
+/// writer against its session. It publishes every simulated week, and takes
+/// the editor actions queued behind it at every day boundary.
 struct ProcessingRun {
     handle: Handle,
-    data: Arc<RwLock<Option<Arc<SimulatorData>>>>,
-    i18n: Arc<I18nManager>,
-    cancel_flag: Arc<AtomicBool>,
+    days: u32,
 }
 
 impl ProcessingRun {
-    /// Simulate `days` daily ticks, publishing progress once per simulated
-    /// week and once at the end.
-    fn execute(self, mut simulator_data: SimulatorData, days: u32) {
+    fn execute(self, session: &mut WorldSession<'_>) {
         let mut days_since_sync: u32 = 0;
         let mut baking = ReplayBaking::default();
 
-        for _ in 0..days {
-            // Check cancellation before each day
-            if self.cancel_flag.load(Ordering::SeqCst) {
+        for _ in 0..self.days {
+            // Edits come before the cancellation check, so a cancelled run
+            // still applies the ones waiting for it.
+            session.catch_up(|| baking.finish(&self.handle));
+            if session.cancelled() {
                 break;
             }
 
             let result = self
                 .handle
-                .block_on(FootballSimulator::simulate(&mut simulator_data));
+                .block_on(FootballSimulator::simulate(session.world()));
             if result.has_match_results() && MatchRuntime::recordings_mode() {
                 baking.hand_over(&self.handle, Self::write_match_results(result));
             }
 
-            // During multi-day runs (e.g. holiday), publish progress every
-            // simulated week so the UI and readers observe intermediate state
-            // instead of waiting for the whole range to finish.
             days_since_sync += 1;
             if days_since_sync >= 7 {
                 days_since_sync = 0;
                 baking.finish(&self.handle);
-                simulator_data = self.publish_progress(simulator_data);
+                session.publish();
             }
         }
 
+        session.catch_up(|| baking.finish(&self.handle));
         baking.finish(&self.handle);
-        self.cancel_flag.store(false, Ordering::SeqCst);
-        self.publish_final(simulator_data);
-    }
-
-    /// Publish an intermediate snapshot and hand back an owned working copy.
-    ///
-    /// The working copy is swapped in first and the outgoing world freed
-    /// before re-cloning, so at most two world copies exist at any moment:
-    /// readers see fresh data right after the swap, the old world drops
-    /// off-lock, then the published snapshot is deep-cloned back into an
-    /// owned working copy for the remaining days.
-    fn publish_progress(&self, world: SimulatorData) -> SimulatorData {
-        self.i18n.set_date(world.date);
-        let published = Arc::new(world);
-        let previous = self.swap(Arc::clone(&published));
-        Self::release(previous);
-        Arc::unwrap_or_clone(published)
-    }
-
-    /// Publish the finished world; the outgoing world is freed here on the
-    /// blocking thread, after the write lock is released.
-    fn publish_final(&self, world: SimulatorData) {
-        self.i18n.set_date(world.date);
-        let previous = self.swap(Arc::new(world));
-        Self::release(previous);
-    }
-
-    /// Free an outgoing world across the pool when this run holds the last
-    /// handle to it. A reader still holding one frees it later, as before.
-    fn release(previous: Option<Arc<SimulatorData>>) {
-        if let Some(world) = previous.and_then(Arc::into_inner) {
-            world.release();
-        }
-    }
-
-    /// Swap `next` into the shared slot and hand the previous world back to
-    /// the caller. The write-lock critical section is a pointer swap only:
-    /// dropping the outgoing world deallocates the entire object graph
-    /// (seconds on a full save) and must happen after the guard is released,
-    /// otherwise every `data.read()` page handler blocks for the whole
-    /// deallocation and the web app appears frozen.
-    fn swap(&self, next: Arc<SimulatorData>) -> Option<Arc<SimulatorData>> {
-        self.handle.block_on(async {
-            let mut guard = self.data.write().await;
-            guard.replace(next)
-        })
     }
 
     async fn write_match_results(result: SimulationResult) {
@@ -224,12 +147,13 @@ pub struct ProcessingStatus {
 
 impl GameProcess {
     pub async fn status(State(state): State<GameAppData>) -> Json<ProcessingStatus> {
-        let processing = state.process_lock.try_lock().is_err();
-        Json(ProcessingStatus { processing })
+        Json(ProcessingStatus {
+            processing: state.world.processing(),
+        })
     }
 
     pub async fn cancel(State(state): State<GameAppData>) -> StatusCode {
-        state.cancel_flag.store(true, Ordering::SeqCst);
+        state.world.cancel();
         StatusCode::OK
     }
 }

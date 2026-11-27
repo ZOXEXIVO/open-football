@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::GameAppData;
+use crate::{ApiResult, GameAppData};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -17,7 +17,6 @@ use core::transfers::pipeline::approach::ApproachPass;
 use core::transfers::{CompletedTransfer, TransferType};
 use core::{Person, PlayerClubContract, PlayerSquadStatus, SimulatorData};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 #[derive(Deserialize)]
 pub struct PlayerPathParam {
@@ -315,21 +314,24 @@ impl PlayerEditor {
 pub struct PlayerActions;
 
 impl PlayerActions {
+    /// The answer to an action that either applies or finds nothing to act on.
+    fn applied(applied: Option<bool>) -> StatusCode {
+        if applied == Some(true) {
+            StatusCode::OK
+        } else {
+            StatusCode::NOT_FOUND
+        }
+    }
+
     pub async fn move_on_free_action(
         State(state): State<GameAppData>,
         Path(params): Path<PlayerPathParam>,
-    ) -> impl IntoResponse {
-        let data = Arc::clone(&state.data);
-        let mut guard = data.write().await;
-
-        if let Some(ref mut arc_data) = *guard {
-            let sim = Arc::make_mut(arc_data);
-            if PlayerEditor::move_on_free(sim, params.player_id) {
-                return StatusCode::OK;
-            }
-        }
-
-        StatusCode::NOT_FOUND
+    ) -> ApiResult<StatusCode> {
+        let moved = state
+            .world
+            .edit(move |sim| PlayerEditor::move_on_free(sim, params.player_id))
+            .await?;
+        Ok(Self::applied(moved))
     }
 
     // ── Clear unhappy ──────────────────────────────────────────────
@@ -337,21 +339,12 @@ impl PlayerActions {
     pub async fn clear_unhappy_action(
         State(state): State<GameAppData>,
         Path(params): Path<PlayerPathParam>,
-    ) -> impl IntoResponse {
-        let data = Arc::clone(&state.data);
-        let mut guard = data.write().await;
-
-        if let Some(ref mut arc_data) = *guard {
-            let sim = Arc::make_mut(arc_data);
-
-            if let Some(player) = sim.player_mut(params.player_id) {
-                player.statuses.remove(core::PlayerStatusType::Unh);
-                player.happiness.clear();
-                return StatusCode::OK;
-            }
-        }
-
-        StatusCode::NOT_FOUND
+    ) -> ApiResult<StatusCode> {
+        let cleared = state
+            .world
+            .edit(move |sim| PlayerEditor::clear_unhappy(sim, params.player_id))
+            .await?;
+        Ok(Self::applied(cleared))
     }
 
     // ── Toggle force match selection ───────────────────────────────
@@ -359,19 +352,12 @@ impl PlayerActions {
     pub async fn toggle_force_match_selection_action(
         State(state): State<GameAppData>,
         Path(params): Path<PlayerPathParam>,
-    ) -> impl IntoResponse {
-        let data = Arc::clone(&state.data);
-        let mut guard = data.write().await;
-
-        if let Some(ref mut arc_data) = *guard {
-            let sim = Arc::make_mut(arc_data);
-            if let Some(player) = sim.player_mut(params.player_id) {
-                player.is_force_match_selection = !player.is_force_match_selection;
-                return StatusCode::OK;
-            }
-        }
-
-        StatusCode::NOT_FOUND
+    ) -> ApiResult<StatusCode> {
+        let toggled = state
+            .world
+            .edit(move |sim| PlayerEditor::toggle_force_match_selection(sim, params.player_id))
+            .await?;
+        Ok(Self::applied(toggled))
     }
 
     // ── Clear injury ────────────────────────────────────────────────
@@ -379,25 +365,45 @@ impl PlayerActions {
     pub async fn clear_injury_action(
         State(state): State<GameAppData>,
         Path(params): Path<PlayerPathParam>,
-    ) -> impl IntoResponse {
-        let data = Arc::clone(&state.data);
-        let mut guard = data.write().await;
-
-        if let Some(ref mut arc_data) = *guard {
-            let sim = Arc::make_mut(arc_data);
-            if let Some(player) = sim.player_mut(params.player_id) {
-                player.player_attributes.is_injured = false;
-                player.player_attributes.injury_days_remaining = 0;
-                player.player_attributes.injury_type = None;
-                player.player_attributes.recovery_days_remaining = 0;
-                return StatusCode::OK;
-            }
-        }
-
-        StatusCode::NOT_FOUND
+    ) -> ApiResult<StatusCode> {
+        let cleared = state
+            .world
+            .edit(move |sim| PlayerEditor::clear_injury(sim, params.player_id))
+            .await?;
+        Ok(Self::applied(cleared))
     }
 
     // ── Cancel loan ─────────────────────────────────────────────────
+}
+
+impl PlayerEditor {
+    fn clear_unhappy(sim: &mut SimulatorData, player_id: u32) -> bool {
+        let Some(player) = sim.player_mut(player_id) else {
+            return false;
+        };
+        player.statuses.remove(core::PlayerStatusType::Unh);
+        player.happiness.clear();
+        true
+    }
+
+    fn toggle_force_match_selection(sim: &mut SimulatorData, player_id: u32) -> bool {
+        let Some(player) = sim.player_mut(player_id) else {
+            return false;
+        };
+        player.is_force_match_selection = !player.is_force_match_selection;
+        true
+    }
+
+    fn clear_injury(sim: &mut SimulatorData, player_id: u32) -> bool {
+        let Some(player) = sim.player_mut(player_id) else {
+            return false;
+        };
+        player.player_attributes.is_injured = false;
+        player.player_attributes.injury_days_remaining = 0;
+        player.player_attributes.injury_type = None;
+        player.player_attributes.recovery_days_remaining = 0;
+        true
+    }
 }
 
 /// Direct editor override: ends a player's loan early and sends him back to
@@ -469,18 +475,12 @@ impl PlayerActions {
     pub async fn cancel_loan_action(
         State(state): State<GameAppData>,
         Path(params): Path<PlayerPathParam>,
-    ) -> impl IntoResponse {
-        let data = Arc::clone(&state.data);
-        let mut guard = data.write().await;
-
-        if let Some(ref mut arc_data) = *guard {
-            let sim = Arc::make_mut(arc_data);
-            if PlayerEditor::cancel_loan(sim, params.player_id) {
-                return StatusCode::OK;
-            }
-        }
-
-        StatusCode::NOT_FOUND
+    ) -> ApiResult<StatusCode> {
+        let cancelled = state
+            .world
+            .edit(move |sim| PlayerEditor::cancel_loan(sim, params.player_id))
+            .await?;
+        Ok(Self::applied(cancelled))
     }
 }
 
@@ -514,9 +514,9 @@ impl PlayerActions {
         State(state): State<GameAppData>,
         Path(params): Path<PlayerPathParam>,
     ) -> impl IntoResponse {
-        let guard = state.data.read().await;
+        let world = state.world.snapshot();
 
-        let sim = match guard.as_ref() {
+        let sim = match world.as_deref() {
             Some(data) => data,
             None => return StatusCode::NOT_FOUND.into_response(),
         };
@@ -561,66 +561,81 @@ impl PlayerActions {
         State(state): State<GameAppData>,
         Path(params): Path<PlayerPathParam>,
         Json(body): Json<ChangeContractRequest>,
-    ) -> impl IntoResponse {
-        let expiration = match NaiveDate::parse_from_str(&body.expiration, DATE_FMT) {
-            Ok(date) => date,
-            Err(_) => return StatusCode::BAD_REQUEST,
+    ) -> ApiResult<StatusCode> {
+        let Ok(expiration) = NaiveDate::parse_from_str(&body.expiration, DATE_FMT) else {
+            return Ok(StatusCode::BAD_REQUEST);
         };
 
         let loan_expiration = match body.loan_expiration.as_deref() {
             Some(raw) => match NaiveDate::parse_from_str(raw, DATE_FMT) {
                 Ok(date) => Some(date),
-                Err(_) => return StatusCode::BAD_REQUEST,
+                Err(_) => return Ok(StatusCode::BAD_REQUEST),
             },
             None => None,
         };
 
-        let data = Arc::clone(&state.data);
-        let mut guard = data.write().await;
+        let changed = state
+            .world
+            .edit(move |sim| {
+                PlayerEditor::change_contract(
+                    sim,
+                    params.player_id,
+                    &body,
+                    expiration,
+                    loan_expiration,
+                )
+            })
+            .await?;
+        Ok(changed.unwrap_or(StatusCode::NOT_FOUND))
+    }
+}
 
-        if let Some(ref mut arc_data) = *guard {
-            let sim = Arc::make_mut(arc_data);
-            let today = sim.date.date();
+impl PlayerEditor {
+    fn change_contract(
+        sim: &mut SimulatorData,
+        player_id: u32,
+        body: &ChangeContractRequest,
+        expiration: NaiveDate,
+        loan_expiration: Option<NaiveDate>,
+    ) -> StatusCode {
+        let today = sim.date.date();
 
-            // A deal that has already run out is not a deal — the expiry pass
-            // would release the player on the next tick and the edit would
-            // read as having done nothing. Both dates are checked before
-            // anything is written, so a bad loan date can't leave the club
-            // contract changed behind a 400.
-            if expiration <= today || loan_expiration.is_some_and(|d| d <= today) {
-                return StatusCode::BAD_REQUEST;
-            }
-
-            let player = match sim.player_mut(params.player_id) {
-                Some(p) => p,
-                None => return StatusCode::NOT_FOUND,
-            };
-
-            let contract = match player.contract.as_mut() {
-                Some(c) => c,
-                None => return StatusCode::NOT_FOUND,
-            };
-
-            contract.salary = body.salary;
-            contract.expiration = expiration;
-
-            if let Some(loan) = player.contract_loan.as_mut() {
-                if let Some(loan_expiration) = loan_expiration {
-                    // A loan hangs off the parent deal and cannot outlive it:
-                    // the day the contract ends the player is a free agent and
-                    // there is nothing left for the borrowing club to hold.
-                    loan.expiration = loan_expiration.min(expiration);
-                }
-                if let Some(loan_salary) = body.loan_salary {
-                    loan.salary = loan_salary;
-                }
-            }
-
-            player.on_contract_terms_changed();
-            return StatusCode::OK;
+        // A deal that has already run out is not a deal — the expiry pass
+        // would release the player on the next tick and the edit would
+        // read as having done nothing. Both dates are checked before
+        // anything is written, so a bad loan date can't leave the club
+        // contract changed behind a 400.
+        if expiration <= today || loan_expiration.is_some_and(|d| d <= today) {
+            return StatusCode::BAD_REQUEST;
         }
 
-        StatusCode::NOT_FOUND
+        let player = match sim.player_mut(player_id) {
+            Some(p) => p,
+            None => return StatusCode::NOT_FOUND,
+        };
+
+        let contract = match player.contract.as_mut() {
+            Some(c) => c,
+            None => return StatusCode::NOT_FOUND,
+        };
+
+        contract.salary = body.salary;
+        contract.expiration = expiration;
+
+        if let Some(loan) = player.contract_loan.as_mut() {
+            if let Some(loan_expiration) = loan_expiration {
+                // A loan hangs off the parent deal and cannot outlive it:
+                // the day the contract ends the player is a free agent and
+                // there is nothing left for the borrowing club to hold.
+                loan.expiration = loan_expiration.min(expiration);
+            }
+            if let Some(loan_salary) = body.loan_salary {
+                loan.salary = loan_salary;
+            }
+        }
+
+        player.on_contract_terms_changed();
+        StatusCode::OK
     }
 }
 
@@ -836,17 +851,13 @@ impl PlayerActions {
         State(state): State<GameAppData>,
         Path(params): Path<PlayerPathParam>,
         Json(body): Json<TransferRequest>,
-    ) -> impl IntoResponse {
-        let data = Arc::clone(&state.data);
-        let mut guard = data.write().await;
-
-        if let Some(ref mut arc_data) = *guard {
-            let sim = Arc::make_mut(arc_data);
-            let fee = body.fee.unwrap_or(0) as f64;
-            return PlayerEditor::transfer(sim, params.player_id, body.to_club_id, fee);
-        }
-
-        StatusCode::NOT_FOUND
+    ) -> ApiResult<StatusCode> {
+        let fee = body.fee.unwrap_or(0) as f64;
+        let transferred = state
+            .world
+            .edit(move |sim| PlayerEditor::transfer(sim, params.player_id, body.to_club_id, fee))
+            .await?;
+        Ok(transferred.unwrap_or(StatusCode::NOT_FOUND))
     }
 }
 
@@ -1180,16 +1191,14 @@ impl PlayerActions {
         State(state): State<GameAppData>,
         Path(params): Path<PlayerPathParam>,
         Json(body): Json<LoanRequest>,
-    ) -> impl IntoResponse {
-        let data = Arc::clone(&state.data);
-        let mut guard = data.write().await;
-
-        if let Some(ref mut arc_data) = *guard {
-            let sim = Arc::make_mut(arc_data);
-            return PlayerEditor::loan(sim, params.player_id, body.to_club_id, body.seasons);
-        }
-
-        StatusCode::NOT_FOUND
+    ) -> ApiResult<StatusCode> {
+        let loaned = state
+            .world
+            .edit(move |sim| {
+                PlayerEditor::loan(sim, params.player_id, body.to_club_id, body.seasons)
+            })
+            .await?;
+        Ok(loaned.unwrap_or(StatusCode::NOT_FOUND))
     }
 }
 
@@ -1213,12 +1222,12 @@ impl PlayerActions {
         State(state): State<GameAppData>,
         Query(query): Query<ClubsQuery>,
     ) -> Json<Vec<ClubListItem>> {
-        let guard = state.data.read().await;
+        let world = state.world.snapshot();
 
         let mut clubs = Vec::new();
         let exclude_id = query.exclude.unwrap_or(0);
 
-        if let Some(ref sim) = *guard {
+        if let Some(sim) = world.as_deref() {
             let filter = query.q.as_deref().unwrap_or("").to_lowercase();
             for continent in &sim.continents {
                 for country in &continent.countries {
@@ -1246,6 +1255,8 @@ impl PlayerActions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
     use chrono::Duration;
     use chrono::{NaiveDate, NaiveTime};
     use core::club::ClubAcademy;
@@ -1264,6 +1275,8 @@ mod tests {
         PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills, StaffCollection,
         TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule, TransferItem,
     };
+    use std::sync::Arc;
+    use tower::ServiceExt;
 
     /// World fixture for the manual-release action: one country (id 1)
     /// with one league (id 1), one club (id 100) whose Main team (id 10)
@@ -1445,6 +1458,41 @@ mod tests {
         let mut sim = Fixture::sim();
         assert!(!PlayerEditor::move_on_free(&mut sim, 999));
         assert!(sim.free_agents.is_empty());
+    }
+
+    #[test]
+    fn a_cleared_injury_is_in_the_next_snapshot() {
+        let mut sim = Fixture::sim();
+        let attributes = &mut sim.player_mut(1).unwrap().player_attributes;
+        attributes.is_injured = true;
+        attributes.injury_days_remaining = 12;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _runtime_guard = runtime.enter();
+        let i18n = Arc::new(crate::I18nManager::new());
+        let state = GameAppData {
+            database: Arc::new(database::DatabaseLoader::load()),
+            world: crate::World::start(Some(sim), Arc::clone(&i18n)),
+            news_i18n: Arc::new(crate::NewsI18nManager::new()),
+            events_i18n: Arc::new(crate::EventI18nManager::new(&i18n)),
+            i18n,
+            workers: crate::WorkerRegistry::empty(),
+            ai: crate::AiConfig::new(),
+        };
+        let app = routes::PlayerActionsRoutes::create().with_state(state.clone());
+        let request = Request::post("/api/players/1/clear-injury")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = runtime.block_on(app.oneshot(request)).unwrap();
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let world = state.world.snapshot().unwrap();
+        let attributes = &world.player(1).unwrap().player_attributes;
+        assert!(!attributes.is_injured);
+        assert_eq!(attributes.injury_days_remaining, 0);
     }
 
     /// World fixture for the manual transfer: one league (id 1) and three

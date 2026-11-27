@@ -16,7 +16,7 @@ use core::MatchRuntime;
 use core::NationalTeamLevel;
 use core::Player;
 use core::SimulatorData;
-use core::r#match::player::statistics::MatchStatisticType;
+use core::r#match::MatchStatisticType;
 use core::r#match::{MatchResult, MatchResultRaw};
 use serde::{Deserialize, Serialize};
 use shared::Appearance;
@@ -388,9 +388,9 @@ impl<'a> MatchGetPage<'a> {
         Path(route_params): Path<MatchGetRequest>,
     ) -> ApiResult<impl IntoResponse> {
         let i18n = state.i18n.for_lang(&route_params.lang);
-        let guard = state.data.read().await;
+        let world = state.world.snapshot();
 
-        let simulator_data = guard
+        let simulator_data = world
             .as_ref()
             .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 

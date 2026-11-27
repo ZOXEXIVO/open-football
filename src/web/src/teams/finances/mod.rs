@@ -103,9 +103,9 @@ impl TeamFinancesPage {
         State(state): State<GameAppData>,
         Path(route_params): Path<TeamFinancesGetRequest>,
     ) -> ApiResult<impl IntoResponse> {
-        let guard = state.data.read().await;
+        let world = state.world.snapshot();
 
-        let simulator_data = guard
+        let simulator_data = world
             .as_ref()
             .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 

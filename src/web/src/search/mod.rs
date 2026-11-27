@@ -125,8 +125,8 @@ impl SearchApi {
         State(state): State<GameAppData>,
         Query(query): Query<SearchApiQuery>,
     ) -> ApiResult<impl IntoResponse> {
-        let guard = state.data.read().await;
-        let simulator_data = guard
+        let world = state.world.snapshot();
+        let simulator_data = world
             .as_ref()
             .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 

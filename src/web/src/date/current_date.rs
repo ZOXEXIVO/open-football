@@ -14,9 +14,9 @@ pub struct CurrentDateModel {
 
 impl CurrentDateModel {
     pub async fn action(State(state): State<GameAppData>) -> Response {
-        let data = state.data.read().await;
+        let world = state.world.snapshot();
 
-        let date = match data.as_ref() {
+        let date = match world.as_deref() {
             None => Utc::now().naive_utc(),
             Some(data) => data.date,
         };

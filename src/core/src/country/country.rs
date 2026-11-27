@@ -3,13 +3,13 @@ use crate::club::team::NearestFixtures;
 use crate::context::GlobalContext;
 use crate::context::{HomeLeagueTable, TournamentClocks};
 use crate::continent::ContinentalCommitments;
-use crate::country::CountryResult;
 use crate::country::builder::CountryBuilder;
 use crate::country::national::NationalTeam;
 use crate::country::process::{
     CountryClubFanout, CountryLeagueFanout, CountryMatchdayResults, CountryTicks,
     CountryTransferMarketTick,
 };
+use crate::country::{CountryResult, RetiredPlayers};
 use crate::league::LeagueBuildOutput;
 use crate::league::LeagueCollection;
 use crate::league::LeaguePendingState;
@@ -26,7 +26,7 @@ use crate::shared::CountryLookupIndex;
 use crate::transfers::market::TransferMarket;
 use crate::transfers::market::map::CountryTransferProfile;
 use crate::utils::PerformanceProfiler;
-use crate::{Club, ClubResult, Player, PlayerCollection};
+use crate::{Club, ClubResult, Player};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 use rayon::iter::{IndexedParallelIterator, ParallelIterator};
@@ -113,7 +113,7 @@ pub struct Country {
     /// falls to [`crate::transfers::CorridorPrior::derive`].
     pub transfer_profile: CountryTransferProfile,
 
-    pub retired_players: PlayerCollection,
+    pub retired_players: RetiredPlayers,
 
     /// Positions of this country's players, teams and clubs for its own
     /// result fan-out, kept between ticks and reconciled before each use.

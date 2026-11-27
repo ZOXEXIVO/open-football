@@ -12,6 +12,7 @@ use self::line::{StubDraw, StubLine};
 use self::performance::{StubFixture, StubPerformance};
 use crate::PlayerFieldPositionGroup;
 use crate::club::player::events::{MatchExertionInputs, PositionLoad};
+use crate::r#match::engine::CoachRecord;
 use crate::r#match::engine::context::MatchEngineConfig;
 use crate::r#match::engine::player::injury::{InjuryCause, InjuryGrade, InjuryRisk};
 use crate::r#match::engine::psychology::Psychology;
@@ -22,9 +23,8 @@ use crate::r#match::engine::result::{
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{
-    CoachCard, CoachRecord, GoalOrigin, MatchCoach, MatchPlayer, MatchResultRaw, MatchRng,
-    MatchSquad, Outlook, ReadCounters, Score, Situation, SquadFit, SubstitutionInfo, TeamPins,
-    TeamSkillAggregates,
+    CoachCard, GoalOrigin, MatchCoach, MatchPlayer, MatchResultRaw, MatchRng, MatchSquad, Outlook,
+    ReadCounters, Score, Situation, SquadFit, SubstitutionInfo, TeamPins, TeamSkillAggregates,
 };
 
 /// One stubbed match between a home and an away squad.

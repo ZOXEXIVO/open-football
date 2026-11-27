@@ -127,8 +127,8 @@ impl LeagueHighlights {
     ) -> ApiResult<Response> {
         let connection = state.ai.connection().await;
         let highlights = {
-            let guard = state.data.read().await;
-            let Some(data) = guard.as_ref() else {
+            let world = state.world.snapshot();
+            let Some(data) = world.as_ref() else {
                 return Ok(Json(Vec::<String>::new()).into_response());
             };
             let suffix = snapshot.map_or_else(

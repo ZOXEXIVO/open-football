@@ -1,3 +1,4 @@
+use crate::world::EditFailed;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -36,6 +37,12 @@ impl From<std::io::Error> for ApiError {
 impl From<serde_json::Error> for ApiError {
     fn from(err: serde_json::Error) -> Self {
         ApiError::InternalError(format!("JSON error: {}", err))
+    }
+}
+
+impl From<EditFailed> for ApiError {
+    fn from(_: EditFailed) -> Self {
+        ApiError::InternalError("the edit failed and was not applied".to_string())
     }
 }
 

@@ -308,9 +308,9 @@ mod run;
 mod tick;
 mod types;
 
-// `phase_prof` was a public child of this module before the grouping, and
-// the engine root re-exports this module with a glob, so it has to stay
-// reachable as `crate::r#match::phase_prof`.
+// `phase_prof` was a public child of this module before the grouping, so it
+// stays reachable as `engine::engine::phase_prof` for the tick loop and the
+// development harnesses that name it directly.
 pub use diagnostics::phase_prof;
 #[cfg(feature = "match-logs")]
 pub use diagnostics::state_counters::tackle_stats;

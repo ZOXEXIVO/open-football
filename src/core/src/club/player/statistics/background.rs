@@ -665,7 +665,7 @@ mod tests {
         p.happiness.starter_ratio = 0.9 * 0.75_f32.powi(3);
         assert!(p.is_picked(september));
 
-        p.statistics_history.season_ledger.clear();
+        p.statistics_history.season_ledger.truncate(0);
         assert!(
             !p.is_picked(september),
             "with no season behind him the rolling share is all there is"

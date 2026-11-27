@@ -92,8 +92,8 @@ impl ChampionsLeagueGet {
         Path(route_params): Path<ChampionsLeagueGetRequest>,
     ) -> ApiResult<impl IntoResponse> {
         let i18n = state.i18n.for_lang(&route_params.lang);
-        let guard = state.data.read().await;
-        let simulator_data = guard.as_ref().unwrap();
+        let world = state.world.snapshot();
+        let simulator_data = world.as_ref().unwrap();
 
         // Find European continent's CL data
         let cl = simulator_data

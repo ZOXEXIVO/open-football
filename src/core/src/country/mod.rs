@@ -7,6 +7,7 @@ pub mod media;
 pub mod national;
 pub mod process;
 pub mod result;
+pub mod retired_players;
 pub mod rules;
 
 pub use builder::*;
@@ -18,4 +19,5 @@ pub use media::*;
 pub use national::*;
 pub use process::*;
 pub use result::*;
+pub use retired_players::*;
 pub use rules::*;

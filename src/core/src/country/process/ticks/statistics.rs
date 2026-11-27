@@ -743,7 +743,9 @@ mod tests {
         assert_eq!(
             country.clubs[0].teams.teams[0].players.players[0]
                 .statistics_history
-                .items[0]
+                .items
+                .first()
+                .unwrap()
                 .statistics
                 .played,
             30
@@ -751,7 +753,9 @@ mod tests {
         assert_eq!(
             country.clubs[0].teams.teams[0].players.players[1]
                 .statistics_history
-                .items[0]
+                .items
+                .first()
+                .unwrap()
                 .statistics
                 .played,
             15
@@ -764,7 +768,7 @@ mod tests {
         // `player.statistics` represent senior callup appearances
         // (reserve-league games would land in friendly_statistics) so
         // they survive into the Main row.
-        let reserve_entry = &reserve_player.statistics_history.items[0];
+        let reserve_entry = reserve_player.statistics_history.items.first().unwrap();
         assert_eq!(reserve_entry.team_slug, "roma");
         assert_eq!(reserve_entry.statistics.played, 5);
     }
@@ -806,9 +810,11 @@ mod tests {
 
         let country = data.country(1).unwrap();
         assert_eq!(country.last_snapshotted_season_year, Some(2026));
-        let entry = &country.clubs[0].teams.teams[0].players.players[0]
+        let entry = country.clubs[0].teams.teams[0].players.players[0]
             .statistics_history
-            .items[0];
+            .items
+            .first()
+            .unwrap();
         assert_eq!(
             entry.season.start_year, 2026,
             "season starting before August must be frozen under its calendar \
@@ -836,9 +842,11 @@ mod tests {
         data.snapshot_player_season_statistics(1);
 
         let country = data.country_mut(1).unwrap();
-        let entry = &country.clubs[0].teams.teams[0].players.players[0]
+        let entry = country.clubs[0].teams.teams[0].players.players[0]
             .statistics_history
-            .items[0];
+            .items
+            .first()
+            .unwrap();
         assert_eq!(entry.season.start_year, 2032);
     }
 
@@ -861,14 +869,18 @@ mod tests {
         assert_eq!(
             country.clubs[0].teams.teams[0].players.players[0]
                 .statistics_history
-                .items[0]
+                .items
+                .first()
+                .unwrap()
                 .team_slug,
             "inter"
         );
         assert_eq!(
             country.clubs[1].teams.teams[0].players.players[0]
                 .statistics_history
-                .items[0]
+                .items
+                .first()
+                .unwrap()
                 .team_slug,
             "milan"
         );
@@ -896,9 +908,11 @@ mod tests {
         data.snapshot_player_season_statistics(1);
 
         let country = data.country_mut(1).unwrap();
-        let entry = &country.clubs[0].teams.teams[0].players.players[0]
+        let entry = country.clubs[0].teams.teams[0].players.players[0]
             .statistics_history
-            .items[0];
+            .items
+            .first()
+            .unwrap();
         assert_eq!(entry.team_slug, "club-b");
         assert_eq!(entry.statistics.played, 8);
     }
@@ -1069,7 +1083,7 @@ mod tests {
             1,
             "expected exactly one career row from the Main spell"
         );
-        let entry = &player.statistics_history.items[0];
+        let entry = player.statistics_history.items.first().unwrap();
         assert_eq!(entry.team_slug, "napoli");
         assert_eq!(entry.statistics.played, 12);
         assert_eq!(entry.statistics.goals, 3);

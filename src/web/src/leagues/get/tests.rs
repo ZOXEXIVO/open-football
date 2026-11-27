@@ -1,7 +1,7 @@
 use super::fixtures::LeagueFixtures;
 use crate::routes::ServerRoutes;
 use crate::{
-    AiConfig, EventI18nManager, GameAppData, I18nManager, NewsI18nManager, WorkerRegistry,
+    AiConfig, EventI18nManager, GameAppData, I18nManager, NewsI18nManager, WorkerRegistry, World,
 };
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, Method, Request, StatusCode, Uri, header};
@@ -156,15 +156,18 @@ impl LeagueFixture {
             database: Arc::clone(
                 DATABASE.get_or_init(|| Arc::new(database::DatabaseLoader::load())),
             ),
-            data: Arc::new(tokio::sync::RwLock::new(Some(Arc::new(Self::world())))),
-            process_lock: Arc::default(),
-            cancel_flag: Arc::default(),
+            world: World::start(Some(Self::world()), Arc::clone(&i18n)),
             news_i18n: Arc::new(NewsI18nManager::new()),
             events_i18n: Arc::new(EventI18nManager::new(&i18n)),
             i18n,
             workers: WorkerRegistry::empty(),
             ai: AiConfig::new(),
         }
+    }
+
+    async fn replace_world(state: &GameAppData, world: SimulatorData) {
+        let replaced = state.world.edit(move |sim| *sim = world).await;
+        assert!(replaced.unwrap().is_some(), "a world is loaded");
     }
 
     fn block_on<F: Future>(future: F) -> F::Output {
@@ -434,12 +437,12 @@ fn disabled_stale_and_empty_lookups_skip_the_model() {
             .schedule
             .tours;
         tours[1].items[1].result = Some(Score::new(10, 11));
-        *state.data.write().await = Some(Arc::new(world));
+        LeagueFixture::replace_world(&state, world).await;
         assert!(LeagueFixture::selections(&app, path).await.is_empty());
 
         let mut world = LeagueFixture::world();
         world.date = LeagueFixture::date(27);
-        *state.data.write().await = Some(Arc::new(world));
+        LeagueFixture::replace_world(&state, world).await;
         assert!(LeagueFixture::selections(&app, path).await.is_empty());
         let only_upcoming = LeagueFixture::body(LeagueFixture::get(&app, PAGE).await).await;
         assert!(!only_upcoming.contains("data-match-highlights"));
@@ -471,11 +474,12 @@ fn a_delayed_answer_does_not_hold_the_page_or_survive_a_replaced_connection() {
                 .await
                 .unwrap();
         assert_eq!(LeagueFixture::body(refreshed).await, html);
-        let mut data = tokio::time::timeout(Duration::from_secs(2), state.data.write())
-            .await
-            .unwrap();
-        *data = Some(Arc::new(LeagueFixture::world()));
-        drop(data);
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            LeagueFixture::replace_world(&state, LeagueFixture::world()),
+        )
+        .await
+        .expect("the edit is applied while the decision answer is held");
         state.ai.clear().await;
         decision.configure(&state).await;
         gate.notify_one();

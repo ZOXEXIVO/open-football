@@ -16,6 +16,7 @@ match-stub = ["core/match-stub"]
 shared = { path = "../shared" }
 core = { path = "../core" }
 database = { path = "../database" }
+arc-swap = "1.9"
 axum = "0.8.9"
 log = "0.4.35"
 tokio = { version = "1.54.1", features = ["full"] }

@@ -21,8 +21,7 @@ use core::league::{
     League, LeagueLadder, LeagueTableRow as CoreTableRow, PlayoffStage, ScheduleItem,
     TieBreakPolicy,
 };
-use core::r#match::GoalDetail;
-use core::r#match::player::statistics::MatchStatisticType;
+use core::r#match::{GoalDetail, MatchStatisticType, Score};
 use core::{Country, SimulatorData};
 use serde::Deserialize;
 use std::cmp::Reverse;
@@ -227,9 +226,9 @@ impl<'a> LeagueGetPage<'a> {
     ) -> ApiResult<axum::response::Response> {
         let i18n = state.i18n.for_lang(&route_params.lang);
         let highlights_enabled = state.ai.connection().await.is_some();
-        let guard = state.data.read().await;
+        let world = state.world.snapshot();
 
-        let simulator_data = guard.as_ref().unwrap();
+        let simulator_data = world.as_ref().unwrap();
 
         let (league, country) = match LeagueAddress::resolve(
             simulator_data,
@@ -549,7 +548,7 @@ impl LeagueScheduleItemResult {
     fn from_result(
         data: &SimulatorData,
         item: &ScheduleItem,
-        res: &core::r#match::engine::flow::result::Score,
+        res: &Score,
         home_team: &core::Team,
         away_team: &core::Team,
     ) -> LeagueScheduleItemResult {

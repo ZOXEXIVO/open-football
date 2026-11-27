@@ -308,9 +308,9 @@ impl Quantize {
 /// Player state change: recorded only when the state actually changes.
 /// Serializes as [timestamp, "StateName"] for compact JSON.
 #[derive(Debug, Clone)]
-pub struct PlayerStateEntry {
-    pub timestamp: u64,
-    pub state: String,
+struct PlayerStateEntry {
+    timestamp: u64,
+    state: String,
 }
 
 impl Serialize for PlayerStateEntry {
@@ -1261,17 +1261,11 @@ impl ResultMatchPositionData {
     }
 }
 
-pub trait VectorExtensions {
-    fn length(&self) -> f32;
+pub(crate) trait VectorExtensions {
     fn distance_to(&self, other: &Vector3<f32>) -> f32;
 }
 
 impl VectorExtensions for Vector3<f32> {
-    #[inline]
-    fn length(&self) -> f32 {
-        (self.x * self.x + self.y * self.y + self.z * self.z).sqrt()
-    }
-
     #[inline]
     fn distance_to(&self, other: &Vector3<f32>) -> f32 {
         let diff = self - other;

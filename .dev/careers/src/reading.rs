@@ -291,12 +291,12 @@ impl RetirementWatch {
         let mut retired = Vec::new();
         for continent in &data.continents {
             for country in &continent.countries {
-                let players = &country.retired_players.players;
+                let players = &country.retired_players;
                 let cursor = self.cursors.entry(country.id).or_insert(0);
                 if *cursor > players.len() {
                     *cursor = 0;
                 }
-                retired.extend(players[*cursor..].iter());
+                retired.extend(players.iter().skip(*cursor));
                 *cursor = players.len();
             }
         }

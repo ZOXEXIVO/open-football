@@ -69,8 +69,8 @@ impl FacePortrait {
         Path(path): Path<FacePathParams>,
         Query(query): Query<FaceQuery>,
     ) -> Response {
-        let guard = state.data.read().await;
-        let Some(simulator_data) = guard.as_ref() else {
+        let world = state.world.snapshot();
+        let Some(simulator_data) = world.as_ref() else {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         };
 

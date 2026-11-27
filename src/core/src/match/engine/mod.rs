@@ -15,10 +15,26 @@ pub mod teamplay;
 #[cfg(test)]
 mod tests;
 
-pub use ball::*;
-pub use engine::*;
-pub use raycast::*;
-pub use state::*;
+// ── Flat engine surface ────────────────────────────────────────────────────
+//
+// The engine root publishes exactly the names the rest of `core` and the
+// development harnesses reach through it. The grouped modules stay reachable
+// by their own paths; nothing is re-exported by accident.
+
+// ball/ — the ball model's root.
+pub(crate) use ball::{Ball, MAX_OWNER_TRACK_DISTANCE, OffsideLine, OffsideSnapshot, ShotTarget};
+pub use ball::{GoalOrigin, PassOriginRestart};
+
+// engine/ — the simulation entry point and its standalone value types.
+pub use engine::FootballEngine;
+pub(crate) use engine::{
+    BallSide, MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MATCH_TIME_MS, MatchFieldSize,
+    MatchPlayerCollection, MatchTime, TeamsTactics,
+};
+pub(crate) use raycast::Space;
+
+// state/ — the match clock's state machine.
+pub(crate) use state::{MatchState, StateManager};
 
 // teamplay/ — re-export the modules (preserve `engine::<module>::` paths)
 // and the items previously surfaced at the engine root.
@@ -28,11 +44,18 @@ pub use teamplay::chemistry::{
     ChemistryInputs, ChemistryMap, ChemistryModifiers, Lane, Role, TacticalFamiliarity,
     chemistry_modifiers, initial_chemistry,
 };
-pub use teamplay::coach::*;
+pub use teamplay::coach::{
+    ChangeMoment, CoachCard, CoachRead, CoachRecord, GamePlan, MatchCoach, Occasion, Outlook,
+    PlanChange, ReadCounters, RollingTeamMetrics, ScoringRates, ShapeChoice, Situation, SquadFit,
+    Stance, TacticalNeed, TeamPins, Temperament,
+};
 pub use teamplay::defence::{DefenceRefreshInputs, DefensiveDuty, DefensivePlan};
 pub use teamplay::shape::{ShapeRefreshInputs, TeamShape};
 pub use teamplay::standard::MatchStandard;
-pub use teamplay::tactical::*;
+pub use teamplay::tactical::{
+    BallSideZone, BallZone, GamePhase, TacticalRefreshInputs, TeamSkillAggregates,
+    TeamTacticalState,
+};
 pub use teamplay::wide::{Flank, WidePlan};
 pub use teamplay::zones::{LateralLane, MatchZone, ZoneCoeffs, ZoneStats};
 pub use teamplay::{
@@ -41,11 +64,24 @@ pub use teamplay::{
 
 // flow/
 pub use flow::celebration::GoalCelebration;
-pub use flow::context::*;
+pub use flow::context::MatchEngineConfig;
+#[cfg(feature = "match-logs")]
+pub(crate) use flow::context::PenaltyArea;
+#[cfg(test)]
+pub(crate) use flow::context::SubstitutionWindows;
+pub(crate) use flow::context::{MATCH_TIME_INCREMENT_MS, MatchContext};
 pub use flow::environment::{EnvModifiers, MatchEnvironment, Pitch, Weather};
-pub use flow::field::*;
-pub use flow::goal::*;
-pub use flow::result::*;
+pub(crate) use flow::field::MatchField;
+pub(crate) use flow::goal::GoalPosition;
+pub use flow::result::{
+    ChanceDetail, DeadTime, FieldSquad, GoalDetail, MatchResult, MatchResultOutcome,
+    MatchResultRaw, PeriodKind, PlayerMatchEndStats, Score, SubstitutionInfo, TeamScore,
+};
+pub(crate) use flow::result::{
+    HighlightSelector, MatchTally, PenaltyShootoutKick, SubstitutionReason,
+};
+#[cfg(feature = "match-logs")]
+pub use flow::result::{LedgerState, TeamCensusTally};
 pub use flow::rng::MatchRng;
 pub use flow::touchline::changeover::{advance_substitution_break, finish_substitution_break};
 pub use flow::touchline::{Bench, SubstitutionBreak, TouchlineStand};
@@ -76,7 +112,8 @@ pub use psychology::{
     ActionLapse, LapseFamily, NegativeEvent, PositiveEvent, PsychState, Psychology,
     PsychologyState, SkillModifiers, TeamMomentum,
 };
-pub use rating::*;
+#[cfg(test)]
+pub(crate) use rating::RatingContext;
 
 // Re-export player items except conflicting ones
 pub use player::{

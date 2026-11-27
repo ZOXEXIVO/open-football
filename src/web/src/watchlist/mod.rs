@@ -86,7 +86,7 @@ impl WatchlistPageTemplate {
         State(state): State<GameAppData>,
         Path(route_params): Path<WatchlistPageRequest>,
     ) -> ApiResult<impl IntoResponse> {
-        if state.data.read().await.is_none() {
+        if state.world.snapshot().is_none() {
             return Err(ApiError::InternalError(
                 "Simulator data not loaded".to_string(),
             ));
@@ -130,8 +130,8 @@ impl WatchlistRowsTemplate {
         Path(route_params): Path<WatchlistPageRequest>,
         Json(body): Json<WatchlistRowsRequest>,
     ) -> ApiResult<impl IntoResponse> {
-        let guard = state.data.read().await;
-        let simulator_data = guard
+        let world = state.world.snapshot();
+        let simulator_data = world
             .as_ref()
             .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 

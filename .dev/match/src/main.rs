@@ -21,15 +21,15 @@ use core::midfielder_census::{
     AttackJob, BallHeld, DropEnd, DropReach, HeadingExit, MidHeaderRule, MidPhase, MidSituation,
     MidfieldPlace, MidfielderCensus, MidfielderCensusSnapshot, TackleTake,
 };
-use core::r#match::forwarders::states::ForwardState;
-use core::r#match::midfielders::states::MidfielderState;
+use core::r#match::engine::forwarders::states::ForwardState;
+use core::r#match::engine::midfielders::states::MidfielderState;
 use core::r#match::FootballEngine;
 use core::r#match::MatchSquad;
-use core::r#match::defenders::states::DefenderState;
-use core::r#match::goalkeepers::states::state::GoalkeeperState;
-use core::r#match::player::MatchPlayer;
-use core::r#match::player::state::PlayerState;
-use core::r#match::player::strategies::players::ops::skill_composites as sc;
+use core::r#match::engine::defenders::states::DefenderState;
+use core::r#match::engine::goalkeepers::states::state::GoalkeeperState;
+use core::r#match::engine::player::MatchPlayer;
+use core::r#match::engine::player::state::PlayerState;
+use core::r#match::engine::player::strategies::players::ops::skill_composites as sc;
 use core::staff_contract_mod::NaiveDate;
 use core::{
     AcademyGenerationContext, MatchRuntime, PeopleNameGeneratorData, PlayerGenerator, PlayerSkills,
@@ -1800,10 +1800,10 @@ fn per_player_rows(result: &core::r#match::MatchResultRaw) -> Vec<PlayerRow> {
 }
 
 /// Goals by `GoalOrigin::index`, read off the score's goal details.
-fn goal_origins(score: &core::r#match::Score) -> [u32; core::r#match::GoalOrigin::COUNT] {
-    let mut out = [0u32; core::r#match::GoalOrigin::COUNT];
+fn goal_origins(score: &core::r#match::Score) -> [u32; core::r#match::engine::GoalOrigin::COUNT] {
+    let mut out = [0u32; core::r#match::engine::GoalOrigin::COUNT];
     for g in score.detail() {
-        if g.stat_type == core::r#match::player::statistics::MatchStatisticType::Goal {
+        if g.stat_type == core::r#match::engine::player::statistics::MatchStatisticType::Goal {
             out[g.origin.index()] += 1;
         }
     }
@@ -5728,7 +5728,7 @@ fn print_usage() {
     eprintln!(
         "  dev_match ladder [N] [--baseline]  strength ladder: gaps 0/2/4/6/9 around level 14, both venues"
     );
-    eprintln!("  pins: {}", core::r#match::TeamPins::USAGE);
+    eprintln!("  pins: {}", core::r#match::engine::TeamPins::USAGE);
     eprintln!(
         "                                      defaults: 20 teams, 2 rounds (38 games), levels 8–18"
     );
@@ -5978,7 +5978,7 @@ impl SubstitutionCensus {
                             s.team_id,
                             (s.match_time_ms / 60_000) as u32,
                             n,
-                            matches!(s.reason, core::r#match::SubstitutionReason::Discretionary),
+                            matches!(s.reason, core::r#match::engine::SubstitutionReason::Discretionary),
                         )
                     })
                     .collect();
@@ -5988,7 +5988,7 @@ impl SubstitutionCensus {
                     if let Some(&on_at) = came_on.get(&s.player_out_id) {
                         recycled.push((
                             s.match_time_ms.saturating_sub(on_at) / 60_000,
-                            matches!(s.reason, core::r#match::SubstitutionReason::Discretionary),
+                            matches!(s.reason, core::r#match::engine::SubstitutionReason::Discretionary),
                         ));
                     }
                     came_on.insert(s.player_in_id, s.match_time_ms);
@@ -6282,12 +6282,12 @@ fn main() {
     let mode = args.get(1).map(|s| s.as_str()).unwrap_or("viewer");
     if !matches!(mode, "--help" | "-h" | "help") {
         println!("shape: {}", HarnessTactic::label());
-        match core::r#match::TeamPins::from_env() {
+        match core::r#match::engine::TeamPins::from_env() {
             Ok(pins) => println!("team: {}", pins.describe()),
             Err(why) => {
                 eprintln!("{why}
 
-Usage: {}", core::r#match::TeamPins::USAGE);
+Usage: {}", core::r#match::engine::TeamPins::USAGE);
                 std::process::exit(2);
             }
         }
@@ -7364,8 +7364,8 @@ impl TeamCensusReport {
     /// Engine ticks in ninety minutes.
     const TICKS_PER_90: f64 = 540_000.0;
 
-    fn print(census: &core::r#match::TeamCensusTally, results: &[&core::r#match::MatchResultRaw]) {
-        use core::r#match::LedgerState;
+    fn print(census: &core::r#match::engine::TeamCensusTally, results: &[&core::r#match::MatchResultRaw]) {
+        use core::r#match::engine::LedgerState;
         let matches = results.len().max(1) as f64;
         let all_ticks: u64 = census
             .ledger
@@ -7391,7 +7391,7 @@ impl TeamCensusReport {
             ("TRAILING", &[LedgerState::TrailingByOne, LedgerState::TrailingByTwo]),
         ];
         for (label, states) in rows {
-            let mut l = core::r#match::StateLedger::default();
+            let mut l = core::r#match::engine::StateLedger::default();
             for &state in states {
                 l.absorb(&census.pooled(state));
             }
@@ -7425,7 +7425,7 @@ impl TeamCensusReport {
             "side", "poss%", "PPDA", "press m", "line m", "block L", "width", "pass/pos", "sec/pos", "direct m/s", "counters"
         );
         for (side, label) in ["home", "away"].iter().enumerate() {
-            let mut l = core::r#match::StateLedger::default();
+            let mut l = core::r#match::engine::StateLedger::default();
             for ledger in &census.ledger[side] {
                 l.absorb(ledger);
             }
@@ -7456,7 +7456,7 @@ impl TeamCensusReport {
         for (side, label) in ["home", "away"].iter().enumerate() {
             let pos = &census.possessions[side];
             let total = pos.possessions.max(1) as f64;
-            let ended: Vec<String> = core::r#match::PossessionEnd::NAMES
+            let ended: Vec<String> = core::r#match::engine::PossessionEnd::NAMES
                 .iter()
                 .zip(pos.ended.iter())
                 .map(|(name, &n)| format!("{name} {:.1}%", n as f64 * 100.0 / total))
@@ -7479,7 +7479,7 @@ impl TeamCensusReport {
     }
 
     fn print_coaches(results: &[&core::r#match::MatchResultRaw]) {
-        use core::r#match::{ChangeMoment, GamePlan};
+        use core::r#match::engine::{ChangeMoment, GamePlan};
         let matches = results.len().max(1) as f64;
         println!();
         println!("--- TEAM CENSUS: coaches ---");
@@ -7491,7 +7491,7 @@ impl TeamCensusReport {
                     r.coach_away.clone()
                 }
             };
-            let records: Vec<core::r#match::CoachRecord> = results.iter().map(|r| record(r)).collect();
+            let records: Vec<core::r#match::engine::CoachRecord> = results.iter().map(|r| record(r)).collect();
             let mut plan = [0.0f64; 7];
             let mut planned = 0.0;
             for p in records.iter().filter_map(|r| r.kickoff_plan) {
@@ -7735,7 +7735,7 @@ impl StrengthLadder {
             all_results.extend(results.into_iter().map(|(_, r)| r));
         }
 
-        let mut census = core::r#match::TeamCensusTally::default();
+        let mut census = core::r#match::engine::TeamCensusTally::default();
         for result in &all_results {
             census.absorb(&result.tally.team_census);
         }
@@ -7884,7 +7884,7 @@ impl RealismBatch {
     }
 
     fn run(n: usize, write_baseline: bool) -> bool {
-        use core::r#match::calibration::MatchCalibrationStats;
+        use core::r#match::MatchCalibrationStats;
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("error")).init();
 
         println!(
@@ -8654,7 +8654,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     core::chase_diag::reset();
     core::dead_ball_diag::reset();
     core::time_band_diag::reset();
-    core::r#match::TransitionGraph::reset();
+    core::r#match::engine::TransitionGraph::reset();
     {
         use std::sync::atomic::Ordering;
         core::save_accounting_stats::SAVE_TICKS_REACHED.store(0, Ordering::Relaxed);
@@ -8717,7 +8717,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 .detail()
                 .iter()
                 .filter(|g| {
-                    g.stat_type == core::r#match::player::statistics::MatchStatisticType::Goal
+                    g.stat_type == core::r#match::engine::player::statistics::MatchStatisticType::Goal
                         && !g.is_auto_goal
                 })
                 .map(|g| (g.time, g.player_id / 100 == 1))
@@ -8730,7 +8730,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 .detail()
                 .iter()
                 .filter(|g| {
-                    g.stat_type == core::r#match::player::statistics::MatchStatisticType::Goal
+                    g.stat_type == core::r#match::engine::player::statistics::MatchStatisticType::Goal
                 })
                 .map(|g| (g.time, g.player_id, g.is_auto_goal))
                 .collect();
@@ -8738,7 +8738,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 .detail()
                 .iter()
                 .filter(|g| {
-                    g.stat_type == core::r#match::player::statistics::MatchStatisticType::Assist
+                    g.stat_type == core::r#match::engine::player::statistics::MatchStatisticType::Assist
                 })
                 .map(|g| (g.time, g.player_id))
                 .collect();
@@ -9336,7 +9336,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     // what the batch's own rates and goal times give two sides scoring
     // independently.
     {
-        use core::r#match::calibration::{GoalTimeline, IndependentScoring};
+        use core::r#match::{GoalTimeline, IndependentScoring};
         let mut timeline = GoalTimeline::default();
         let mut goal_minutes: Vec<u32> = Vec::new();
         let (mut home_total, mut away_total) = (0u64, 0u64);
@@ -11246,7 +11246,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 {
                     let (rows, un_ticks, un_eps, longest) = core::dead_ball_diag::snapshot();
                     let mut label = std::collections::HashMap::new();
-                    for st in core::r#match::player::state::PlayerState::all() {
+                    for st in core::r#match::engine::player::state::PlayerState::all() {
                         label.insert(st.compact_id(), format!("{}", st));
                     }
                     let total: u64 = rows.iter().map(|r| r.1).sum::<u64>() + un_ticks;
@@ -11634,7 +11634,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                         );
                         let by_state = core::flight_diag::FlightDiag::absurd_by_state();
                         let mut label = std::collections::HashMap::new();
-                        for st in core::r#match::player::state::PlayerState::all() {
+                        for st in core::r#match::engine::player::state::PlayerState::all() {
                             label.insert(st.compact_id(), format!("{}", st));
                         }
                         let mut rows: Vec<(usize, u64)> = by_state
@@ -12946,7 +12946,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             // passes through, as `Kicking` does when it strikes the ball on
             // entry, holds no tick either; the transition graph tells it
             // apart from one nothing reaches.
-            let entered: HashSet<u16> = core::r#match::TransitionGraph::edges()
+            let entered: HashSet<u16> = core::r#match::engine::TransitionGraph::edges()
                 .iter()
                 .map(|edge| edge.to.compact_id())
                 .collect();
@@ -14578,7 +14578,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 goal_kicks as f64 / n_matches as f64
             );
             {
-                use core::r#match::player::strategies::passing::CrossType;
+                use core::r#match::engine::player::strategies::passing::CrossType;
                 use core::mid_run_diag::CrossDiag;
                 let by_type = CrossDiag::by_type();
                 let struck: u64 = by_type.iter().sum();
@@ -14762,10 +14762,10 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     // restarts were actually taken, how much of the match was football,
     // and who got hurt and how. Summed from each match's own tally.
     {
-        use core::r#match::player::events::FoulSource;
-        use core::r#match::player::injury::{InjuryCause, InjuryGrade};
-        use core::r#match::calibration::MatchCalibrationStats;
-        use core::r#match::{DeadTime, GoalOrigin, PassOriginRestart, PeriodKind};
+        use core::r#match::engine::player::events::FoulSource;
+        use core::r#match::engine::player::injury::{InjuryCause, InjuryGrade};
+        use core::r#match::MatchCalibrationStats;
+        use core::r#match::engine::{DeadTime, GoalOrigin, PassOriginRestart, PeriodKind};
         let mut calibration = MatchCalibrationStats::new();
         let mut goals = [0u32; GoalOrigin::COUNT];
         for o in &outcomes {
@@ -15094,7 +15094,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     // duel is too hard; a high `won` with no headers means the winner's
     // state machine isn't striking the planted ball.
     {
-        use core::r#match::player::strategies::passing::CrossType;
+        use core::r#match::engine::player::strategies::passing::CrossType;
         use core::mid_run_diag::CrossDiag;
         let by_type = CrossDiag::by_type();
         let total: u64 = by_type.iter().sum();
@@ -15757,8 +15757,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     // state has an exit. This is the population-scale transition graph,
     // so it exercises the audit on real play rather than synthetic edges.
     {
-        let edges = core::r#match::TransitionGraph::edges();
-        let dot = core::r#match::TransitionGraph::render_dot(&edges);
+        let edges = core::r#match::engine::TransitionGraph::edges();
+        let dot = core::r#match::engine::TransitionGraph::render_dot(&edges);
         let dot_path = "player_state_transitions.dot";
         let written = std::fs::write(dot_path, &dot).is_ok();
         println!();
@@ -15780,17 +15780,17 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
 
         // Structural invariants over the OBSERVED graph. Entry = the four
         // kickoff defaults + reserved (Injured); terminal = reserved.
-        let universe = core::r#match::player::state::PlayerState::all();
-        let mut entry = core::r#match::player::state::PlayerState::entry_states().to_vec();
-        entry.extend(core::r#match::player::state::PlayerState::reserved_states());
+        let universe = core::r#match::engine::player::state::PlayerState::all();
+        let mut entry = core::r#match::engine::player::state::PlayerState::entry_states().to_vec();
+        entry.extend(core::r#match::engine::player::state::PlayerState::reserved_states());
         // Terminal = reserved, plus every state somebody was still in
         // when a whistle went: a player who has not left a state gives it
         // no outbound edge, which reads as a dead end. See
         // `TransitionGraph::note_final_states`.
-        let mut terminal = core::r#match::player::state::PlayerState::reserved_states().to_vec();
-        terminal.extend(core::r#match::TransitionGraph::final_states());
+        let mut terminal = core::r#match::engine::player::state::PlayerState::reserved_states().to_vec();
+        terminal.extend(core::r#match::engine::TransitionGraph::final_states());
         let violations =
-            core::r#match::TransitionGraph::audit(&edges, &universe, &entry, &terminal);
+            core::r#match::engine::TransitionGraph::audit(&edges, &universe, &entry, &terminal);
 
         // Only flag states actually exercised this run — an unreached
         // state is "not observed", not a structural dead-end.
@@ -15801,8 +15801,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         let real: Vec<_> = violations
             .into_iter()
             .filter(|v| match v {
-                core::r#match::GraphInvariantViolation::Unreachable(id)
-                | core::r#match::GraphInvariantViolation::DeadEnd(id) => observed.contains(id),
+                core::r#match::engine::GraphInvariantViolation::Unreachable(id)
+                | core::r#match::engine::GraphInvariantViolation::DeadEnd(id) => observed.contains(id),
             })
             .collect();
         println!("  states observed: {}/{}", observed.len(), universe.len());
@@ -16200,7 +16200,7 @@ fn run_trace(matches: usize, level: u8) {
     use std::collections::HashMap;
 
     motion_diag::reset();
-    core::r#match::TransitionGraph::reset();
+    core::r#match::engine::TransitionGraph::reset();
 
     let mut names: HashMap<u32, String> = HashMap::new();
     for m in 0..matches {
@@ -16316,7 +16316,7 @@ fn run_trace(matches: usize, level: u8) {
     {
         use std::sync::atomic::Ordering;
         let mut rows: Vec<(f64, f64, u64, u64, String)> = Vec::new();
-        for st in core::r#match::player::state::PlayerState::all() {
+        for st in core::r#match::engine::player::state::PlayerState::all() {
             let slot = st.compact_id() as usize;
             let ticks = motion_diag::TICKS_BY_STATE[slot].load(Ordering::Relaxed);
             let revs = motion_diag::REV_BY_STATE[slot].load(Ordering::Relaxed);
@@ -16366,7 +16366,7 @@ fn run_trace(matches: usize, level: u8) {
     // which way he was going, and where the ball was relative to him.
     {
         let eps = motion_diag::episodes();
-        let states = core::r#match::player::state::PlayerState::all();
+        let states = core::r#match::engine::player::state::PlayerState::all();
         // Only dump the worst few states — otherwise this buries the report.
         // Ranked by the COUNT of fast reversals, not the rate: a state
         // occupied for a handful of ticks can top a rate table without
@@ -17548,8 +17548,8 @@ impl ReelCensus {
         );
         println!(
             "  selector: PER_TEAM={}  MIN_XG={:.3}",
-            core::r#match::HighlightSelector::PER_TEAM,
-            core::r#match::HighlightSelector::MIN_XG,
+            core::r#match::engine::HighlightSelector::PER_TEAM,
+            core::r#match::engine::HighlightSelector::MIN_XG,
         );
         println!();
 
@@ -17617,7 +17617,7 @@ impl ReelCensus {
             .detail()
             .iter()
             .filter(|detail| {
-                detail.stat_type == core::r#match::player::statistics::MatchStatisticType::Goal
+                detail.stat_type == core::r#match::engine::player::statistics::MatchStatisticType::Goal
             })
             .count();
 
@@ -18246,7 +18246,7 @@ fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
     let goals_json: Vec<GoalJson> = score
         .detail()
         .iter()
-        .filter(|g| g.stat_type == core::r#match::player::statistics::MatchStatisticType::Goal)
+        .filter(|g| g.stat_type == core::r#match::engine::player::statistics::MatchStatisticType::Goal)
         .map(|g| GoalJson {
             player_id: g.player_id,
             time: g.time,
@@ -18651,7 +18651,7 @@ impl WaypointCensusRun {
             "  {:<28} {:<6} {:>7}  route (x,y) ...",
             "position", "side", "end-x"
         );
-        for (position, _, _) in core::r#match::POSITION_POSITIONING {
+        for (position, _, _) in core::r#match::engine::POSITION_POSITIONING {
             for (side, label) in [(PlayerSide::Left, "home"), (PlayerSide::Right, "away")] {
                 let tp = TacticalPositions::new(*position, Some(side));
                 let route = &tp.tactical_positions[0].waypoints;
@@ -19464,7 +19464,7 @@ impl HeatCensusRun {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::r#match::Adherence;
+    use core::r#match::engine::Adherence;
 
     /// The adherence references are the mean reading of the eleven the
     /// level-14 batches field: fresh, in their roles, a settled side,

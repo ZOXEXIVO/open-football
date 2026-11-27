@@ -24,8 +24,8 @@
 //!   stream, and determinism is a property of this struct's lifetime.
 //!
 //! Every item is re-exported below, so `flow::context::Item` resolves as
-//! it did when this was one file — which matters because the engine root
-//! globs this module.
+//! it did when this was one file. The engine root names the few items it
+//! publishes explicitly.
 
 pub mod clock;
 pub mod config;

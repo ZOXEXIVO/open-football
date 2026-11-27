@@ -450,7 +450,7 @@ pub use crate::r#match::engine::player::strategies::processor::chase_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::psychology::lapse::lapse_diag;
 #[cfg(feature = "match-logs")]
-pub use crate::r#match::heatmap as heatmap_diag;
+pub use crate::r#match::engine::engine::heatmap as heatmap_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::midfielders::states::shared::onball_diag as mid_onball_diag;
 #[cfg(feature = "match-logs")]
@@ -472,7 +472,7 @@ pub use crate::r#match::player::strategies::players::ops::forward_shot_decision:
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::player::waypoints::census as waypoint_census;
 #[cfg(feature = "match-logs")]
-pub use crate::r#match::spacing as spacing_diag;
+pub use crate::r#match::engine::engine::spacing as spacing_diag;
 
 static STORE_MATCH_EVENTS_MODE: AtomicBool = AtomicBool::new(false);
 static MATCH_RECORDINGS_MODE: AtomicBool = AtomicBool::new(false);

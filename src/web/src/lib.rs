@@ -29,6 +29,7 @@ mod views;
 mod watchlist;
 pub mod worker;
 mod workers;
+mod world;
 
 pub use settings::Settings;
 
@@ -40,17 +41,15 @@ pub use i18n::{I18n, I18nManager};
 pub use worker::{
     DistributedDispatcher, WorkerRegistry, WorkerServer, WorkerSnapshot, WorkerStatus,
 };
+pub use world::World;
 
 use crate::routes::ServerRoutes;
 use axum::response::IntoResponse;
-use core::SimulatorData;
 use database::DatabaseEntity;
 use log::{error, info};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, RwLock};
 use tower::ServiceBuilder;
 use tower_http::catch_panic::CatchPanicLayer;
 
@@ -97,9 +96,7 @@ impl FootballSimulatorServer {
 
 pub struct GameAppData {
     pub database: Arc<DatabaseEntity>,
-    pub data: Arc<RwLock<Option<Arc<SimulatorData>>>>,
-    pub process_lock: Arc<Mutex<()>>,
-    pub cancel_flag: Arc<AtomicBool>,
+    pub world: World,
     pub i18n: Arc<I18nManager>,
     /// Press vocabulary, scoped away from `i18n` so the chrome bundle every
     /// page clones stays small. Only the newspaper pages resolve against it.
@@ -119,9 +116,7 @@ impl Clone for GameAppData {
     fn clone(&self) -> Self {
         GameAppData {
             database: Arc::clone(&self.database),
-            data: Arc::clone(&self.data),
-            process_lock: Arc::clone(&self.process_lock),
-            cancel_flag: Arc::clone(&self.cancel_flag),
+            world: self.world.clone(),
             i18n: Arc::clone(&self.i18n),
             news_i18n: Arc::clone(&self.news_i18n),
             events_i18n: Arc::clone(&self.events_i18n),

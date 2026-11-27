@@ -1,11 +1,11 @@
 use super::SimulatorDataIndexes;
-use super::entry::{PersonLocation, PlayerHome, PoolPlace, RosterEntry};
+use super::entry::{PersonLocation, PlayerHome, PlayerPool, PoolPlace, RosterEntry};
 use super::place::{ClubPlace, CountryPlace, LeaguePlace, LeagueSeat, RosterPlace, TeamPlace};
 use super::roll::{RosterKey, RosterRoll};
 use crate::country::Country;
 use crate::league::League;
 use crate::shared::RosterRevision;
-use crate::{PlayerCollection, SimulatorData, Team};
+use crate::{SimulatorData, Team};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -228,7 +228,7 @@ impl<'a> CountrySurvey<'a> {
         &mut self,
         index: &SimulatorDataIndexes,
         key: RosterKey,
-        roster: &PlayerCollection,
+        roster: &impl PlayerPool,
         moved: bool,
         place: CountryPlace,
         home: fn(PoolPlace) -> PlayerHome,
@@ -237,7 +237,7 @@ impl<'a> CountrySurvey<'a> {
             self.players.push(RosterSurvey {
                 key,
                 revision: roster.revision(),
-                members: Self::members(roster.players.iter().map(|p| p.id), |slot| {
+                members: Self::members(roster.members().map(|p| p.id), |slot| {
                     home(PoolPlace::new(place, slot))
                 }),
             });

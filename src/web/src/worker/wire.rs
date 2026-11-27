@@ -432,7 +432,7 @@ mod tests {
 
     #[test]
     fn a_fixture_plays_the_same_locally_and_through_the_wire() {
-        core::utils::random::engine::RandomEngine::set_seed(0x7EA4_9A81);
+        core::utils::random::engine::RandomEngine::set_seed(0x5EED_0002);
         // A sharp, adaptable man in the home dugout, so the plan changes in
         // play as well as the talks.
         let mut card = CoachCard::from_pin("risktaker").unwrap();
@@ -444,12 +444,12 @@ mod tests {
         let local = FootballEngine::<840, 545>::play_with_config(
             home,
             away,
-            MatchEngineConfig::seeded(0x7EA4_9A81),
+            MatchEngineConfig::seeded(0x5EED_0002),
         );
         let remote = FootballEngine::<840, 545>::play_with_config(
             remote_home,
             remote_away,
-            MatchEngineConfig::seeded(0x7EA4_9A81),
+            MatchEngineConfig::seeded(0x5EED_0002),
         );
         assert!(
             local.coach_home.half_time_talk.is_some() && local.coach_away.half_time_talk.is_some(),

@@ -1,9 +1,10 @@
+use crate::shared::AppendLog;
 use crate::utils::FormattingUtils;
 use chrono::NaiveDate;
 
 #[derive(Debug, Clone)]
 pub struct PlayerDecisionHistory {
-    pub items: Vec<PlayerDecision>,
+    pub items: AppendLog<PlayerDecision>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,7 +36,9 @@ impl PlayerDecisionHistory {
     const FORCED_SALE: &'static str = "dec_board_forced_sale";
 
     pub fn new() -> Self {
-        PlayerDecisionHistory { items: Vec::new() }
+        PlayerDecisionHistory {
+            items: AppendLog::new(),
+        }
     }
 
     /// The last word on his being for sale was the board's own demand.

@@ -15,8 +15,9 @@
 //!
 //! `arena` re-exports its three modules under the names they had before
 //! the grouping, so `flow::environment`, `flow::field` and `flow::goal`
-//! keep resolving; `context` does the same for `flow::rng`. The engine
-//! root globs all four groups and must not need to know this layout.
+//! keep resolving; `context` does the same for `flow::rng`. The engine root
+//! names each item it publishes explicitly and must not need to know this
+//! layout.
 
 pub mod arena;
 pub mod celebration;

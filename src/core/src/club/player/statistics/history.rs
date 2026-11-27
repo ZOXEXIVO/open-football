@@ -1,13 +1,14 @@
 use super::ledger::{PlayerStatCompetitionKind, PlayerStatLedgerEntry};
 use super::types::{CompetitiveTally, PlayerStatistics, SecondaryTeamStatistics, TeamInfo};
 use crate::league::Season;
+use crate::shared::AppendLog;
 use chrono::NaiveDate;
 use rustc_hash::FxHashSet;
 
 #[derive(Debug, Clone)]
 pub struct PlayerStatisticsHistory {
     /// Frozen history from completed seasons. Never modified after write.
-    pub items: Vec<PlayerStatisticsHistoryItem>,
+    pub items: AppendLog<PlayerStatisticsHistoryItem>,
     /// Current-season entries. Append-only during season, drained at season end.
     pub current: Vec<CurrentSeasonEntry>,
     /// Continental-cup statistics captured per (season, team spell). The
@@ -17,7 +18,7 @@ pub struct PlayerStatisticsHistory {
     /// from `items` on purpose: the league-only career record other systems
     /// rely on (career-apps wage clauses, favourite-club evaluation) must not
     /// pick up cup games.
-    pub continental: Vec<ContinentalSeasonStats>,
+    pub continental: AppendLog<ContinentalSeasonStats>,
     /// Canonical append-only ledger. Every season-end / transfer / loan
     /// event writes a row here in addition to the legacy `items` /
     /// `current` / `continental` fields, with an idempotent merge on
@@ -26,7 +27,7 @@ pub struct PlayerStatisticsHistory {
     /// so storage drop filters can no longer hide a row from the
     /// renderer. Empty for save files written before this field
     /// existed — those still fall back to the legacy adapter.
-    pub season_ledger: Vec<PlayerStatLedgerEntry>,
+    pub season_ledger: AppendLog<PlayerStatLedgerEntry>,
     /// Live, current-season league appearances the player made for a team
     /// OTHER than his active spell — the borrowed-across-club-teams case (a
     /// reserve fielded for the main XI, or a senior turning out for the "2"
@@ -188,10 +189,10 @@ impl Default for PlayerStatisticsHistory {
 impl PlayerStatisticsHistory {
     pub fn new() -> Self {
         PlayerStatisticsHistory {
-            items: Vec::new(),
+            items: AppendLog::new(),
             current: Vec::new(),
-            continental: Vec::new(),
-            season_ledger: Vec::new(),
+            continental: AppendLog::new(),
+            season_ledger: AppendLog::new(),
             current_secondary: Vec::new(),
             next_seq: 0,
         }
@@ -209,7 +210,7 @@ impl PlayerStatisticsHistory {
     /// event populated `season_ledger`.
     pub fn from_items(items: Vec<PlayerStatisticsHistoryItem>) -> Self {
         let next_seq = items.iter().map(|i| i.seq_id + 1).max().unwrap_or(0);
-        let season_ledger: Vec<PlayerStatLedgerEntry> = items
+        let season_ledger: AppendLog<PlayerStatLedgerEntry> = items
             .iter()
             .map(|i| PlayerStatLedgerEntry {
                 seq_id: i.seq_id,
@@ -229,9 +230,9 @@ impl PlayerStatisticsHistory {
             })
             .collect();
         PlayerStatisticsHistory {
-            items,
+            items: AppendLog::from(items),
             current: Vec::new(),
-            continental: Vec::new(),
+            continental: AppendLog::new(),
             season_ledger,
             current_secondary: Vec::new(),
             next_seq,
@@ -326,7 +327,7 @@ impl PlayerStatisticsHistory {
         spell_end: Option<NaiveDate>,
         statistics: PlayerStatistics,
     ) {
-        if let Some(existing) = self.season_ledger.iter_mut().find(|e| {
+        if let Some(existing) = self.season_ledger.find_mut(|e| {
             e.season_start_year == season_start_year
                 && e.team_slug == team.slug
                 && e.competition_kind == competition_kind
@@ -1429,7 +1430,7 @@ impl PlayerStatisticsHistory {
 
     fn merge_seed_into_frozen(&mut self, entry: &CurrentSeasonEntry, entry_year: u16, games: u16) {
         if games > 0
-            && let Some(existing) = self.items.iter_mut().rev().find(|i| {
+            && let Some(existing) = self.items.rfind_mut(|i| {
                 i.season.start_year == entry_year
                     && i.team_slug == entry.team_slug
                     && i.is_loan == entry.is_loan
@@ -1441,7 +1442,7 @@ impl PlayerStatisticsHistory {
             existing.statistics.merge_from(&remaining);
         }
         if entry.transfer_fee.is_some()
-            && let Some(existing) = self.items.iter_mut().rev().find(|i| {
+            && let Some(existing) = self.items.rfind_mut(|i| {
                 i.season.start_year == entry_year
                     && i.team_slug == entry.team_slug
                     && i.is_loan == entry.is_loan
@@ -1695,7 +1696,7 @@ impl PlayerStatisticsHistory {
     ) {
         // Merge remaining stats (games played between first and second snapshot)
         if current_stats.total_games() > 0
-            && let Some(existing) = self.items.iter_mut().rev().find(|i| {
+            && let Some(existing) = self.items.rfind_mut(|i| {
                 i.season.start_year == season.start_year
                     && i.team_slug == team.slug
                     && i.is_loan == is_loan
@@ -1759,7 +1760,7 @@ impl PlayerStatisticsHistory {
 
     fn merge_entry_into_frozen(&mut self, entry: &CurrentSeasonEntry, season_year: u16) {
         if entry.statistics.total_games() > 0
-            && let Some(existing) = self.items.iter_mut().rev().find(|i| {
+            && let Some(existing) = self.items.rfind_mut(|i| {
                 i.season.start_year == season_year
                     && i.team_slug == entry.team_slug
                     && i.is_loan == entry.is_loan
@@ -1771,7 +1772,7 @@ impl PlayerStatisticsHistory {
             existing.statistics.merge_from(&remaining);
         }
         if entry.transfer_fee.is_some()
-            && let Some(existing) = self.items.iter_mut().rev().find(|i| {
+            && let Some(existing) = self.items.rfind_mut(|i| {
                 i.season.start_year == season_year
                     && i.team_slug == entry.team_slug
                     && i.is_loan == entry.is_loan
@@ -1945,7 +1946,7 @@ impl PlayerStatisticsHistory {
         current_date: NaiveDate,
     ) -> Vec<PlayerStatisticsHistoryItem> {
         let today_season = Season::from_date(current_date);
-        let mut result: Vec<PlayerStatisticsHistoryItem> = self.items.clone();
+        let mut result: Vec<PlayerStatisticsHistoryItem> = self.items.iter().cloned().collect();
 
         let is_first_season = self.items.is_empty();
         let first_seq = self.current.iter().map(|e| e.seq_id).min();
@@ -2529,13 +2530,38 @@ impl PlayerStatisticsHistory {
     ///   get a senior callup still need a Main row for the season, and a
     ///   parent-club row must coexist with a loan-out spell.
     fn merge_same_season_team_items(
-        items: &mut Vec<PlayerStatisticsHistoryItem>,
+        items: &mut AppendLog<PlayerStatisticsHistoryItem>,
         season_year: u16,
     ) {
-        let (in_season, mut other): (Vec<_>, Vec<_>) = items
-            .drain(..)
+        let tail_start = items
+            .iter()
+            .rposition(|i| i.season.start_year != season_year)
+            .map_or(0, |at| at + 1);
+        let season_is_tail = !items
+            .iter()
+            .take(tail_start)
+            .any(|i| i.season.start_year == season_year);
+        // The closed season is normally the tail, and rewriting only the tail
+        // leaves every older chunk shared with the published world.
+        if season_is_tail {
+            let in_season: Vec<_> = items.iter().skip(tail_start).cloned().collect();
+            let merged = Self::merge_season_rows(in_season, tail_start > 0);
+            items.truncate(tail_start);
+            items.extend(merged);
+            return;
+        }
+        let (in_season, other): (Vec<_>, Vec<_>) = items
+            .iter()
+            .cloned()
             .partition(|i| i.season.start_year == season_year);
+        let merged = Self::merge_season_rows(in_season, !other.is_empty());
+        *items = other.into_iter().chain(merged).collect();
+    }
 
+    fn merge_season_rows(
+        in_season: Vec<PlayerStatisticsHistoryItem>,
+        has_other_seasons: bool,
+    ) -> Vec<PlayerStatisticsHistoryItem> {
         let mut merged: Vec<PlayerStatisticsHistoryItem> = Vec::with_capacity(in_season.len());
         for entry in in_season {
             if let Some(target) = merged
@@ -2566,7 +2592,7 @@ impl PlayerStatisticsHistory {
         // recorded (`other` non-empty), the empty origin stub is dropped as
         // before — the user's rule: keep the original only when it's the sole
         // record.
-        let protected_seq = if other.is_empty() {
+        let protected_seq = if !has_other_seasons {
             merged.iter().map(|m| m.seq_id).min()
         } else {
             None
@@ -2593,8 +2619,7 @@ impl PlayerStatisticsHistory {
             !phantom_alongside_other_senior_spell
         });
 
-        other.extend(merged);
-        *items = other;
+        merged
     }
 
     /// View-time variant of [`merge_same_season_team_items`]. Operates on a

@@ -232,7 +232,7 @@ mod free_agent_retirement_tests {
             country.retired_players.iter().any(|p| p.id == 900),
             "retired player must land in his nationality country"
         );
-        assert!(country.retired_players.players[0].retired);
+        assert!(country.retired_players.get(0).unwrap().retired);
     }
 
     #[test]

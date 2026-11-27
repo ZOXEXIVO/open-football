@@ -40,7 +40,8 @@ use core::PlayerFieldPositionGroup;
 use core::club::staff::perception::{
     AbilityEstimator, CoachEye, EstimationContext, PotentialEstimator,
 };
-use core::r#match::{FieldSquad, Pitch, Weather};
+use core::r#match::FieldSquad;
+use core::r#match::engine::{Pitch, Weather};
 use core::utils::DateUtils;
 use core::continent::{
     CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
@@ -50,8 +51,8 @@ use core::utils::random::engine::RandomEngine;
 use core::shared::{CountryLookupIndex, ReconcileStats, SimulatorDataIndexes};
 use core::{
     AllocationCount, FootballSimulator, InternationalCalendar, MatchRuntime, PerformanceProfiler,
-    PhaseObserver,
-    SimulationResult, SimulatorData, TeamType,
+    PhaseObserver, Player,
+    SimulationResult, SimulatorData, Team, TeamType,
 };
 use database::{DatabaseGenerator, DatabaseLoader};
 use fingerprint::WorldFingerprint;
@@ -679,6 +680,21 @@ fn main() {
         return;
     }
 
+    // `dev_simulate clone-census [days]` — the per-collection copy cost
+    // (design D7). Defaults to a full season, not the harness-wide 60.
+    if args.first().map(|a| a == "clone-census").unwrap_or(false) {
+        let days = args
+            .iter()
+            .skip(1)
+            .find_map(|a| a.parse::<u32>().ok())
+            .unwrap_or(364);
+        for _ in 0..days {
+            harness.tick();
+        }
+        CloneCensus::take(&harness.data).print();
+        return;
+    }
+
     harness.bench(days);
 }
 
@@ -749,6 +765,265 @@ impl IndexOracle {
             "index-oracle PASS  {days} days  rosters {}  members {}  departures {}",
             total.rosters, total.members, total.departures
         );
+    }
+}
+
+/// D7's per-collection copy census: at one worker, copy and release each
+/// append-only candidate across every owner in the world, then the whole
+/// world, and print what each costs.
+///
+/// The world row is the denominator: every candidate's share is its copy
+/// time over the whole-world copy time, which is the measure the
+/// `core/world/copy` spec holds to 1%.
+struct CloneCensus {
+    rows: Vec<CopyCensusRow>,
+}
+
+struct CopyCensusRow {
+    name: &'static str,
+    copy_ms: f64,
+    drop_ms: f64,
+    allocations: u64,
+    bytes: u64,
+    share: f64,
+}
+
+impl CloneCensus {
+    /// One copy can be interrupted by the OS or another process; the best of
+    /// three is the copy cost the table is about.
+    const REPS: usize = 3;
+
+    fn take(data: &SimulatorData) -> Self {
+        let mut census = CloneCensus { rows: Vec::new() };
+        let world_ms = census.whole_world(data);
+
+        census.measure("team.match_history", world_ms, || {
+            Self::teams(data).map(|t| t.match_history.clone()).collect()
+        });
+        census.measure("player.statistics_history", world_ms, || {
+            Self::players(data)
+                .map(|p| p.statistics_history.clone())
+                .collect()
+        });
+        census.measure("  .items", world_ms, || {
+            Self::players(data)
+                .map(|p| p.statistics_history.items.clone())
+                .collect()
+        });
+        census.measure("  .continental", world_ms, || {
+            Self::players(data)
+                .map(|p| p.statistics_history.continental.clone())
+                .collect()
+        });
+        census.measure("  .season_ledger", world_ms, || {
+            Self::players(data)
+                .map(|p| p.statistics_history.season_ledger.clone())
+                .collect()
+        });
+        census.measure("  .current", world_ms, || {
+            Self::players(data)
+                .map(|p| p.statistics_history.current.clone())
+                .collect()
+        });
+        census.measure("  .current_secondary", world_ms, || {
+            Self::players(data)
+                .map(|p| p.statistics_history.current_secondary.clone())
+                .collect()
+        });
+        census.measure("player.decision_history", world_ms, || {
+            Self::players(data)
+                .map(|p| p.decision_history.clone())
+                .collect()
+        });
+        census.measure("country.retired_players", world_ms, || {
+            Self::countries(data)
+                .map(|c| c.retired_players.clone())
+                .collect()
+        });
+        census.measure("league.matches", world_ms, || {
+            Self::leagues(data).map(|l| l.matches.clone()).collect()
+        });
+        census.measure("world.match_store", world_ms, || {
+            vec![data.match_store.clone()]
+        });
+        census.measure("league.newsroom", world_ms, || {
+            Self::leagues(data).map(|l| l.newsroom.clone()).collect()
+        });
+        census.measure("team.newsroom", world_ms, || {
+            Self::teams(data).map(|t| t.newsroom.clone()).collect()
+        });
+        census.measure("league.player_of_week", world_ms, || {
+            Self::leagues(data)
+                .map(|l| l.player_of_week.clone())
+                .collect()
+        });
+        census.measure("league.awards", world_ms, || {
+            Self::leagues(data).map(|l| l.awards.clone()).collect()
+        });
+        census.measure("league.milestones", world_ms, || {
+            Self::leagues(data).map(|l| l.milestones.clone()).collect()
+        });
+        census.measure("country.transfer_history", world_ms, || {
+            Self::countries(data)
+                .map(|c| c.transfer_market.transfer_history.clone())
+                .collect()
+        });
+        census.measure("club.market_ledger", world_ms, || {
+            Self::clubs(data)
+                .map(|c| c.market_ledger.clone())
+                .collect()
+        });
+        census.measure("continent.competitions", world_ms, || {
+            data.continents
+                .iter()
+                .map(|c| c.continental_competitions.clone())
+                .collect()
+        });
+        census.measure("continent.national_competitions", world_ms, || {
+            data.continents
+                .iter()
+                .map(|c| c.national_team_competitions.clone())
+                .collect()
+        });
+
+        // The entity spine at the same scale, so the table says what the
+        // history costs against what the tick rewrites every day.
+        census.measure("players (all)", world_ms, || {
+            Self::players(data).cloned().collect()
+        });
+        census.measure("player.relations", world_ms, || {
+            Self::players(data).map(|p| p.relations.clone()).collect()
+        });
+        census.measure("player.happiness", world_ms, || {
+            Self::players(data).map(|p| p.happiness.clone()).collect()
+        });
+        census.measure("player.mailboxes", world_ms, || {
+            Self::players(data).map(|p| p.mailbox.clone()).collect()
+        });
+
+        census
+    }
+
+    fn whole_world(&mut self, data: &SimulatorData) -> f64 {
+        // The parts only add up to the whole at one worker. Simulating the
+        // census world may use every core, but the copy it is measuring does
+        // not: this local pool keeps the world row on one thread either way.
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .expect("the census measures its world copy on one worker");
+        let mut best = CopyCensusRow {
+            name: "whole world",
+            copy_ms: f64::MAX,
+            drop_ms: 0.0,
+            allocations: 0,
+            bytes: 0,
+            share: 100.0,
+        };
+        for _ in 0..Self::REPS {
+            let before = CountingAllocator::process_count();
+            let copy_start = Instant::now();
+            let copy = pool.install(|| data.clone());
+            let copy_ms = copy_start.elapsed().as_secs_f64() * 1000.0;
+            let allocated = CountingAllocator::process_count().since(before);
+            let drop_start = Instant::now();
+            pool.install(move || copy.release());
+            let drop_ms = drop_start.elapsed().as_secs_f64() * 1000.0;
+            if copy_ms < best.copy_ms {
+                best.copy_ms = copy_ms;
+                best.drop_ms = drop_ms;
+                best.allocations = allocated.allocations + allocated.reallocations;
+                best.bytes = allocated.bytes;
+            }
+        }
+        let copy_ms = best.copy_ms;
+        self.rows.push(best);
+        copy_ms
+    }
+
+    fn measure<T>(
+        &mut self,
+        name: &'static str,
+        world_ms: f64,
+        mut copy: impl FnMut() -> Vec<T>,
+    ) {
+        let mut best = CopyCensusRow {
+            name,
+            copy_ms: f64::MAX,
+            drop_ms: 0.0,
+            allocations: 0,
+            bytes: 0,
+            share: 0.0,
+        };
+        for _ in 0..Self::REPS {
+            let before = CountingAllocator::process_count();
+            let copy_start = Instant::now();
+            let values = copy();
+            let copy_ms = copy_start.elapsed().as_secs_f64() * 1000.0;
+            let allocated = CountingAllocator::process_count().since(before);
+            let drop_start = Instant::now();
+            drop(values);
+            let drop_ms = drop_start.elapsed().as_secs_f64() * 1000.0;
+            if copy_ms < best.copy_ms {
+                best.copy_ms = copy_ms;
+                best.drop_ms = drop_ms;
+                best.allocations = allocated.allocations + allocated.reallocations;
+                best.bytes = allocated.bytes;
+            }
+        }
+        best.share = if world_ms > 0.0 {
+            best.copy_ms / world_ms * 100.0
+        } else {
+            0.0
+        };
+        self.rows.push(best);
+    }
+
+    fn print(&self) {
+        println!();
+        println!(
+            "{:<34} {:>9} {:>9} {:>12} {:>14} {:>9}",
+            "collection", "copy ms", "drop ms", "allocations", "bytes", "share"
+        );
+        for row in &self.rows {
+            println!(
+                "{:<34} {:>9.3} {:>9.3} {:>12} {:>14} {:>8.2}%",
+                row.name, row.copy_ms, row.drop_ms, row.allocations, row.bytes, row.share
+            );
+        }
+    }
+
+    fn teams(data: &SimulatorData) -> impl Iterator<Item = &Team> + '_ {
+        Self::clubs(data).flat_map(|c| c.teams.teams.iter())
+    }
+
+    fn clubs(data: &SimulatorData) -> impl Iterator<Item = &core::Club> + '_ {
+        Self::countries(data).flat_map(|c| c.clubs.iter())
+    }
+
+    fn countries(data: &SimulatorData) -> impl Iterator<Item = &core::Country> + '_ {
+        data.continents.iter().flat_map(|c| c.countries.iter())
+    }
+
+    fn leagues(data: &SimulatorData) -> impl Iterator<Item = &core::league::League> + '_ {
+        Self::countries(data).flat_map(|c| c.leagues.leagues.iter())
+    }
+
+    fn players(data: &SimulatorData) -> impl Iterator<Item = &Player> + '_ {
+        Self::teams(data)
+            .flat_map(|t| t.players.players.iter())
+            .chain(
+                Self::countries(data).flat_map(|c| c.retired_players.iter()),
+            )
+            .chain(
+                Self::countries(data)
+                    .flat_map(|c| c.national_team.generated_squad.players.iter()),
+            )
+            .chain(
+                Self::countries(data)
+                    .flat_map(|c| c.u21_national_team.generated_squad.players.iter()),
+            )
+            .chain(data.free_agents.iter())
     }
 }
 

@@ -246,9 +246,9 @@ impl PlayerTransfersPage {
         Path(route_params): Path<PlayerTransfersRequest>,
     ) -> ApiResult<Response> {
         let i18n = state.i18n.for_lang(&route_params.lang);
-        let guard = state.data.read().await;
+        let world = state.world.snapshot();
 
-        let simulator_data = guard
+        let simulator_data = world
             .as_ref()
             .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
@@ -1077,9 +1077,7 @@ mod tests {
             }));
         let state = GameAppData {
             database: Arc::new(database::DatabaseLoader::load()),
-            data: Arc::new(tokio::sync::RwLock::new(Some(Arc::new(world)))),
-            process_lock: Arc::default(),
-            cancel_flag: Arc::default(),
+            world: crate::World::start(Some(world), Arc::clone(&i18n)),
             news_i18n: Arc::new(crate::NewsI18nManager::new()),
             events_i18n: Arc::new(crate::EventI18nManager::new(&i18n)),
             i18n: Arc::clone(&i18n),

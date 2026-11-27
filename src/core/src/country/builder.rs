@@ -1,4 +1,5 @@
 use crate::context::{HomeLeagueTable, TournamentClocks};
+use crate::country::RetiredPlayers;
 use crate::country::national::{NationalTeam, NationalTeamLevel};
 use crate::league::{DomesticCup, LeagueCollection, LeaguePlayoff};
 use crate::shared::CountryLookupIndex;
@@ -6,7 +7,7 @@ use crate::transfers::market::TransferMarket;
 use crate::transfers::market::map::CountryTransferProfile;
 use crate::{
     Club, Country, CountryEconomicFactors, CountryGeneratorData, CountryRegulations,
-    CountrySettings, InternationalCompetition, MediaCoverage, PlayerCollection,
+    CountrySettings, InternationalCompetition, MediaCoverage,
 };
 
 #[derive(Default, Clone)]
@@ -198,7 +199,7 @@ impl CountryBuilder {
             media_coverage: self.media_coverage.unwrap_or_default(),
             regulations: self.regulations.unwrap_or_default(),
             transfer_profile: self.transfer_profile.unwrap_or_default(),
-            retired_players: PlayerCollection::new(Vec::new()),
+            retired_players: RetiredPlayers::new(),
             lookup: CountryLookupIndex::default(),
             last_snapshotted_season_year: None,
             months_to_tournament: u8::MAX,

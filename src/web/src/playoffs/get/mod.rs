@@ -9,7 +9,7 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Redirect, Response};
 use core::league::{CROSS_BRACKET, LeaguePlayoff, PlayoffRoundLabel, PlayoffSeries, ScheduleItem};
-use core::r#match::player::statistics::MatchStatisticType;
+use core::r#match::MatchStatisticType;
 use core::{Country, SimulatorData};
 use serde::Deserialize;
 use std::cmp::Reverse;
@@ -158,8 +158,8 @@ impl<'a> PlayoffGetPage<'a> {
         Path(route_params): Path<PlayoffGetRequest>,
     ) -> ApiResult<Response> {
         let i18n = state.i18n.for_lang(&route_params.lang);
-        let guard = state.data.read().await;
-        let simulator_data = guard.as_ref().unwrap();
+        let world = state.world.snapshot();
+        let simulator_data = world.as_ref().unwrap();
 
         let league_id = simulator_data
             .indexes

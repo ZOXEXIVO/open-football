@@ -78,9 +78,9 @@ impl CountrySchedulePage {
         level: NationalTeamLevel,
     ) -> ApiResult<impl IntoResponse> {
         let i18n = state.i18n.for_lang(&route_params.lang);
-        let guard = state.data.read().await;
+        let world = state.world.snapshot();
 
-        let simulator_data = guard
+        let simulator_data = world
             .as_ref()
             .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 

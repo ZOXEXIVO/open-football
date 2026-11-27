@@ -15,8 +15,9 @@
 //! | [`raw`]           | The whole engine payload and the league-facing wrapper around it |
 //!
 //! Every item is re-exported below, so `flow::result::Item` resolves
-//! exactly as it did when this was one file — which the engine root
-//! globs and the league pipeline names directly.
+//! exactly as it did when this was one file. The engine root publishes the
+//! subset that crosses the match boundary; the league pipeline names the
+//! rest directly.
 
 pub mod highlights;
 pub mod player_stats;

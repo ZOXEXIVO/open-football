@@ -102,9 +102,9 @@ impl LeagueAddress<'_> {
         Path(route_params): Path<LeagueMovedRequest>,
         uri: Uri,
     ) -> ApiResult<Response> {
-        let guard = state.data.read().await;
+        let world = state.world.snapshot();
 
-        let simulator_data = guard
+        let simulator_data = world
             .as_ref()
             .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 

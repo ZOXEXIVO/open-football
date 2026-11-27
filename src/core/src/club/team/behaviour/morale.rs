@@ -3969,7 +3969,8 @@ mod tests {
         let today = first_of_month(2026, 6);
         let mut p = perennial_backup(12.0);
         // Most recent completed season: he claimed the shirt.
-        p.statistics_history.season_ledger.pop();
+        let kept = p.statistics_history.season_ledger.len() - 1;
+        p.statistics_history.season_ledger.truncate(kept);
         p.statistics_history
             .season_ledger
             .push(ledger_row(2025, 20, false));
@@ -4258,7 +4259,7 @@ mod tests {
         let name = "Club".to_string();
         let mut p = proven_returnee(today);
         // Same age and situation, but the record is three cameo starts.
-        p.statistics_history.season_ledger.clear();
+        p.statistics_history.season_ledger.truncate(0);
         p.statistics_history
             .season_ledger
             .push(ledger_row(2025, 3, true));
@@ -4347,7 +4348,7 @@ mod tests {
     fn half_season_returnee(today: NaiveDate) -> Player {
         let mut p = proven_returnee(today);
         p.last_transfer_date = Some(today - Duration::days(45));
-        p.statistics_history.season_ledger.clear();
+        p.statistics_history.season_ledger.truncate(0);
         p.statistics_history
             .season_ledger
             .push(ledger_row(2025, 11, true));
@@ -4614,7 +4615,7 @@ mod tests {
         let mut returnee = proven_returnee(today);
         returnee.last_transfer_date = Some(today - Duration::days(20));
         // Three cameo starts — came back quietly.
-        returnee.statistics_history.season_ledger.clear();
+        returnee.statistics_history.season_ledger.truncate(0);
         returnee
             .statistics_history
             .season_ledger
@@ -4902,7 +4903,7 @@ mod tests {
         let mut p = serial_loanee(today, 14.0);
         // Nothing but parent seasons behind him: this is his first
         // spell away, which is how a career is supposed to start.
-        p.statistics_history.season_ledger.clear();
+        p.statistics_history.season_ledger.truncate(0);
         p.statistics_history
             .season_ledger
             .push(ledger_row(2025, 2, false));
@@ -4924,7 +4925,7 @@ mod tests {
         let mut p = serial_loanee(today, 14.0);
         // Same spells away, but a real season in the parent's own side
         // in between — the loans are phases of a career at this club.
-        p.statistics_history.season_ledger.clear();
+        p.statistics_history.season_ledger.truncate(0);
         p.statistics_history
             .season_ledger
             .push(ledger_row(2023, 22, false));

@@ -25,10 +25,9 @@ use log::info;
 use simulator_core::r#match::MatchDispatcherRegistry;
 use simulator_core::utils::TimeEstimation;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
 use web::{
     AiConfig, DistributedDispatcher, EventI18nManager, FootballSimulatorServer, GameAppData,
-    I18nManager, NewsI18nManager, Settings, WorkerRegistry, WorkerServer,
+    I18nManager, NewsI18nManager, Settings, WorkerRegistry, WorkerServer, World,
 };
 
 #[tokio::main]
@@ -87,9 +86,7 @@ async fn main() {
 
     let data = GameAppData {
         database: Arc::new(database),
-        data: Arc::new(RwLock::new(Some(Arc::new(game_data)))),
-        process_lock: Arc::new(Mutex::new(())),
-        cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        world: World::start(Some(game_data), Arc::clone(&i18n)),
         i18n,
         news_i18n,
         events_i18n,

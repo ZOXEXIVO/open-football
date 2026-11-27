@@ -316,8 +316,8 @@ impl NationalCompetitionsGet {
         selected_slug: Option<String>,
     ) -> ApiResult<impl IntoResponse> {
         let i18n = state.i18n.for_lang(&lang);
-        let guard = state.data.read().await;
-        let simulator_data = guard.as_ref().unwrap();
+        let world = state.world.snapshot();
+        let simulator_data = world.as_ref().unwrap();
 
         let configs = Self::menu_configs(simulator_data);
 

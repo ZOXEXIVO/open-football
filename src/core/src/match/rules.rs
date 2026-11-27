@@ -6,7 +6,7 @@
 //! orchestration (league, cup, continental) sets it according to
 //! competition convention.
 
-use crate::r#match::fixture::CompetitionKind;
+use crate::r#match::CompetitionKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MatchRules {

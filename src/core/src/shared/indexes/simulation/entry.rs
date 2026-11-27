@@ -1,6 +1,7 @@
 use super::place::{CountryPlace, RosterPlace};
 use crate::continent::Continent;
-use crate::country::Country;
+use crate::country::{Country, RetiredPlayers};
+use crate::shared::RosterRevision;
 use crate::{Player, PlayerCollection, Team};
 
 /// The ids around a person. Parallel country passes read them without
@@ -89,16 +90,51 @@ impl PoolPlace {
 
     /// The player in the recorded country's `list`: at the recorded slot
     /// while it still holds him, otherwise wherever he now stands in it.
-    pub(super) fn find<'a>(
+    pub(super) fn find<'a, P: PlayerPool + 'a>(
         self,
         continents: &'a [Continent],
-        list: impl Fn(&'a Country) -> &'a PlayerCollection,
+        list: impl Fn(&'a Country) -> &'a P,
         id: u32,
     ) -> Option<&'a Player> {
-        let players = &list(self.country.country(continents)?).players;
-        if let Some(player) = players.get(self.slot as usize).filter(|p| p.id == id) {
+        let pool = list(self.country.country(continents)?);
+        if let Some(player) = pool.slot(self.slot as usize).filter(|p| p.id == id) {
             return Some(player);
         }
-        players.iter().find(|p| p.id == id)
+        pool.members().find(|p| p.id == id)
+    }
+}
+
+/// A country's list of players the index records by slot.
+pub(super) trait PlayerPool {
+    fn revision(&self) -> RosterRevision;
+    fn slot(&self, slot: usize) -> Option<&Player>;
+    fn members(&self) -> impl Iterator<Item = &Player>;
+}
+
+impl PlayerPool for PlayerCollection {
+    fn revision(&self) -> RosterRevision {
+        PlayerCollection::revision(self)
+    }
+
+    fn slot(&self, slot: usize) -> Option<&Player> {
+        self.players.get(slot)
+    }
+
+    fn members(&self) -> impl Iterator<Item = &Player> {
+        self.players.iter()
+    }
+}
+
+impl PlayerPool for RetiredPlayers {
+    fn revision(&self) -> RosterRevision {
+        RetiredPlayers::revision(self)
+    }
+
+    fn slot(&self, slot: usize) -> Option<&Player> {
+        self.get(slot)
+    }
+
+    fn members(&self) -> impl Iterator<Item = &Player> {
+        self.iter()
     }
 }

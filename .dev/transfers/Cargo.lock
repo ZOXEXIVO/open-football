@@ -152,7 +152,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "core"
-version = "1.8.490"
+version = "1.8.800"
 dependencies = [
  "chrono",
  "deunicode",
@@ -163,7 +163,6 @@ dependencies = [
  "rayon",
  "rustc-hash",
  "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -217,7 +216,7 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "database"
-version = "1.8.490"
+version = "1.8.800"
 dependencies = [
  "chrono",
  "core",

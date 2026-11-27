@@ -2150,7 +2150,7 @@ mod tests {
         assert!(player.last_transfer_date.is_none());
 
         assert_eq!(player.statistics_history.items.len(), 1);
-        let entry = &player.statistics_history.items[0];
+        let entry = player.statistics_history.items.first().unwrap();
         assert_eq!(entry.season.start_year, 2031);
         assert_eq!(entry.statistics.played, 30);
         assert_eq!(entry.statistics.goals, 10);
@@ -2171,7 +2171,7 @@ mod tests {
         let team = make_team("Torino", "torino");
         player.on_season_end(Season::new(2031), &team, make_date(2032, 8, 1));
 
-        assert!(player.statistics_history.items[0].is_loan);
+        assert!(player.statistics_history.items.first().unwrap().is_loan);
     }
 
     #[test]
@@ -2187,8 +2187,26 @@ mod tests {
         player.on_season_end(Season::new(2031), &team, make_date(2032, 8, 1));
 
         assert_eq!(player.statistics_history.items.len(), 2);
-        assert_eq!(player.statistics_history.items[0].statistics.played, 30);
-        assert_eq!(player.statistics_history.items[1].statistics.played, 28);
+        assert_eq!(
+            player
+                .statistics_history
+                .items
+                .first()
+                .unwrap()
+                .statistics
+                .played,
+            30
+        );
+        assert_eq!(
+            player
+                .statistics_history
+                .items
+                .get(1)
+                .unwrap()
+                .statistics
+                .played,
+            28
+        );
         assert_eq!(player.statistics.played, 0);
     }
 
@@ -2303,9 +2321,11 @@ mod tests {
     // boundaries with transfers and loans, and that no phantom entries appear.
 
     /// Helper: pretty-print history for assertion messages
-    fn describe_history(items: &[PlayerStatisticsHistoryItem]) -> String {
+    fn describe_history<'a>(
+        items: impl IntoIterator<Item = &'a PlayerStatisticsHistoryItem>,
+    ) -> String {
         items
-            .iter()
+            .into_iter()
             .enumerate()
             .map(|(i, e)| {
                 format!(

@@ -37,8 +37,8 @@ impl MatchChunk {
         State(state): State<GameAppData>,
         Path(route_params): Path<MatchChunkRequest>,
     ) -> ApiResult<Response> {
-        let guard = state.data.read().await;
-        let simulator_data = guard.as_ref().unwrap();
+        let world = state.world.snapshot();
+        let simulator_data = world.as_ref().unwrap();
 
         // Find league_slug from match result
         let league_slug = MatchLookup::league_slug(simulator_data, &route_params.match_id);
@@ -82,8 +82,8 @@ impl MatchMetadata {
         State(state): State<GameAppData>,
         Path(route_params): Path<MatchMetadataRequest>,
     ) -> ApiResult<Response> {
-        let guard = state.data.read().await;
-        let simulator_data = guard.as_ref().unwrap();
+        let world = state.world.snapshot();
+        let simulator_data = world.as_ref().unwrap();
 
         let league_slug = MatchLookup::league_slug(simulator_data, &route_params.match_id);
 

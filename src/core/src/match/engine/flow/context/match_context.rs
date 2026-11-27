@@ -8,6 +8,7 @@ use super::substitution_record::{SubstitutionRecord, SubstitutionWindows};
 use crate::FormationFamiliarity;
 use crate::MatchTacticType;
 use crate::r#match::CompetitionKind;
+use crate::r#match::MatchRules;
 use crate::r#match::engine::chemistry::{ChemistryMap, TacticalFamiliarity};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::engine::BoxEpisode;
@@ -36,7 +37,6 @@ use crate::r#match::player::diagnostics::forward_census::ForwardCensus;
 use crate::r#match::player::diagnostics::keeper_census::KeeperCensus;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::diagnostics::midfielder_census::MidfielderCensus;
-use crate::r#match::rules::MatchRules;
 use crate::r#match::{
     AttackPlan, DefensivePlan, GameState, GoalCelebration, GoalDetail, GoalPosition, MatchCoach,
     MatchField, MatchFieldSize, MatchPlayer, MatchPlayerCollection, MatchTime, Score, TeamShape,

@@ -1,6 +1,6 @@
 use super::*;
 use crate::watchlist::routes::WatchlistRoutes;
-use crate::{AiConfig, EventI18nManager, I18nManager, NewsI18nManager, WorkerRegistry};
+use crate::{AiConfig, EventI18nManager, I18nManager, NewsI18nManager, WorkerRegistry, World};
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use chrono::{NaiveDate, NaiveTime};
@@ -137,9 +137,7 @@ impl WatchlistFixture {
             database: Arc::clone(
                 DATABASE.get_or_init(|| Arc::new(database::DatabaseLoader::load())),
             ),
-            data: Arc::new(tokio::sync::RwLock::new(Some(Arc::new(data)))),
-            process_lock: Arc::default(),
-            cancel_flag: Arc::default(),
+            world: World::start(Some(data), Arc::clone(&i18n)),
             news_i18n: Arc::new(NewsI18nManager::new()),
             events_i18n: Arc::new(EventI18nManager::new(&i18n)),
             i18n,

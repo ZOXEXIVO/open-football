@@ -46,8 +46,8 @@ impl ServerRoutes {
 impl ServerRoutes {
     async fn sitemap_xml(State(state): State<GameAppData>) -> impl IntoResponse {
         let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        let guard = state.data.read().await;
-        let xml = Sitemap::render(guard.as_deref(), &date);
+        let world = state.world.snapshot();
+        let xml = Sitemap::render(world.as_deref(), &date);
 
         ([(axum::http::header::CONTENT_TYPE, "application/xml")], xml)
     }
