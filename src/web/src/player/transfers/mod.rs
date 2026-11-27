@@ -16,6 +16,7 @@ use core::utils::FormattingUtils;
 use core::{Player, PlayerStatusType, SimulatorData, Team};
 use serde::Deserialize;
 use std::cmp::Reverse;
+use std::collections::HashMap;
 
 #[derive(Deserialize)]
 pub struct PlayerTransfersRequest {
@@ -57,7 +58,8 @@ pub struct PlayerTransfersTemplate {
     pub transfer_status: PlayerTransferStatusDto,
     pub listing: Option<PlayerListingDto>,
     pub interested_clubs: Vec<PlayerInterestedClubDto>,
-    pub monitoring: Vec<PlayerMonitoringDto>,
+    pub monitoring: Vec<PlayerMonitoringClubDto>,
+    pub monitoring_count: usize,
     pub negotiations: Vec<PlayerNegotiationDto>,
     pub completed: Vec<PlayerCompletedTransferDto>,
 }
@@ -92,13 +94,23 @@ pub struct PlayerInterestedClubDto {
     pub country_flag: Option<ClubCountryFlag>,
 }
 
-/// A scout observation or recruitment summary on the player's transfers page.
-pub struct PlayerMonitoringDto {
+/// One club's group of scouting entries on the player's transfers page:
+/// the club context is written once and spans all of the club's scout rows.
+pub struct PlayerMonitoringClubDto {
     pub club_name: String,
     pub club_slug: String,
     pub country: Option<ClubCountryFlag>,
     pub league: Option<MonitoringLeague>,
-    world_reputation: Option<u16>,
+    /// Senior first-team world reputation the group was sorted by —
+    /// kept for tests asserting the order; the page shows the order,
+    /// not the number.
+    #[allow(dead_code)]
+    pub world_reputation: Option<u16>,
+    pub scouts: Vec<PlayerMonitoringScoutDto>,
+}
+
+/// A scout observation or recruitment summary row inside a club group.
+pub struct PlayerMonitoringScoutDto {
     pub scout_name: String,
     pub scout_id: u32,
     /// i18n key — "monitoring_status_active", "..._report_ready", etc.
@@ -108,6 +120,24 @@ pub struct PlayerMonitoringDto {
     pub confidence_pct: u8,
     pub times_watched: u16,
     pub matches_watched: u16,
+}
+
+/// Flat per-entry row used while building the monitoring view; folded
+/// into [`PlayerMonitoringClubDto`] groups keyed by club identity.
+struct PlayerMonitoringDto {
+    club_id: u32,
+    club_name: String,
+    club_slug: String,
+    country: Option<ClubCountryFlag>,
+    league: Option<MonitoringLeague>,
+    world_reputation: Option<u16>,
+    scout_name: String,
+    scout_id: u32,
+    status_key: String,
+    last_observed: String,
+    confidence_pct: u8,
+    times_watched: u16,
+    matches_watched: u16,
 }
 
 pub struct MonitoringLeague {
@@ -312,6 +342,7 @@ impl PlayerTransfersPage {
             listing: view.listing,
             interested_clubs: view.interested_clubs,
             monitoring: view.monitoring,
+            monitoring_count: view.monitoring_count,
             negotiations: view.negotiations,
             completed: view.completed,
         }
@@ -323,7 +354,8 @@ struct TransfersView {
     transfer_status: PlayerTransferStatusDto,
     listing: Option<PlayerListingDto>,
     interested_clubs: Vec<PlayerInterestedClubDto>,
-    monitoring: Vec<PlayerMonitoringDto>,
+    monitoring: Vec<PlayerMonitoringClubDto>,
+    monitoring_count: usize,
     negotiations: Vec<PlayerNegotiationDto>,
     completed: Vec<PlayerCompletedTransferDto>,
 }
@@ -364,6 +396,8 @@ impl TransfersView {
             .map(|t| t.reputation.market_value_score())
             .unwrap_or(0);
         let country = team_opt.and_then(|t| data.country_by_club(t.club_id));
+        let monitoring = Self::monitoring(data, player, i18n);
+        let monitoring_count: usize = monitoring.iter().map(|club| club.scouts.len()).sum();
 
         Self {
             transfer_status: Self::transfer_status(
@@ -385,7 +419,8 @@ impl TransfersView {
                     country_flag: ClubCountryFlag::for_club(data, club_id, i18n),
                 })
                 .collect(),
-            monitoring: Self::monitoring(data, player, i18n),
+            monitoring,
+            monitoring_count,
             completed: Self::completed(data, player, i18n),
         }
     }
@@ -469,7 +504,11 @@ impl TransfersView {
             .unwrap_or_default()
     }
 
-    fn monitoring(data: &SimulatorData, player: &Player, i18n: &I18n) -> Vec<PlayerMonitoringDto> {
+    fn monitoring(
+        data: &SimulatorData,
+        player: &Player,
+        i18n: &I18n,
+    ) -> Vec<PlayerMonitoringClubDto> {
         let mut rows: Vec<_> = data
             .player_monitoring_details(player.id)
             .into_iter()
@@ -488,6 +527,7 @@ impl TransfersView {
                     });
 
                 PlayerMonitoringDto {
+                    club_id: row.club_id,
                     club_name: row.club_name,
                     club_slug: row.team_slug,
                     country: ClubCountryFlag::for_club(data, row.club_id, i18n),
@@ -509,7 +549,41 @@ impl TransfersView {
             })
             .collect();
         rows.sort_by_key(|row| Reverse(row.world_reputation));
-        rows
+        Self::group_monitoring(rows)
+    }
+
+    /// Fold the reputation-sorted rows into club groups keyed by `club_id`.
+    /// First appearance fixes the group order and rows keep their sorted
+    /// order inside the group, so no second sort is needed. Grouping is by
+    /// identity, not display name: distinct clubs sharing a name stay apart.
+    fn group_monitoring(rows: Vec<PlayerMonitoringDto>) -> Vec<PlayerMonitoringClubDto> {
+        let mut groups: Vec<PlayerMonitoringClubDto> = Vec::new();
+        let mut group_by_club: HashMap<u32, usize> = HashMap::new();
+        for row in rows {
+            let scout = PlayerMonitoringScoutDto {
+                scout_name: row.scout_name,
+                scout_id: row.scout_id,
+                status_key: row.status_key,
+                last_observed: row.last_observed,
+                confidence_pct: row.confidence_pct,
+                times_watched: row.times_watched,
+                matches_watched: row.matches_watched,
+            };
+            if let Some(&index) = group_by_club.get(&row.club_id) {
+                groups[index].scouts.push(scout);
+                continue;
+            }
+            group_by_club.insert(row.club_id, groups.len());
+            groups.push(PlayerMonitoringClubDto {
+                club_name: row.club_name,
+                club_slug: row.club_slug,
+                country: row.country,
+                league: row.league,
+                world_reputation: row.world_reputation,
+                scouts: vec![scout],
+            });
+        }
+        groups
     }
 
     fn completed(
@@ -951,7 +1025,11 @@ mod tests {
             ));
         }
 
-        let country = monitoring_country(vec![amkar, tied, reserves_first, zero, no_team]);
+        monitoring_world_with(vec![amkar, tied, reserves_first, zero, no_team])
+    }
+
+    fn monitoring_world_with(clubs: Vec<Club>) -> SimulatorData {
+        let country = monitoring_country(clubs);
         let mut data = SimulatorData::new(
             observation_date(18).and_hms_opt(12, 0, 0).unwrap(),
             vec![Continent::new(
@@ -1017,29 +1095,129 @@ mod tests {
         let i18n = crate::I18nManager::new().for_lang("en");
         let source = data.player_monitoring_details(player.id);
         assert_eq!(source[0].club_name, "Reserves First");
-        let rows = TransfersView::monitoring(&data, player, &i18n);
+        let groups = TransfersView::monitoring(&data, player, &i18n);
 
-        let ranks: Vec<_> = rows
+        let order: Vec<_> = groups
             .iter()
-            .map(|row| (row.club_name.as_str(), row.scout_id, row.world_reputation))
+            .map(|group| {
+                (
+                    group.club_name.as_str(),
+                    group.world_reputation,
+                    group.scouts.iter().map(|s| s.scout_id).collect::<Vec<_>>(),
+                )
+            })
             .collect();
         assert_eq!(
-            ranks,
+            order,
             [
-                ("Dinamo St Petersburg", 103, Some(6000)),
-                ("Amkar", 101, Some(6000)),
-                ("Amkar", 102, Some(6000)),
-                ("Reserves First", 104, Some(1000)),
-                ("Zero Reputation", 105, Some(0)),
-                ("No Senior Team", 0, None),
+                ("Dinamo St Petersburg", Some(6000), vec![103]),
+                ("Amkar", Some(6000), vec![101, 102]),
+                ("Reserves First", Some(1000), vec![104]),
+                ("Zero Reputation", Some(0), vec![105]),
+                ("No Senior Team", None, vec![0]),
             ]
         );
         assert_eq!(
-            rows[3].league.as_ref().unwrap().name,
+            groups[2].league.as_ref().unwrap().name,
             "Russian Senior League"
         );
-        assert!(rows[4].league.is_none());
-        assert!(rows[5].league.is_none());
+        assert!(groups[3].league.is_none());
+        assert!(groups[4].league.is_none());
+    }
+
+    #[test]
+    fn monitoring_count_totals_entries_not_club_groups() {
+        let data = monitoring_world();
+        let player = data.player(1).unwrap();
+        let i18n = crate::I18nManager::new().for_lang("en");
+        let view = TransfersView::build(player, None, &data, &i18n, observation_date(18));
+        assert_eq!(view.monitoring.len(), 5);
+        assert_eq!(view.monitoring_count, 6);
+    }
+
+    #[test]
+    fn distinct_clubs_sharing_a_display_name_stay_separate_groups() {
+        let mut perm = monitoring_club(
+            11,
+            "Amkar",
+            vec![monitoring_team(
+                11,
+                "amkar-perm",
+                TeamType::Main,
+                Some(1),
+                6000,
+            )],
+        );
+        observe(&mut perm, 101, 14);
+        let mut nizhny = monitoring_club(
+            16,
+            "Amkar",
+            vec![monitoring_team(
+                16,
+                "amkar-nizhny",
+                TeamType::Main,
+                Some(1),
+                6000,
+            )],
+        );
+        observe(&mut nizhny, 106, 15);
+        let data = monitoring_world_with(vec![perm, nizhny]);
+        let player = data.player(1).unwrap();
+        let i18n = crate::I18nManager::new().for_lang("en");
+
+        let groups = TransfersView::monitoring(&data, player, &i18n);
+
+        assert_eq!(groups.len(), 2);
+        assert!(
+            groups
+                .iter()
+                .all(|g| g.club_name == "Amkar" && g.scouts.len() == 1)
+        );
+        // The newer observation leads the summary and the reputation tie
+        // keeps that order; club identity — not the shared name — decides
+        // the groups.
+        assert_eq!(groups[0].club_slug, "amkar-nizhny");
+        assert_eq!(groups[0].scouts[0].scout_id, 106);
+        assert_eq!(groups[1].club_slug, "amkar-perm");
+        assert_eq!(groups[1].scouts[0].scout_id, 101);
+    }
+
+    #[test]
+    fn scouts_within_one_club_keep_the_summary_order() {
+        let mut amkar = monitoring_club(
+            11,
+            "Amkar",
+            vec![monitoring_team(
+                11,
+                "amkar-perm",
+                TeamType::Main,
+                Some(1),
+                6000,
+            )],
+        );
+        observe(&mut amkar, 101, 12);
+        observe(&mut amkar, 102, 16);
+        observe(&mut amkar, 103, 14);
+        let data = monitoring_world_with(vec![amkar]);
+        let player = data.player(1).unwrap();
+        let i18n = crate::I18nManager::new().for_lang("en");
+
+        let groups = TransfersView::monitoring(&data, player, &i18n);
+
+        assert_eq!(groups.len(), 1);
+        let scouts: Vec<_> = groups[0]
+            .scouts
+            .iter()
+            .map(|s| (s.scout_id, s.last_observed.as_str()))
+            .collect();
+        assert_eq!(
+            scouts,
+            [
+                (102, "16.06.2030"),
+                (103, "14.06.2030"),
+                (101, "12.06.2030"),
+            ]
+        );
     }
 
     #[test]
@@ -1133,10 +1311,25 @@ mod tests {
                 "href=\"/{lang}/leagues/russia/russian-second-division-b-ural-volga\""
             )));
             assert!(panel.contains(&format!("href=\"/{lang}/staff/101\"")));
+            assert!(panel.contains(&format!("href=\"/{lang}/staff/102\"")));
             assert!(panel.contains("<span class=\"fm-panel-count\">6</span>"));
             assert_eq!(panel.matches("scope=\"col\"").count(), 6);
-            assert_eq!(panel.matches("<td class=\"pt-club\">").count(), 6);
-            assert_eq!(panel.matches(&flag_label).count(), 6, "{lang}");
+            assert_eq!(panel.matches("<td class=\"pt-club\"").count(), 5);
+            assert_eq!(
+                panel.matches("<td class=\"pt-club\" rowspan=\"2\">").count(),
+                1
+            );
+            assert_eq!(panel.matches("class=\"pt-group-start\"").count(), 5);
+            assert_eq!(panel.matches(&flag_label).count(), 5, "{lang}");
+            let amkar_cell = panel
+                .split_once("<td class=\"pt-club\" rowspan=\"2\">")
+                .unwrap()
+                .1
+                .split_once("</td>")
+                .unwrap()
+                .0;
+            assert!(amkar_cell.contains(&format!("href=\"/{lang}/teams/amkar-perm\"")));
+            assert!(amkar_cell.contains(&flag_label));
             if lang == "en" {
                 assert!(
                     panel

@@ -1191,6 +1191,14 @@ a.fm-seasonstep-arrow:hover {
 .scout-monitoring .fm-pt-table .pt-club {
     width: 32%;
     overflow-wrap: anywhere;
+    vertical-align: top;
+}
+
+/* One club cell spans all of its club's scout rows; a stronger top border
+   on each group's first row keeps groups readable as units despite the
+   per-row even striping. */
+.scout-monitoring tbody tr.pt-group-start td {
+    border-top: 1px solid #2a353d;
 }
 
 .scout-monitoring .fm-pt-table .pt-date {

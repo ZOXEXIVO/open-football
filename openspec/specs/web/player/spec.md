@@ -387,40 +387,59 @@ carries no listing, the page SHALL show no listing reason.
 
 ### Requirement: The player transfers page shows scouting clubs with league context and reputation order
 
-For each row in the Scout Monitoring table at `/{lang}/players/{player_slug}/transfers`, the Club cell SHALL show the monitoring club’s name with its country flag when available. The flag SHALL have an accessible country name in the page language. The club name SHALL link to its team page when a team URL is available. The current senior first-team league SHALL appear below the club name in smaller type and link to the league’s canonical country-scoped overview in the current language when that route can be resolved.
+The Scout Monitoring table at `/{lang}/players/{player_slug}/transfers` SHALL group monitoring entries by club identity. Each club SHALL appear as one group with a single Club cell that covers all of the club's scout rows. The Club cell SHALL show the monitoring club's name with its country flag when available. The flag SHALL have an accessible country name in the page language. The club name SHALL link to its team page when a team URL is available. The current senior first-team league SHALL appear below the club name in smaller type and link to the league's canonical country-scoped overview in the current language when that route can be resolved. Distinct clubs that share a display name SHALL remain separate groups.
 
-The table SHALL show monitoring rows in descending order of the club’s senior first-team world reputation. Rows tied on reputation SHALL keep their order from the monitoring summary. Rows with unavailable reputation SHALL follow rows with a known value. The panel SHALL count monitoring rows, including multiple rows for the same club and summary rows that have no named scout.
+Every monitoring entry SHALL keep its own row within its club group, retaining its scout name or recruitment department label, status, confidence, watch counts, and any last-observed date. Entries within a group SHALL keep their relative order from the monitoring summary.
+
+The table SHALL show club groups in descending order of the club's senior first-team world reputation. Groups tied on reputation SHALL keep the order of their first entry from the monitoring summary. Groups with unavailable reputation SHALL follow groups with a known value. The panel SHALL count monitoring entries, including multiple entries for the same club and summary entries that have no named scout — not the number of club groups.
 
 #### Scenario: A scouting club has country and league information
 
-- **WHEN** a player has a monitoring row for Amkar and Amkar’s current senior league is Russian Second Division B Ural-Volga
-- **THEN** the Club cell SHALL show the Russian flag identified as Russia on the English page, Amkar linked to `/en/teams/amkar-perm`, and Russian Second Division B Ural-Volga linked to `/en/leagues/russia/russian-second-division-b-ural-volga` on the line below
+- **WHEN** a player has a monitoring entry for Amkar and Amkar's current senior league is Russian Second Division B Ural-Volga
+- **THEN** Amkar's single Club cell SHALL show the Russian flag identified as Russia on the English page, Amkar linked to `/en/teams/amkar-perm`, and Russian Second Division B Ural-Volga linked to `/en/leagues/russia/russian-second-division-b-ural-volga` on the line below
 - **AND** the URLs and accessible labels SHALL follow the requested language when viewing a localized page
 
 #### Scenario: Club context is incomplete
 
 - **WHEN** some country, current league, or team-route information is unavailable
-- **THEN** the row SHALL still show the club name and all available context
+- **THEN** the group SHALL still show the club name and all available context
 - **AND** the club and league names SHALL appear as plain text when each name is known but its destination is unavailable, and any unknown country flag or league name SHALL be omitted
+
+#### Scenario: Several scouts of one club share a single club cell
+
+- **WHEN** a club has two or more monitoring entries for the player, including entries with different scouts, statuses, or confidence values
+- **THEN** the club name, flag, and league SHALL be written once for that club and visually cover all of its scout rows
+- **AND** each entry SHALL keep its own row with its scout name or recruitment department label, status, confidence, watch counts, and last-observed date
+- **AND** the panel count SHALL include every one of the club's entries
+
+#### Scenario: Scouts within a club keep their summary order
+
+- **WHEN** a club's monitoring entries have different last-observed dates in the monitoring summary
+- **THEN** the rows inside the club's group SHALL keep the summary's relative order, most recent observation first
+
+#### Scenario: Distinct clubs sharing a display name stay separate
+
+- **WHEN** two different clubs with the same display name both monitor the player
+- **THEN** each club SHALL have its own group and its own Club cell, and their entries SHALL NOT be merged
 
 #### Scenario: The higher-reputation club appears first
 
 - **WHEN** the monitoring summary contains a lower-reputation club with a newer observation and a higher-reputation club whose file has an older observation or only summary information
-- **THEN** the higher-reputation club’s rows SHALL appear first
+- **THEN** the higher-reputation club's group SHALL appear first
 - **AND** each row SHALL retain its scout name or recruitment department label, status, confidence, watch counts, and any last-observed date
 
 #### Scenario: Equal or unavailable world reputation
 
-- **WHEN** several rows have equal senior first-team world reputation and other rows have no known reputation
-- **THEN** the tied rows SHALL retain their relative order from the monitoring summary, with unavailable ratings appearing after every known rating, including zero
+- **WHEN** several clubs have equal senior first-team world reputation and other clubs have no known reputation
+- **THEN** the tied groups SHALL retain the relative order of their first entry from the monitoring summary, with unavailable ratings appearing after every known rating, including zero
 
 #### Scenario: Narrow layout and keyboard navigation
 
 - **WHEN** the table is wider than the available panel space
 - **THEN** the table SHALL scroll horizontally inside the panel and keep all six columns, including Last Observed, reachable without page-level horizontal scrolling from the table
-- **AND** the table’s scroll region SHALL have a localized accessible label and a visible keyboard focus indicator
+- **AND** the table's scroll region SHALL have a localized accessible label and a visible keyboard focus indicator
 
 #### Scenario: No scouting records
 
-- **WHEN** a player has no monitoring rows
+- **WHEN** a player has no monitoring entries
 - **THEN** the panel SHALL show a count of zero and the localized empty-state message in place of the table
