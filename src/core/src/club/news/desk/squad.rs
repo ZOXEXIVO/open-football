@@ -5,10 +5,13 @@ use super::facts::{
 use super::fans::FansDesk;
 use super::market::MarketDesk;
 use super::rumour::RumourDesk;
-use crate::club::news::types::{NewsStory, NewsStoryKind};
-use crate::{HappinessEventType, Person, Player, PlayerFieldPositionGroup, Team};
+use crate::club::news::ScoutSighting;
+use crate::club::news::types::{NewsStory, NewsStoryDetail, NewsStoryKind, PlayingTimeConcern};
+use crate::{
+    CareerDesireEvidence, HappinessEventType, Person, Player, PlayerFieldPositionGroup, Team,
+};
 use chrono::{Datelike, Duration, NaiveDate};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Squad news: form, fitness, discipline, milestones, contracts — plus
 /// everything a paper's own players say and do off the pitch.
@@ -68,6 +71,7 @@ impl SquadDesk {
         rosters: &[&Team],
         sides: &FxHashSet<u32>,
         facts: &WeeklyMatchFacts,
+        mut sightings: FxHashMap<u32, ScoutSighting>,
         played_this_week: bool,
         date: NaiveDate,
     ) -> SquadPulse {
@@ -139,9 +143,27 @@ impl SquadDesk {
                     DugoutDesk::file_player(out, player, &mut pulse, date);
                     FansDesk::file_player(out, player, &mut pulse, date);
                     MarketDesk::file_verdict(out, player, date);
-                    RumourDesk::file_player(out, player, date);
+                } else {
+                    Self::file_playing_time(
+                        out,
+                        player,
+                        &RecentEvents::fortnight(player),
+                        PlayerStanding::importance(player),
+                        date,
+                    );
                 }
+                RumourDesk::file_player_with_sighting(
+                    out,
+                    player,
+                    date,
+                    senior,
+                    sightings.remove(&player.id),
+                );
             }
+        }
+
+        for (player_id, sighting) in sightings {
+            RumourDesk::file_sighting(out, player_id, date, 0, sighting);
         }
 
         Self::file_squad_state(out, &pulse, date);
@@ -757,20 +779,22 @@ impl SquadDesk {
     /// days. Four is the scoreline a supporter argues about all week.
     const KEEPER_OVERRUN_CONCEDED: u16 = 4;
 
-    fn file_match_deeds(
+    pub(super) fn file_match_deeds(
         out: &mut Vec<NewsStory>,
         player_id: u32,
         sides: &FxHashSet<u32>,
         facts: &WeeklyMatchFacts,
         date: NaiveDate,
     ) {
-        if let Some(goals) = facts.hat_trick_of(player_id, sides) {
+        if let Some(deed) = facts.hat_trick_of(player_id, sides) {
+            let goals = i32::from(deed.goals);
             out.push(
                 NewsStory::new(NewsStoryKind::HatTrick, date)
                     .about(player_id)
-                    .with_numbers(goals as i32, 0)
+                    .with_numbers(goals, 0)
+                    .with_detail(NewsStoryDetail::Performance(deed.clone()))
                     // Four and five-goal hauls are a different story again.
-                    .weighted((goals as i32 - 3) * 60),
+                    .weighted((goals - 3) * 60),
             );
         }
 
@@ -894,6 +918,21 @@ impl SquadDesk {
         );
 
         if Self::file_headline_deeds(out, player_id, date, week, derby_hero, debut) {
+            return;
+        }
+        if let Some(deed) = facts.substitute_deed_of(player_id, sides) {
+            let contributions = deed.contributions() as i32;
+            out.push(
+                Self::verdict(
+                    player_id,
+                    date,
+                    NewsStoryKind::SuperSub,
+                    contributions,
+                    deed.rating,
+                    (contributions - 1) * 35,
+                )
+                .with_detail(NewsStoryDetail::Performance(deed.clone())),
+            );
             return;
         }
         if Self::file_scoring_deeds(out, player_id, date, week, age, is_defender) {
@@ -1121,27 +1160,13 @@ impl SquadDesk {
         false
     }
 
-    /// The quieter verdicts: the bench, the misses and the hook.
+    /// The quieter verdicts: the misses and the hook.
     fn file_effort_deeds(
         out: &mut Vec<NewsStory>,
         player_id: u32,
         date: NaiveDate,
         week: OutfieldMatchFacts,
     ) -> bool {
-        // Off the bench and decisive. Half an hour that changed the
-        // afternoon, and a story only a substitute can be the subject of.
-        if week.impact_off_the_bench > 0 {
-            out.push(Self::verdict(
-                player_id,
-                date,
-                NewsStoryKind::SuperSub,
-                week.impact_off_the_bench as i32,
-                week.best_rating,
-                (week.impact_off_the_bench as i32 - 1) * 35,
-            ));
-            return true;
-        }
-
         // The chances were there and he put them everywhere but in. Both
         // bars are load-bearing: without the expected-goals floor this
         // fires on a winger who had six shots from distance, and without
@@ -2189,18 +2214,7 @@ impl SquadDesk {
             return true;
         }
 
-        if feed
-            .any_of(&[
-                HappinessEventType::LackOfPlayingTime,
-                HappinessEventType::WantsFirstTeamFootball,
-            ])
-            .is_some()
-        {
-            out.push(
-                NewsStory::new(NewsStoryKind::BenchFrustration, date)
-                    .about(player.id)
-                    .weighted(importance),
-            );
+        if Self::file_playing_time(out, player, feed, importance, date) {
             return true;
         }
 
@@ -2227,6 +2241,40 @@ impl SquadDesk {
             return true;
         }
         false
+    }
+
+    fn file_playing_time(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        feed: &RecentEvents<'_>,
+        importance: i32,
+        date: NaiveDate,
+    ) -> bool {
+        let concern = if let Some(event) = feed.find(HappinessEventType::WantsFirstTeamFootball) {
+            let evidence = event
+                .context
+                .as_ref()
+                .and_then(|context| context.career_desire_context.as_ref())
+                .map_or(&[][..], |desire| desire.evidence.as_slice());
+            if evidence.contains(&CareerDesireEvidence::StuckInReserveSquad) {
+                PlayingTimeConcern::Reserves
+            } else if evidence.contains(&CareerDesireEvidence::PerennialBackupRole) {
+                PlayingTimeConcern::Backup
+            } else {
+                PlayingTimeConcern::FirstTeam
+            }
+        } else if feed.happened(HappinessEventType::LackOfPlayingTime) {
+            PlayingTimeConcern::Minutes
+        } else {
+            return false;
+        };
+        out.push(
+            NewsStory::new(NewsStoryKind::BenchFrustration, date)
+                .about(player.id)
+                .with_detail(NewsStoryDetail::PlayingTime(concern))
+                .weighted(importance),
+        );
+        true
     }
 
     /// The training ground, from a star's aura to a quiet complaint.

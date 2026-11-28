@@ -1,3 +1,4 @@
+use crate::club::news::sightings::WeeklyScoutVisits;
 use crate::club::news::{
     BoardroomDesk, ClubDugoutWatch, ClubLoanWatch, ClubTargetsWeek, ClubTransferWeek, DugoutDesk,
     FansDesk, IssueResult, LoanDesk, MarketDesk, MatchDesk, NewsEditor, NewsStory, NewspaperIssue,
@@ -14,6 +15,7 @@ pub(super) struct TeamPressRun<'a> {
     pub(super) team: &'a Team,
     /// The squads this paper speaks for.
     pub(super) rosters: Vec<&'a Team>,
+    pub(super) sightings: &'a WeeklyScoutVisits<'a>,
     /// Every side the club owns — the football this paper is entitled to
     /// report as its own. Shared across the club's editions because it
     /// is a property of the club, not of one of its papers.
@@ -90,6 +92,7 @@ impl TeamPressRun<'_> {
             &self.rosters,
             self.sides,
             self.facts,
+            self.sightings.for_paper(&self.rosters),
             played_this_week,
             date,
         );

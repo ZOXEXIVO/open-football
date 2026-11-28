@@ -30,6 +30,7 @@ use log::debug;
 
 use crate::club::player::events::transfer_social::TransferInterestSignal;
 use crate::club::player::language::Language;
+use crate::club::{news::ScoutVisit, team::MatchHistoryItem};
 use crate::transfers::MarketMap;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::gate::build::Suitor;
@@ -56,6 +57,7 @@ use chrono::Weekday;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 struct ScoutAssignmentAction {
     club_id: u32,
@@ -138,6 +140,8 @@ struct MatchWatch<'a> {
     assignment: &'a ScoutMatchAssignment,
     target_club: &'a Club,
     target_team: &'a Team,
+    fixture: &'a MatchHistoryItem,
+    scout_name: Option<Arc<str>>,
     /// How good this scout's eye is — the spread on every read below.
     judging_ability: u8,
     judging_potential: u8,
@@ -145,6 +149,50 @@ struct MatchWatch<'a> {
     suitor: &'a Suitor<'a>,
     /// The watched club, as every summary of its players reads it.
     target_ctx: SummaryClubContext,
+}
+
+impl MatchWatch<'_> {
+    fn press_visit(&self, country: &Country, club: &Club, player: &Player) -> Option<ScoutVisit> {
+        if club.id == self.target_club.id
+            || self.fixture.match_id.is_empty()
+            || self.fixture.rival_team_id == 0
+            || !self.fixture.took_the_field(player.id)
+        {
+            return None;
+        }
+        let signal = PlayerView::domestic_interest_signal(
+            country,
+            club,
+            self.target_club,
+            player,
+            TransferInterestStage::ScoutWatched,
+            TransferInterestSource::ScoutAttendance,
+        );
+        Some(ScoutVisit {
+            date: self.fixture.date.date(),
+            fixture_id: Arc::clone(&self.fixture.match_id),
+            team_id: self.target_team.id,
+            opponent_team_id: self.fixture.rival_team_id,
+            club_id: club.id,
+            scout_id: self.assignment.scout_staff_id,
+            scout_name: self.scout_name.clone(),
+            player_id: player.id,
+            notable: player.scout_visit_is_notable(&signal),
+        })
+    }
+
+    fn scout_name(club: &Club, scout_id: u32) -> Option<Arc<str>> {
+        let staff = club
+            .teams
+            .iter()
+            .find_map(|team| team.staffs.find(scout_id))?;
+        let name = format!(
+            "{} {}",
+            staff.full_name.first_name, staff.full_name.last_name
+        );
+        let name = name.trim();
+        (!name.is_empty()).then(|| Arc::from(name))
+    }
 }
 
 /// What one country's scouts saw at the weekend's fixtures. The read pass walks
@@ -157,6 +205,7 @@ struct MatchScoutingStaged {
     attended_updates: Vec<(u32, u32, NaiveDate)>,
     staff_events: Vec<(u32, u32, StaffEventType)>,
     monitoring_updates: Vec<MonitoringUpdate>,
+    press_visits: Vec<ScoutVisit>,
 }
 
 /// What the scout made of one player at a live match, once the report
@@ -600,6 +649,7 @@ impl ScoutingPass {
             attended_updates: Vec::new(),
             staff_events: Vec::new(),
             monitoring_updates: Vec::new(),
+            press_visits: Vec::new(),
         };
 
         // Pass 1: Immutable reads
@@ -627,16 +677,14 @@ impl ScoutingPass {
                 };
 
                 // Check if this team played today
-                let played_today = target_team
+                let Some(fixture) = target_team
                     .match_history
                     .items()
                     .last()
-                    .map(|m| m.date.date() == current_date)
-                    .unwrap_or(false);
-
-                if !played_today {
+                    .filter(|fixture| fixture.date.date() == current_date)
+                else {
                     continue;
-                }
+                };
 
                 // Get scout skills
                 let (judging_ability, judging_potential) =
@@ -664,6 +712,8 @@ impl ScoutingPass {
                         assignment: match_assignment,
                         target_club,
                         target_team,
+                        fixture,
+                        scout_name: MatchWatch::scout_name(club, match_assignment.scout_staff_id),
                         judging_ability,
                         judging_potential,
                         suitor,
@@ -755,6 +805,10 @@ impl ScoutingPass {
         if !assessment.reaches(PursuitAction::KeepFile.needs()) {
             return;
         }
+
+        staged
+            .press_visits
+            .extend(watch.press_visit(country, club, player));
 
         Self::record_observation(
             country,
@@ -1028,7 +1082,9 @@ impl ScoutingPass {
             attended_updates,
             staff_events,
             monitoring_updates,
+            press_visits,
         } = staged;
+        country.scout_visits.record(current_date, press_visits);
         // Pass 2: Apply observations, reports, and attendance updates
         for obs in observations {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == obs.club_id)
@@ -1828,6 +1884,99 @@ mod match_scouting_gate_tests {
             plan.monitorings_for_player(Fx::OUT_OF_REACH).is_empty(),
             "the one on a wage it could never hold is not"
         );
+    }
+
+    #[test]
+    fn only_a_playing_member_of_the_exact_fixture_supplies_a_visit() {
+        let today = TestDate::today();
+        for (starters, substitutes, expected) in [
+            (
+                vec![(Fx::AFFORDABLE, PlayerPositionType::MidfielderCenter)],
+                vec![],
+                true,
+            ),
+            (vec![], vec![Fx::AFFORDABLE], true),
+            (
+                vec![(99, PlayerPositionType::MidfielderCenter)],
+                vec![],
+                false,
+            ),
+            (vec![], vec![], false),
+        ] {
+            let mut country = Fx::country();
+            let history = &mut country.clubs[1].teams.teams[0].match_history;
+            history.add(
+                history.items()[0]
+                    .clone()
+                    .with_fixture("match-20-99".into(), 1, None)
+                    .with_starting_eleven(starters)
+                    .with_substitutes_used(substitutes),
+            );
+
+            let staged = ScoutingPass::observe_matches(&country, today);
+            assert_eq!(staged.observations.len(), 1);
+            assert_eq!(staged.observations[0].player_id, Fx::AFFORDABLE);
+            assert!(country.scout_visits.iter().next().is_none());
+            ScoutingPass::apply_match_scouting(&mut country, today, staged);
+
+            let assignment = &country.clubs[0].transfer_plan.scouting_assignments[0];
+            assert!(assignment.has_observation_for(Fx::AFFORDABLE));
+            let player = country.clubs[1].teams.teams[0]
+                .players
+                .find(Fx::AFFORDABLE)
+                .unwrap();
+            assert!(player.happiness.recent_events.is_empty());
+            let visit = country.scout_visits.iter().next();
+            assert_eq!(visit.is_some(), expected);
+            if let Some(visit) = visit {
+                assert_eq!(
+                    (visit.club_id, visit.scout_id, visit.player_id),
+                    (1, Fx::SCOUT, Fx::AFFORDABLE)
+                );
+                assert_eq!(
+                    (visit.team_id, visit.opponent_team_id, visit.date),
+                    (20, 99, today)
+                );
+                assert_eq!(visit.fixture_id.as_ref(), "match-20-99");
+                assert!(!visit.notable, "a quiet visit should still be recorded");
+            }
+        }
+    }
+
+    #[test]
+    fn planned_visits_and_pool_reviews_supply_no_match_evidence() {
+        let mut country = Fx::country();
+        let today = TestDate::today() + chrono::Duration::days(1);
+        ScoutingPass::process_match_scouting(&mut country, today);
+        assert!(
+            country.clubs[0].transfer_plan.scout_match_assignments[0]
+                .last_attended
+                .is_none()
+        );
+        assert!(country.scout_visits.iter().next().is_none());
+
+        let pool_review = ClubScoutingStaged {
+            observations: vec![ScoutingObservationResult {
+                club_id: 1,
+                assignment_id: 7,
+                player_id: Fx::AFFORDABLE,
+                assessed_ability: 130,
+                assessed_potential: 135,
+                is_new: true,
+            }],
+            reports: Vec::new(),
+            staff_events: Vec::new(),
+            familiarity_events: Vec::new(),
+            rejected_events: Vec::new(),
+            wanted_targets: Vec::new(),
+            monitoring_updates: Vec::new(),
+        };
+        ScoutingPass::apply_club_scouting(&mut country.clubs[0], pool_review, today, 1);
+        assert!(
+            country.clubs[0].transfer_plan.scouting_assignments[0]
+                .has_observation_for(Fx::AFFORDABLE)
+        );
+        assert!(country.scout_visits.iter().next().is_none());
     }
 }
 

@@ -7,10 +7,8 @@
 //! | [`desk`]   | Detectors that read club state and file candidate stories  |
 //! | [`editor`] | Ranks, de-duplicates, balances and lays out one edition     |
 //!
-//! Stories carry identifiers and numbers only. Names, money formats and
-//! translated prose are resolved by the web layer at render time, so an
-//! edition costs the same handful of bytes in every language and the
-//! whole world's back catalogue stays cheap to keep in memory.
+//! Stories carry the facts known at publication. The web layer resolves
+//! display names, money formats and translated prose at render time.
 //!
 //! A paper belongs to a TEAM, not to a club. Every side that competes
 //! under its own brand — the first team, the B team, the "{Club} 2"
@@ -22,11 +20,14 @@
 //! accounts, the loan column, the transfer market) file.
 
 pub mod affairs;
+mod angle;
 pub mod desk;
 pub mod editor;
+pub(crate) mod sightings;
 pub mod types;
 
 pub use affairs::{ClauseWindfallKind, ClubAffair, ClubAffairEntry, ClubAffairLog};
+pub use angle::NewsAngle;
 pub use desk::{
     Absorbing, BoardroomDesk, CareerRecord, ClubDugoutWatch, ClubLoanWatch, ClubTargetsWeek,
     ClubTransferWeek, ContinentalNight, CupTie, DugoutDesk, FansDesk, KeeperMatchFacts, LoanDesk,
@@ -37,7 +38,8 @@ pub use desk::{
     WindowWeek,
 };
 pub use editor::NewsEditor;
+pub use sightings::{ScoutSighting, ScoutVisit};
 pub use types::{
-    IssueResult, NewsDesk, NewsRecurrence, NewsStory, NewsStoryKind, NewspaperIssue, PressMood,
-    ResultCompetition, TeamNewsroom,
+    IssueResult, MatchPerformance, NewsDesk, NewsRecurrence, NewsStory, NewsStoryDetail,
+    NewsStoryKind, NewspaperIssue, PlayingTimeConcern, PressMood, ResultCompetition, TeamNewsroom,
 };

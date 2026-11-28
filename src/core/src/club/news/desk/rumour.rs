@@ -1,6 +1,10 @@
 use super::facts::{PlayerStanding, RecentEvents};
-use crate::club::news::types::{NewsStory, NewsStoryKind};
-use crate::{HappinessEventType, Player, PlayerStatusType};
+use crate::club::news::ScoutSighting;
+use crate::club::news::types::{NewsStory, NewsStoryDetail, NewsStoryKind};
+use crate::{
+    HappinessEventType, Player, PlayerStatusType, TransferInterestContext, TransferInterestSource,
+    TransferInterestStage,
+};
 use chrono::NaiveDate;
 
 /// The rumour mill: everything printed about a player's future that has
@@ -27,7 +31,212 @@ impl RumourDesk {
     const STEPPING_STONE_DAYS: i64 = 120;
 
     pub fn file_player(out: &mut Vec<NewsStory>, player: &Player, date: NaiveDate) {
-        Self::file_player_over(out, player, date, RecentEvents::FORTNIGHT);
+        Self::file_player_with_sighting(out, player, date, true, None);
+    }
+
+    pub(super) fn file_player_with_sighting(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        date: NaiveDate,
+        senior: bool,
+        sighting: Option<ScoutSighting>,
+    ) {
+        if !senior && sighting.is_none() {
+            return;
+        }
+        let importance = PlayerStanding::importance(player);
+        if player.is_on_loan() {
+            if let Some(sighting) = sighting {
+                Self::file_sighting(out, player.id, date, importance, sighting);
+            }
+            return;
+        }
+        if senior {
+            Self::file_standing_at_club(out, player, date, RecentEvents::FORTNIGHT);
+        }
+        let feed = RecentEvents::fortnight(player);
+        if let Some(story) = Self::confirmed_interest(&feed, player.id, date) {
+            out.push(story.weighted(importance));
+        } else if let Some(sighting) = sighting {
+            Self::file_sighting(out, player.id, date, importance, sighting);
+        } else if let Some(story) = Self::sourced_rumour(&feed, player.id, date) {
+            out.push(story.weighted(importance / 2));
+        } else {
+            Self::file_weekly_fallback(out, player, &feed, importance, date);
+        }
+    }
+
+    fn confirmed_interest(
+        feed: &RecentEvents<'_>,
+        player_id: u32,
+        date: NaiveDate,
+    ) -> Option<NewsStory> {
+        feed.transfer_interest()
+            .filter_map(|(days, interest)| {
+                let (rank, kind) = Self::confirmed_kind(interest)?;
+                let club = interest.interested_club_id.filter(|&club| club != 0)?;
+                Some((
+                    (rank, days, club),
+                    Self::interest_story(kind, player_id, date, interest),
+                ))
+            })
+            .min_by_key(|(rank, _)| *rank)
+            .map(|(_, story)| story)
+    }
+
+    fn confirmed_kind(interest: &TransferInterestContext) -> Option<(u8, NewsStoryKind)> {
+        use TransferInterestSource::{ClubBriefing, ConfirmedApproach, RejectedBid};
+        use TransferInterestStage::*;
+
+        match (interest.interest_stage, interest.interest_source) {
+            (MoveCollapsed, ConfirmedApproach | ClubBriefing) => {
+                Some((0, NewsStoryKind::MoveCollapsed))
+            }
+            (TermsAgreed, ConfirmedApproach | ClubBriefing) => {
+                Some((1, NewsStoryKind::PersonalTermsAgreed))
+            }
+            (TermsRejected, ConfirmedApproach | ClubBriefing) => {
+                Some((2, NewsStoryKind::TurnsDownMove))
+            }
+            (BidRejected, ConfirmedApproach | ClubBriefing | RejectedBid) => {
+                Some((3, NewsStoryKind::BidRejected))
+            }
+            (NegotiationsOpened, ConfirmedApproach | ClubBriefing) => {
+                Some((4, NewsStoryKind::TalksExpected))
+            }
+            (BidSubmitted, ConfirmedApproach | ClubBriefing) => {
+                Some((5, NewsStoryKind::RumourInterest))
+            }
+            (ConcreteInterest, ConfirmedApproach) => Some((6, NewsStoryKind::RumourInterest)),
+            _ => None,
+        }
+    }
+
+    fn sourced_rumour(
+        feed: &RecentEvents<'_>,
+        player_id: u32,
+        date: NaiveDate,
+    ) -> Option<NewsStory> {
+        use TransferInterestSource::*;
+        use TransferInterestStage::*;
+
+        let (_, interest) = feed
+            .transfer_interest()
+            .filter(|(_, interest)| {
+                matches!(
+                    (interest.interest_stage, interest.interest_source),
+                    (AgentSoundingOut, AgentLeak)
+                        | (
+                            LooseRumour | Shortlisted | ConcreteInterest | BidExpected,
+                            LocalPress | NationalPress
+                        )
+                )
+            })
+            .min_by_key(|(days, interest)| {
+                (
+                    *days,
+                    interest.interested_club_id,
+                    interest.interest_source as u8,
+                )
+            })?;
+        let kind = if interest.interest_source == AgentLeak {
+            NewsStoryKind::AgentTouting
+        } else {
+            NewsStoryKind::TransferSpeculation
+        };
+        Some(Self::interest_story(kind, player_id, date, interest))
+    }
+
+    fn interest_story(
+        kind: NewsStoryKind,
+        player_id: u32,
+        date: NaiveDate,
+        interest: &TransferInterestContext,
+    ) -> NewsStory {
+        NewsStory::new(kind, date)
+            .about(player_id)
+            .against(interest.interested_club_id.unwrap_or(0))
+            .with_detail(NewsStoryDetail::TransferInterest {
+                source: interest.interest_source,
+                stage: interest.interest_stage,
+            })
+    }
+
+    fn file_weekly_fallback(
+        out: &mut Vec<NewsStory>,
+        player: &Player,
+        feed: &RecentEvents<'_>,
+        importance: i32,
+        date: NaiveDate,
+    ) {
+        if let Some(club) = feed
+            .transfer_interest()
+            .filter(|(_, interest)| {
+                interest.interest_stage == TransferInterestStage::ScoutWatched
+                    && interest.interest_source == TransferInterestSource::ScoutAttendance
+            })
+            .filter_map(|(days, interest)| {
+                interest
+                    .interested_club_id
+                    .filter(|&club| club != 0)
+                    .map(|club| (days, club))
+            })
+            .min()
+            .map(|(_, club)| club)
+        {
+            out.push(
+                NewsStory::new(NewsStoryKind::ScoutsWatching, date)
+                    .about(player.id)
+                    .against(club)
+                    .weighted(importance / 2),
+            );
+            return;
+        }
+        if feed.happened(HappinessEventType::InterestCooled) {
+            out.push(
+                NewsStory::new(NewsStoryKind::RumourCools, date)
+                    .about(player.id)
+                    .against(feed.interested_club(HappinessEventType::InterestCooled))
+                    .weighted(importance / 3),
+            );
+            return;
+        }
+        let existing = out.len();
+        Self::file_status_speculation(out, player, date, importance, RecentEvents::FORTNIGHT);
+        if existing == out.len()
+            && (feed.happened(HappinessEventType::ScoutedByClub)
+                || feed.happened(HappinessEventType::AgentStirsInterest)
+                || feed.transfer_interest().any(|(_, interest)| {
+                    matches!(
+                        interest.interest_stage,
+                        TransferInterestStage::ScoutWatched
+                            | TransferInterestStage::Shortlisted
+                            | TransferInterestStage::LooseRumour
+                    )
+                }))
+        {
+            out.push(
+                NewsStory::new(NewsStoryKind::TransferSpeculation, date)
+                    .about(player.id)
+                    .weighted(importance),
+            );
+        }
+    }
+
+    pub(super) fn file_sighting(
+        out: &mut Vec<NewsStory>,
+        player_id: u32,
+        date: NaiveDate,
+        importance: i32,
+        sighting: ScoutSighting,
+    ) {
+        out.push(
+            NewsStory::new(NewsStoryKind::ScoutsWatching, date)
+                .about(player_id)
+                .against(sighting.latest.club_id)
+                .with_detail(NewsStoryDetail::Sighting(sighting))
+                .weighted(importance / 2),
+        );
     }
 
     /// The same desk run on a different press cycle.
@@ -532,8 +741,9 @@ impl RumourDesk {
 
 #[cfg(test)]
 mod tests {
-    use super::RumourDesk;
-    use crate::club::news::types::{NewsStory, NewsStoryKind};
+    use super::{RecentEvents, RumourDesk};
+    use crate::club::news::types::{NewsStory, NewsStoryDetail, NewsStoryKind};
+    use crate::club::news::{ScoutSighting, ScoutVisit};
     use crate::club::player::happiness::{
         HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
         TransferInterestContext, TransferInterestKind, TransferInterestReaction,
@@ -631,8 +841,51 @@ mod tests {
 
         fn kinds_of(player: &Player) -> Vec<NewsStoryKind> {
             let mut out: Vec<NewsStory> = Vec::new();
-            RumourDesk::file_player(&mut out, player, Self::day());
+            RumourDesk::file_player_over(&mut out, player, Self::day(), RecentEvents::MONTH);
             out.iter().map(|story| story.kind).collect()
+        }
+
+        fn record(
+            player: &mut Player,
+            kind: HappinessEventType,
+            stage: TransferInterestStage,
+            source: TransferInterestSource,
+            club: Option<u32>,
+        ) {
+            let mut interest = TransferInterestContext::new(
+                stage,
+                source,
+                TransferInterestKind::Speculative,
+                TransferInterestReaction::Flattered,
+            );
+            interest.interested_club_id = club;
+            let event = HappinessEventContext::new(
+                HappinessEventCause::MediaPressure,
+                HappinessEventSeverity::Moderate,
+                HappinessEventScope::Media,
+            )
+            .with_transfer_interest_context(interest);
+            player
+                .happiness
+                .add_event_with_context(kind, -3.0, None, event);
+        }
+
+        fn sighting(player: &Player) -> ScoutSighting {
+            ScoutSighting {
+                latest: ScoutVisit {
+                    date: Self::day().pred_opt().unwrap(),
+                    fixture_id: "fixture".into(),
+                    team_id: 1,
+                    opponent_team_id: 2,
+                    club_id: Self::SUITOR,
+                    scout_id: 9,
+                    scout_name: None,
+                    player_id: player.id,
+                    notable: true,
+                },
+                other: None,
+                returned: false,
+            }
         }
     }
 
@@ -705,7 +958,7 @@ mod tests {
         );
 
         let mut out: Vec<NewsStory> = Vec::new();
-        RumourDesk::file_player(&mut out, &player, Mill::day());
+        RumourDesk::file_player_over(&mut out, &player, Mill::day(), RecentEvents::MONTH);
 
         let bid = out
             .iter()
@@ -792,7 +1045,7 @@ mod tests {
 
         assert!(Mill::kinds(&[HappinessEventType::ContractExpiryAnxiety]).is_empty());
 
-        let mut player = Mill::player(&[HappinessEventType::ContractExpiryAnxiety]);
+        let mut player = Mill::anonymous_player(&[HappinessEventType::ContractExpiryAnxiety]);
         player.contract = Some(PlayerClubContract::new(
             10_000,
             NaiveDate::from_ymd_opt(2026, 11, 30).unwrap(),
@@ -838,5 +1091,121 @@ mod tests {
 
         assert!(!kinds.contains(&NewsStoryKind::PersonalTermsAgreed));
         assert!(!kinds.contains(&NewsStoryKind::TurnsDownMove));
+    }
+
+    #[test]
+    fn weekly_press_links_and_agent_soundings_use_their_own_suitor_and_source() {
+        use TransferInterestSource::*;
+        use TransferInterestStage::*;
+        let mut player = Mill::player(&[]);
+        Mill::record(
+            &mut player,
+            HappinessEventType::ScoutedByClub,
+            ScoutWatched,
+            ScoutAttendance,
+            Some(Mill::SUITOR),
+        );
+        Mill::record(
+            &mut player,
+            HappinessEventType::TransferRumour,
+            LooseRumour,
+            LocalPress,
+            None,
+        );
+        let mut out = Vec::new();
+        RumourDesk::file_player(&mut out, &player, Mill::day());
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            (out[0].kind, out[0].other_id),
+            (NewsStoryKind::TransferSpeculation, 0)
+        );
+        assert!(matches!(
+            out[0].detail.as_deref(),
+            Some(NewsStoryDetail::TransferInterest {
+                stage: LooseRumour,
+                source: LocalPress
+            })
+        ));
+        assert_eq!(Mill::kinds_of(&player), [NewsStoryKind::ScoutsWatching]);
+
+        player.happiness.recent_events.clear();
+        Mill::record(
+            &mut player,
+            HappinessEventType::AgentStirsInterest,
+            AgentSoundingOut,
+            AgentLeak,
+            None,
+        );
+        out.clear();
+        RumourDesk::file_player(&mut out, &player, Mill::day());
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            (out[0].kind, out[0].other_id),
+            (NewsStoryKind::AgentTouting, 0)
+        );
+        assert!(matches!(
+            out[0].detail.as_deref(),
+            Some(NewsStoryDetail::TransferInterest {
+                stage: AgentSoundingOut,
+                source: AgentLeak
+            })
+        ));
+    }
+
+    #[test]
+    fn weekly_monitoring_stays_neutral_and_a_confirmed_rejection_supersedes_a_sighting() {
+        use TransferInterestSource::*;
+        use TransferInterestStage::*;
+        let mut player = Mill::player(&[]);
+        Mill::record(
+            &mut player,
+            HappinessEventType::ScoutedByClub,
+            ScoutWatched,
+            InternalRecruitmentMeeting,
+            None,
+        );
+        let mut out = Vec::new();
+        RumourDesk::file_player(&mut out, &player, Mill::day());
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            (out[0].kind, out[0].other_id),
+            (NewsStoryKind::TransferSpeculation, 0)
+        );
+        assert!(out[0].detail.is_none());
+
+        Mill::record(
+            &mut player,
+            HappinessEventType::TransferBidRejected,
+            BidRejected,
+            RejectedBid,
+            Some(Mill::SUITOR),
+        );
+        Mill::record(
+            &mut player,
+            HappinessEventType::TransferRumour,
+            LooseRumour,
+            LocalPress,
+            Some(77),
+        );
+        out.clear();
+        RumourDesk::file_player_with_sighting(
+            &mut out,
+            &player,
+            Mill::day(),
+            false,
+            Some(Mill::sighting(&player)),
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            (out[0].kind, out[0].other_id),
+            (NewsStoryKind::BidRejected, Mill::SUITOR)
+        );
+        assert!(matches!(
+            out[0].detail.as_deref(),
+            Some(NewsStoryDetail::TransferInterest {
+                stage: BidRejected,
+                source: RejectedBid
+            })
+        ));
     }
 }

@@ -329,7 +329,8 @@ impl PressCuttings {
 
 #[cfg(test)]
 mod tests {
-    use super::{PlayerNewspaperTemplate, PlayerPress};
+    use super::{PlayerNewsCounter, PlayerNewspaperTemplate, PlayerPress, PressCuttings};
+    use crate::teams::newspaper::enriched_tests::PressFixture;
     use crate::teams::newspaper::{IssueView, PortraitView, Prose, ResultView, Span, StoryView};
     use crate::{I18n, NewsI18n};
     use askama::Template;
@@ -525,6 +526,113 @@ mod tests {
                 issues,
             }
         }
+    }
+
+    #[test]
+    fn both_pages_keep_the_first_cutting_after_later_assists_and_a_formal_approach() {
+        use core::club::news::NewsEditor;
+
+        let mut world = PressFixture::world(0);
+        let i18n = crate::I18nManager::new().for_lang("en");
+        let news = crate::NewsI18nManager::new().for_lang("en");
+        let publish = |world: &mut core::SimulatorData, number, day, assists, appearances| {
+            let date = PressFixture::day(day);
+            let paper = &mut world.team_mut(PressFixture::PUBLISHER).unwrap().newsroom;
+            let loan = NewsStory::new(NewsStoryKind::LoanWatchAssists, date)
+                .about(PressFixture::PLAYER)
+                .against(PressFixture::CITY)
+                .with_numbers(assists, appearances)
+                .weighted(500);
+            let stories = NewsEditor::compile(
+                vec![loan, PressFixture::rumour(date, number > 1)],
+                &paper.issues,
+            );
+            paper.publish(NewspaperIssue {
+                number,
+                date,
+                mood: PressMood::Steady,
+                stories,
+                results: Vec::new(),
+            });
+        };
+
+        publish(&mut world, 1, 2, 3, 6);
+        let original = PressFixture::club_page(&world, &i18n, &news).remove(0);
+        let original_loan = original.lead.as_ref().unwrap();
+        let original_rumour = &original.secondary[0];
+        assert!(
+            original_loan.body.text().contains("3 assists")
+                && original_loan.body.text().contains("6 league")
+        );
+        assert!(original_rumour.headline.text().contains("agent"));
+        assert!(!original_rumour.body.text().contains("City"));
+
+        let stats = &mut world.player_mut(PressFixture::PLAYER).unwrap().statistics;
+        stats.assists = 4;
+        stats.played = 7;
+        publish(&mut world, 2, 9, 4, 7);
+
+        let player = world.player(PressFixture::PLAYER).unwrap();
+        let cuttings = PressCuttings::collect(&world, player, &i18n, &news);
+        let club_page = PressFixture::club_page(&world, &i18n, &news);
+        let count = PlayerNewsCounter::count(&world, player);
+        assert_eq!(count, 2);
+        assert_eq!(
+            cuttings
+                .iter()
+                .map(|issue| issue.number)
+                .collect::<Vec<_>>(),
+            [2, 1]
+        );
+        for (player_issue, club_issue) in cuttings.iter().zip(&club_page) {
+            assert_eq!(player_issue.number, club_issue.number);
+            assert_eq!(player_issue.paper_slug, "county");
+            for (cut, full) in player_issue
+                .lead
+                .iter()
+                .chain(&player_issue.secondary)
+                .zip(club_issue.lead.iter().chain(&club_issue.secondary))
+            {
+                assert_eq!(cut.headline.text(), full.headline.text());
+                assert_eq!(cut.body.text(), full.body.text());
+                assert!(cut.marked);
+                assert!(!full.marked);
+            }
+        }
+
+        let earlier = &cuttings[1];
+        let later = &cuttings[0];
+        let earlier_loan = earlier.lead.as_ref().unwrap();
+        let later_loan = later.lead.as_ref().unwrap();
+        assert_eq!(earlier_loan.headline.text(), original_loan.headline.text());
+        assert_eq!(earlier_loan.body.text(), original_loan.body.text());
+        assert!(
+            later_loan.body.text().contains("4 assists")
+                && later_loan.body.text().contains("7 league")
+        );
+        assert_ne!(
+            later_loan.headline.text().replace('4', "3"),
+            earlier_loan.headline.text()
+        );
+        assert_eq!(
+            earlier.secondary[0].headline.text(),
+            original_rumour.headline.text()
+        );
+        assert_eq!(
+            earlier.secondary[0].body.text(),
+            original_rumour.body.text()
+        );
+        assert!(
+            later.secondary[0].headline.text().contains("approach")
+                && later.secondary[0].headline.text().contains("City")
+        );
+
+        let mut page = Page::template(cuttings);
+        page.news_count = count;
+        let html = page.render().unwrap();
+        assert_eq!(html.matches("np-sheet").count(), 2);
+        assert!(html.contains("<span class=\"fm-tab-badge\">2</span>"));
+        assert!(html.contains("np-story-link np-mark"));
     }
 
     /// The whole edition reaches the player's page — lead, secondaries

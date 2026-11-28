@@ -443,3 +443,46 @@ The table SHALL show club groups in descending order of the club's senior first-
 
 - **WHEN** a player has no monitoring entries
 - **THEN** the panel SHALL show a count of zero and the localized empty-state message in place of the table
+
+### Requirement: Player news leads with the facts that distinguish the story
+
+For hat-tricks, substitute contributions, playing-time concerns, assist-led loan reports, scout sightings and sourced transfer rumours, the player News tab SHALL show a localized headline and body whose angle reflects the recorded situation. Each supported situation SHALL have at least two distinct headline/body pairs in each supported press language. Within a pair, the lead and supporting detail SHALL agree. Older stories lacking the new detail SHALL use factual wording supported by what the edition holds.
+
+#### Scenario: Two hat-tricks tell different stories
+
+- **WHEN** one player scores three in a 3–3 draw with North End and another scores three in a 4–0 win over City
+- **THEN** the two reports SHALL frame one as sharing the points and the other as victory, naming each opponent and score when displaying the full story.
+
+#### Scenario: A report has fewer facts
+
+- **WHEN** an older hat-trick story records the player and goal count alone
+- **THEN** the paper SHALL credit the player with his goals in the selected language, omitting any invented opponent, result, time or quotation.
+
+#### Scenario: A player reads the same edition in another language
+
+- **WHEN** a reader opens an assist-only substitute story in any supported language
+- **THEN** the headline and body SHALL convey the assist in that language, with the same match facts, readable names and filled placeholders.
+
+#### Scenario: A scout changes clubs after a return visit
+
+- **WHEN** a reader opens an issue about City's return to watch Mora against North End, after the scout has joined another employer
+- **THEN** both pages SHALL still identify City as the watching club and North End as the opponent in that edition. If the scout's name was unavailable at publication, the copy SHALL identify the visitor by club alone.
+
+#### Scenario: A rumour becomes a transfer story
+
+- **WHEN** an agent sounding is reported in one edition and a formal approach is reported in a later one
+- **THEN** reopening the first cutting SHALL show the original agent attribution and level of certainty in both its headline and body.
+
+### Requirement: Repeated player coverage varies across published editions
+
+When a weekly paper publishes another enriched story about the same player in the same situation, and its last such report is on that paper's shelf, it SHALL use a different headline/body pair from that report. The player and club pages SHALL show the same published pair for the same story in a given language, including after a later edition appears. The editor's eligibility rules SHALL apply before phrasing is chosen.
+
+#### Scenario: A provider adds a fourth assist
+
+- **WHEN** a parent paper publishes a player's fourth-assist report after having published his third-assist report
+- **THEN** the new headline and body SHALL use a different formulation, distinguishable even after substituting the same names and figures into both pairs.
+
+#### Scenario: Reopening the cutting
+
+- **WHEN** a reader returns to the earlier issue after the player changes clubs or accumulates more assists
+- **THEN** the earlier report SHALL still give its original tally, borrowing side and phrasing on both the player's and publishing club's News pages.

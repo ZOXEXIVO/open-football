@@ -723,6 +723,10 @@ impl Player {
         )
     }
 
+    pub(crate) fn scout_visit_is_notable(&self, sig: &TransferInterestSignal) -> bool {
+        self.signal_should_surface(sig, self.classify_interest_kind(sig))
+    }
+
     fn signal_should_surface(
         &self,
         sig: &TransferInterestSignal,

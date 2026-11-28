@@ -9,8 +9,10 @@ use crate::{ApiError, ApiResult, GameAppData, I18n, NewsI18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use chrono::{Datelike, NaiveDate};
-use core::club::news::{IssueResult, NewsDesk, NewsStory, NewspaperIssue};
+use chrono::NaiveDate;
+use core::club::news::{
+    IssueResult, MatchPerformance, NewsDesk, NewsStory, NewsStoryDetail, NewspaperIssue, ScoutVisit,
+};
 use core::shared::fullname::FullName;
 use core::utils::FormattingUtils;
 use core::{SimulatorData, Team, TeamType};
@@ -843,6 +845,7 @@ impl<'a> PaperFor<'a> {
 /// no desk knows about.
 enum Slot {
     Text(String),
+    Prose(Prose),
     Name {
         text: String,
         section: &'static str,
@@ -913,6 +916,15 @@ impl StoryComposer {
     /// by `variant_copy_ships_in_matched_pairs`), which is what lets
     /// the count be read off the headline keys alone.
     fn phrasing_key(part: &str, story: &NewsStory, news: &NewsI18n) -> String {
+        if let Some(angle) = story.angle() {
+            let stem = angle.key_stem();
+            let index = usize::from(story.phrasing);
+            let headline = Self::phrasing_key_at("h", stem, index);
+            let body = Self::phrasing_key_at("b", stem, index);
+            if news.t(&headline) != headline && news.t(&body) != body {
+                return if part == "h" { headline } else { body };
+            }
+        }
         let stem = story.kind.key_stem();
         let eligible = Self::eligible_phrasings(story, news, stem);
         let index = eligible[Self::phrasing_index(story, eligible.len())];
@@ -996,22 +1008,7 @@ impl StoryComposer {
             return 0;
         }
 
-        let mut hash: u32 = 0x811c_9dc5;
-        for value in [
-            story.player_id,
-            story.other_id,
-            story.staff_id,
-            story.a as u32,
-            story.b as u32,
-            story.date.num_days_from_ce() as u32,
-        ] {
-            for byte in value.to_le_bytes() {
-                hash ^= u32::from(byte);
-                hash = hash.wrapping_mul(0x0100_0193);
-            }
-        }
-
-        (hash % count as u32) as usize
+        (story.phrasing_seed() % count as u32) as usize
     }
 
     /// Walks a translated string once, filling each `{slot}` as it comes
@@ -1031,6 +1028,10 @@ impl StoryComposer {
         news: &NewsI18n,
         paper: Paper<'_>,
     ) -> Prose {
+        Self::interpolate(template, |name| Self::slot(name, data, story, news, paper))
+    }
+
+    fn interpolate(template: &str, mut slot: impl FnMut(&str) -> Slot) -> Prose {
         let mut spans: Vec<Span> = Vec::new();
         let mut plain = String::new();
         let mut rest = template;
@@ -1042,8 +1043,14 @@ impl StoryComposer {
 
             plain.push_str(&rest[..open]);
 
-            match Self::slot(&rest[open + 1..close], data, story, news, paper) {
+            match slot(&rest[open + 1..close]) {
                 Slot::Text(text) => plain.push_str(&text),
+                Slot::Prose(prose) => {
+                    if !plain.is_empty() {
+                        spans.push(Span::text(std::mem::take(&mut plain)));
+                    }
+                    spans.extend(prose.spans);
+                }
                 Slot::Name {
                     text,
                     section,
@@ -1081,6 +1088,9 @@ impl StoryComposer {
         news: &NewsI18n,
         paper: Paper<'_>,
     ) -> Slot {
+        if let Some(slot) = Self::coverage_slot(name, data, story, news) {
+            return slot;
+        }
         match name {
             // The side whose paper this is. It is a name in the copy like
             // any other, so it leads where the name leads — the club's
@@ -1163,6 +1173,148 @@ impl StoryComposer {
         }
     }
 
+    fn coverage_slot(
+        name: &str,
+        data: &SimulatorData,
+        story: &NewsStory,
+        news: &NewsI18n,
+    ) -> Option<Slot> {
+        match story.detail.as_deref()? {
+            NewsStoryDetail::Performance(deed) => {
+                if name == "fixture_result" {
+                    return Some(Slot::Prose(Self::fixture_result(data, deed, news)));
+                }
+                Self::performance_slot(name, data, deed, news)
+            }
+            NewsStoryDetail::Sighting(sighting) => match name {
+                "visit" => Some(Slot::Prose(Self::scout_visit(data, &sighting.latest, news))),
+                "visit2" => sighting
+                    .other
+                    .as_ref()
+                    .map(|other| Slot::Prose(Self::scout_visit(data, other, news))),
+                "visit_opponent" => Some(Self::fixture_opponent(
+                    data,
+                    sighting.latest.opponent_team_id,
+                    news,
+                )),
+                "other2" => sighting
+                    .other
+                    .as_ref()
+                    .map(|other| Self::club_slot(data, other.club_id, news)),
+                _ => None,
+            },
+            NewsStoryDetail::TransferInterest { .. } => match name {
+                "press_suitor" => Some(Self::reported_suitor(
+                    data,
+                    story,
+                    news,
+                    "newspaper_press_suitor",
+                )),
+                "agent_suitor" => Some(Self::reported_suitor(
+                    data,
+                    story,
+                    news,
+                    "newspaper_agent_suitor",
+                )),
+                _ => None,
+            },
+            NewsStoryDetail::PlayingTime(_) => None,
+        }
+    }
+
+    fn scout_visit(data: &SimulatorData, visit: &ScoutVisit, news: &NewsI18n) -> Prose {
+        let key = if visit.scout_name.is_some() {
+            "newspaper_scout_visit_named"
+        } else {
+            "newspaper_scout_visit_club"
+        };
+        Self::interpolate(news.t(key), |name| match name {
+            "visit_date" => Slot::Text(visit.date.to_string()),
+            "visit_club" => Self::club_slot(data, visit.club_id, news),
+            "visit_opponent" => Self::fixture_opponent(data, visit.opponent_team_id, news),
+            "scout_name" => Slot::Text(visit.scout_name.as_deref().unwrap_or_default().to_owned()),
+            _ => Slot::Unknown,
+        })
+    }
+
+    fn reported_suitor(
+        data: &SimulatorData,
+        story: &NewsStory,
+        news: &NewsI18n,
+        key: &str,
+    ) -> Slot {
+        let (text, slug) = Self::club_party(data, story.other_id);
+        if text.is_empty() {
+            return Slot::Text(String::new());
+        }
+        Slot::Prose(Self::interpolate(news.t(key), |name| {
+            if name == "rumour_club" {
+                Slot::Name {
+                    text: text.clone(),
+                    section: "teams",
+                    slug: slug.clone(),
+                }
+            } else {
+                Slot::Unknown
+            }
+        }))
+    }
+
+    fn club_slot(data: &SimulatorData, id: u32, news: &NewsI18n) -> Slot {
+        let (text, slug) = Self::club_party(data, id);
+        if text.is_empty() {
+            Slot::Text(news.t("newspaper_another_club").to_string())
+        } else {
+            Slot::Name {
+                text,
+                section: "teams",
+                slug,
+            }
+        }
+    }
+
+    fn fixture_result(data: &SimulatorData, deed: &MatchPerformance, news: &NewsI18n) -> Prose {
+        let key = match deed.goals_for.cmp(&deed.goals_against) {
+            std::cmp::Ordering::Greater => "newspaper_fixture_win",
+            std::cmp::Ordering::Equal => "newspaper_fixture_draw",
+            std::cmp::Ordering::Less => "newspaper_fixture_defeat",
+        };
+        Self::interpolate(news.t(key), |name| {
+            Self::performance_slot(name, data, deed, news).unwrap_or(Slot::Unknown)
+        })
+    }
+
+    fn performance_slot(
+        name: &str,
+        data: &SimulatorData,
+        deed: &MatchPerformance,
+        news: &NewsI18n,
+    ) -> Option<Slot> {
+        Some(match name {
+            "fixture_opponent" => Self::fixture_opponent(data, deed.opponent_team_id, news),
+            "fixture_score" => Slot::Text(MatchPage::score(
+                i32::from(deed.goals_for),
+                i32::from(deed.goals_against),
+            )),
+            "goals" => Slot::Text(deed.goals.to_string()),
+            "assists" => Slot::Text(deed.assists.to_string()),
+            _ => return None,
+        })
+    }
+
+    fn fixture_opponent(data: &SimulatorData, team_id: u32, news: &NewsI18n) -> Slot {
+        data.team(team_id)
+            .filter(|team| !team.name.is_empty())
+            .map_or_else(
+                || Slot::Text(news.t("newspaper_fixture_opponent").to_string()),
+                |team| Slot::Name {
+                    text: team.name.clone(),
+                    section: "teams",
+                    slug: team.slug.clone(),
+                },
+            )
+    }
+
     /// Match reports name a team; every other desk names a club. Both
     /// arrive in the same slot, so the desk decides which lookup runs —
     /// keyed off the desk rather than a list of kinds, so a new story
@@ -1186,7 +1338,11 @@ impl StoryComposer {
                 .unwrap_or_default();
         }
 
-        data.club(story.other_id)
+        Self::club_party(data, story.other_id)
+    }
+
+    fn club_party(data: &SimulatorData, id: u32) -> (String, String) {
+        data.club(id)
             .map(|club| {
                 (
                     club.name.clone(),
@@ -1293,7 +1449,7 @@ impl PlayerName {
 
 #[cfg(test)]
 mod tests {
-    use core::club::news::{NewsDesk, NewsStoryKind, PressMood};
+    use core::club::news::{NewsAngle, NewsDesk, NewsStoryKind, PressMood};
     use std::collections::BTreeMap;
 
     /// Every locale the newspaper has to print in.
@@ -1327,6 +1483,18 @@ mod tests {
                 keys.push(format!("news_h_{}", kind.key_stem()));
                 keys.push(format!("news_b_{}", kind.key_stem()));
                 keys.push(kind.desk().i18n_key().to_string());
+            }
+
+            for angle in NewsAngle::ALL {
+                for part in ["h", "b"] {
+                    for phrasing in 0..2 {
+                        keys.push(super::StoryComposer::phrasing_key_at(
+                            part,
+                            angle.key_stem(),
+                            phrasing,
+                        ));
+                    }
+                }
             }
 
             for desk in NewsDesk::ALL {
@@ -1372,6 +1540,14 @@ mod tests {
                 "newspaper_cup_tie",
                 "newspaper_continental_night",
                 "newspaper_playoff_tie",
+                "newspaper_fixture_opponent",
+                "newspaper_fixture_win",
+                "newspaper_fixture_draw",
+                "newspaper_fixture_defeat",
+                "newspaper_scout_visit_named",
+                "newspaper_scout_visit_club",
+                "newspaper_press_suitor",
+                "newspaper_agent_suitor",
             ] {
                 keys.push(chrome.to_string());
             }
@@ -1512,6 +1688,7 @@ mod tests {
         let stems: Vec<&str> = NewsStoryKind::ALL
             .iter()
             .map(|kind| kind.key_stem())
+            .chain(NewsAngle::ALL.into_iter().map(NewsAngle::key_stem))
             .collect();
 
         let split = |rest: &str| -> Option<(String, usize)> {
@@ -1573,6 +1750,53 @@ mod tests {
                     "{}.json: '{}' exceeds the composer's probe ceiling",
                     lang,
                     stem
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn enriched_copy_pairs_use_the_same_evidence_with_different_leads() {
+        let fields = |text: &str| -> std::collections::BTreeSet<String> {
+            text.split('{')
+                .skip(1)
+                .filter_map(|part| part.split_once('}'))
+                .map(|(name, _)| name.to_owned())
+                .collect()
+        };
+        for (lang, _) in BUNDLES {
+            let bundle = PressKeys::bundle(lang);
+            for angle in NewsAngle::ALL {
+                let pairs = phrasings(&bundle, angle.key_stem());
+                assert_eq!(pairs.len(), 2, "{lang} {angle:?}");
+                let (_, headline, body) = pairs[0];
+                let (_, alternate_headline, alternate_body) = pairs[1];
+                assert_eq!(
+                    fields(headline),
+                    fields(alternate_headline),
+                    "{lang} {angle:?} headline"
+                );
+                assert_eq!(
+                    fields(body),
+                    fields(alternate_body),
+                    "{lang} {angle:?} body"
+                );
+                let example = |text: &str| {
+                    text.replace("{player}", "Mora")
+                        .replace("{n}", "3")
+                        .replace("{m}", "6")
+                        .replace("{other}", "City")
+                        .replace("{fixture_result}", "3-3 / North End")
+                };
+                assert_ne!(
+                    example(headline),
+                    example(alternate_headline),
+                    "{lang} {angle:?} headline"
+                );
+                assert_ne!(
+                    example(body),
+                    example(alternate_body),
+                    "{lang} {angle:?} body"
                 );
             }
         }
@@ -2840,3 +3064,6 @@ mod render_tests {
             .expect("write preview");
     }
 }
+
+#[cfg(test)]
+pub(crate) mod enriched_tests;

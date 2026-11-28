@@ -1,14 +1,14 @@
 use crate::PlayerFieldPositionGroup;
 use crate::club::news::{
-    Absorbing, ContinentalNight, CupTie, KeeperMatchFacts, MatchDramaFacts, MatchStarFacts,
-    OutfieldMatchFacts, PlayoffTie, WeeklyMatchFacts,
+    Absorbing, ContinentalNight, CupTie, KeeperMatchFacts, MatchDramaFacts, MatchPerformance,
+    MatchStarFacts, OutfieldMatchFacts, PlayoffTie, WeeklyMatchFacts,
 };
 use crate::continent::competitions::{
     CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
 };
 use crate::league::PlayoffRoundLabel;
 use crate::r#match::player::statistics::MatchStatisticType;
-use crate::r#match::{FieldSquad, MatchResult, SubstitutionReason};
+use crate::r#match::{FieldSquad, MatchResult, PlayerMatchEndStats, SubstitutionReason};
 use crate::world::SimulatorData;
 use chrono::NaiveDate;
 use rayon::prelude::*;
@@ -102,8 +102,17 @@ impl WeeklyMatchFacts {
                 let Some(team_id) = Self::side_of(result, *player_id) else {
                     continue;
                 };
-                let best = self.hat_tricks.entry((*player_id, team_id)).or_insert(0);
-                *best = (*best).max(*goals);
+                let stats = result
+                    .details
+                    .as_ref()
+                    .and_then(|details| details.player_stats.get(player_id));
+                if let Some(deed) =
+                    MatchPerformance::from_result(result, team_id, u16::from(*goals), stats)
+                {
+                    Self::retain_performance(&mut self.hat_tricks, *player_id, deed, |deed| {
+                        u32::from(deed.goals)
+                    });
+                }
             }
 
             self.absorb_keepers(result);
@@ -609,7 +618,18 @@ impl WeeklyMatchFacts {
                 };
 
             let rating = (stats.match_rating * 100.0) as i32;
-            let contribution = stats.goals.saturating_add(stats.assists);
+            if !started
+                && (stats.goals > 0 || stats.assists > 0)
+                && let Some(deed) =
+                    MatchPerformance::from_result(result, team_id, stats.goals, Some(stats))
+            {
+                Self::retain_performance(
+                    &mut self.substitute_deeds,
+                    *player_id,
+                    deed,
+                    MatchPerformance::contributions,
+                );
+            }
 
             self.outfield
                 .entry((*player_id, team_id))
@@ -638,9 +658,6 @@ impl WeeklyMatchFacts {
                     yellow_cards: stats.yellow_cards,
                     penalties_missed: missed.get(player_id).copied().unwrap_or(0),
                     man_of_the_match: details.player_of_the_match_id == Some(*player_id),
-                    // Only a substitute can have an impact off the
-                    // bench; a starter's goal is just a goal.
-                    impact_off_the_bench: if started { 0 } else { contribution },
                 });
         }
     }
@@ -676,9 +693,18 @@ impl WeeklyMatchFacts {
 
     /// Rayon fold partner: two half-worlds become one.
     fn merged(mut self, other: WeeklyMatchFacts) -> Self {
-        for (key, goals) in other.hat_tricks {
-            let best = self.hat_tricks.entry(key).or_insert(0);
-            *best = (*best).max(goals);
+        for ((player_id, _), deed) in other.hat_tricks {
+            Self::retain_performance(&mut self.hat_tricks, player_id, deed, |deed| {
+                u32::from(deed.goals)
+            });
+        }
+        for ((player_id, _), deed) in other.substitute_deeds {
+            Self::retain_performance(
+                &mut self.substitute_deeds,
+                player_id,
+                deed,
+                MatchPerformance::contributions,
+            );
         }
         self.red_cards.extend(other.red_cards);
         self.cup_ties.extend(other.cup_ties);
@@ -706,5 +732,163 @@ impl WeeklyMatchFacts {
             }
         }
         self
+    }
+
+    fn retain_performance(
+        deeds: &mut FxHashMap<(u32, u32), MatchPerformance>,
+        player_id: u32,
+        candidate: MatchPerformance,
+        tally: impl Fn(&MatchPerformance) -> u32,
+    ) {
+        use std::collections::hash_map::Entry;
+
+        match deeds.entry((player_id, candidate.team_id)) {
+            Entry::Vacant(slot) => {
+                slot.insert(candidate);
+            }
+            Entry::Occupied(mut slot)
+                if candidate.selection_key(&tally) < slot.get().selection_key(&tally) =>
+            {
+                slot.insert(candidate);
+            }
+            Entry::Occupied(_) => {}
+        }
+    }
+}
+
+impl MatchPerformance {
+    fn from_result(
+        result: &MatchResult,
+        team_id: u32,
+        goals: u16,
+        stats: Option<&PlayerMatchEndStats>,
+    ) -> Option<Self> {
+        let home = result.score.home_team.get();
+        let away = result.score.away_team.get();
+        let (opponent_team_id, goals_for, goals_against) = if team_id == result.home_team_id {
+            (result.away_team_id, home, away)
+        } else if team_id == result.away_team_id {
+            (result.home_team_id, away, home)
+        } else {
+            return None;
+        };
+        Some(Self {
+            fixture_id: result.id.as_str().into(),
+            team_id,
+            opponent_team_id,
+            goals_for,
+            goals_against,
+            goals,
+            assists: stats.map_or(0, |stats| stats.assists),
+            rating: stats.map_or(0, |stats| (stats.match_rating * 100.0) as i32),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::r#match::{GoalDetail, MatchResultRaw, Score, TeamScore};
+
+    const PLAYER: u32 = 42;
+    const SIDE: u32 = 10;
+
+    fn fixture(id: &str, opponent: u32, goals: u16, assists: u16) -> MatchResult {
+        let mut details = MatchResultRaw::with_match_time(90 * 60 * 1000);
+        details.left_team_players.team_id = opponent;
+        details.right_team_players.team_id = SIDE;
+        details.right_team_players.substitutes = vec![PLAYER];
+        details.right_team_players.substitutes_used = vec![PLAYER];
+        let mut stats = PlayerMatchEndStats::neutral(PlayerFieldPositionGroup::Forward, 30, 7.25);
+        stats.goals = goals;
+        stats.assists = assists;
+        details.player_stats.insert(PLAYER, stats);
+
+        let mut score = Score::new(opponent, SIDE);
+        score.home_team = TeamScore::new_with_score(opponent, 5);
+        score.away_team = TeamScore::new_with_score(SIDE, (goals + assists) as u8);
+        score.details = (0..goals)
+            .map(|goal| GoalDetail {
+                player_id: PLAYER,
+                stat_type: MatchStatisticType::Goal,
+                is_auto_goal: false,
+                time: u64::from(goal) * 60_000,
+                origin: Default::default(),
+            })
+            .collect();
+        MatchResult {
+            id: id.to_owned(),
+            league_id: 1,
+            league_slug: String::new(),
+            home_team_id: opponent,
+            away_team_id: SIDE,
+            details: Some(details),
+            score,
+            friendly: false,
+        }
+    }
+
+    fn gather<'a>(fixtures: impl IntoIterator<Item = &'a MatchResult>) -> WeeklyMatchFacts {
+        let mut facts = WeeklyMatchFacts::empty();
+        facts.absorb(fixtures.into_iter(), false);
+        facts
+    }
+
+    #[test]
+    fn select_each_deed_by_its_own_tally_in_both_orders() {
+        let scorer = fixture("a", 20, 4, 0);
+        let provider = fixture("b", 30, 3, 2);
+        let sides = FxHashSet::from_iter([SIDE]);
+        for fixtures in [[&scorer, &provider], [&provider, &scorer]] {
+            let facts = gather(fixtures);
+            let hat_trick = facts.hat_trick_of(PLAYER, &sides).unwrap();
+            assert_eq!((&*hat_trick.fixture_id, hat_trick.goals), ("a", 4));
+            let sub = facts.substitute_deed_of(PLAYER, &sides).unwrap();
+            assert_eq!((&*sub.fixture_id, sub.goals, sub.assists), ("b", 3, 2));
+        }
+    }
+
+    #[test]
+    fn break_ties_by_fixture_during_gather_merge_and_selection() {
+        let earlier = fixture("a", 20, 3, 1);
+        let later = fixture("b", 30, 3, 1);
+        let sides = FxHashSet::from_iter([SIDE, 11]);
+        for (first, second) in [(&earlier, &later), (&later, &earlier)] {
+            let gathered = gather([first, second]);
+            let merged = gather([first]).merged(gather([second]));
+            let mut across_sides = gather([&later]);
+            let mut other_side = gather([&earlier]);
+            let mut hat = other_side.hat_tricks.remove(&(PLAYER, SIDE)).unwrap();
+            let mut sub = other_side.substitute_deeds.remove(&(PLAYER, SIDE)).unwrap();
+            hat.team_id = 11;
+            sub.team_id = 11;
+            across_sides.hat_tricks.insert((PLAYER, 11), hat);
+            across_sides.substitute_deeds.insert((PLAYER, 11), sub);
+            for facts in [gathered, merged, across_sides] {
+                let hat = facts.hat_trick_of(PLAYER, &sides).unwrap();
+                let sub = facts.substitute_deed_of(PLAYER, &sides).unwrap();
+                assert_eq!(hat, sub);
+                assert_eq!((&*hat.fixture_id, hat.opponent_team_id), ("a", 20));
+                assert_eq!((hat.goals_for, hat.goals_against), (4, 5));
+            }
+        }
+    }
+
+    #[test]
+    fn skip_friendlies_own_goals_and_unattributable_players() {
+        let mut friendly = fixture("a", 20, 4, 1);
+        friendly.friendly = true;
+        let mut unknown = fixture("b", 30, 4, 2);
+        unknown.details.as_mut().unwrap().right_team_players = FieldSquad::new();
+        let mut own_goal = fixture("c", 40, 3, 0);
+        own_goal.score.details[0].is_auto_goal = true;
+        let facts = gather([&friendly, &unknown, &own_goal]);
+        let sides = FxHashSet::from_iter([SIDE]);
+        assert!(facts.hat_trick_of(PLAYER, &sides).is_none());
+        assert!(
+            gather([&friendly, &unknown])
+                .substitute_deed_of(PLAYER, &sides)
+                .is_none()
+        );
     }
 }

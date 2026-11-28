@@ -1,5 +1,6 @@
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 /// Which desk filed a story. Rendered by the web layer as the standing
 /// kicker above a headline — the same section furniture a real sports
@@ -761,6 +762,7 @@ pub enum NewsStoryKind {
     // ── Loan column ───────────────────────────────────────────────
     LoanWatchStarter,
     LoanWatchGoals,
+    LoanWatchAssists,
     LoanWatchBenched,
     LoanWantsReturn,
     LoanWantsPermanent,
@@ -1164,7 +1166,7 @@ impl NewsStoryKind {
     /// each one has a headline and a body in every translation bundle,
     /// so adding a variant without its copy fails a test rather than
     /// printing a raw key on the front page.
-    pub const ALL: [NewsStoryKind; 361] = [
+    pub const ALL: [NewsStoryKind; 362] = [
         NewsStoryKind::LeagueWin,
         NewsStoryKind::LeagueDraw,
         NewsStoryKind::GoallessDraw,
@@ -1395,6 +1397,7 @@ impl NewsStoryKind {
         NewsStoryKind::ContinentalAmbition,
         NewsStoryKind::LoanWatchStarter,
         NewsStoryKind::LoanWatchGoals,
+        NewsStoryKind::LoanWatchAssists,
         NewsStoryKind::LoanWatchBenched,
         NewsStoryKind::LoanWantsReturn,
         NewsStoryKind::LoanWantsPermanent,
@@ -1755,6 +1758,7 @@ impl NewsStoryKind {
         (NewsStoryKind::SigningComesGood, NewsDesk::Market),
         (NewsStoryKind::LoanWatchStarter, NewsDesk::Loan),
         (NewsStoryKind::LoanWatchGoals, NewsDesk::Loan),
+        (NewsStoryKind::LoanWatchAssists, NewsDesk::Loan),
         (NewsStoryKind::LoanWatchBenched, NewsDesk::Loan),
         (NewsStoryKind::LoanWantsReturn, NewsDesk::Loan),
         (NewsStoryKind::LoanWantsPermanent, NewsDesk::Loan),
@@ -2195,6 +2199,7 @@ impl NewsStoryKind {
         (NewsStoryKind::ContinentalAmbition, "continental_ambition"),
         (NewsStoryKind::LoanWatchStarter, "loan_watch_starter"),
         (NewsStoryKind::LoanWatchGoals, "loan_watch_goals"),
+        (NewsStoryKind::LoanWatchAssists, "loan_watch_assists"),
         (
             NewsStoryKind::KeeperLoanWatchShutouts,
             "keeper_loan_watch_shutouts",
@@ -2782,6 +2787,7 @@ impl NewsStoryKind {
         // rather than an event, and the paper runs it quietly.
         (NewsStoryKind::UnsoldStillHere, 276),
         (NewsStoryKind::LoanWatchGoals, 285),
+        (NewsStoryKind::LoanWatchAssists, 282),
         (NewsStoryKind::KeeperLoanWatchShutouts, 283),
         (NewsStoryKind::MediaPressure, 282),
         (NewsStoryKind::ContractStandoff, 280),
@@ -3344,6 +3350,7 @@ impl NewsStoryKind {
         // the story reruns each Monday with the number nudged by
         // one. Anything counting appearances belongs in `Standing`.
         (NewsStoryKind::LoanWatchGoals, NewsRecurrence::Progress),
+        (NewsStoryKind::LoanWatchAssists, NewsRecurrence::Progress),
         // The same shape in the other job: a shut-out arrives every
         // few weeks, and the tally sits still in between.
         (
@@ -3628,6 +3635,7 @@ impl NewsStoryKind {
                 // week, and each of them has waited for it.
                 | NewsStoryKind::FirstClubGoal
                 | NewsStoryKind::LoanWatchGoals
+                | NewsStoryKind::LoanWatchAssists
                 | NewsStoryKind::KeeperLoanWatchShutouts
                 | NewsStoryKind::LoanWatchStarter
                 | NewsStoryKind::SigningNotWorking
@@ -3795,7 +3803,6 @@ impl NewsStoryKind {
                 | NewsStoryKind::ToldNotInPlans
                 | NewsStoryKind::ContractTalksStalled
                 | NewsStoryKind::RetirementAnnounced
-                | NewsStoryKind::AgentTouting
                 | NewsStoryKind::ContractRenewed
                 | NewsStoryKind::NewManagerArrives
                 // The interim's first words, the veteran talking about
@@ -3808,29 +3815,72 @@ impl NewsStoryKind {
                 | NewsStoryKind::ClearTheAir
                 | NewsStoryKind::ManagerCallsOutPlayer
                 | NewsStoryKind::FansTurnOnTeam
-                // The three a foreign player, a substitute and a captain
+                // The two a foreign player and a captain
                 // say out loud. Wanting to go home is the one thing on
                 // this page nobody else can say for him — a paper can
                 // report bad form, but homesickness only exists once he
                 // admits it.
                 | NewsStoryKind::HomesickAbroad
-                | NewsStoryKind::BenchFrustration
                 | NewsStoryKind::DressingRoomSpeech
-                // The manager after the match, and the player who said
-                // no to a move: both are somebody talking.
+                // The manager speaking after the match.
                 | NewsStoryKind::ManagerOnWin
                 | NewsStoryKind::ManagerOnDraw
                 | NewsStoryKind::ManagerOnDefeat
-                | NewsStoryKind::TurnsDownMove
         )
     }
 }
 
-/// One printed item. Deliberately allocation-free: every club in the
-/// world keeps five editions on hand, so a story carries identifiers
-/// and numbers only and the web layer resolves names, money formats
-/// and translated prose at render time.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchPerformance {
+    pub fixture_id: Box<str>,
+    pub team_id: u32,
+    pub opponent_team_id: u32,
+    pub goals_for: u8,
+    pub goals_against: u8,
+    pub goals: u16,
+    pub assists: u16,
+    pub rating: i32,
+}
+
+impl MatchPerformance {
+    pub fn contributions(&self) -> u32 {
+        u32::from(self.goals) + u32::from(self.assists)
+    }
+
+    pub(crate) fn selection_key(
+        &self,
+        tally: impl Fn(&Self) -> u32,
+    ) -> (std::cmp::Reverse<u32>, &str, u32) {
+        (
+            std::cmp::Reverse(tally(self)),
+            &self.fixture_id,
+            self.team_id,
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum NewsStoryDetail {
+    Performance(MatchPerformance),
+    PlayingTime(PlayingTimeConcern),
+    Sighting(super::ScoutSighting),
+    TransferInterest {
+        source: crate::TransferInterestSource,
+        stage: crate::TransferInterestStage,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayingTimeConcern {
+    Minutes,
+    FirstTeam,
+    Reserves,
+    Backup,
+}
+
+/// One printed item. The web layer resolves names, money formats and
+/// localized prose from the facts stored with the edition.
+#[derive(Debug, Clone)]
 pub struct NewsStory {
     pub kind: NewsStoryKind,
     pub date: NaiveDate,
@@ -3874,6 +3924,9 @@ pub struct NewsStory {
     /// record's id, which is how a scoreline in the copy links to the
     /// match page. Meaningless — and left `false` — on every other desk.
     pub home: bool,
+    pub detail: Option<Arc<NewsStoryDetail>>,
+    /// Index of the localized pair chosen for this edition's enriched story.
+    pub phrasing: u8,
 }
 
 impl NewsStory {
@@ -3890,6 +3943,8 @@ impl NewsStory {
             b: 0,
             money: 0,
             home: false,
+            detail: None,
+            phrasing: 0,
         }
     }
 
@@ -3925,6 +3980,30 @@ impl NewsStory {
     pub fn with_money(mut self, money: i64) -> Self {
         self.money = money;
         self
+    }
+
+    pub fn with_detail(mut self, detail: NewsStoryDetail) -> Self {
+        self.detail = Some(Arc::new(detail));
+        self
+    }
+
+    /// FNV-1a over the story fields keeps the first choice stable across runs.
+    pub fn phrasing_seed(&self) -> u32 {
+        let mut hash: u32 = 0x811c_9dc5;
+        for value in [
+            self.player_id,
+            self.other_id,
+            self.staff_id,
+            self.a as u32,
+            self.b as u32,
+            self.date.num_days_from_ce() as u32,
+        ] {
+            for byte in value.to_le_bytes() {
+                hash ^= u32::from(byte);
+                hash = hash.wrapping_mul(0x0100_0193);
+            }
+        }
+        hash
     }
 
     /// Match reports only: which end of the fixture this paper's side
@@ -4152,10 +4231,7 @@ impl TeamNewsroom {
     /// under way, which is the one thing a reader actually goes back
     /// for.
     ///
-    /// The cost is per branded side, not per club: an edition is
-    /// identifiers and numbers only (no strings — the web layer
-    /// resolves names and prose at render time), so a full shelf is on
-    /// the order of 60 KB per paper.
+    /// Each branded side has its own shelf of compact story facts.
     pub const MAX_ISSUES: usize = 100;
     /// Stories one edition can hold: a lead, two secondaries, and a
     /// column of briefs deep enough to carry the loan watch and the
@@ -4407,7 +4483,7 @@ mod tests {
 
         // Kinds whose `a` is a goal / clean-sheet / run-length tally —
         // figures that stand still unless something actually happened.
-        const OCCASIONAL: [NewsStoryKind; 15] = [
+        const OCCASIONAL: [NewsStoryKind; 16] = [
             NewsStoryKind::KeeperShutoutMilestone,
             NewsStoryKind::WinningRun,
             NewsStoryKind::UnbeatenRun,
@@ -4425,6 +4501,7 @@ mod tests {
             NewsStoryKind::MilestoneGoals,
             NewsStoryKind::GoalDrought,
             NewsStoryKind::LoanWatchGoals,
+            NewsStoryKind::LoanWatchAssists,
             NewsStoryKind::KeeperLoanWatchShutouts,
         ];
 

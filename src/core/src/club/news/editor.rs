@@ -1,6 +1,9 @@
-use super::types::{NewsDesk, NewsRecurrence, NewsStory, NewspaperIssue, TeamNewsroom};
+use super::types::{
+    NewsDesk, NewsRecurrence, NewsStory, NewsStoryDetail, NewspaperIssue, TeamNewsroom,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 /// Identity the editor uses to decide whether a story is the same story
 /// it ran last week: the kind, who it is about (player and, for the
@@ -12,7 +15,7 @@ use std::collections::VecDeque;
 /// manager" would be the same key whichever man it was about, and a
 /// club that changed manager twice inside three editions would print
 /// the second appointment as a rerun of the first.
-type StoryKey = (&'static str, u32, u32, u32, i32);
+type StoryKey = (&'static str, u32, u32, u32, i32, Option<Arc<str>>);
 
 /// Turns a week's raw candidates into the edition that actually goes to
 /// print: ranked by newsworthiness, one voice per subject, balanced
@@ -100,7 +103,7 @@ impl NewsEditor {
         let mut per_player: FxHashMap<u32, usize> = FxHashMap::default();
         let mut edition = Vec::with_capacity(TeamNewsroom::MAX_STORIES);
 
-        for story in candidates {
+        for mut story in candidates {
             if edition.len() >= TeamNewsroom::MAX_STORIES {
                 break;
             }
@@ -139,10 +142,27 @@ impl NewsEditor {
             used.insert(key);
             single_run.insert(story.kind.key_stem());
             per_desk.insert(desk, desk_used + 1);
+            Self::choose_phrasing(&mut story, recent);
             edition.push(story);
         }
 
         edition
+    }
+
+    fn choose_phrasing(story: &mut NewsStory, recent: &VecDeque<NewspaperIssue>) {
+        let Some(angle) = story.angle() else { return };
+        let last = recent
+            .iter()
+            .flat_map(|issue| &issue.stories)
+            .find(|printed| {
+                printed.player_id == story.player_id
+                    && printed.kind == story.kind
+                    && printed.angle() == Some(angle)
+            });
+        story.phrasing = last.map_or_else(
+            || (story.phrasing_seed() % 2) as u8,
+            |printed| printed.phrasing ^ 1,
+        );
     }
 
     /// Whether the numbers behind a story support the sentence its copy
@@ -170,12 +190,19 @@ impl NewsEditor {
             NewsRecurrence::Progress => story.a,
             NewsRecurrence::Event | NewsRecurrence::Standing => 0,
         };
+        let fixture = match story.detail.as_deref() {
+            Some(NewsStoryDetail::Sighting(sighting)) => {
+                Some(Arc::clone(&sighting.latest.fixture_id))
+            }
+            _ => None,
+        };
         (
             story.kind.key_stem(),
             story.player_id,
             story.other_id,
             story.staff_id,
             figure,
+            fixture,
         )
     }
 }
@@ -245,6 +272,41 @@ mod tests {
         let edition = NewsEditor::compile(candidates, &VecDeque::new());
 
         assert_eq!(edition[0].kind, NewsStoryKind::DerbyWin);
+    }
+
+    #[test]
+    fn enriched_phrasing_alternates_only_after_publication_in_the_same_paper() {
+        let candidate = |player, assists| {
+            Desk::story(NewsStoryKind::LoanWatchAssists, player, assists)
+                .against(9)
+                .with_numbers(assists, 6)
+        };
+        let empty = VecDeque::new();
+        let first = NewsEditor::compile(vec![candidate(1, 3)], &empty);
+        let fresh = NewsEditor::compile(vec![candidate(1, 3)], &empty);
+        assert_eq!(first[0].phrasing, fresh[0].phrasing);
+
+        let shelf = Desk::back_issue(first.clone());
+        let next = NewsEditor::compile(vec![candidate(1, 4)], &shelf);
+        assert_eq!(next[0].phrasing, first[0].phrasing ^ 1);
+        assert_eq!(shelf[0].stories[0].phrasing, first[0].phrasing);
+
+        let another_player = NewsEditor::compile(vec![candidate(2, 4)], &shelf);
+        let alone = NewsEditor::compile(vec![candidate(2, 4)], &empty);
+        assert_eq!(another_player[0].phrasing, alone[0].phrasing);
+        let another_paper = NewsEditor::compile(vec![candidate(1, 4)], &empty);
+        assert_eq!(
+            another_paper[0].phrasing,
+            (candidate(1, 4).phrasing_seed() % 2) as u8
+        );
+
+        let cut = std::iter::once(candidate(1, 3).weighted(-1000))
+            .chain((2..=5).map(|player| candidate(player, 3)))
+            .collect();
+        let cut_issue = NewsEditor::compile(cut, &empty);
+        assert!(cut_issue.iter().all(|story| story.player_id != 1));
+        let after_cut = NewsEditor::compile(vec![candidate(1, 4)], &Desk::back_issue(cut_issue));
+        assert_eq!(after_cut[0].phrasing, another_paper[0].phrasing);
     }
 
     #[test]

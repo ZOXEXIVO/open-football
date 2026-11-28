@@ -18,6 +18,7 @@ impl LoanDesk {
     const MIN_APPEARANCES_FOR_FORM: i32 = 3;
     /// Goals at a borrowing club start to matter from here.
     const GOALS_WORTH_A_LINE: i32 = 3;
+    const ASSISTS_WORTH_A_LINE: i32 = 3;
     /// The same bar in the other job. A goalkeeper keeps roughly one
     /// clean sheet in three, so this is a comparable stretch of a
     /// season kept well rather than a fortnight of good luck.
@@ -220,6 +221,17 @@ impl LoanDesk {
             return;
         }
 
+        if !entry.is_goalkeeper && entry.assists >= Self::ASSISTS_WORTH_A_LINE {
+            out.push(
+                NewsStory::new(NewsStoryKind::LoanWatchAssists, date)
+                    .about(entry.player_id)
+                    .against(entry.loan_club_id)
+                    .with_numbers(entry.assists, entry.appearances())
+                    .weighted(entry.assists * 12),
+            );
+            return;
+        }
+
         if spoke {
             return;
         }
@@ -335,6 +347,91 @@ mod tests {
         fn kinds(stories: &[NewsStory]) -> Vec<NewsStoryKind> {
             stories.iter().map(|story| story.kind).collect()
         }
+    }
+
+    #[test]
+    fn assist_form_uses_league_appearances_and_respects_other_verdicts() {
+        use NewsStoryKind::{KeeperLoanWatchShutouts, LoanFlop, LoanWatchAssists, LoanWatchGoals};
+
+        let provider = LoanWatchEntry {
+            assists: 3,
+            ..Spell::entry(0, 3, 0)
+        };
+        let stories = Spell::file(provider);
+        let assist = stories
+            .iter()
+            .find(|story| story.kind == LoanWatchAssists)
+            .unwrap();
+        assert_eq!((assist.other_id, assist.a, assist.b), (90, 3, 3));
+
+        for entry in [
+            LoanWatchEntry {
+                assists: 2,
+                ..provider
+            },
+            LoanWatchEntry {
+                sub_appearances: 2,
+                ..provider
+            },
+        ] {
+            assert!(!Spell::kinds(&Spell::file(entry)).contains(&LoanWatchAssists));
+        }
+        for (entry, preferred) in [
+            (
+                LoanWatchEntry {
+                    goals: 3,
+                    ..provider
+                },
+                LoanWatchGoals,
+            ),
+            (
+                LoanWatchEntry {
+                    sub_appearances: 6,
+                    form_concern: true,
+                    ..provider
+                },
+                LoanFlop,
+            ),
+            (
+                LoanWatchEntry {
+                    assists: 3,
+                    ..Spell::keeper(5, 0, 4)
+                },
+                KeeperLoanWatchShutouts,
+            ),
+        ] {
+            let kinds = Spell::kinds(&Spell::file(entry));
+            assert!(kinds.contains(&preferred));
+            assert!(!kinds.contains(&LoanWatchAssists));
+        }
+    }
+
+    #[test]
+    fn the_editor_looks_for_another_assist_before_repeating_loan_form() {
+        use crate::club::news::{NewsEditor, NewspaperIssue, PressMood, TeamNewsroom};
+
+        let mut paper = TeamNewsroom::for_team(1);
+        let mut provider = LoanWatchEntry {
+            assists: 3,
+            ..Spell::entry(0, 6, 0)
+        };
+        let stories = NewsEditor::compile(Spell::file(provider), &paper.issues);
+        assert_eq!(Spell::kinds(&stories), [NewsStoryKind::LoanWatchAssists]);
+        assert_eq!((stories[0].a, stories[0].b), (3, 6));
+        paper.publish(NewspaperIssue {
+            number: 1,
+            date: Spell::day(),
+            mood: PressMood::Steady,
+            stories,
+            results: Vec::new(),
+        });
+
+        provider.sub_appearances += 1;
+        assert!(NewsEditor::compile(Spell::file(provider), &paper.issues).is_empty());
+        provider.assists += 1;
+        let next = NewsEditor::compile(Spell::file(provider), &paper.issues);
+        assert_eq!(Spell::kinds(&next), [NewsStoryKind::LoanWatchAssists]);
+        assert_eq!((next[0].a, next[0].b), (4, 7));
     }
 
     #[test]

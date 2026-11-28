@@ -1,3 +1,4 @@
+use crate::club::news::MatchPerformance;
 use crate::transfers::pipeline::ScoutingRecommendation;
 use crate::transfers::{CompletedTransfer, TransferType};
 use crate::{
@@ -145,8 +146,6 @@ pub struct OutfieldMatchFacts {
     /// He was the match's outstanding player, by the engine's own
     /// verdict rather than the desk's arithmetic.
     pub man_of_the_match: bool,
-    /// Goals and assists he produced after coming on as a substitute.
-    pub impact_off_the_bench: u16,
 }
 
 impl Absorbing for OutfieldMatchFacts {
@@ -182,7 +181,6 @@ impl Absorbing for OutfieldMatchFacts {
         self.yellow_cards = self.yellow_cards.max(other.yellow_cards);
         self.penalties_missed = self.penalties_missed.max(other.penalties_missed);
         self.man_of_the_match |= other.man_of_the_match;
-        self.impact_off_the_bench = self.impact_off_the_bench.max(other.impact_off_the_bench);
 
         // The defensive shift keeps the clean sheet it was actually
         // performed in front of: forty clearances in a 4-0 defeat is not
@@ -319,7 +317,8 @@ impl MatchDramaFacts {
 pub struct WeeklyMatchFacts {
     /// Goals scored in a single match this week, for players who
     /// managed at least three in one game.
-    pub hat_tricks: FxHashMap<(u32, u32), u8>,
+    pub hat_tricks: FxHashMap<(u32, u32), MatchPerformance>,
+    pub substitute_deeds: FxHashMap<(u32, u32), MatchPerformance>,
     /// Players sent off this week, and the side they were sent off for.
     pub red_cards: FxHashSet<(u32, u32)>,
     /// Knockout ties, keyed by the team that played them.
@@ -390,6 +389,7 @@ impl WeeklyMatchFacts {
     pub fn empty() -> Self {
         WeeklyMatchFacts {
             hat_tricks: FxHashMap::default(),
+            substitute_deeds: FxHashMap::default(),
             red_cards: FxHashSet::default(),
             cup_ties: FxHashMap::default(),
             keepers: FxHashMap::default(),
@@ -427,13 +427,39 @@ impl WeeklyMatchFacts {
         })
     }
 
-    /// Goals in one game for one of `sides`, when he managed three or
-    /// more. A hat-trick for his country is his country's story.
-    pub fn hat_trick_of(&self, player_id: u32, sides: &FxHashSet<u32>) -> Option<u8> {
+    pub fn hat_trick_of(
+        &self,
+        player_id: u32,
+        sides: &FxHashSet<u32>,
+    ) -> Option<&MatchPerformance> {
+        Self::performance_of(&self.hat_tricks, player_id, sides, |deed| {
+            u32::from(deed.goals)
+        })
+    }
+
+    pub fn substitute_deed_of(
+        &self,
+        player_id: u32,
+        sides: &FxHashSet<u32>,
+    ) -> Option<&MatchPerformance> {
+        Self::performance_of(
+            &self.substitute_deeds,
+            player_id,
+            sides,
+            MatchPerformance::contributions,
+        )
+    }
+
+    fn performance_of<'a>(
+        deeds: &'a FxHashMap<(u32, u32), MatchPerformance>,
+        player_id: u32,
+        sides: &FxHashSet<u32>,
+        tally: impl Fn(&MatchPerformance) -> u32,
+    ) -> Option<&'a MatchPerformance> {
         sides
             .iter()
-            .filter_map(|team_id| self.hat_tricks.get(&(player_id, *team_id)).copied())
-            .max()
+            .filter_map(|team_id| deeds.get(&(player_id, *team_id)))
+            .min_by(|left, right| left.selection_key(&tally).cmp(&right.selection_key(&tally)))
     }
 
     /// Whether he was sent off playing for one of `sides`.
@@ -975,6 +1001,18 @@ impl<'a> RecentEvents<'a> {
 
     pub fn find(&self, kind: HappinessEventType) -> Option<&'a HappinessEvent> {
         self.lookup(&kind)
+    }
+
+    pub fn transfer_interest(
+        &self,
+    ) -> impl Iterator<Item = (u16, &crate::TransferInterestContext)> + '_ {
+        self.events.iter().filter_map(|event| {
+            if event.days_ago > self.window_days {
+                return None;
+            }
+            let interest = event.context.as_ref()?.transfer_interest_context.as_ref()?;
+            Some((event.days_ago, interest))
+        })
     }
 
     fn lookup(&self, kind: &HappinessEventType) -> Option<&'a HappinessEvent> {

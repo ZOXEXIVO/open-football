@@ -197,6 +197,7 @@ impl CountryBuilder {
             }),
             international_competitions: self.international_competitions.unwrap_or_default(),
             media_coverage: self.media_coverage.unwrap_or_default(),
+            scout_visits: Default::default(),
             regulations: self.regulations.unwrap_or_default(),
             transfer_profile: self.transfer_profile.unwrap_or_default(),
             retired_players: RetiredPlayers::new(),

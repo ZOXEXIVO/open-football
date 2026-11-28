@@ -1,5 +1,6 @@
 use super::edition::{TeamPressRun, TransferSplit};
 use super::{WeeklyDugout, WeeklyLoanWatch, WeeklyMarket};
+use crate::club::news::sightings::WeeklyScoutVisits;
 use crate::club::news::{
     IssueResult, NewspaperIssue, NextFixture, ResultCompetition, StandingSnapshot, WeeklyMatchFacts,
 };
@@ -21,6 +22,7 @@ impl ClubPressRun {
         market: &WeeklyMarket,
         loans: &WeeklyLoanWatch,
         dugout: &WeeklyDugout,
+        sightings: &WeeklyScoutVisits<'_>,
         week_start: NaiveDate,
         week_end: NaiveDate,
     ) -> Vec<(u32, NewspaperIssue)> {
@@ -79,11 +81,13 @@ impl ClubPressRun {
             .zip(fixtures)
             .filter_map(|((team, results), fixture)| {
                 let is_flagship = team.id == flagship.id;
+                let rosters = Self::rosters(club, team, is_flagship);
 
                 let edition = TeamPressRun {
                     club,
                     team,
-                    rosters: Self::rosters(club, team, is_flagship),
+                    sightings,
+                    rosters,
                     sides: &sides,
                     results,
                     standing: Self::standing(team.league_id, country, team.id),
@@ -359,5 +363,161 @@ impl ClubPressRun {
             .map(|player| player.player_attributes.value as i64)
             .max()
             .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod sighting_tests {
+    use super::*;
+    use crate::GlobalCompetitions;
+    use crate::club::news::{NewsStoryDetail, NewsStoryKind, ScoutVisit};
+    use crate::continent::Continent;
+    use crate::news::club::ClubNewsroomTick;
+    use crate::transfers::tests::kit::{TestClub, TestCountry, TestDate, TestPlayer, TestTeam};
+    use crate::world::SimulatorData;
+
+    struct Press;
+
+    impl Press {
+        const YOUTH: u32 = 11;
+        const PLAYER: u32 = 71;
+
+        fn visit(days_ago: i64, club: u32, scout: u32, opponent: u32, notable: bool) -> ScoutVisit {
+            let date = TestDate::today() - Duration::days(days_ago);
+            ScoutVisit {
+                date,
+                fixture_id: format!("{date}_{}_{}", Self::YOUTH, opponent).into(),
+                team_id: Self::YOUTH,
+                opponent_team_id: opponent,
+                club_id: club,
+                scout_id: scout,
+                scout_name: Some(format!("Scout {scout}").into()),
+                player_id: Self::PLAYER,
+                notable,
+            }
+        }
+
+        fn world(visits: Vec<ScoutVisit>) -> SimulatorData {
+            let club = TestClub::new(1)
+                .teams(vec![
+                    TestTeam::new(10).club_id(1).build(),
+                    TestTeam::new(Self::YOUTH)
+                        .club_id(1)
+                        .team_type(TeamType::U18)
+                        .players(vec![TestPlayer::new(Self::PLAYER).age(17).build()])
+                        .build(),
+                    TestTeam::new(12).club_id(1).team_type(TeamType::B).build(),
+                ])
+                .build();
+            let today = TestDate::today();
+            let mut country = TestCountry::new(1).clubs(vec![club]).build();
+            country.scout_visits.record(today, visits);
+            SimulatorData::new(
+                today.and_hms_opt(0, 0, 0).unwrap(),
+                vec![Continent::new(
+                    1,
+                    "Europe".into(),
+                    vec![country],
+                    Vec::new(),
+                )],
+                GlobalCompetitions::new(Vec::new()),
+            )
+        }
+
+        fn run(visits: Vec<ScoutVisit>) -> Vec<crate::club::news::ScoutSighting> {
+            let mut world = Self::world(visits);
+            let today = TestDate::today();
+            ClubNewsroomTick::run(
+                &mut world,
+                today - Duration::days(6),
+                today + Duration::days(1),
+            );
+            let club = world.club(1).unwrap();
+            for id in [Self::YOUTH, 12] {
+                assert!(
+                    !club
+                        .teams
+                        .find(id)
+                        .unwrap()
+                        .newsroom
+                        .issues
+                        .iter()
+                        .flat_map(|issue| &issue.stories)
+                        .any(|story| story.kind == NewsStoryKind::ScoutsWatching)
+                );
+            }
+            club.teams
+                .main()
+                .unwrap()
+                .newsroom
+                .issues
+                .iter()
+                .flat_map(|issue| &issue.stories)
+                .filter_map(|story| {
+                    if let Some(NewsStoryDetail::Sighting(sighting)) = story.detail.as_deref() {
+                        assert_eq!(story.player_id, Self::PLAYER);
+                        Some(sighting.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn a_rescout_on_day_28_is_a_return_in_the_youth_sides_flagship_paper() {
+        let stories = Press::run(vec![
+            Press::visit(28, 2, 49, 80, false),
+            Press::visit(0, 2, 50, 81, false),
+        ]);
+        assert_eq!(stories.len(), 1);
+        assert!(stories[0].returned);
+        assert_eq!(
+            (
+                stories[0].latest.scout_id,
+                stories[0].latest.opponent_team_id
+            ),
+            (50, 81)
+        );
+        assert!(
+            Press::run(vec![
+                Press::visit(29, 2, 49, 80, false),
+                Press::visit(0, 2, 50, 81, false)
+            ])
+            .is_empty()
+        );
+        assert!(Press::run(vec![Press::visit(8, 2, 49, 80, true)]).is_empty());
+    }
+
+    #[test]
+    fn one_clubs_observers_count_once_and_the_latest_two_clubs_both_keep_their_fixture() {
+        let visits = vec![
+            Press::visit(2, 2, 51, 80, true),
+            Press::visit(2, 2, 50, 80, true),
+        ];
+        let stories = Press::run(visits.clone());
+        assert_eq!(stories.len(), 1);
+        assert_eq!(stories[0].latest.scout_id, 50);
+        assert!(!stories[0].returned);
+        assert!(stories[0].other.is_none());
+
+        let stories = Press::run(
+            visits
+                .into_iter()
+                .chain([
+                    Press::visit(1, 3, 61, 81, true),
+                    Press::visit(1, 4, 71, 82, true),
+                ])
+                .collect(),
+        );
+        assert_eq!(stories.len(), 1);
+        let story = &stories[0];
+        assert_eq!(
+            (story.latest.club_id, story.latest.opponent_team_id),
+            (3, 81)
+        );
+        let other = story.other.as_ref().unwrap();
+        assert_eq!((other.club_id, other.opponent_team_id), (4, 82));
     }
 }

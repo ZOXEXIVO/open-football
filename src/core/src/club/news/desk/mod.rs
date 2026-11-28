@@ -59,7 +59,9 @@ mod tests {
     };
     use super::squad::SquadDesk;
     use super::{MarketDesk, MatchDesk, TableDesk};
-    use crate::club::news::types::{IssueResult, NewsStory, NewsStoryKind, ResultCompetition};
+    use crate::club::news::types::{
+        IssueResult, MatchPerformance, NewsStory, NewsStoryDetail, NewsStoryKind, ResultCompetition,
+    };
     use crate::club::player::model::builder::PlayerBuilder;
     use crate::shared::FullName;
     use crate::{
@@ -1512,6 +1514,153 @@ mod tests {
             derby_hero: bool,
         ) -> Vec<NewsStoryKind> {
             Fixture::kinds(&Self::stories(position, facts, derby_hero))
+        }
+    }
+
+    #[test]
+    fn individual_match_stories_keep_the_selected_result_and_contributions() {
+        let player = Verdicts::player(PlayerPositionType::Striker);
+        let key = (player.id, Fixture::OUR_SIDE);
+        let sides = Fixture::our_sides();
+        let date = Fixture::day();
+        let mut facts = WeeklyMatchFacts::empty();
+        let deed = MatchPerformance {
+            fixture_id: "draw".into(),
+            team_id: Fixture::OUR_SIDE,
+            opponent_team_id: 20,
+            goals_for: 3,
+            goals_against: 3,
+            goals: 3,
+            assists: 0,
+            rating: 750,
+        };
+        facts.hat_tricks.insert(key, deed.clone());
+        let mut out = Vec::new();
+        SquadDesk::file_match_deeds(&mut out, player.id, &sides, &facts, date);
+        assert_eq!(Fixture::kinds(&out), [NewsStoryKind::HatTrick]);
+        let Some(NewsStoryDetail::Performance(printed)) = out[0].detail.as_deref() else {
+            panic!("missing hat-trick fixture");
+        };
+        assert_eq!(printed, &deed);
+
+        for (fixture_id, opponent, score, goals) in
+            [("loss", 30, (1, 2), 0), ("win", 40, (2, 0), 1)]
+        {
+            let deed = MatchPerformance {
+                fixture_id: fixture_id.into(),
+                opponent_team_id: opponent,
+                goals_for: score.0,
+                goals_against: score.1,
+                goals,
+                assists: 1,
+                rating: 710,
+                ..deed.clone()
+            };
+            facts.substitute_deeds.insert(key, deed.clone());
+            facts.outfield.insert(
+                key,
+                OutfieldMatchFacts {
+                    best_rating: 790,
+                    worst_rating: 710,
+                    goals,
+                    assists: 1,
+                    ..Verdicts::blank()
+                },
+            );
+            out.clear();
+            SquadDesk::file_outfield_deeds(&mut out, &player, &sides, &facts, false, false, date);
+            assert_eq!(Fixture::kinds(&out), [NewsStoryKind::SuperSub]);
+            assert_eq!((out[0].a, out[0].b), (i32::from(goals) + 1, 710));
+            let Some(NewsStoryDetail::Performance(printed)) = out[0].detail.as_deref() else {
+                panic!("missing substitute fixture");
+            };
+            assert_eq!(printed, &deed);
+        }
+    }
+
+    #[test]
+    fn playing_time_stories_follow_the_recorded_concern() {
+        use crate::club::news::{NewsRecurrence, PlayingTimeConcern};
+        use crate::{
+            CareerDesireEventContext, CareerDesireEvidence, CareerDesireKind, HappinessEventCause,
+            HappinessEventContext, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
+        };
+
+        let cases = [
+            (
+                Some(CareerDesireEvidence::StuckInReserveSquad),
+                true,
+                true,
+                PlayingTimeConcern::Reserves,
+            ),
+            (
+                Some(CareerDesireEvidence::PerennialBackupRole),
+                false,
+                true,
+                PlayingTimeConcern::Backup,
+            ),
+            (
+                Some(CareerDesireEvidence::PerennialBackupRole),
+                true,
+                true,
+                PlayingTimeConcern::Backup,
+            ),
+            (None, false, true, PlayingTimeConcern::FirstTeam),
+            (None, true, false, PlayingTimeConcern::Minutes),
+        ];
+        for (evidence, minutes, first_team, expected) in cases {
+            let mut player = Verdicts::player(PlayerPositionType::Striker);
+            if minutes {
+                player
+                    .happiness
+                    .add_event(HappinessEventType::LackOfPlayingTime, -2.0);
+            }
+            if let Some(evidence) = evidence {
+                let context = HappinessEventContext::new(
+                    HappinessEventCause::Other,
+                    HappinessEventSeverity::Moderate,
+                    HappinessEventScope::Personal,
+                )
+                .with_career_desire_context(
+                    CareerDesireEventContext::new(CareerDesireKind::FirstTeamBreakthroughAmbition)
+                        .with_evidence(evidence),
+                );
+                player.happiness.add_event_with_context(
+                    HappinessEventType::WantsFirstTeamFootball,
+                    -2.0,
+                    None,
+                    context,
+                );
+            } else if first_team {
+                player
+                    .happiness
+                    .add_event(HappinessEventType::WantsFirstTeamFootball, -2.0);
+            }
+            let mut team = Fixture::team(Fixture::OUR_SIDE);
+            if expected == PlayingTimeConcern::Reserves {
+                team.team_type = TeamType::Reserve;
+                player.statistics.played = 15;
+            }
+            team.players = PlayerCollection::new(vec![player]);
+            let mut out = Vec::new();
+            SquadDesk::file(
+                &mut out,
+                &[&team],
+                &Fixture::our_sides(),
+                &WeeklyMatchFacts::empty(),
+                Default::default(),
+                true,
+                Fixture::day(),
+            );
+            let stories: Vec<_> = out
+                .iter()
+                .filter(|story| story.kind == NewsStoryKind::BenchFrustration)
+                .collect();
+            assert_eq!(stories.len(), 1);
+            assert_eq!(stories[0].kind.recurrence(), NewsRecurrence::Standing);
+            assert!(
+                matches!(stories[0].detail.as_deref(), Some(NewsStoryDetail::PlayingTime(concern)) if *concern == expected)
+            );
         }
     }
 

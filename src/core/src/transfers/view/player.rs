@@ -558,6 +558,24 @@ impl PlayerView {
         }
         let buyer_club = country.clubs.iter().find(|c| c.id == buyer_club_id)?;
 
+        Some(Self::domestic_interest_signal(
+            country,
+            buyer_club,
+            seller_club,
+            player,
+            stage,
+            source,
+        ))
+    }
+
+    pub(in crate::transfers) fn domestic_interest_signal(
+        country: &Country,
+        buyer_club: &Club,
+        seller_club: &Club,
+        player: &Player,
+        stage: TransferInterestStage,
+        source: TransferInterestSource,
+    ) -> TransferInterestSignal {
         let rep01 = |club: &Club| -> f32 {
             club.teams.main().map(|t| t.reputation.world).unwrap_or(0) as f32 / 10_000.0
         };
@@ -571,8 +589,8 @@ impl PlayerView {
                 .unwrap_or(0)
         };
 
-        Some(TransferInterestSignal {
-            interested_club_id: buyer_club_id,
+        TransferInterestSignal {
+            interested_club_id: buyer_club.id,
             interested_league_id: buyer_club.teams.teams.first().and_then(|t| t.league_id),
             buyer_rep: rep01(buyer_club),
             seller_rep: rep01(seller_club),
@@ -581,13 +599,13 @@ impl PlayerView {
             stage,
             source,
             repeated_attention: false,
-            is_rival: seller_club.is_rival(buyer_club_id),
+            is_rival: seller_club.is_rival(buyer_club.id),
             is_home_country: player.country_id == country.id,
             is_seller_in_home_country: player.country_id == country.id,
             is_former_club: player
                 .sold_from
                 .as_ref()
-                .map(|(cid, _)| *cid == buyer_club_id)
+                .map(|(cid, _)| *cid == buyer_club.id)
                 .unwrap_or(false),
             buyer_country_id: country.id,
             buyer_continent_id: country.continent_id,
@@ -595,7 +613,7 @@ impl PlayerView {
             // opportunity framing belongs to concrete approaches.
             buyer_has_continental_path: false,
             buyer_competition_path: None,
-        })
+        }
     }
 
     pub(in crate::transfers) fn get_player_negotiation_data(

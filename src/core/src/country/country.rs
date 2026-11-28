@@ -104,6 +104,7 @@ pub struct Country {
     pub economic_factors: CountryEconomicFactors,
     pub international_competitions: Vec<InternationalCompetition>,
     pub media_coverage: MediaCoverage,
+    pub(crate) scout_visits: crate::club::news::sightings::ScoutVisitLog,
     pub regulations: CountryRegulations,
 
     /// The country's transfer-market card: who its clubs import from, where
